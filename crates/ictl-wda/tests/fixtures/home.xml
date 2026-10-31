@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<XCUIElementTypeApplication type="XCUIElementTypeApplication" name=" " label=" " x="0" y="0" width="430" height="932">
+  <XCUIElementTypeWindow type="XCUIElementTypeWindow" x="0" y="0" width="430" height="932">
+    <XCUIElementTypeOther type="XCUIElementTypeOther" name="Home screen icons" x="0" y="0" width="430" height="932">
+      <XCUIElementTypeIcon type="XCUIElementTypeIcon" name="设置" label="设置" value="1个新项目" x="129" y="604" width="84" height="106">
+        <XCUIElementTypeOther type="XCUIElementTypeOther" name="设置" label="设置" x="129" y="604" width="84" height="106"/>
+      </XCUIElementTypeIcon>
+      <XCUIElementTypeIcon type="XCUIElementTypeIcon" name="时钟" label="时钟" x="228" y="402" width="73" height="95"/>
+      <XCUIElementTypeIcon type="XCUIElementTypeIcon" name="第二页的 App" label="第二页的 App" x="890" y="402" width="73" height="95"/>
+      <XCUIElementTypeButton type="XCUIElementTypeButton" name="com.apple.settings.displayAndBrightness" label="显示与亮度" x="20" y="650" width="390" height="53"/>
+      <XCUIElementTypeStaticText type="XCUIElementTypeStaticText" label="被顶出屏幕一半" x="100" y="-20" width="100" height="40"/>
+      <XCUIElementTypeOther type="XCUIElementTypeOther" x="10" y="10" width="50" height="50"/>
+      <XCUIElementTypeOther type="XCUIElementTypeOther" label="零宽" x="10" y="10" width="0" height="50"/>
+      <XCUIElementTypeOther type="XCUIElementTypeOther" label="垂直滚动条, 1页" value="0%" x="412" y="113" width="30" height="736"/>
+    </XCUIElementTypeOther>
+  </XCUIElementTypeWindow>
+</XCUIElementTypeApplication>

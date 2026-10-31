@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- 锁屏界面（自造样本）：密码键盘已收起，但 Key 元素仍留在树里 -->
+<XCUIElementTypeApplication type="XCUIElementTypeApplication" name=" " label=" " x="0" y="0" width="430" height="932">
+  <XCUIElementTypeWindow type="XCUIElementTypeWindow" name="SBCoverSheetWindow" x="0" y="0" width="430" height="932">
+    <XCUIElementTypeOther type="XCUIElementTypeOther" label="向上轻扫以解锁" x="128" y="11" width="174" height="37"/>
+    <XCUIElementTypeOther type="XCUIElementTypeOther" name="passcode-view" x="0" y="0" width="430" height="932">
+      <XCUIElementTypeStaticText type="XCUIElementTypeStaticText" label="输入密码" x="173" y="175" width="84" height="24"/>
+      <XCUIElementTypeSecureTextField type="XCUIElementTypeSecureTextField" label="密码栏" value="共6位数，已输入0位" x="0" y="220" width="430" height="14"/>
+      <XCUIElementTypeKey type="XCUIElementTypeKey" label="1" x="47" y="317" width="112" height="108"/>
+      <XCUIElementTypeKey type="XCUIElementTypeKey" label="2" x="159" y="317" width="112" height="108"/>
+      <XCUIElementTypeKey type="XCUIElementTypeKey" label="3" x="271" y="317" width="112" height="108"/>
+      <XCUIElementTypeKey type="XCUIElementTypeKey" label="4" x="47" y="425" width="112" height="108"/>
+      <XCUIElementTypeKey type="XCUIElementTypeKey" label="5" x="159" y="425" width="112" height="108"/>
+      <XCUIElementTypeKey type="XCUIElementTypeKey" label="6" x="271" y="425" width="112" height="108"/>
+      <XCUIElementTypeKey type="XCUIElementTypeKey" label="7" x="47" y="533" width="112" height="108"/>
+      <XCUIElementTypeKey type="XCUIElementTypeKey" label="8" x="159" y="533" width="112" height="108"/>
+      <XCUIElementTypeKey type="XCUIElementTypeKey" label="9" x="271" y="533" width="112" height="108"/>
+      <XCUIElementTypeKey type="XCUIElementTypeKey" label="0" x="159" y="641" width="112" height="108"/>
+    </XCUIElementTypeOther>
+  </XCUIElementTypeWindow>
+</XCUIElementTypeApplication>

@@ -1,0 +1,16 @@
+[package]
+name = "ictl-spike"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "第 0 步真机验证程序"
+
+[dependencies]
+idevice.workspace = true
+clap.workspace = true
+tokio.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true

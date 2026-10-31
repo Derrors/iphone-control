@@ -1,0 +1,15 @@
+[package]
+name = "ictl-sign"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Apple ID、描述文件、签名（含 .xctest）"
+
+[dependencies]
+apple-codesign.workspace = true
+tokio.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+tracing.workspace = true

@@ -1,0 +1,63 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/ictl-device",
+    "crates/ictl-wda",
+    "crates/ictl-sign",
+    "crates/ictl-unlock",
+    "crates/ictl-daemon",
+    "crates/ictl-mcp",
+    "apps/iphone-control",
+    "spike",
+]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2024"
+# rmcp 3.8 要求 1.88；Impactor/idevice 用 edition 2024
+rust-version = "1.88"
+license = "MIT"
+publish = false
+
+# 全部锁精确版本：idevice 0.2.0 之前每个小版本都可能有破坏性变更（见 docs/decisions.md D9）
+[workspace.dependencies]
+idevice = { version = "=0.1.68", default-features = false, features = [
+    "ring",
+    "usbmuxd",
+    "pair",
+    "amfi",
+    "core_device_proxy",
+    "tunnel_tcp_stack",
+    "rsd",
+    "xpc",
+    "core_device",
+    "display_stream",
+    "cryptexd",
+    "tss",
+    "installation_proxy",
+    "xctest",
+    "wda",
+] }
+# 阶段 4 改为 vendor 并打 Impactor 的权限补丁（docs/decisions.md D6）
+apple-codesign = { version = "=0.29.0", default-features = false }
+rmcp = { version = "=3.8.0", features = ["server", "macros", "transport-io"] }
+tokio = { version = "=1.54.1", features = ["full"] }
+reqwest = { version = "=0.13.5", default-features = false, features = ["json"] }
+quick-xml = "=0.42.0"
+image = { version = "=0.25.10", default-features = false, features = ["png", "jpeg"] }
+clap = { version = "=4.6.7", features = ["derive", "env"] }
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = "=1.0.154"
+thiserror = "=2.0.21"
+tracing = "=0.1.44"
+tracing-subscriber = { version = "=0.3.23", features = ["env-filter"] }
+toml = "=1.1.8"
+base64 = "=0.23.1"
+anyhow = "=1.0.104"
+
+ictl-device = { path = "crates/ictl-device" }
+ictl-wda = { path = "crates/ictl-wda" }
+ictl-sign = { path = "crates/ictl-sign" }
+ictl-unlock = { path = "crates/ictl-unlock" }
+ictl-daemon = { path = "crates/ictl-daemon" }
+ictl-mcp = { path = "crates/ictl-mcp" }

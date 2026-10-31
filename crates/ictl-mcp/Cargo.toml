@@ -1,0 +1,20 @@
+[package]
+name = "ictl-mcp"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "MCP stdio 服务（13 个 iphone_* 工具）"
+
+[dependencies]
+ictl-daemon.workspace = true
+rmcp.workspace = true
+image.workspace = true
+base64.workspace = true
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+anyhow.workspace = true

@@ -1,0 +1,12 @@
+/target
+**/*.rs.bk
+# 运行时数据和秘密，永远不进仓库
+/data/
+/secrets/
+*.p12
+*.mobileprovision
+*.pem
+*.ipa
+notify.toml
+config.toml
+!/docs/**

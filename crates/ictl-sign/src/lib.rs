@@ -1,84 +1,264 @@
 //! Apple ID 登录、注册设备、描述文件、签名。
 //!
-//! 阶段 4 会 vendor Impactor 的 `plume_core`（MPL-2.0）、`plume_utils`、`omnisette`，并打两处补丁：
-//! 1. `plume_utils::BundleType` 增加 `XCTest`：`.xctest` 要签名、不带 entitlements。
-//!    原实现把 `xctest` 归为 `Unknown` 直接跳过，导致 WDA 报 XCTestErrorDomain 103。
-//! 2. apple-codesign 0.29.0 的权限补丁（Impactor `patches/apple-codesign-0.29.0/0001-apply-0o755-perms.patch`）。
-//!    作为 git 依赖引用 Impactor 时它的 `[patch.crates-io]` 不生效，所以必须 vendor。
+//! 基于 vendor 的 Impactor 组件：`plume_core`（Apple 登录与开发者服务，MPL-2.0）、
+//! `plume_store`（账号存储，MIT）、`omnisette`（anisette，MPL-2.0），以及打过权限补丁的 apple-codesign。
+//! 签名流程本身在这里重写，修掉了 Impactor 漏签 `.xctest` 的问题（见 [`bundle`]）。
 //!
-//! 免费账号：描述文件 7 天过期、开发证书 1 年；anisette 服务地址可配置（默认第三方）。
+//! 账号目录（数据目录下 `account/`，0700）：`accounts.json`（会话令牌）、`keys/<团队>/key.pem`（开发私钥）、anisette 状态。
+//! 免费账号：描述文件 7 天过期、开发证书 1 年。
+
+pub mod bundle;
+pub mod ipa;
+pub mod profile;
 
 use std::path::{Path, PathBuf};
-use std::time::SystemTime;
+
+use plume_core::{
+    AnisetteConfiguration, CertificateIdentity, MobileProvision, SettingsScope, SigningSettings, UnifiedSigner,
+    auth::Account as PlumeAccount, developer::DeveloperSession,
+};
+use plume_store::AccountStore;
+
+pub use plume_core::auth::{TwoFactorAction, TwoFactorMethod, TwoFactorRequest};
+pub use profile::Profile;
 
 #[derive(Debug, thiserror::Error)]
 pub enum SignError {
-    #[error("Apple ID 会话已失效，需要重新登录")]
-    SessionExpired,
-    #[error("需要双重认证验证码")]
-    TwoFactorRequired,
+    #[error("还没有登录 Apple ID：运行 iphone-control login")]
+    NotLoggedIn,
+    #[error("Apple ID 会话已失效，需要重新登录（iphone-control login）：{0}")]
+    SessionInvalid(String),
+    #[error("账号下没有可用的开发团队")]
+    NoTeam,
     #[error("签名失败：{0}")]
     Codesign(String),
     #[error("开发者服务：{0}")]
     Developer(String),
+    #[error("签名结果检查不通过：{0}")]
+    Verify(String),
+    #[error("{0}")]
+    Io(#[from] std::io::Error),
+}
+
+impl From<plume_core::Error> for SignError {
+    fn from(e: plume_core::Error) -> Self {
+        Self::Developer(e.to_string())
+    }
+}
+
+impl From<plume_core::AppleCodesignError> for SignError {
+    fn from(e: plume_core::AppleCodesignError) -> Self {
+        Self::Codesign(e.to_string())
+    }
 }
 
 pub type Result<T> = std::result::Result<T, SignError>;
 
-/// 持久化的账号状态（会话、团队、私钥），存放在数据目录 `account/`，权限 0700
-pub struct Account {
-    pub team_id: String,
+/// 账号目录及 anisette 设置
+#[derive(Debug, Clone)]
+pub struct AccountDir {
     pub dir: PathBuf,
+    /// 自建 anisette 服务地址；None 用 Impactor 的默认（第三方）服务
+    pub anisette_url: Option<String>,
 }
 
-/// 双重认证验证码的获取方式（CLI 交互输入）
-pub trait TwoFactorPrompt {
-    fn code(&mut self) -> String;
+impl AccountDir {
+    fn store_path(&self) -> PathBuf {
+        self.dir.join("accounts.json")
+    }
+
+    fn anisette(&self) -> AnisetteConfiguration {
+        let c = AnisetteConfiguration::default().set_configuration_path(self.dir.clone());
+        match &self.anisette_url {
+            Some(url) => c.set_anisette_url(url.clone()),
+            None => c,
+        }
+    }
+
+    /// 交互式登录。`two_factor` 在需要验证码时被调用（可在里面读终端输入）。成功后会话写入 `accounts.json`。
+    pub async fn login(
+        &self,
+        email: &str,
+        password: &str,
+        two_factor: impl Fn(TwoFactorRequest) -> std::result::Result<TwoFactorAction, String>,
+    ) -> Result<String> {
+        restrict_dir(&self.dir)?;
+        let (e, p) = (email.to_owned(), password.to_owned());
+        let account = PlumeAccount::login(move || Ok((e.clone(), p.clone())), two_factor, self.anisette()).await?;
+        let mut store = AccountStore::load(&Some(self.store_path())).await.map_err(|e| SignError::Developer(e.to_string()))?;
+        store
+            .accounts_add_from_session(email.to_owned(), account)
+            .await
+            .map_err(|e| SignError::Developer(e.to_string()))?;
+        Ok(email.to_owned())
+    }
+
+    /// 当前选中账号的邮箱
+    pub async fn selected_email(&self) -> Result<String> {
+        let store = AccountStore::load(&Some(self.store_path())).await.map_err(|e| SignError::Developer(e.to_string()))?;
+        store.selected_account().map(|a| a.email().clone()).ok_or(SignError::NotLoggedIn)
+    }
+
+    /// 用保存的令牌恢复会话，取第一个团队
+    pub async fn session(&self) -> Result<Session> {
+        let store = AccountStore::load(&Some(self.store_path())).await.map_err(|e| SignError::Developer(e.to_string()))?;
+        let acct = store.selected_account().ok_or(SignError::NotLoggedIn)?.clone();
+        let inner = DeveloperSession::new(acct.adsid().clone(), acct.xcode_gs_token().clone(), self.anisette())
+            .await
+            .map_err(|e| SignError::SessionInvalid(e.to_string()))?;
+        let teams = inner.qh_list_teams().await.map_err(|e| SignError::SessionInvalid(e.to_string()))?.teams;
+        let team_id = teams.first().map(|t| t.team_id.clone()).ok_or(SignError::NoTeam)?;
+        Ok(Session { inner, team_id, dir: self.clone() })
+    }
 }
 
-impl Account {
-    pub async fn login(dir: &Path, apple_id: &str, password: &str, prompt: &mut dyn TwoFactorPrompt) -> Result<Self> {
-        let _ = (dir, apple_id, password, prompt);
-        todo!("plume_core::auth::account + omnisette")
+/// 已登录的开发者会话
+pub struct Session {
+    inner: DeveloperSession,
+    pub team_id: String,
+    dir: AccountDir,
+}
+
+/// 一次签名的结果
+#[derive(Debug, Clone)]
+pub struct Signed {
+    pub team_id: String,
+    pub bundle_id: String,
+    pub profile: Profile,
+}
+
+impl Session {
+    /// 把设备注册到团队（已注册则跳过）
+    pub async fn ensure_device(&self, udid: &str, name: &str) -> Result<()> {
+        self.inner.qh_ensure_device(&self.team_id, &name.to_owned(), &udid.to_owned()).await?;
+        Ok(())
     }
 
-    pub async fn load(dir: &Path) -> Result<Self> {
-        let _ = dir;
-        todo!()
+    /// 签名 .ipa：Bundle ID 改成 `<原 ID>.<团队 ID>`（免费账号不能用别人的 ID），申请描述文件，深度优先签名所有嵌套 bundle。
+    /// 签好后自检（每个嵌套 bundle 都有 `_CodeSignature`、描述文件含这台手机且带 get-task-allow）。
+    pub async fn sign_ipa(&self, input: &Path, output: &Path, udid: &str) -> Result<Signed> {
+        let work = std::env::temp_dir().join(format!("ictl-sign-{}", uuid::Uuid::new_v4()));
+        let result = self.sign_in(&work, input, output, udid).await;
+        let _ = std::fs::remove_dir_all(&work);
+        result
     }
 
-    /// 每天调用一次，提前发现会话过期（不要等到重签时）
-    pub async fn verify_session(&self) -> Result<()> {
-        todo!("developer::qh::teams")
-    }
+    async fn sign_in(&self, work: &Path, input: &Path, output: &Path, udid: &str) -> Result<Signed> {
+        let app = ipa::unpack(input, work)?;
+        let bundles = bundle::collect_sorted(&app)?;
+        let main = bundles.last().cloned().ok_or_else(|| SignError::Codesign("空的 .app".into()))?;
+        let orig = main.identifier().ok_or_else(|| SignError::Codesign("主程序没有 CFBundleIdentifier".into()))?;
+        let team = &self.team_id;
+        let new_id = if orig.ends_with(&format!(".{team}")) { orig.clone() } else { format!("{orig}.{team}") };
 
-    pub async fn register_device(&self, udid: &str, name: &str) -> Result<()> {
-        let _ = (udid, name);
-        todo!("developer::qh::devices")
-    }
+        // 只有带 entitlements 的 bundle（App/扩展）需要换 ID 并申请描述文件；WDA 里只有主程序一个
+        let mut profiles = Vec::new();
+        for b in bundles.iter().filter(|b| b.kind.has_entitlements()) {
+            let id = b.identifier().unwrap_or_default().replace(&orig, &new_id);
+            b.set_identifier(&id)?;
+            let name = b.name().unwrap_or_else(|| id.clone());
+            self.inner.qh_ensure_app_id(team, &name, &id).await?;
+            let app_id = self
+                .inner
+                .qh_get_app_id(team, &id)
+                .await?
+                .ok_or_else(|| SignError::Developer(format!("刚创建的 App ID {id} 查不到")))?;
+            let data = self.inner.qh_get_profile(team, &app_id.app_id_id).await?.provisioning_profile.encoded_profile;
+            let data: Vec<u8> = data.as_ref().to_vec();
+            std::fs::write(b.dir.join("embedded.mobileprovision"), &data)?;
+            profiles.push((b.dir.clone(), MobileProvision::load_with_bytes(data)?));
+        }
 
-    /// 为 bundle id 取一份新的开发描述文件（会注册 App ID）
-    pub async fn provisioning_profile(&self, bundle_id: &str) -> Result<Profile> {
-        let _ = bundle_id;
-        todo!("developer::qh::{{app_ids, profile}}")
+        let cert = CertificateIdentity::new_with_session(&self.inner, self.dir.dir.clone(), None, team, false, None).await?;
+        for b in bundles.iter().filter(|b| b.kind.should_be_signed()) {
+            let mut settings = SigningSettings::default();
+            cert.load_into_signing_settings(&mut settings)?;
+            settings.set_for_notarization(false);
+            settings.set_shallow(true);
+            if let Some((_, prov)) = profiles.iter_mut().find(|(d, _)| *d == b.dir) {
+                if let (Some(exe), Some(id)) = (b.executable(), b.identifier()) {
+                    prov.merge_entitlements(b.dir.join(exe), &id).ok();
+                }
+                std::fs::write(b.dir.join("embedded.mobileprovision"), &prov.data)?;
+                let xml = String::from_utf8_lossy(&prov.entitlements_as_bytes()?).into_owned();
+                settings.set_entitlements_xml(SettingsScope::Main, xml)?;
+            }
+            tracing::info!("签名 {}", b.dir.display());
+            UnifiedSigner::new(settings).sign_path_in_place(&b.dir)?;
+        }
+        if let Some(key) = &cert.key {
+            key.finish()?;
+        }
+
+        let profile = verify_signed(&app, udid)?;
+        ipa::pack(work, output)?;
+        Ok(Signed { team_id: team.clone(), bundle_id: new_id, profile })
     }
 }
 
-pub struct Profile {
-    pub path: PathBuf,
-    pub expires: SystemTime,
-    pub devices: Vec<String>,
-    pub get_task_allow: bool,
+/// 签名后自检：每个要签名的嵌套 bundle 都要有 `_CodeSignature/CodeResources`（`.xctest` 漏签会在这里暴露），
+/// 主程序的描述文件包含这台手机、带 get-task-allow（XCTest 要能附加调试）。
+pub fn verify_signed(app_dir: &Path, udid: &str) -> Result<Profile> {
+    for b in bundle::collect_sorted(app_dir)? {
+        if matches!(b.kind, bundle::BundleType::Unknown | bundle::BundleType::Dylib) {
+            continue;
+        }
+        if !b.dir.join("_CodeSignature/CodeResources").is_file() {
+            return Err(SignError::Verify(format!("{} 没有签名", b.dir.display())));
+        }
+    }
+    let p = Profile::load(&app_dir.join("embedded.mobileprovision"))
+        .ok_or_else(|| SignError::Verify("主程序没有可解析的 embedded.mobileprovision".into()))?;
+    if !p.devices.iter().any(|d| d == udid) {
+        return Err(SignError::Verify("描述文件里没有这台手机，先注册设备".into()));
+    }
+    if !p.get_task_allow {
+        return Err(SignError::Verify("描述文件不带 get-task-allow，WDA 起不来".into()));
+    }
+    Ok(p)
 }
 
-/// 签名 .ipa/.app：深度优先，包括 Frameworks、PlugIns/*.appex、PlugIns/*.xctest
-pub async fn sign(input: &Path, output: &Path, account: &Account, profile: &Profile, bundle_id: &str) -> Result<()> {
-    let _ = (input, output, account, profile, bundle_id);
-    todo!("plume_utils::Signer（打过 XCTest 补丁）")
+fn restrict_dir(dir: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::create_dir_all(dir)?;
+    std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))
 }
 
-/// 签名后自检：每个嵌套 bundle 都要有 `_CodeSignature`，主程序带 get-task-allow
-pub fn verify_signed(app_dir: &Path) -> Result<()> {
-    let _ = app_dir;
-    todo!()
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{Duration, SystemTime};
+
+    fn signed_fake(root: &Path, sign_xctest: bool, devices: &[&str]) -> PathBuf {
+        let app = bundle::tests::fake_wda(root);
+        let mut dirs = vec![app.clone(), app.join("PlugIns/WebDriverAgentRunner.xctest/Frameworks/WebDriverAgentLib.framework")];
+        if sign_xctest {
+            dirs.push(app.join("PlugIns/WebDriverAgentRunner.xctest"));
+        }
+        for d in dirs {
+            std::fs::create_dir_all(d.join("_CodeSignature")).unwrap();
+            std::fs::write(d.join("_CodeSignature/CodeResources"), b"x").unwrap();
+        }
+        let exp = SystemTime::now() + Duration::from_secs(7 * 86400);
+        std::fs::write(app.join("embedded.mobileprovision"), profile::tests::fake(exp, devices)).unwrap();
+        app
+    }
+
+    #[test]
+    fn verify_catches_unsigned_xctest() {
+        let root = std::env::temp_dir().join(format!("ictl-verify-{}", uuid::Uuid::new_v4()));
+        let app = signed_fake(&root, false, &["UDID-1"]);
+        let err = verify_signed(&app, "UDID-1").unwrap_err().to_string();
+        assert!(err.contains(".xctest"), "{err}");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn verify_passes_and_checks_device() {
+        let root = std::env::temp_dir().join(format!("ictl-verify-{}", uuid::Uuid::new_v4()));
+        let app = signed_fake(&root, true, &["UDID-1"]);
+        assert!(verify_signed(&app, "UDID-1").is_ok());
+        assert!(verify_signed(&app, "UDID-2").unwrap_err().to_string().contains("没有这台手机"));
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }

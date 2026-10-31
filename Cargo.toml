@@ -10,9 +10,12 @@ members = [
     "apps/iphone-control",
     "spike",
 ]
+# vendor/ 下是 Impactor 的组件（MPL-2.0 / MIT），作为路径依赖使用，但不算本 workspace 成员：
+# 不对它们跑 clippy/test，也不把它们的 lint 当成本项目的问题。
+exclude = ["vendor"]
 
 [workspace.package]
-version = "0.0.0"
+version = "0.1.0"
 edition = "2024"
 # rmcp 3.8 要求 1.88；Impactor/idevice 用 edition 2024
 rust-version = "1.88"
@@ -26,6 +29,7 @@ idevice = { version = "=0.1.68", default-features = false, features = [
     "usbmuxd",
     "pair",
     "amfi",
+    "afc",
     "core_device_proxy",
     "tunnel_tcp_stack",
     "rsd",
@@ -38,11 +42,9 @@ idevice = { version = "=0.1.68", default-features = false, features = [
     "xctest",
     "wda",
 ] }
-# 阶段 4 改为 vendor 并打 Impactor 的权限补丁（docs/decisions.md D6）
-apple-codesign = { version = "=0.29.0", default-features = false }
-rmcp = { version = "=3.8.0", features = ["server", "macros", "transport-io"] }
+rmcp = { version = "=3.8.0", features = ["server", "transport-io"] }
 tokio = { version = "=1.54.1", features = ["full"] }
-reqwest = { version = "=0.13.5", default-features = false, features = ["json"] }
+reqwest = { version = "=0.13.5", default-features = false, features = ["json", "rustls"] }
 quick-xml = "=0.42.0"
 image = { version = "=0.25.10", default-features = false, features = ["png", "jpeg"] }
 clap = { version = "=4.6.7", features = ["derive", "env"] }
@@ -54,6 +56,15 @@ tracing-subscriber = { version = "=0.3.23", features = ["env-filter"] }
 toml = "=1.1.8"
 base64 = "=0.23.1"
 anyhow = "=1.0.104"
+plist = "=1.9.0"
+uuid = { version = "=1.23.1", features = ["v4"] }
+zip = { version = "=8.6.0", default-features = false, features = ["deflate"] }
+regex = "=1.12.3"
+log = "=0.4.29"
+
+# vendored Impactor 组件（见 THIRD_PARTY.md）
+plume_core = { path = "vendor/plume_core" }
+plume_store = { path = "vendor/plume_store" }
 
 ictl-device = { path = "crates/ictl-device" }
 ictl-wda = { path = "crates/ictl-wda" }
@@ -61,3 +72,13 @@ ictl-sign = { path = "crates/ictl-sign" }
 ictl-unlock = { path = "crates/ictl-unlock" }
 ictl-daemon = { path = "crates/ictl-daemon" }
 ictl-mcp = { path = "crates/ictl-mcp" }
+
+# Impactor 给 apple-codesign 0.29.0 打的权限补丁（0o755）。作为 git 依赖引用 Impactor 时
+# 它自己的 [patch] 不生效，所以这里 vendor 打过补丁的副本（docs/decisions.md D6）。
+[patch.crates-io]
+apple-codesign = { path = "vendor/apple-codesign" }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "debuginfo"

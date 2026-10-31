@@ -1,0 +1,16 @@
+# vendored from Impactor v2.7.2 (b13d995)；本仓库只把 workspace 继承改成了显式版本，源码未改
+[package]
+name = "plume_store"
+description = "Data storage layer for Plume Impactor tools."
+edition = "2024"
+version = "2.7.2"
+authors = ["khcrysalis"]
+license = "MIT"
+repository = "https://github.com/claration/impactor"
+
+[dependencies]
+tokio = { version = "1.43", features = ["rt-multi-thread"] }
+chrono = { version = "0.4", default-features = false, features = ["std", "serde"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1" }
+plume_core = { path = "../plume_core", features = ["tweaks"] }

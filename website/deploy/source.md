@@ -34,6 +34,8 @@ iphone-control setup        # 另开一个终端运行安装向导
 iphone-control mcp-config   # 打印注册 MCP 的命令
 ```
 
+只有下面的 systemd 服务会读 `~/.config/iphone-control/env`。前台运行时先加载它：`set -a; . ~/.config/iphone-control/env; set +a`。
+
 ### 常驻：systemd 用户服务
 
 服务文件在仓库的 `deploy/iphone-control.service`（二进制压缩包里也有）：
@@ -41,7 +43,7 @@ iphone-control mcp-config   # 打印注册 MCP 的命令
 ```bash
 mkdir -p ~/.config/systemd/user ~/.config/iphone-control
 cp deploy/iphone-control.service ~/.config/systemd/user/
-cp .env.example ~/.config/iphone-control/env    # 按需改代理、通知
+cp .env.example ~/.config/iphone-control/env    # 按需改代理、通知（二进制压缩包里叫 env.example）
 systemctl --user daemon-reload && systemctl --user enable --now iphone-control
 loginctl enable-linger "$USER"                  # 不登录也随开机启动
 ```

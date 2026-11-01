@@ -111,7 +111,7 @@ loginctl enable-linger "$USER"                    # start at boot without loggin
 | Unsigned WDA | shipped in the image | downloaded (sha256-checked) before the first signing |
 | Configuration | `.env` | environment variables, e.g. the systemd `EnvironmentFile` |
 
-Run the daemon, the CLI and the MCP server as the same user. With a host `usbmuxd` installed, `sudo systemctl mask usbmuxd` before going back to the container, or the two will fight over the phone.
+Run the daemon, the CLI and the MCP server as the same user; for another user, point them at it with `--socket` and `--data-dir` (or `ICTL_SOCKET`, `ICTL_DATA_DIR`). Run as root, the defaults match the container and the daemon starts its own usbmuxd — set `ICTL_MANAGE_USBMUXD=0` if the host already runs the usbmuxd service. With a host `usbmuxd` installed, `sudo systemctl mask usbmuxd` before going back to the container, or the two will fight over the phone.
 
 ## Commands
 

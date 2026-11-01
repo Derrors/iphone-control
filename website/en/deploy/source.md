@@ -34,6 +34,8 @@ iphone-control setup        # setup wizard, in a second terminal
 iphone-control mcp-config   # prints the MCP registration command
 ```
 
+Only the systemd service below reads `~/.config/iphone-control/env`. In the foreground, load it first: `set -a; . ~/.config/iphone-control/env; set +a`.
+
 ### Keep it running: systemd user service
 
 The unit is `deploy/iphone-control.service` in the repository (also included in the binary archives):
@@ -41,7 +43,7 @@ The unit is `deploy/iphone-control.service` in the repository (also included in 
 ```bash
 mkdir -p ~/.config/systemd/user ~/.config/iphone-control
 cp deploy/iphone-control.service ~/.config/systemd/user/
-cp .env.example ~/.config/iphone-control/env    # proxy, notifications, …
+cp .env.example ~/.config/iphone-control/env    # proxy, notifications, … (env.example in the binary archive)
 systemctl --user daemon-reload && systemctl --user enable --now iphone-control
 loginctl enable-linger "$USER"                  # start at boot without logging in
 ```

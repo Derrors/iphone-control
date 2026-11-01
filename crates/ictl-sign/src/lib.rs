@@ -103,6 +103,7 @@ impl AccountDir {
 
     /// 用保存的令牌恢复会话，取第一个团队
     pub async fn session(&self) -> Result<Session> {
+        restrict_dir(&self.dir)?;
         let store =
             AccountStore::load(&Some(self.store_path())).await.map_err(|e| SignError::Developer(e.to_string()))?;
         let acct = store.selected_account().ok_or(SignError::NotLoggedIn)?.clone();
@@ -173,7 +174,7 @@ impl Session {
                 .ok_or_else(|| SignError::Developer(format!("刚创建的 App ID {id} 查不到")))?;
             let data = self.inner.qh_get_profile(team, &app_id.app_id_id).await?.provisioning_profile.encoded_profile;
             let data: Vec<u8> = data.as_ref().to_vec();
-            std::fs::write(b.dir.join("embedded.mobileprovision"), &data)?;
+            // 合并 entitlements 后在下面签名前写进 bundle
             profiles.push((b.dir.clone(), MobileProvision::load_with_bytes(data)?));
         }
 
@@ -183,8 +184,10 @@ impl Session {
             settings.set_for_notarization(false);
             settings.set_shallow(true);
             if let Some((_, prov)) = profiles.iter_mut().find(|(d, _)| *d == b.dir) {
-                if let (Some(exe), Some(id)) = (b.executable(), b.identifier()) {
-                    prov.merge_entitlements(b.dir.join(exe), &id).ok();
+                if let (Some(exe), Some(id)) = (b.executable(), b.identifier())
+                    && let Err(e) = prov.merge_entitlements(b.dir.join(exe), &id)
+                {
+                    tracing::warn!("合并 {} 的 entitlements 失败，只用描述文件里的：{e}", b.dir.display());
                 }
                 std::fs::write(b.dir.join("embedded.mobileprovision"), &prov.data)?;
                 let xml = String::from_utf8_lossy(&prov.entitlements_as_bytes()?).into_owned();
@@ -196,6 +199,8 @@ impl Session {
         if let Some(key) = &cert.key {
             key.finish()?;
         }
+        // 证书新建时 plume 按默认 umask 写私钥（0644），收紧
+        restrict_tree(&self.dir.dir)?;
 
         let profile = verify_signed(&app, udid, cert.cert.as_ref().map(|c| c.constructed_data()))?;
         ipa::pack(work, output)?;
@@ -236,10 +241,40 @@ fn restrict_dir(dir: &Path) -> std::io::Result<()> {
     std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))
 }
 
+/// 账号目录下的子目录 0700、文件 0600（里面有会话令牌和开发私钥）
+fn restrict_tree(dir: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    for entry in std::fs::read_dir(dir)? {
+        let entry = entry?;
+        let ft = entry.file_type()?;
+        if ft.is_dir() {
+            std::fs::set_permissions(entry.path(), std::fs::Permissions::from_mode(0o700))?;
+            restrict_tree(&entry.path())?;
+        } else if ft.is_file() {
+            std::fs::set_permissions(entry.path(), std::fs::Permissions::from_mode(0o600))?;
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::time::{Duration, SystemTime};
+
+    #[test]
+    fn account_tree_is_locked_down() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = std::env::temp_dir().join(format!("ictl-acct-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(root.join("keys/TEAM")).unwrap();
+        std::fs::write(root.join("keys/TEAM/key.pem"), b"k").unwrap();
+        std::fs::set_permissions(root.join("keys/TEAM/key.pem"), std::fs::Permissions::from_mode(0o644)).unwrap();
+        restrict_tree(&root).unwrap();
+        let mode = |p: &str| std::fs::metadata(root.join(p)).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode("keys/TEAM/key.pem"), 0o600);
+        assert_eq!(mode("keys"), 0o700);
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     fn signed_fake(root: &Path, sign_xctest: bool, devices: &[&str]) -> PathBuf {
         let app = bundle::tests::fake_wda(root);

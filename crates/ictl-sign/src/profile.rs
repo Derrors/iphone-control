@@ -2,7 +2,7 @@
 //!
 //! 文件是 CMS 签名包着一个 XML plist，直接截取 `<?xml` 到 `</plist>` 那段解析即可（不验签）。
 
-use std::time::{Duration, SystemTime};
+use std::time::SystemTime;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Profile {
@@ -56,11 +56,6 @@ impl Profile {
     pub fn load(path: &std::path::Path) -> Option<Self> {
         Self::parse(&std::fs::read(path).ok()?)
     }
-
-    /// 还剩多久过期；已过期返回 0
-    pub fn remaining(&self, now: SystemTime) -> Duration {
-        self.expires.duration_since(now).unwrap_or_default()
-    }
 }
 
 fn find(hay: &[u8], needle: &[u8]) -> Option<usize> {
@@ -70,6 +65,7 @@ fn find(hay: &[u8], needle: &[u8]) -> Option<usize> {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+    use std::time::Duration;
 
     /// 造一个假的描述文件：前后各垫一段二进制，模拟 CMS 外壳
     pub fn fake(expires: SystemTime, devices: &[&str]) -> Vec<u8> {
@@ -101,14 +97,6 @@ pub(crate) mod tests {
         assert_eq!(p.expires, exp);
         assert!(p.application_identifier.starts_with("TEAM000000."));
         assert_eq!(p.certificates, [b"CERT-A".to_vec()]);
-    }
-
-    #[test]
-    fn remaining_saturates_at_zero() {
-        let exp = SystemTime::UNIX_EPOCH + Duration::from_secs(1000);
-        let p = Profile::parse(&fake(exp, &[])).unwrap();
-        assert_eq!(p.remaining(exp + Duration::from_secs(5)), Duration::ZERO);
-        assert_eq!(p.remaining(exp - Duration::from_secs(5)), Duration::from_secs(5));
     }
 
     #[test]

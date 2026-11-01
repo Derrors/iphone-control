@@ -3,7 +3,7 @@
 use std::io::Cursor;
 
 use ictl_device::ScreenSize;
-use image::{DynamicImage, ImageFormat, codecs::jpeg::JpegEncoder, imageops::FilterType};
+use image::{DynamicImage, codecs::jpeg::JpegEncoder, imageops::FilterType};
 
 pub const ZOOM_MIN_LONG_SIDE: f64 = 600.0;
 pub const ZOOM_MAX_LONG_SIDE: f64 = 1200.0;
@@ -29,23 +29,29 @@ pub fn oriented(img_w: u32, img_h: u32, screen: ScreenSize) -> (u32, u32) {
     if img_w > img_h && w < h { (h, w) } else { (w, h) }
 }
 
+/// 解码后马上转成 8 位 RGB：设备截图是 16 位 RGBA（1290×2796 解出来约 29MB），后面缩放、编码都按 RGB8 做，
+/// 内存峰值和计算量都小得多；JPEG 本来也不要 alpha
 fn decode(png: &[u8]) -> Result<DynamicImage, String> {
-    image::load_from_memory(png).map_err(|e| format!("截图解码失败：{e}"))
+    let img = image::load_from_memory(png).map_err(|e| format!("截图解码失败：{e}"))?;
+    Ok(DynamicImage::ImageRgb8(img.into_rgb8()))
 }
 
 fn jpeg(img: &DynamicImage, quality: u8) -> Result<Vec<u8>, String> {
     let mut out = Cursor::new(Vec::new());
-    img.to_rgb8()
-        .write_with_encoder(JpegEncoder::new_with_quality(&mut out, quality))
-        .map_err(|e| format!("JPEG 编码失败：{e}"))?;
+    JpegEncoder::new_with_quality(&mut out, quality).encode_image(img).map_err(|e| format!("JPEG 编码失败：{e}"))?;
     Ok(out.into_inner())
+}
+
+/// 缩小用三角滤波（3:1 缩小足够清晰，比 Lanczos3 快几倍）；放大小区域用 CatmullRom 保住文字边缘
+fn filter_for(from: (u32, u32), to: (u32, u32)) -> FilterType {
+    if to.0 > from.0 || to.1 > from.1 { FilterType::CatmullRom } else { FilterType::Triangle }
 }
 
 /// 整屏缩放到点尺寸：图像像素即点坐标。返回 (jpeg, 说明文字)
 pub fn full_screen(png: &[u8], screen: ScreenSize, via: &str) -> Result<(Vec<u8>, String), String> {
     let img = decode(png)?;
     let (w, h) = oriented(img.width(), img.height(), screen);
-    let out = jpeg(&img.resize_exact(w, h, FilterType::Lanczos3), 80)?;
+    let out = jpeg(&img.resize_exact(w, h, filter_for((img.width(), img.height()), (w, h))), 80)?;
     Ok((out, format!("{w}x{h} 点,图像像素即点坐标(经 {via})")))
 }
 
@@ -96,7 +102,7 @@ pub fn region(
     let (cx, cy, cw, ch) = p.crop;
     let mut crop = img.crop_imm(cx, cy, cw, ch);
     if p.out != (cw, ch) {
-        crop = crop.resize_exact(p.out.0, p.out.1, FilterType::Lanczos3);
+        crop = crop.resize_exact(p.out.0, p.out.1, filter_for((cw, ch), p.out));
     }
     let (x1, y1, rw, rh) = p.region;
     let (x, y, z) = (fmt_g(x1), fmt_g(y1), fmt_3g(p.zoom));
@@ -109,8 +115,9 @@ pub fn region(
 }
 
 /// 读取 PNG 尺寸（不解码像素）
+#[cfg(test)]
 pub fn png_size(png: &[u8]) -> Option<(u32, u32)> {
-    image::ImageReader::with_format(Cursor::new(png), ImageFormat::Png).into_dimensions().ok()
+    image::ImageReader::with_format(Cursor::new(png), image::ImageFormat::Png).into_dimensions().ok()
 }
 
 #[cfg(test)]
@@ -121,7 +128,9 @@ mod tests {
 
     fn png(w: u32, h: u32) -> Vec<u8> {
         let mut out = Cursor::new(Vec::new());
-        image::RgbImage::from_pixel(w, h, image::Rgb([30, 60, 90])).write_to(&mut out, ImageFormat::Png).unwrap();
+        image::RgbImage::from_pixel(w, h, image::Rgb([30, 60, 90]))
+            .write_to(&mut out, image::ImageFormat::Png)
+            .unwrap();
         out.into_inner()
     }
 

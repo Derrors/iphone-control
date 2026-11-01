@@ -8,7 +8,7 @@ publish.workspace = true
 description = "MCP stdio 服务（13 个 iphone_* 工具）"
 
 [dependencies]
-ictl-daemon.workspace = true
+ictl-protocol.workspace = true
 rmcp.workspace = true
 tokio.workspace = true
 serde_json.workspace = true

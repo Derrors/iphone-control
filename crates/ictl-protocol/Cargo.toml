@@ -1,0 +1,13 @@
+[package]
+name = "ictl-protocol"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "守护进程控制接口的请求/响应类型和客户端（MCP、CLI 共用，不依赖设备栈）"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true

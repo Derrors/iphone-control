@@ -76,6 +76,7 @@ impl Backoff {
         *self = Self::default();
     }
 
+    #[cfg(test)]
     pub fn current_delay(&self) -> Duration {
         self.delay
     }

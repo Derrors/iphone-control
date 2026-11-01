@@ -61,7 +61,8 @@ impl Config {
             };
         Self {
             data_dir: data_dir.to_owned(),
-            socket: env("ICTL_SOCKET").map(PathBuf::from).unwrap_or_else(|| crate::protocol::DEFAULT_SOCKET.into()),
+            // 实际值由命令行给（--socket / ICTL_SOCKET，见 apps/iphone-control）
+            socket: crate::protocol::DEFAULT_SOCKET.into(),
             udid: env("IPHONE_UDID"),
             manage_usbmuxd: env("ICTL_MANAGE_USBMUXD").is_none_or(|v| v != "0" && v != "false"),
             usbmuxd_bin: env("ICTL_USBMUXD_BIN").unwrap_or_else(|| "usbmuxd".into()),

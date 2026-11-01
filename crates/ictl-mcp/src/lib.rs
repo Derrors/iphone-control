@@ -5,8 +5,9 @@
 //! 参数到请求的转换（[`to_request`]）是纯函数，可单测。
 
 use std::path::PathBuf;
+use std::time::Duration;
 
-use ictl_daemon::protocol::{self, Request, Response};
+use ictl_protocol::{self as protocol, Request, Response};
 use rmcp::{
     ErrorData, RoleServer, ServerHandler, ServiceExt,
     model::{
@@ -114,27 +115,51 @@ pub fn tools() -> Vec<Tool> {
 
 struct Args<'a>(&'a Map<String, Value>);
 
+/// 数字，或写成字符串的数字（toolkit 的 pydantic 也接受 "3"）
+fn number(v: &Value) -> Option<f64> {
+    v.as_f64().or_else(|| v.as_str()?.trim().parse().ok()).filter(|x: &f64| x.is_finite())
+}
+
+/// 参数给了但类型不对就报错，不再悄悄用默认值（例如 index: -1 原来会点第 0 个）
 impl Args<'_> {
+    fn get(&self, k: &str) -> Option<&Value> {
+        self.0.get(k).filter(|v| !v.is_null())
+    }
     fn f(&self, k: &str) -> Result<f64, String> {
-        self.0.get(k).and_then(Value::as_f64).ok_or_else(|| format!("缺少数字参数 {k}"))
+        self.opt_f(k)?.ok_or_else(|| format!("缺少数字参数 {k}"))
     }
-    fn f_or(&self, k: &str, d: f64) -> f64 {
-        self.0.get(k).and_then(Value::as_f64).unwrap_or(d)
+    fn f_or(&self, k: &str, d: f64) -> Result<f64, String> {
+        Ok(self.opt_f(k)?.unwrap_or(d))
     }
-    fn opt_f(&self, k: &str) -> Option<f64> {
-        self.0.get(k).and_then(Value::as_f64)
+    fn opt_f(&self, k: &str) -> Result<Option<f64>, String> {
+        self.get(k).map(|v| number(v).ok_or_else(|| format!("参数 {k} 要是数字"))).transpose()
     }
     fn s(&self, k: &str) -> Result<String, String> {
-        self.0.get(k).and_then(Value::as_str).map(str::to_owned).ok_or_else(|| format!("缺少文字参数 {k}"))
+        self.get(k).and_then(Value::as_str).map(str::to_owned).ok_or_else(|| format!("缺少文字参数 {k}"))
     }
-    fn s_or(&self, k: &str, d: &str) -> String {
-        self.0.get(k).and_then(Value::as_str).unwrap_or(d).to_owned()
+    fn s_or(&self, k: &str, d: &str) -> Result<String, String> {
+        match self.get(k) {
+            None => Ok(d.to_owned()),
+            Some(v) => v.as_str().map(str::to_owned).ok_or_else(|| format!("参数 {k} 要是文字")),
+        }
     }
-    fn u_or(&self, k: &str, d: usize) -> usize {
-        self.0.get(k).and_then(Value::as_u64).map(|v| v as usize).unwrap_or(d)
+    fn u_or(&self, k: &str, d: usize) -> Result<usize, String> {
+        match self.get(k) {
+            None => Ok(d),
+            Some(v) => number(v)
+                .filter(|x| *x >= 0.0 && x.fract() == 0.0)
+                .map(|x| x as usize)
+                .ok_or_else(|| format!("参数 {k} 要是非负整数")),
+        }
     }
-    fn b_or(&self, k: &str, d: bool) -> bool {
-        self.0.get(k).and_then(Value::as_bool).unwrap_or(d)
+    fn b_or(&self, k: &str, d: bool) -> Result<bool, String> {
+        match self.get(k) {
+            None => Ok(d),
+            Some(Value::Bool(b)) => Ok(*b),
+            Some(Value::String(s)) if s.eq_ignore_ascii_case("true") => Ok(true),
+            Some(Value::String(s)) if s.eq_ignore_ascii_case("false") => Ok(false),
+            Some(_) => Err(format!("参数 {k} 要是 true 或 false")),
+        }
     }
 }
 
@@ -144,7 +169,7 @@ pub fn to_request(name: &str, args: &Map<String, Value>) -> Result<Request, Stri
     Ok(match name {
         "iphone_status" => Request::Status,
         "iphone_screenshot" => {
-            let r = [a.opt_f("x"), a.opt_f("y"), a.opt_f("width"), a.opt_f("height")];
+            let r = [a.opt_f("x")?, a.opt_f("y")?, a.opt_f("width")?, a.opt_f("height")?];
             let region = match r {
                 [None, None, None, None] => None,
                 [Some(x), Some(y), Some(w), Some(h)] => Some((x, y, w, h)),
@@ -152,18 +177,18 @@ pub fn to_request(name: &str, args: &Map<String, Value>) -> Result<Request, Stri
             };
             Request::Screenshot { region }
         }
-        "iphone_list_elements" => Request::ListElements { filter: a.s_or("filter", ""), limit: a.u_or("limit", 150) },
+        "iphone_list_elements" => Request::ListElements { filter: a.s_or("filter", "")?, limit: a.u_or("limit", 150)? },
         "iphone_tap" => Request::Tap { x: a.f("x")?, y: a.f("y")? },
-        "iphone_tap_element" => Request::TapElement { text: a.s("text")?, index: a.u_or("index", 0) },
-        "iphone_long_press" => Request::LongPress { x: a.f("x")?, y: a.f("y")?, seconds: a.f_or("seconds", 1.0) },
+        "iphone_tap_element" => Request::TapElement { text: a.s("text")?, index: a.u_or("index", 0)? },
+        "iphone_long_press" => Request::LongPress { x: a.f("x")?, y: a.f("y")?, seconds: a.f_or("seconds", 1.0)? },
         "iphone_swipe" => Request::Swipe {
             from: (a.f("from_x")?, a.f("from_y")?),
             to: (a.f("to_x")?, a.f("to_y")?),
-            seconds: a.f_or("seconds", 0.3),
+            seconds: a.f_or("seconds", 0.3)?,
         },
-        "iphone_type_text" => Request::TypeText { text: a.s("text")?, submit: a.b_or("submit", false) },
+        "iphone_type_text" => Request::TypeText { text: a.s("text")?, submit: a.b_or("submit", false)? },
         "iphone_press_button" => Request::PressButton { button: a.s("button")? },
-        "iphone_list_apps" => Request::ListApps { include_system: a.b_or("include_system", false) },
+        "iphone_list_apps" => Request::ListApps { include_system: a.b_or("include_system", false)? },
         "iphone_launch_app" => Request::LaunchApp { app: a.s("app")? },
         "iphone_terminate_app" => Request::TerminateApp { app: a.s("app")? },
         "iphone_open_url" => Request::OpenUrl { url: a.s("url")? },
@@ -208,7 +233,8 @@ impl ServerHandler for McpServer {
         let args = request.arguments.unwrap_or_default();
         let resp = match to_request(&request.name, &args) {
             Err(e) => Response::error(e),
-            Ok(req) => protocol::call(&self.socket, &req).await.unwrap_or_else(|e| {
+            // 守护进程正忙（例如在自动解锁）时会排队；最多等 150 秒，免得 agent 一直挂着
+            Ok(req) => protocol::call(&self.socket, &req, Some(Duration::from_secs(150))).await.unwrap_or_else(|e| {
                 Response::error(format!("连不上守护进程({}):{e};确认 iphone-control 容器在运行", self.socket.display()))
             }),
         };
@@ -261,6 +287,23 @@ mod tests {
         assert_eq!(
             to_request("iphone_type_text", &args(json!({"text": "设置"}))).unwrap(),
             Request::TypeText { text: "设置".into(), submit: false }
+        );
+    }
+
+    #[test]
+    fn wrong_typed_parameters_are_errors_not_defaults() {
+        let args = |v: Value| v.as_object().unwrap().clone();
+        assert!(to_request("iphone_tap_element", &args(json!({"text": "设置", "index": -1}))).is_err());
+        assert!(to_request("iphone_list_elements", &args(json!({"limit": 1.5}))).is_err());
+        assert!(to_request("iphone_swipe", &args(json!({"from_x": 1, "from_y": 2, "to_x": "x", "to_y": 4}))).is_err());
+        // 写成字符串的数字照收（toolkit 的 pydantic 也收）
+        assert_eq!(
+            to_request("iphone_tap_element", &args(json!({"text": "设置", "index": "2"}))).unwrap(),
+            Request::TapElement { text: "设置".into(), index: 2 }
+        );
+        assert_eq!(
+            to_request("iphone_list_elements", &args(json!({"limit": null}))).unwrap(),
+            Request::ListElements { filter: String::new(), limit: 150 }
         );
     }
 

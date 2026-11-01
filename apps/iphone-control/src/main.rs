@@ -89,11 +89,15 @@ async fn main() -> anyhow::Result<()> {
     let _ = rustls::crypto::ring::default_provider().install_default();
     let cli = Cli::parse();
     let quiet = matches!(cli.command, Command::Mcp);
+    // ICTL_LOG 留空（.env 里常见的 `ICTL_LOG=`）当作没设；原来空值会生成一个什么都不放行的过滤器
+    let filter =
+        env_nonempty("ICTL_LOG").and_then(|v| tracing_subscriber::EnvFilter::try_new(v).ok()).unwrap_or_else(|| {
+            tracing_subscriber::EnvFilter::new(if quiet { "warn" } else { "info,idevice=warn,apple_codesign=warn" })
+        });
     tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
-        .with_env_filter(tracing_subscriber::EnvFilter::try_from_env("ICTL_LOG").unwrap_or_else(|_| {
-            tracing_subscriber::EnvFilter::new(if quiet { "warn" } else { "info,idevice=warn,apple_codesign=warn" })
-        }))
+        .with_ansi(std::io::IsTerminal::is_terminal(&std::io::stderr()))
+        .with_env_filter(filter)
         .init();
 
     match cli.command {
@@ -160,7 +164,12 @@ fn env_nonempty(key: &str) -> Option<String> {
 }
 
 async fn ask(socket: &Path, req: Request) -> anyhow::Result<Response> {
-    protocol::call(socket, &req).await.with_context(|| {
+    // 签名要等装完，不设时限；其余命令守护进程忙也最多等 3 分钟
+    let timeout = match req {
+        Request::Resign { .. } => None,
+        _ => Some(Duration::from_secs(180)),
+    };
+    protocol::call(socket, &req, timeout).await.with_context(|| {
         format!("连不上守护进程（{}）：先启动 iphone-control daemon（容器里是入口进程）", socket.display())
     })
 }
@@ -242,11 +251,10 @@ fn read_secret(prompt: &str) -> anyhow::Result<String> {
     r
 }
 
+/// 账号目录和 anisette 地址：与守护进程同一份配置（路径、环境变量的读法都在 Config 里）
 fn account_dir(data_dir: &Path) -> ictl_sign::AccountDir {
-    ictl_sign::AccountDir {
-        dir: data_dir.join("account"),
-        anisette_url: std::env::var("ICTL_ANISETTE_URL").ok().filter(|v| !v.trim().is_empty()),
-    }
+    let cfg = ictl_daemon::Config::from_env(data_dir);
+    ictl_sign::AccountDir { dir: cfg.account_dir(), anisette_url: cfg.anisette_url }
 }
 
 async fn login(data_dir: &Path, email: Option<String>) -> anyhow::Result<()> {
@@ -273,13 +281,13 @@ async fn login(data_dir: &Path, email: Option<String>) -> anyhow::Result<()> {
         Ok(ictl_sign::TwoFactorAction::SubmitCode(code))
     };
     account_dir(data_dir).login(&email, &password, two_factor).await?;
-    println!("登录成功，会话已保存到 {}", data_dir.join("account").display());
+    println!("登录成功，会话已保存到 {}", account_dir(data_dir).dir.display());
     Ok(())
 }
 
 fn passcode(data_dir: &Path, action: PasscodeAction) -> anyhow::Result<()> {
     use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-    let path = data_dir.join("secrets/passcode");
+    let path = ictl_daemon::Config::from_env(data_dir).passcode_file();
     match action {
         PasscodeAction::Clear => {
             let _ = std::fs::remove_file(&path);
@@ -293,10 +301,12 @@ fn passcode(data_dir: &Path, action: PasscodeAction) -> anyhow::Result<()> {
             if p.len() < 4 || !p.bytes().all(|b| b.is_ascii_digit()) {
                 bail!("只支持 4 位以上的纯数字密码");
             }
-            let dir = data_dir.join("secrets");
-            std::fs::create_dir_all(&dir)?;
-            std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))?;
+            let dir = path.parent().context("密码文件路径没有上级目录")?;
+            std::fs::create_dir_all(dir)?;
+            std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
             let mut f = std::fs::OpenOptions::new().create(true).write(true).truncate(true).mode(0o600).open(&path)?;
+            // mode() 只在新建时生效：已有文件也收紧
+            f.set_permissions(std::fs::Permissions::from_mode(0o600))?;
             f.write_all(p.as_bytes())?;
             println!("已保存。别忘了在手机上把「自动锁定」从「永不」改回较短时间。");
         }
@@ -335,7 +345,7 @@ async fn setup(cli: &Cli) -> anyhow::Result<()> {
     if !found {
         bail!("10 分钟内没检测到手机：用数据线接好并解锁手机");
     }
-    let udid = std::env::var("IPHONE_UDID").ok().filter(|v| !v.is_empty());
+    let udid = env_nonempty("IPHONE_UDID");
     let device = Device::find(udid.as_deref()).await?;
     println!("  手机 {}", device.udid);
 
@@ -408,21 +418,78 @@ async fn setup(cli: &Cli) -> anyhow::Result<()> {
 }
 
 /// 显式开启：127.0.0.1:port → 手机上的 WDA 8100。只绑本机回环地址。
+/// 容器用 host 网络，所以这就是宿主机的回环地址：本机的其他用户、浏览器里的网页都能访问到，而 WDA 没有认证。
+/// 浏览器那条路（DNS rebinding）靠检查 Host 头挡住；本机其他用户挡不住，用完就停。
 async fn wda_bridge(port: u16) -> anyhow::Result<()> {
-    let udid = std::env::var("IPHONE_UDID").ok().filter(|v| !v.is_empty());
+    let udid = env_nonempty("IPHONE_UDID");
     let device = ictl_device::Device::find(udid.as_deref()).await?;
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", port)).await?;
     println!("WDA 桥接 127.0.0.1:{port} → 手机 {} 的 8100 端口（Ctrl-C 停止）", device.udid);
+    println!("注意：本机所有用户都能经这个端口控制手机（WDA 没有认证），用完就停掉。");
     loop {
-        let (mut client, _) = listener.accept().await?;
+        let (client, _) = listener.accept().await?;
         let device = device.clone();
         tokio::spawn(async move {
-            match device.connect_port(8100).await {
-                Ok(mut remote) => {
-                    let _ = tokio::io::copy_bidirectional(&mut client, &mut remote).await;
-                }
-                Err(e) => tracing::warn!("连接手机 WDA 端口失败：{e}"),
+            if let Err(e) = bridge_conn(client, &device).await {
+                tracing::warn!("桥接连接出错：{e}");
             }
         });
+    }
+}
+
+/// 先读到第一个请求的头部，Host 必须是本机回环地址才转发：恶意网页借 DNS rebinding 发到 127.0.0.1 的请求，
+/// Host 头是它自己的域名
+async fn bridge_conn(mut client: tokio::net::TcpStream, device: &ictl_device::Device) -> anyhow::Result<()> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let mut head = Vec::new();
+    let mut buf = [0u8; 4096];
+    while !head.windows(4).any(|w| w == b"\r\n\r\n") {
+        if head.len() > 64 * 1024 {
+            bail!("请求头太长");
+        }
+        let n = client.read(&mut buf).await?;
+        if n == 0 {
+            return Ok(());
+        }
+        head.extend_from_slice(&buf[..n]);
+    }
+    if !host_is_loopback(&head) {
+        client.write_all(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").await?;
+        return Ok(());
+    }
+    let mut remote = device.connect_port(8100).await?;
+    remote.write_all(&head).await?;
+    tokio::io::copy_bidirectional(&mut client, &mut remote).await?;
+    Ok(())
+}
+
+/// HTTP 请求头里的 Host 是不是 localhost / 127.0.0.1 / [::1]（端口不限）
+fn host_is_loopback(head: &[u8]) -> bool {
+    let text = String::from_utf8_lossy(head);
+    let Some(host) = text.split("\r\n").skip(1).find_map(|l| {
+        let (k, v) = l.split_once(':')?;
+        k.trim().eq_ignore_ascii_case("host").then(|| v.trim().to_ascii_lowercase())
+    }) else {
+        return false;
+    };
+    let name = match host.strip_prefix('[') {
+        Some(rest) => format!("[{}]", rest.split(']').next().unwrap_or_default()),
+        None => host.split(':').next().unwrap_or_default().to_owned(),
+    };
+    matches!(name.as_str(), "localhost" | "127.0.0.1" | "[::1]")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::host_is_loopback;
+
+    #[test]
+    fn bridge_only_accepts_loopback_host() {
+        assert!(host_is_loopback(b"GET /status HTTP/1.1\r\nHost: 127.0.0.1:8100\r\n\r\n"));
+        assert!(host_is_loopback(b"GET / HTTP/1.1\r\nhost: localhost\r\n\r\n"));
+        assert!(host_is_loopback(b"GET / HTTP/1.1\r\nHost: [::1]:8100\r\n\r\n"));
+        assert!(!host_is_loopback(b"GET / HTTP/1.1\r\nHost: evil.example:8100\r\n\r\n"));
+        assert!(!host_is_loopback(b"GET / HTTP/1.1\r\nHost: localhost.evil.example\r\n\r\n"));
+        assert!(!host_is_loopback(b"GET / HTTP/1.1\r\n\r\n"));
     }
 }

@@ -142,7 +142,7 @@ impl WdaRunner {
                 async move { XCUITestService::new(provider).run(cfg, &mut ErrorListener(progress), None).await },
             )
         };
-        let runner = Self { bundle_id: bundle_id.to_owned(), task };
+        let mut runner = Self { bundle_id: bundle_id.to_owned(), task };
         let client = WdaClient::new(DeviceTransport::new(provider, WDA_PORT));
 
         let failure = |extra: Option<String>| {
@@ -170,7 +170,7 @@ impl WdaRunner {
                 }
             }
             if runner.task.is_finished() {
-                let r = runner.task.await;
+                let r = (&mut runner.task).await;
                 let msg = match r {
                     Ok(Ok(())) => "runner 提前结束".to_owned(),
                     Ok(Err(e)) => e.to_string(),
@@ -194,7 +194,13 @@ impl WdaRunner {
         !self.task.is_finished()
     }
 
-    pub fn stop(self) {
+    /// 停掉 runner（即丢掉它，见 Drop）
+    pub fn stop(self) {}
+}
+
+/// 丢掉就停：守护进程的后台启动任务可能在 start() 中途被取消，不能留下一个没人管的 XCTest 会话
+impl Drop for WdaRunner {
+    fn drop(&mut self) {
         self.task.abort();
     }
 }

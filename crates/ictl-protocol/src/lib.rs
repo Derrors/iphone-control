@@ -90,18 +90,51 @@ impl Response {
     }
 }
 
-/// 发一个请求、读一个响应（客户端用）
-pub async fn call(socket: &std::path::Path, req: &Request) -> std::io::Result<Response> {
+impl Request {
+    /// 会改变手机状态的操作。守护进程忙时排队太久就放弃，免得点击落到已经变了的屏幕上
+    pub fn is_device_action(&self) -> bool {
+        matches!(
+            self,
+            Self::Tap { .. }
+                | Self::TapElement { .. }
+                | Self::LongPress { .. }
+                | Self::Swipe { .. }
+                | Self::TypeText { .. }
+                | Self::PressButton { .. }
+                | Self::LaunchApp { .. }
+                | Self::TerminateApp { .. }
+                | Self::OpenUrl { .. }
+        )
+    }
+}
+
+/// 发一个请求、读一个响应（客户端用）。`timeout` 为 None 时一直等（例如 `sign` 要等签名装完）
+pub async fn call(
+    socket: &std::path::Path,
+    req: &Request,
+    timeout: Option<std::time::Duration>,
+) -> std::io::Result<Response> {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-    let stream = tokio::net::UnixStream::connect(socket).await?;
-    let (r, mut w) = stream.into_split();
-    let mut line = serde_json::to_string(req)?;
-    line.push('\n');
-    w.write_all(line.as_bytes()).await?;
-    w.shutdown().await?;
-    let mut resp = String::new();
-    BufReader::new(r).read_line(&mut resp).await?;
-    serde_json::from_str(&resp).map_err(std::io::Error::other)
+    let exchange = async {
+        let stream = tokio::net::UnixStream::connect(socket).await?;
+        let (r, mut w) = stream.into_split();
+        let mut line = serde_json::to_string(req)?;
+        line.push('\n');
+        w.write_all(line.as_bytes()).await?;
+        w.shutdown().await?;
+        let mut resp = String::new();
+        BufReader::new(r).read_line(&mut resp).await?;
+        serde_json::from_str(&resp).map_err(std::io::Error::other)
+    };
+    match timeout {
+        None => exchange.await,
+        Some(t) => tokio::time::timeout(t, exchange).await.map_err(|_| {
+            std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                format!("守护进程 {} 秒内没有应答（可能正忙，例如正在启动 WDA 或重签）", t.as_secs()),
+            )
+        })?,
+    }
 }
 
 #[cfg(test)]

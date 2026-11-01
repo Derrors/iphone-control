@@ -1989,6 +1989,7 @@ dependencies = [
  "anyhow",
  "base64 0.23.1",
  "ictl-device",
+ "ictl-protocol",
  "ictl-sign",
  "ictl-unlock",
  "ictl-wda",
@@ -1996,7 +1997,6 @@ dependencies = [
  "reqwest 0.13.5",
  "serde",
  "serde_json",
- "thiserror 2.0.21",
  "tokio",
  "tracing",
 ]
@@ -2020,8 +2020,17 @@ name = "ictl-mcp"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "ictl-daemon",
+ "ictl-protocol",
  "rmcp",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
+name = "ictl-protocol"
+version = "0.1.0"
+dependencies = [
+ "serde",
  "serde_json",
  "tokio",
 ]

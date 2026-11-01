@@ -22,7 +22,8 @@ impl EventLog {
         Self { path: dir.join("daemon.log"), max }
     }
 
-    pub fn path(&self) -> &Path {
+    #[cfg(test)]
+    fn path(&self) -> &Path {
         &self.path
     }
 
@@ -41,11 +42,24 @@ impl EventLog {
         writeln!(f, "{} {msg}", timestamp())
     }
 
-    /// 最后 n 行
+    /// 最后 n 行。只读文件末尾一段（日志最大 5MB，每次 status 都整个读太浪费）
     pub fn tail(&self, n: usize) -> Vec<String> {
-        let text = std::fs::read_to_string(&self.path).unwrap_or_default();
-        let lines: Vec<_> = text.lines().map(str::to_owned).collect();
-        lines[lines.len().saturating_sub(n)..].to_vec()
+        use std::io::{Read, Seek, SeekFrom};
+        const WINDOW: u64 = 16 * 1024;
+        let Ok(mut f) = std::fs::File::open(&self.path) else { return Vec::new() };
+        let len = f.metadata().map(|m| m.len()).unwrap_or(0);
+        let start = len.saturating_sub(WINDOW);
+        let mut buf = Vec::new();
+        if f.seek(SeekFrom::Start(start)).is_err() || f.read_to_end(&mut buf).is_err() {
+            return Vec::new();
+        }
+        let text = String::from_utf8_lossy(&buf);
+        let mut lines: Vec<&str> = text.lines().collect();
+        // 从中间截开的话第一行不完整，丢掉
+        if start > 0 && !lines.is_empty() {
+            lines.remove(0);
+        }
+        lines[lines.len().saturating_sub(n)..].iter().map(|s| (*s).to_owned()).collect()
     }
 }
 

@@ -40,10 +40,6 @@ path = "src/lib.rs"
 name = "rcodesign"
 path = "src/main.rs"
 
-[[test]]
-name = "cli_tests"
-path = "tests/cli_tests.rs"
-
 [dependencies.anyhow]
 version = "1.0.93"
 

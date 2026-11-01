@@ -13,7 +13,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      # 锁定工具链（与 Docker 构建镜像一致）：新版 clippy 的 lint 不会在代码没变时把 CI 弄挂
+      - uses: dtolnay/rust-toolchain@1.99.1
         with:
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
@@ -22,6 +23,15 @@ jobs:
         run: for p in ictl-device ictl-wda ictl-sign ictl-unlock ictl-daemon ictl-mcp ictl-protocol iphone-control; do cargo fmt -p $p -- --check; done
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - run: cargo test --workspace --locked
+
+  # Cargo.toml 声明的最低版本（rust-version）要真能编译
+  msrv:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.88.0
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check --workspace --locked
 
   secrets:
     runs-on: ubuntu-latest
@@ -45,3 +55,5 @@ jobs:
           context: .
           file: docker/Dockerfile
           push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

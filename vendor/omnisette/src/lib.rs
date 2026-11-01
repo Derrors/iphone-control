@@ -4,6 +4,7 @@
 //!
 //! If you want remote anisette, make sure the `remote-anisette` feature is enabled. (it's currently on by default)
 
+#[cfg(feature = "local-anisette")]
 use crate::adi_proxy::{ADIProxyAnisetteProvider, ConfigurableADIProxy};
 use crate::anisette_headers_provider::AnisetteHeadersProvider;
 use adi_proxy::ADIError;
@@ -13,6 +14,7 @@ use thiserror::Error;
 
 pub mod adi_proxy;
 pub mod anisette_headers_provider;
+#[cfg(feature = "local-anisette")]
 pub mod store_services_core;
 
 #[cfg(feature = "remote-anisette-v3")]
@@ -138,6 +140,7 @@ impl AnisetteHeaders {
         configuration: AnisetteConfiguration,
     ) -> Result<AnisetteHeadersProviderRes, AnisetteError> {
         // TODO: handle Err because it will just go to remote anisette and not tell the user anything
+        #[cfg(feature = "local-anisette")]
         if let Ok(ssc_anisette_headers_provider) =
             AnisetteHeaders::get_ssc_anisette_headers_provider(configuration.clone())
         {
@@ -154,6 +157,7 @@ impl AnisetteHeaders {
         )));
     }
 
+    #[cfg(feature = "local-anisette")]
     pub fn get_ssc_anisette_headers_provider(
         configuration: AnisetteConfiguration,
     ) -> Result<AnisetteHeadersProviderRes, AnisetteError> {

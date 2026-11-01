@@ -9,8 +9,14 @@ services:
         HTTPS_PROXY: ${HTTPS_PROXY:-}
     image: ${IMAGE:-iphone-control:local}
     container_name: ${CONTAINER_NAME:-iphone-control}
-    # 要直接访问 USB 设备；隧道走用户态 TCP 栈，不建网卡、不改宿主机网络
-    privileged: true
+    # 只开放 USB 设备（字符设备主号 189），不再整个 privileged；隧道走用户态 TCP 栈，不建网卡、不改宿主机网络。
+    # /dev/bus/usb 用绑定挂载（见 volumes）而不是 devices：拔插后新出现的设备节点在容器里也看得到
+    device_cgroup_rules:
+      - "c 189:* rmw"
+    # 守护进程是 PID 1：加 init 回收子进程（stty 等），并把停止信号转给它
+    init: true
+    # 停止时先停 HID 屏幕媒体流、runner、usbmuxd；给够时间，避免被强杀后手机端留下会话
+    stop_grace_period: 30s
     # WDA 经 usbmuxd 直连手机，本机不监听任何端口；host 网络只为了用宿主机上的代理
     network_mode: host
     restart: unless-stopped

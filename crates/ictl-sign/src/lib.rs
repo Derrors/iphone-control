@@ -104,6 +104,7 @@ impl AccountDir {
     /// 用保存的令牌恢复会话，取第一个团队
     pub async fn session(&self) -> Result<Session> {
         restrict_dir(&self.dir)?;
+        restrict_tree(&self.dir)?;
         let store =
             AccountStore::load(&Some(self.store_path())).await.map_err(|e| SignError::Developer(e.to_string()))?;
         let acct = store.selected_account().ok_or(SignError::NotLoggedIn)?.clone();

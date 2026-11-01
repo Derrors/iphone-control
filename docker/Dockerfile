@@ -6,11 +6,27 @@ ARG DEBIAN_IMAGE=debian:trixie-slim@sha256:f6b08b09a05725f9431502d3b5714f5c4576e
 ARG RUST_IMAGE=rust:1-trixie@sha256:09027f873d45b8ecd1dc86f1fa13b7a62b875c961f017a0e331267b350430137
 
 # ---- 编译 ----
+# 依赖下载和编译产物放在构建缓存里：改 README、compose 等不再从头编译约 570 个 crate
 FROM ${RUST_IMAGE} AS build
 WORKDIR /src
 COPY . .
-RUN cargo build --release --locked -p iphone-control \
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    --mount=type=cache,target=/src/target \
+    cargo build --release --locked -p iphone-control \
  && cp target/release/iphone-control /iphone-control
+
+# ---- 第三方许可证清单（cargo-about，按 Cargo.lock 生成，含 MIT/Apache 等要求随附的许可证全文）----
+FROM ${RUST_IMAGE} AS notices
+ARG CARGO_ABOUT_VERSION=0.9.3
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    cargo install --locked --features cli "cargo-about@${CARGO_ABOUT_VERSION}"
+WORKDIR /src
+COPY . .
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    cargo about generate --locked -m apps/iphone-control/Cargo.toml -c docker/about.toml docker/about.hbs \
+      -o /THIRD_PARTY_LICENSES.html
 
 # ---- WebDriverAgent：Appium 官方构建的未签名真机包，重新打成 IPA ----
 # 计划改为本项目在 macOS CI 上自己编译（docs/roadmap.md 阶段 7）
@@ -38,12 +54,16 @@ COPY --from=build /iphone-control /usr/local/bin/iphone-control
 COPY --from=wda /out/WDA-unsigned.ipa /usr/share/iphone-control/WDA-unsigned.ipa
 COPY --from=wda /out/licenses/ /usr/share/licenses/
 COPY LICENSE THIRD_PARTY.md /usr/share/doc/iphone-control/
+COPY --from=notices /THIRD_PARTY_LICENSES.html /usr/share/doc/iphone-control/THIRD_PARTY_LICENSES.html
 COPY vendor/plume_core/LICENSE /usr/share/licenses/plume_core/LICENSE
+COPY vendor/plume_store/LICENSE-MIT-Impactor /usr/share/licenses/plume_store/LICENSE
 COPY vendor/omnisette/LICENSE /usr/share/licenses/omnisette/LICENSE
 COPY vendor/apple-codesign/LICENSE /usr/share/licenses/apple-codesign/LICENSE
 # usbmuxd 把配对记录写在 /var/lib/lockdown，指到数据目录里，删掉重建容器也不丢
 RUN rm -rf /var/lib/lockdown && ln -s /var/lib/iphone-control/lockdown /var/lib/lockdown
 ENV ICTL_DATA_DIR=/var/lib/iphone-control
+# 截图处理时临时分配几十 MB；glibc 默认按线程开很多 arena，释放后也不还给系统，看起来像内存涨了不回落
+ENV MALLOC_ARENA_MAX=2
 LABEL org.opencontainers.image.title="iphone-control" \
       org.opencontainers.image.description="Drive a real iPhone from Linux: WebDriverAgent + CoreDevice HID + MCP, single Rust binary" \
       org.opencontainers.image.licenses="MIT AND MPL-2.0"

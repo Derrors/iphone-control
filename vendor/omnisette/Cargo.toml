@@ -1,4 +1,5 @@
-# vendored from Impactor v2.7.2 (b13d995)；本仓库只把 workspace 继承改成了显式版本，源码未改
+# vendored from Impactor v2.7.2 (b13d995)。本仓库的改动（见 THIRD_PARTY.md）：workspace 继承改成显式版本；
+# reqwest 用 rustls-no-provider；本地 anisette（加载苹果 Android 库，依赖没有许可证的 android-loader）改成可选 feature local-anisette
 [package]
 name = "omnisette"
 edition = "2024"
@@ -10,7 +11,9 @@ repository = "https://github.com/claration/impactor"
 [features]
 remote-anisette = []
 async = ["dep:async-trait"]
-default = ["remote-anisette", "dep:remove-async-await"]
+default = ["remote-anisette", "local-anisette", "dep:remove-async-await"]
+# 本地 anisette：加载苹果的 libstoreservicescore.so（需自备），依赖 android-loader（没有许可证声明）
+local-anisette = ["dep:android-loader"]
 remote-anisette-v3 = [
     "async",
     "dep:serde",
@@ -29,9 +32,9 @@ plist = "1.8"
 thiserror = "2.0"
 
 hex = "0.4"
-reqwest = { version = "0.13", default-features = false, features = [ "blocking", "json", "rustls", "gzip", "system-proxy", ] }
+reqwest = { version = "0.13", default-features = false, features = [ "blocking", "json", "rustls-no-provider", "gzip", "system-proxy", ] }
 uuid = { version = "1.3", features = ["v4", "fast-rng", "macro-diagnostics"] }
-android-loader = { git = "https://github.com/Dadoum/android-loader", branch = "bigger_pages" }
+android-loader = { git = "https://github.com/Dadoum/android-loader", branch = "bigger_pages", optional = true }
 libc = "0.2"
 log = "0.4"
 async-trait = { version = "0.1", optional = true }

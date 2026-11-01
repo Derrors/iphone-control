@@ -10,8 +10,6 @@ description = "Apple ID、描述文件、签名（含 .xctest）"
 [dependencies]
 plume_core.workspace = true
 plume_store.workspace = true
-tokio.workspace = true
-serde.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 plist.workspace = true

@@ -19,7 +19,7 @@ serde_json = { version = "1" }
 rustls = { version = "0.23", default-features = false, features = [ "std", "tls12", "ring", ] }
 goblin = "0.9"
 regex = "1.11"
-reqwest = { version = "0.13", default-features = false, features = [ "blocking", "json", "rustls", "gzip", "system-proxy", ] }
+reqwest = { version = "0.13", default-features = false, features = [ "blocking", "json", "rustls-no-provider", "gzip", "system-proxy", ] }
 base64 = "0.22"
 hex = "0.4"
 rand = "0.8"
@@ -40,7 +40,9 @@ sha1 = "0.10"             # p12
 p12-keystore = "0.2"      # p12 crate only supports legacy PKCS#12
 # Forks
 apple-codesign = { version = "0.29.0", default-features = false }
-omnisette = { path = "../omnisette", features = [
+# 本仓库改动：只要远程 anisette（不编本地 anisette 和 remove-async-await，见 THIRD_PARTY.md）
+omnisette = { path = "../omnisette", default-features = false, features = [
+    "remote-anisette",
     "remote-anisette-v3",
 ] }
 srp = "0.7.0-rc.1"

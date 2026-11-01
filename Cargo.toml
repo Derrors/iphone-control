@@ -40,12 +40,11 @@ idevice = { version = "=0.1.68", default-features = false, features = [
     "tss",
     "installation_proxy",
     "xctest",
-    "wda",
 ] }
 rmcp = { version = "=3.8.0", features = ["server", "transport-io"] }
 tokio = { version = "=1.54.1", features = ["full"] }
-reqwest = { version = "=0.13.5", default-features = false, features = ["json", "form", "rustls"] }
-# reqwest 带进 aws-lc-rs，idevice/plume_core 用 ring，两个都开时 rustls 不会自动选，入口处显式装 ring
+# rustls-no-provider：不编进 aws-lc-rs（C 代码，编译慢、体积大）；idevice/plume_core 用 ring，入口处显式装 ring 为默认 provider
+reqwest = { version = "=0.13.5", default-features = false, features = ["form", "rustls-no-provider"] }
 rustls = { version = "=0.23.46", default-features = false, features = ["ring"] }
 quick-xml = "=0.42.0"
 image = { version = "=0.25.10", default-features = false, features = ["png", "jpeg"] }
@@ -55,14 +54,12 @@ serde_json = "=1.0.154"
 thiserror = "=2.0.21"
 tracing = "=0.1.44"
 tracing-subscriber = { version = "=0.3.23", features = ["env-filter"] }
-toml = "=1.1.8"
 base64 = "=0.23.1"
 anyhow = "=1.0.104"
 plist = "=1.9.0"
 uuid = { version = "=1.23.1", features = ["v4"] }
 zip = { version = "=8.6.0", default-features = false, features = ["deflate"] }
 regex = "=1.12.3"
-log = "=0.4.29"
 
 # vendored Impactor 组件（见 THIRD_PARTY.md）
 plume_core = { path = "vendor/plume_core" }
@@ -86,4 +83,4 @@ idevice = { git = "https://github.com/jkcoxson/idevice", rev = "89702099f4d7552f
 [profile.release]
 lto = "thin"
 codegen-units = 1
-strip = "debuginfo"
+strip = true

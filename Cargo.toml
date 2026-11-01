@@ -21,6 +21,8 @@ edition = "2024"
 rust-version = "1.88"
 license = "MIT"
 publish = false
+repository = "https://github.com/Derrors/iphone-control"
+homepage = "https://github.com/Derrors/iphone-control"
 
 # 全部锁精确版本：idevice 0.2.0 之前每个小版本都可能有破坏性变更（见 docs/decisions.md D9）
 [workspace.dependencies]

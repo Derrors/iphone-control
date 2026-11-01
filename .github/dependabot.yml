@@ -1,0 +1,20 @@
+# Dependencies are pinned to exact versions on purpose (docs/decisions.md D9): every upgrade arrives as its
+# own pull request and has to pass CI; device-facing ones (idevice, rmcp, tokio) also need a real-phone test.
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    ignore:
+      # git dependency pinned to an upstream commit until the next release (docs/decisions.md D1)
+      - dependency-name: idevice
+    groups:
+      minor-and-patch:
+        update-types: [minor, patch]
+        exclude-patterns: [rmcp, tokio, quick-xml]
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly

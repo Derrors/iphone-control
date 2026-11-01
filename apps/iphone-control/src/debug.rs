@@ -1,4 +1,4 @@
-//! `iphone-control debug …`：真机诊断（原第 0 步 spike，结果见 docs/spike-results.md）。直接调用设备层和 WDA 客户端，
+//! `iphone-control debug …`：真机诊断（原第 0 步 spike，结果见 docs/dev/spike-results.md）。直接调用设备层和 WDA 客户端，
 //! 不经守护进程。`wda`、`e2e` 会启动 XCTest、`hid` 会开屏幕媒体流，和守护进程同时跑会互相干扰：
 //! 先停掉守护进程（例如在另一个只跑 usbmuxd 的容器里运行）。
 

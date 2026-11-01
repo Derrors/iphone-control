@@ -5,6 +5,8 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
+repository.workspace = true
+homepage.workspace = true
 description = "守护进程：状态机、usbmuxd 看护、重签、通知、控制接口"
 
 [dependencies]

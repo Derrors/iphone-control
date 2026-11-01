@@ -710,7 +710,7 @@ mod tests {
     #[test]
     fn widget_contents_are_moved_to_screen_coordinates() {
         let els = parse(HOME_WIDGETS_IOS27, SCREEN);
-        let city = els.iter().find(|e| e.label == "上海市").unwrap();
+        let city = els.iter().find(|e| e.label == "示例市").unwrap();
         // 小组件内容区在 (29,84)，文字在其中 (19,19) 起 52x13
         assert_eq!(city.center, (74, 110));
         // 主屏图标本来就是屏幕坐标，不受影响

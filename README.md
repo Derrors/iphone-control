@@ -1,130 +1,179 @@
 # iphone-control
 
-在 Linux 上（不需要 Mac、不需要付费开发者账号）控制一台通过 USB 连接的真实 iPhone，并把能力以 MCP 工具的形式提供给 AI agent。用 Rust 写成，产物是**一个二进制**，外加系统自带的 `usbmuxd`。
+**English** | [简体中文](README.zh-CN.md)
 
-> **状态：阶段 0～6 已在真机（iPhone 15 Pro Max，iOS 27.0.1）通过**：设备层、守护进程、MCP、签名重签、通知、自动解锁。
-> 97 个离线单测和 `clippy -D warnings` 都通过；阶段 7（打包发布）还有几项没做。
-> 保底方案是前身项目 iphone-control-toolkit。各阶段的真机结果和剩余项见 [roadmap 的完成情况](docs/roadmap.md#完成情况)。
+[![CI](https://github.com/Derrors/iphone-control/actions/workflows/ci.yml/badge.svg)](https://github.com/Derrors/iphone-control/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-## 与 iphone-control-toolkit 的关系
+Control a real, USB-connected iPhone from Linux — no Mac, no paid Apple developer account — and hand it to AI agents as [MCP](https://modelcontextprotocol.io) tools. One Rust binary plus the system `usbmuxd`.
 
-| | iphone-control-toolkit（B 方案，保底） | iphone-control（本仓库，D 方案） |
-|---|---|---|
-| 做法 | 容器里装 go-ios、pymobiledevice3、plumesign 的命令行，由 Python MCP 和 shell 脚本调用 | 基于 Rust 库 [idevice](https://github.com/jkcoxson/idevice) 和 [Impactor](https://github.com/claration/impactor) 的组件，一个进程完成全部工作 |
-| 语言 | Go + Python + Rust + Shell | Rust（手机端 WDA 仍是 Objective-C） |
-| 进程 | supervisor.sh + 多个命令行进程，每条 HID 命令重建隧道 | 一个守护进程独占设备，隧道、HID 会话、WDA 会话常驻复用 |
-| WDA 端口 | 转发到 127.0.0.1:8100 | 经 usbmuxd 直连手机，**本机不监听任何端口** |
-| 许可证 | MIT（自己的代码） | MIT（自己的代码）；vendor 的签名组件是 MPL-2.0，见 [licensing](docs/licensing.md) |
-| iOS 27 实测 | 全部通过 | 阶段 0～6 全部通过 |
-
-两者的 MCP 工具名、参数、返回文字保持一致，切换时 agent 侧不用改。
-
-## 快速开始
-
-```bash
-cp .env.example .env            # 按需改代理、通知
-docker compose up -d --build    # 首次构建要编译 Rust，约 2 分钟（依赖和编译产物走构建缓存）
-docker exec -it iphone-control iphone-control setup   # 配对 → 开发者模式 → 登录 Apple ID → 签名安装 WDA
-docker exec -it iphone-control iphone-control mcp-config   # 打印注册到 Claude Code 的命令
-```
-
-> 不要和 toolkit 同时连着同一部手机：两边都会拉起 usbmuxd、各自持有 XCTest 会话。
+> **Status: early (0.x).** Everything below works end to end on one device: iPhone 15 Pro Max, iOS 27.0.1. Other models and iOS 17+ should work but are untested — reports are welcome.
 >
-> 容器不用 `privileged`：只开放 USB 字符设备（`device_cgroup_rules: "c 189:* rmw"`），`/dev/bus/usb` 绑定挂载。这套设置下的 USB 拔插恢复已在真机上确认。
+> The CLI, `doctor` output and MCP tool results are currently in **Simplified Chinese**. Agents handle this fine; a human reading the logs may need a translator.
 
-## 从源码运行（不用 Docker）
+## What it does
 
-需要 Rust 1.88 以上（[rustup](https://rustup.rs)）、C 编译器（编译 bzip2/xz 的捆绑源码）和系统的 usbmuxd。以 Debian/Ubuntu 为例：
+- **Agent tools** — screenshots (with zoom-in regions), on-screen element lists, tap by coordinates or by text, swipe, long press, typing (including Chinese), hardware buttons, launch/terminate apps, open URLs, wait for text to appear, and batches of steps. Any action can also return the resulting screen, saving the agent a round trip. See [docs/tools.md](docs/tools.md).
+- **Keeps itself running** — pairs with the phone, mounts the Developer Disk Image, signs WebDriverAgent with your free Apple ID and re-signs it before the 7-day profile expires, restarts WDA when it dies, and recovers after the phone is unplugged or rebooted.
+- **Fallback path** — when WDA is down, taps, swipes, key presses and screenshots still work through CoreDevice HID.
+- **Tells you when it needs you** — Bark or Telegram notifications for a failed re-sign, an expired Apple ID session, a reboot that needs the passcode, or the phone going offline.
+- **Optional auto-unlock** — off by default; read [SECURITY.md](SECURITY.md) before turning it on.
+- **No open ports** — WDA is reached through usbmuxd; nothing listens on the network.
 
-```bash
-sudo apt install build-essential git usbmuxd   # usbmuxd 由 udev 在插上手机时拉起
-git clone <本仓库地址> iphone-control && cd iphone-control
-cargo install --path apps/iphone-control --locked   # 装到 ~/.cargo/bin/iphone-control
-iphone-control daemon            # 前台运行;常驻用下面的 systemd 用户服务
-iphone-control setup             # 另开一个终端:配对 → 开发者模式 → 登录 Apple ID → 签名安装 WDA
-iphone-control mcp-config        # 打印 claude mcp add iphone -s user -- ~/.cargo/bin/iphone-control --socket … mcp
+```
+AI agent ──stdio──▶ iphone-control mcp ──unix socket──▶ iphone-control daemon ──usbmuxd/USB──▶ iPhone (WebDriverAgent)
 ```
 
-以普通用户运行，和容器部署的区别：
+One long-running daemon owns the device (tunnel, HID session, WDA session); each agent session gets a thin MCP client. Details: [docs/architecture.md](docs/architecture.md) (Chinese).
 
-| | 容器 | 从源码（普通用户） |
-|---|---|---|
-| 数据目录 | `./data`（容器内 `/var/lib/iphone-control`） | `~/.local/share/iphone-control` |
-| 控制接口 | 容器内 `/run/iphone-control/ctl.sock` | `$XDG_RUNTIME_DIR/iphone-control/ctl.sock` |
-| usbmuxd | 守护进程拉起并看护；容器没有 udev，靠 sysfs 发现漏掉的设备 | 系统服务，udev 处理插拔；守护进程不拉起 |
-| 配对记录 | 数据目录的 `lockdown/` | 系统的 `/var/lib/lockdown`（usbmuxd 管理） |
-| 未签名的 WDA | 镜像自带 | 第一次签名前下载同一版本（核对 sha256），存到数据目录的 `wda/` |
-| 配置 | `.env` | 环境变量：shell 里 `set -a; . ~/.config/iphone-control/env; set +a`，或 systemd 的环境文件 |
-| MCP | `docker exec -i iphone-control iphone-control mcp` | 直接调用二进制 |
+## Requirements
 
-常驻运行用 [deploy/iphone-control.service](deploy/iphone-control.service)（systemd 用户服务）：
+- A Linux host (x86_64 or arm64) with a USB port.
+- Docker with Compose v2 — or, without Docker, Rust 1.88+, a C compiler and `usbmuxd` ([install from source](#install-from-source-without-docker)).
+- An iPhone on iOS 17 or later with a data cable. Setup walks you through Developer Mode.
+- A free Apple ID. Using a dedicated one is recommended (see [Security](#security-and-privacy)).
+- Internet access to Apple, to the anisette server, and to GitHub (the Developer Disk Image and WebDriverAgent are downloaded on first use).
+
+## Quick start (Docker)
+
+```bash
+git clone https://github.com/Derrors/iphone-control && cd iphone-control
+cp .env.example .env              # optional: proxy, notifications, auto-unlock settings
+docker compose up -d --build      # the first build compiles Rust and takes a few minutes
+docker exec -it iphone-control iphone-control setup
+docker exec -it iphone-control iphone-control mcp-config   # prints the command to register the MCP server
+```
+
+Once a release is published you can skip the build: set `IMAGE=ghcr.io/derrors/iphone-control:latest` in `.env`, then run `docker compose pull && docker compose up -d --no-build`.
+
+`setup` can be re-run at any time. It walks through:
+
+1. **Connect** the phone and unlock it.
+2. **Pair** — tap *Trust* on the phone and enter the passcode.
+3. **Developer Mode** — *Settings → Privacy & Security → Developer Mode → On*, restart, then confirm after unlocking.
+4. **Apple ID login** — the password and two-factor code are typed into this terminal only.
+5. **Sign and install WebDriverAgent** — keep the phone unlocked.
+6. **Start WebDriverAgent** — the first time, trust your Apple ID under *Settings → General → VPN & Device Management*. If the phone asks you to *enter the iPhone passcode for "XCTest"* (Enable UI Automation), enter it.
+
+The container is not `privileged`: it only gets USB character devices (`device_cgroup_rules: "c 189:* rmw"`) plus a bind mount of `/dev/bus/usb`. Don't run two copies (or another usbmuxd-based tool) against the same phone.
+
+## Connect an MCP client
+
+Claude Code (this is what `mcp-config` prints for the container):
+
+```bash
+claude mcp add iphone -s user -- docker exec -i iphone-control iphone-control mcp
+```
+
+Other clients (Claude Desktop, Cursor, …) take the same command in their JSON config:
+
+```json
+{
+  "mcpServers": {
+    "iphone": { "command": "docker", "args": ["exec", "-i", "iphone-control", "iphone-control", "mcp"] }
+  }
+}
+```
+
+For a source install, use `iphone-control --socket <path> mcp` instead; `iphone-control mcp-config` prints the exact command.
+
+## Install from source (without Docker)
+
+Debian/Ubuntu example:
+
+```bash
+sudo apt install build-essential git usbmuxd     # udev starts usbmuxd when the phone is plugged in
+git clone https://github.com/Derrors/iphone-control && cd iphone-control
+cargo install --path apps/iphone-control --locked  # installs ~/.cargo/bin/iphone-control
+iphone-control daemon      # foreground; see below for a systemd user service
+iphone-control setup       # in a second terminal
+iphone-control mcp-config
+```
+
+To keep it running, use the systemd user service in [deploy/iphone-control.service](deploy/iphone-control.service):
 
 ```bash
 mkdir -p ~/.config/systemd/user ~/.config/iphone-control
 cp deploy/iphone-control.service ~/.config/systemd/user/
-cp .env.example ~/.config/iphone-control/env   # 按需改代理、通知;CONTAINER_NAME、IMAGE、DATA_DIR 只给 compose 用
+cp .env.example ~/.config/iphone-control/env      # CONTAINER_NAME, IMAGE and DATA_DIR are compose-only
 systemctl --user daemon-reload && systemctl --user enable --now iphone-control
-loginctl enable-linger "$USER"                   # 不登录也随开机启动
+loginctl enable-linger "$USER"                    # start at boot without logging in
 ```
 
-> - 守护进程、`setup` 等命令和 MCP 要用同一个用户运行：路径按用户算，别的用户要用 `--socket`、`--data-dir`（或 `ICTL_SOCKET`、`ICTL_DATA_DIR`）指过去。
-> - 以 root 运行时默认路径和容器里一样（`/var/lib/iphone-control`、`/run/iphone-control/ctl.sock`），守护进程会自己拉起 usbmuxd；宿主机已有 usbmuxd 服务时设 `ICTL_MANAGE_USBMUXD=0`。
-> - 不要和容器版同时连同一部手机。装了系统 usbmuxd 后，一插手机 udev 就会拉起它，和容器里的 usbmuxd 抢设备；还要用容器版时先 `sudo systemctl mask usbmuxd`。
+| | Container | Source install (regular user) |
+|---|---|---|
+| Data directory | `./data` (`/var/lib/iphone-control` inside) | `~/.local/share/iphone-control` |
+| Control socket | `/run/iphone-control/ctl.sock` inside the container | `$XDG_RUNTIME_DIR/iphone-control/ctl.sock` |
+| usbmuxd | started and supervised by the daemon (no udev in the container) | the system service; the daemon does not start it |
+| Pairing records | `lockdown/` in the data directory | the system's `/var/lib/lockdown` |
+| Unsigned WDA | shipped in the image | downloaded (sha256-checked) before the first signing |
+| Configuration | `.env` | environment variables, e.g. the systemd `EnvironmentFile` |
 
-## 命令
+Run the daemon, the CLI and the MCP server as the same user. With a host `usbmuxd` installed, `sudo systemctl mask usbmuxd` before going back to the container, or the two will fight over the phone.
 
-| 命令 | 作用 |
+## Commands
+
+| Command | Purpose |
 |---|---|
-| `daemon` | 常驻守护进程（容器入口）：状态机、usbmuxd 看护、重签调度、通知、控制接口 |
-| `mcp` | MCP stdio 服务，经控制接口调用守护进程 |
-| `status` / `doctor` | 状态快照、最近日志 / 逐层诊断 |
-| `setup` | 首次安装向导，可重复运行 |
-| `login` | 登录 Apple ID（密码不回显，支持双重认证和短信） |
-| `sign` / `resign [--force]` | 签名安装 WDA / 快过期才重签 |
-| `passcode set\|clear` / `unlock-reset` | 自动解锁（默认关闭） |
-| `wda-bridge --port 8100` | 显式把 WDA 桥接到 127.0.0.1，供外部工具使用（见下方注意） |
-| `notify-test` | 按已配置的渠道给每类事件发一条测试通知 |
+| `daemon` | The long-running daemon (container entry point) |
+| `mcp` | MCP stdio server; talks to the daemon over the control socket |
+| `mcp-config` | Print the command that registers the MCP server with Claude Code |
+| `status` / `doctor` | State snapshot and recent log / layer-by-layer diagnosis with fixes |
+| `setup` | First-run wizard (re-runnable) |
+| `login` | Log in to an Apple ID (no echo; two-factor and SMS supported) |
+| `sign` / `resign [--force]` | Sign and install WDA now / re-sign only if the profile is close to expiring |
+| `passcode set\|clear`, `unlock-reset` | Auto-unlock (off by default) |
+| `wda-bridge --port 8100` | Expose WDA on 127.0.0.1 for other tools — unauthenticated, stop it when done |
+| `notify-test` | Send one test notification per event type |
 
-> `wda-bridge`：WDA 没有认证。bridge 只转发 Host 头是 `localhost`/`127.0.0.1`/`[::1]` 的请求，挡住网页借 DNS rebinding 访问；
-> 但容器用 host 网络，**本机的任何用户都能连上这个端口**，用完就停。
->
-> 隐藏命令 `debug <ddi|hid|screenshot|soak|wda|e2e>` 是真机诊断（原第 0 步 spike，结果见 [spike-results](docs/spike-results.md)），直接操作设备，运行前先停掉守护进程。
+## Configuration
 
-## 文档
+Everything is configured through environment variables; all of them are optional. See [.env.example](.env.example) for the full list. The common ones:
 
-| 文档 | 内容 |
+| Variable | Meaning |
 |---|---|
-| [architecture.md](docs/architecture.md) | 架构图、单进程守护状态机、模块划分、数据和秘密目录 |
-| [capability-matrix.md](docs/capability-matrix.md) | toolkit 的每项能力在本项目里由哪个 crate 实现 |
-| [spike-plan.md](docs/spike-plan.md) / [spike-results.md](docs/spike-results.md) | 第 0 步真机验证 5 项的计划和结果（已完成，留作记录） |
-| [roadmap.md](docs/roadmap.md) | 分阶段计划、**完成情况**、必测的回归用例 |
-| [licensing.md](docs/licensing.md) | 许可证分析、不能分发的苹果文件 |
-| [decisions.md](docs/decisions.md) | 关键取舍记录 |
+| `HTTP_PROXY`, `HTTPS_PROXY` | Proxy for Apple, anisette, Developer Disk Image and notification traffic |
+| `IPHONE_UDID` | Which phone to use when several are connected |
+| `BARK_KEY`, `BARK_SERVER`, `TG_BOT_TOKEN`, `TG_CHAT_ID` | Notifications |
+| `RESIGN_MIN_DAYS`, `RESIGN_CHECK_HOURS` | When to re-sign WebDriverAgent |
+| `ICTL_ANISETTE_URL` | Your own anisette server instead of the default third-party one |
+| `ICTL_DDI_URL`, `ICTL_DDI_DIR` | Where the Developer Disk Image comes from |
 
-## 目录
+## Security and privacy
 
-```
-crates/
-  ictl-device/    设备层：usbmuxd 发现、配对、隧道、开发者镜像（含下载）、HID（含媒体流）、截图、App
-  ictl-wda/       WDA：启动 XCTest runner、直连设备端口的 HTTP 客户端、元素树解析
-  ictl-protocol/  控制接口的请求/响应类型和客户端（MCP、CLI 共用）
-  ictl-sign/      Apple ID 登录、注册设备、描述文件、签名（修复 .xctest 漏签）、签后自检
-  ictl-unlock/    锁屏自动解锁（默认关闭）
-  ictl-daemon/    守护进程：状态机、usbmuxd 看护、重签调度、通知、控制接口服务端
-  ictl-mcp/       MCP 服务（stdio），toolkit 的 13 个工具 + iphone_wait_for、iphone_batch
-apps/
-  iphone-control/ 唯一的可执行程序（含隐藏的 debug 真机诊断）
-vendor/           Impactor 的 plume_core / plume_store / omnisette 与打过补丁的 apple-codesign（见 THIRD_PARTY.md）
-docker/           Dockerfile（编译 → debian:trixie-slim + usbmuxd）、cargo-about 许可证清单配置
-deploy/           从源码运行时的 systemd 用户服务
-```
+Read [SECURITY.md](SECURITY.md) before deploying. In short:
 
-## 构建与测试
+- The data directory holds your Apple ID session, the development signing key, pairing records and — only if you enable auto-unlock — the phone passcode in plain text. Back it up, and never commit or share it.
+- The container runs as root, because it needs the USB device nodes and must be able to restart `usbmuxd` after the phone is unplugged.
+- Apple ID logins use an anisette server. The default is a public third-party server; set `ICTL_ANISETTE_URL` to use your own.
+- Anyone who can reach the control socket, or a running `wda-bridge`, can control the phone.
 
-```bash
-docker run --rm -v "$PWD":/src -w /src rust:1-trixie sh -c \
-  'rustup component add clippy && cargo test --workspace && cargo clippy --workspace --all-targets -- -D warnings'
-```
+## Disclaimer
 
-国内网络需要 `--network host` 和 `HTTP_PROXY`/`HTTPS_PROXY`。不需要 nightly；最低 Rust 1.88（由 rmcp 决定，CI 单独检查），开发和 CI 用 1.99.1。
-`vendor/` 不是 workspace 成员，不对它跑 clippy；它自带的编译警告属于上游。
+This project is not affiliated with, endorsed by, or sponsored by Apple Inc. iPhone, iOS and Xcode are trademarks of Apple Inc.
+
+Use it only with devices and accounts you own or are authorized to control. Automating third-party apps may violate their terms of service, and Apple may limit or suspend developer accounts — consider a dedicated Apple ID. The software is provided "as is", without warranty of any kind (see [LICENSE](LICENSE)).
+
+Nothing here bypasses iOS security: trusting the computer, enabling Developer Mode, trusting the developer certificate and enabling UI automation all require the owner on the phone.
+
+## Documentation
+
+| Document | Contents |
+|---|---|
+| [docs/tools.md](docs/tools.md) | MCP tools and their parameters |
+| [docs/troubleshooting.md](docs/troubleshooting.md) | What each state means and how to fix common problems |
+| [SECURITY.md](SECURITY.md) | Threat model, hardening, reporting vulnerabilities |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | Building, testing (with and without a phone), pull requests |
+| [CHANGELOG.md](CHANGELOG.md) | Release notes |
+| [docs/architecture.md](docs/architecture.md) | Architecture, daemon state machine, modules, data layout (Chinese) |
+| [docs/decisions.md](docs/decisions.md) | Key design decisions (Chinese) |
+| [docs/licensing.md](docs/licensing.md), [THIRD_PARTY.md](THIRD_PARTY.md) | License analysis and third-party components (Chinese) |
+| [docs/dev/](docs/dev/) | Development history: spike results, roadmap, regression cases (Chinese) |
+
+## Acknowledgements
+
+Built on [idevice](https://github.com/jkcoxson/idevice) (device protocols), [Impactor](https://github.com/claration/impactor) (Apple ID and signing), [apple-codesign](https://github.com/indygreg/apple-platform-rs), [WebDriverAgent](https://github.com/appium/WebDriverAgent) (on-device automation), [usbmuxd](https://github.com/libimobiledevice/usbmuxd) and the [Rust MCP SDK](https://github.com/modelcontextprotocol/rust-sdk).
+
+## License
+
+The code in this repository is [MIT](LICENSE). Vendored components keep their own licenses (MPL-2.0 and MIT); see [THIRD_PARTY.md](THIRD_PARTY.md). Apple files such as the Developer Disk Image are downloaded at runtime and never distributed.

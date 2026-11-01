@@ -7,7 +7,7 @@
 - **决定**：设备通讯全部基于 `idevice`。版本用 `[patch.crates-io]` 锁在上游 master 的 git 提交 `89702099`（0.1.68 发版代码的 cryptexd install 会挂住，修复已在 master、未发版）；发版后换回 crates.io。
 - **理由**：它已覆盖我们需要的全部能力：usbmuxd、lockdown、CoreDeviceProxy 用户态隧道、RSD、cryptexd 个性化镜像安装、universalhidservice/indigo HID、screencaptureservice、XCTest 启动 WDA、WDA 客户端；MIT；StikDebug、CrossCode 等在生产中使用；Impactor 也依赖它，和签名部分同源。
 - **代价**：0.2.0 之前每个小版本都可能有破坏性变更；主要一人维护；`tss` 自述部分支持、TCP 栈自述 "naive"。
-- **重新评估**：spike 第 4、5 项不过时（已全部通过，见 [spike-results](spike-results.md)）。
+- **重新评估**：spike 第 4、5 项不过时（已全部通过，见 [spike-results](dev/spike-results.md)）。
 
 ## D2：守护进程独占设备，MCP 是薄客户端
 
@@ -48,7 +48,7 @@
 ## D8：自动解锁默认关闭
 
 - **决定**：需要显式开启并配置密码文件。
-- **理由**：存储锁屏密码意味着能访问主机的人就能解锁手机；输错累计还可能触发设备抹除。保护规则见 capability-matrix §5。
+- **理由**：存储锁屏密码意味着能访问主机的人就能解锁手机；输错累计还可能触发设备抹除。保护规则见 [capability-matrix §5](dev/capability-matrix.md)。
 
 ## D9：所有依赖锁定精确版本
 

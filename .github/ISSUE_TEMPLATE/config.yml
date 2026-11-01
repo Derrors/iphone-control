@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Security vulnerability / 安全漏洞
+    url: https://github.com/Derrors/iphone-control/security/advisories/new
+    about: Report privately, please don't open a public issue. 请私下报告，不要公开提 issue。
+  - name: Troubleshooting guide / 排错指南
+    url: https://github.com/Derrors/iphone-control/blob/main/docs/troubleshooting.md
+    about: What each state means and how to fix common problems.

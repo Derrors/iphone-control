@@ -5,6 +5,8 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
+repository.workspace = true
+homepage.workspace = true
 description = "设备层：发现、配对、隧道、开发者镜像、HID、截图、App"
 
 [dependencies]

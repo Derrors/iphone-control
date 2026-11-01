@@ -1,0 +1,50 @@
+name: Bug report / 问题反馈
+description: Something doesn't work as expected. 英文或中文都可以。
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Security problems: please don't file them here — see SECURITY.md.
+        Remove private data (UDID, Apple ID, notification keys, phone numbers) from everything you paste.
+        安全问题请不要在这里提，见 SECURITY.md。粘贴前请去掉 UDID、Apple ID、通知密钥、手机号等隐私信息。
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened / 发生了什么
+      description: What you did, what you expected, what happened instead.
+    validations:
+      required: true
+  - type: input
+    id: device
+    attributes:
+      label: Phone model and iOS version / 机型和 iOS 版本
+      placeholder: iPhone 15 Pro Max, iOS 27.0.1
+    validations:
+      required: true
+  - type: dropdown
+    id: deploy
+    attributes:
+      label: How do you run it / 运行方式
+      options:
+        - Docker (compose)
+        - From source (systemd user service or manual)
+        - From source as root
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit / 版本或提交
+      placeholder: v0.1.0, or the output of `git rev-parse --short HEAD`
+  - type: textarea
+    id: doctor
+    attributes:
+      label: Output of `iphone-control doctor`
+      render: text
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs / 相关日志
+      description: "`docker logs iphone-control`, `data/logs/daemon.log`, or `journalctl --user -u iphone-control`; for MCP problems, the tool call and its result."
+      render: text

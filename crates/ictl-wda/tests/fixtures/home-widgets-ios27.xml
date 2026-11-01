@@ -28,8 +28,8 @@
                                             <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="175" height="175">
                                               <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="175" height="175">
                                                 <XCUIElementTypeOther type="XCUIElementTypeOther" x="19" y="19" width="135" height="137">
-                                                  <XCUIElementTypeOther type="XCUIElementTypeOther" name="上海市，20°摄氏度，多云，明天气温降低，最高气温21°，最高气温26°摄氏度，最低气温17°摄氏度" label="上海市，20°摄氏度，多云，明天气温降低，最高气温21°，最高气温26°摄氏度，最低气温17°摄氏度" x="19" y="19" width="135" height="137">
-                                                    <XCUIElementTypeStaticText type="XCUIElementTypeStaticText" value="上海市" name="上海市" label="上海市" x="19" y="19" width="52" height="13"/>
+                                                  <XCUIElementTypeOther type="XCUIElementTypeOther" name="示例市，20°摄氏度，多云，明天气温降低，最高气温21°，最高气温26°摄氏度，最低气温17°摄氏度" label="示例市，20°摄氏度，多云，明天气温降低，最高气温21°，最高气温26°摄氏度，最低气温17°摄氏度" x="19" y="19" width="135" height="137">
+                                                    <XCUIElementTypeStaticText type="XCUIElementTypeStaticText" value="示例市" name="示例市" label="示例市" x="19" y="19" width="52" height="13"/>
                                                     <XCUIElementTypeStaticText type="XCUIElementTypeStaticText" value="20°" name="20°" label="20°" x="19" y="30" width="69" height="54"/>
                                                     <XCUIElementTypeImage type="XCUIElementTypeImage" name="温度计" label="温度计" x="19" y="96" width="14" height="23"/>
                                                     <XCUIElementTypeStaticText type="XCUIElementTypeStaticText" value="明天气温降低，最高气温21°" name="明天气温降低，最高气温21°" label="明天气温降低，最高气温21°" x="19" y="123" width="135" height="33"/>

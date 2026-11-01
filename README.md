@@ -153,10 +153,10 @@ The architecture and design documents are in Chinese for now.
 
 ## Contributing
 
-Bug reports and suggestions are welcome in [Issues](https://github.com/Derrors/iphone-control/issues); please include the output of `doctor` with your UDID removed. Pull requests are welcome too — see the [contributing guide](CONTRIBUTING.md).
+Issues and pull requests are welcome — see the [contributing guide](CONTRIBUTING.md).
 
 ## License
 
-[MIT](LICENSE) for this project's code. Vendored signing components keep their own licenses (MPL-2.0 and MIT), and the Docker image also contains Debian's usbmuxd (GPL-3.0, run as a separate process). Apple files such as the Developer Disk Image are downloaded at runtime and never distributed. See [THIRD_PARTY.md](THIRD_PARTY.md).
+[MIT](LICENSE). Third-party components: [THIRD_PARTY.md](THIRD_PARTY.md).
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>

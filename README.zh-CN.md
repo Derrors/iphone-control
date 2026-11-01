@@ -151,10 +151,10 @@ claude mcp add iphone -s user -- docker exec -i iphone-control iphone-control mc
 
 ## 参与贡献
 
-欢迎通过 [Issues](https://github.com/Derrors/iphone-control/issues) 反馈问题或提出建议，请附上去掉 UDID 后的 `doctor` 输出。也欢迎提交 Pull Request，构建、测试和提交前检查见[贡献指南](CONTRIBUTING.md)。
+欢迎通过 [Issues](https://github.com/Derrors/iphone-control/issues) 反馈问题、提交 Pull Request，详见[贡献指南](CONTRIBUTING.md)。
 
 ## License
 
-本项目的代码使用 [MIT](LICENSE)。vendor 进来的签名组件保留各自的许可证（MPL-2.0 和 MIT），Docker 镜像里还有 Debian 的 usbmuxd（GPL-3.0，作为独立进程运行）。开发者镜像等苹果文件在运行时下载，从不分发。详见 [THIRD_PARTY.md](THIRD_PARTY.md)。
+[MIT](LICENSE)，第三方组件见 [THIRD_PARTY.md](THIRD_PARTY.md)。
 
 <p align="right">(<a href="#readme-top">回到顶部</a>)</p>

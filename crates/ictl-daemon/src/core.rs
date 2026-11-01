@@ -83,7 +83,6 @@ struct Inner {
     device: Option<Device>,
     info: Option<DeviceInfo>,
     tunnel: Option<Tunnel>,
-    hid: Option<HidSession>,
     runner: Option<WdaRunner>,
     wda: Option<WdaClient<DeviceTransport>>,
     wda_misses: Misses,
@@ -107,11 +106,18 @@ pub struct Daemon {
     inner: Mutex<Inner>,
 }
 
-/// 先停 HID 会话的屏幕媒体流再丢掉（要在隧道断开之前）。直接丢的话手机一直以为「配对的电脑」在看屏幕：
-/// 灵动岛常驻图标、不会自动锁屏，本进程退出后也不消失（iOS 27 真机，要拔插数据线才清掉）
+/// 停掉 HID 会话（屏幕媒体流），隧道保留。媒体流不停的话手机一直以为「配对的电脑」在看屏幕：
+/// 灵动岛常驻图标、不会自动锁屏，本进程退出、拔插数据线都清不掉（iOS 27 真机）
 async fn close_hid(g: &mut Inner) {
-    if let Some(h) = g.hid.take() {
-        let _ = tokio::time::timeout(Duration::from_secs(3), h.close()).await;
+    if let Some(t) = g.tunnel.as_mut() {
+        t.close_hid().await;
+    }
+}
+
+/// 丢掉隧道。一律走这里：先停 HID 媒体流再断（见 [`close_hid`]）
+async fn drop_tunnel(g: &mut Inner) {
+    if let Some(t) = g.tunnel.take() {
+        t.close().await;
     }
 }
 
@@ -130,7 +136,6 @@ impl Daemon {
             device: None,
             info: None,
             tunnel: None,
-            hid: None,
             runner: None,
             wda: None,
             wda_misses: Misses::default(),
@@ -211,8 +216,7 @@ impl Daemon {
             r.stop();
         }
         g.wda = None;
-        close_hid(g).await;
-        g.tunnel = None;
+        drop_tunnel(g).await;
         g.wda_misses.reset();
     }
 
@@ -228,7 +232,7 @@ impl Daemon {
         let g = &mut *g;
         self.ensure_usbmuxd(g, false).await;
 
-        if g.hid.is_some() && g.hid_used.is_none_or(|t| t.elapsed() >= HID_IDLE) {
+        if g.tunnel.as_ref().is_some_and(Tunnel::hid_open) && g.hid_used.is_none_or(|t| t.elapsed() >= HID_IDLE) {
             close_hid(g).await;
             tracing::info!("HID 会话空闲，已关闭（停止屏幕媒体流）");
         }
@@ -385,11 +389,11 @@ impl Daemon {
             Ok(Some(v)) => self.log.log(&format!("开发者镜像已挂载 {v}")),
             Ok(None) => {}
             Err(DeviceError::PasswordProtected) => {
-                g.tunnel = None;
+                drop_tunnel(g).await;
                 return self.set_state(g, DeviceState::NeedsUnlock);
             }
             Err(e) => {
-                g.tunnel = None;
+                drop_tunnel(g).await;
                 g.backoff.failed(Instant::now());
                 return self.set_state(g, DeviceState::WdaStarting { last_error: Some(format!("开发者镜像：{e}")) });
             }
@@ -579,19 +583,15 @@ impl Daemon {
 
     /// HID 会话（WDA 不可用时的后备路线）。出错时丢掉会话和隧道，下次重建
     async fn hid<'a>(&self, g: &'a mut Inner) -> Result<&'a mut HidSession, String> {
-        if g.hid.is_none() {
-            let screen = self.screen(g).await?;
-            let device = g.device.clone().ok_or("手机未连接")?;
-            let t = self.ensure_tunnel(g, &device).await.map_err(|e| format!("HID 后备路线不可用：{e}"))?;
-            match t.hid(screen).await {
-                Ok(h) => g.hid = Some(h),
-                Err(e) => {
-                    g.tunnel = None;
-                    return Err(format!("HID 后备路线不可用：{e}"));
-                }
-            }
+        let screen = self.screen(g).await?;
+        let device = g.device.clone().ok_or("手机未连接")?;
+        let t = self.ensure_tunnel(g, &device).await.map_err(|e| format!("HID 后备路线不可用：{e}"))?;
+        if let Err(e) = t.hid(screen).await {
+            drop_tunnel(g).await;
+            return Err(format!("HID 后备路线不可用：{e}"));
         }
-        Ok(g.hid.as_mut().expect("刚建好"))
+        // 第二次调用直接返回已开好的会话（这样写是为了绕开借用检查对条件返回的限制）
+        g.tunnel.as_mut().expect("刚建好").hid(screen).await.map_err(|e| e.to_string())
     }
 
     async fn hid_do<F>(&self, g: &mut Inner, f: F) -> Result<(), String>
@@ -603,10 +603,14 @@ impl Daemon {
     {
         let r = f(self.hid(g).await?).await;
         g.hid_used = Some(Instant::now());
-        if let Err(e) = r {
-            close_hid(g).await;
-            g.tunnel = None;
-            return Err(format!("HID 命令失败: {e}"));
+        match r {
+            // 参数问题（例如不能输入的字符），连接没坏，不用重建
+            Err(e @ DeviceError::InvalidInput(_)) => return Err(e.to_string()),
+            Err(e) => {
+                drop_tunnel(g).await;
+                return Err(format!("HID 命令失败: {e}"));
+            }
+            Ok(()) => {}
         }
         Ok(())
     }
@@ -665,8 +669,7 @@ impl Daemon {
                 match t.screenshot_png().await {
                     Ok(p) => (p, "HID"),
                     Err(e) => {
-                        close_hid(g).await;
-                        g.tunnel = None;
+                        drop_tunnel(g).await;
                         return Err(format!("HID 命令失败: {e}"));
                     }
                 }

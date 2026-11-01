@@ -11,6 +11,8 @@ use anyhow::{Context, bail};
 use clap::{Parser, Subcommand};
 use ictl_daemon::protocol::{self, Request, Response};
 
+mod debug;
+
 #[derive(Parser)]
 #[command(name = "iphone-control", version, about = "在 Linux 上控制 iPhone，并提供 MCP 工具")]
 struct Cli {
@@ -65,6 +67,9 @@ enum Command {
         #[arg(long, default_value_t = 8100)]
         port: u16,
     },
+    /// 真机诊断（原第 0 步 spike）。`wda`/`e2e`/`hid` 会和守护进程抢 XCTest、HID，先停掉守护进程
+    #[command(hide = true)]
+    Debug(debug::DebugArgs),
     /// 按已配置的渠道发测试通知：每类事件各一条（标题带「[测试]」），或只发指定的一类
     NotifyTest {
         /// resign / session / pin / pin-recovered / unlock / offline / online；不给就全发
@@ -111,6 +116,7 @@ async fn main() -> anyhow::Result<()> {
         Command::Passcode { action } => passcode(&cli.data_dir, action),
         Command::UnlockReset => print_text(&cli.socket, Request::UnlockReset).await,
         Command::WdaBridge { port } => wda_bridge(port).await,
+        Command::Debug(args) => debug::run(env_nonempty("IPHONE_UDID").as_deref(), args).await,
         Command::NotifyTest { event } => notify_test(&cli.data_dir, event.as_deref()).await,
     }
 }
@@ -146,6 +152,11 @@ async fn notify_test(data_dir: &Path, only: Option<&str>) -> anyhow::Result<()> 
         bail!("{failed} 条没有全部发出去，详见上面的 WARN 日志");
     }
     Ok(())
+}
+
+/// 读环境变量，去掉首尾空白，空值当作没设（.env 里常留着 `KEY=`）
+fn env_nonempty(key: &str) -> Option<String> {
+    std::env::var(key).ok().map(|v| v.trim().to_owned()).filter(|v| !v.is_empty())
 }
 
 async fn ask(socket: &Path, req: Request) -> anyhow::Result<Response> {

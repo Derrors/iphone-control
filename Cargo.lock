@@ -2042,18 +2042,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ictl-spike"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
- "ictl-device",
- "ictl-wda",
- "tokio",
- "tracing-subscriber",
-]
-
-[[package]]
 name = "ictl-unlock"
 version = "0.1.0"
 dependencies = [
@@ -2286,6 +2274,7 @@ dependencies = [
  "ictl-device",
  "ictl-mcp",
  "ictl-sign",
+ "ictl-wda",
  "rustls",
  "serde_json",
  "tokio",

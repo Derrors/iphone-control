@@ -12,6 +12,7 @@ ictl-daemon.workspace = true
 ictl-device.workspace = true
 ictl-mcp.workspace = true
 ictl-sign.workspace = true
+ictl-wda.workspace = true
 clap.workspace = true
 tokio.workspace = true
 anyhow.workspace = true

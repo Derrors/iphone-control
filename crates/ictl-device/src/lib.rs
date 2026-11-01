@@ -15,8 +15,10 @@ pub mod ddi;
 pub mod hid;
 mod media;
 
+use std::future::Future;
 use std::path::Path;
 use std::sync::Arc;
+use std::time::Duration;
 
 use idevice::{
     IdeviceError, IdeviceService, RsdService,
@@ -53,14 +55,23 @@ pub enum DeviceError {
     /// 锁屏且自开机以来从未解锁（BFU），或锁屏时建隧道，都会报这个
     #[error("手机锁屏（PasswordProtected），需要解锁")]
     PasswordProtected,
-    #[error("App 未安装：{0}")]
-    AppNotInstalled(String),
     #[error("下载开发者镜像失败：{0}")]
     Download(String),
     #[error("{0}")]
     Io(#[from] std::io::Error),
     #[error("idevice：{0}")]
     Idevice(String),
+    /// 手机上的服务没在限定时间内应答。调用方应丢掉隧道重建
+    #[error("超时：{0}")]
+    Timeout(String),
+    /// 调用方给的参数不合法（例如 HID 不能输入的字符）。与连接无关，不需要重建会话
+    #[error("{0}")]
+    InvalidInput(String),
+}
+
+/// 给对手机的一次调用加时限：卡住的服务不能把调用方（守护进程持锁时）一起卡死
+pub(crate) async fn limit<T>(what: &str, d: Duration, f: impl Future<Output = Result<T>>) -> Result<T> {
+    tokio::time::timeout(d, f).await.map_err(|_| DeviceError::Timeout(format!("{what}（{} 秒）", d.as_secs())))?
 }
 
 impl From<IdeviceError> for DeviceError {
@@ -166,10 +177,16 @@ impl Device {
         self.provider.clone()
     }
 
-    /// usbmuxd 里有没有这台手机的配对记录
+    /// usbmuxd 里有没有这台手机的配对记录。只有「没有记录」算 false；连不上 usbmuxd 等错误照常返回，
+    /// 免得 usbmuxd 抖一下就让状态变成「请在手机上点信任」
     pub async fn paired(&self) -> Result<bool> {
         let mut mux = self.provider.addr.connect(0).await?;
-        Ok(mux.get_pair_record(&self.udid).await.is_ok())
+        match mux.get_pair_record(&self.udid).await {
+            Ok(_) => Ok(true),
+            // 没有记录时 usbmuxd 的应答里没有 PairRecordData；记录损坏同样需要重新配对
+            Err(IdeviceError::UnexpectedResponse(_)) => Ok(false),
+            Err(e) => Err(e.into()),
+        }
     }
 
     /// 发起配对：手机上弹「信任此电脑」。用户还没点时返回 [`DeviceError::PairingPending`]，调用方应轮询重试。
@@ -189,12 +206,13 @@ impl Device {
     pub async fn info(&self) -> Result<DeviceInfo> {
         let mut lockdown = LockdownClient::connect(&*self.provider).await?;
         let mut get = async |key: &str| -> String {
-            lockdown
-                .get_value(Some(key), None)
-                .await
-                .ok()
-                .and_then(|v| v.as_string().map(str::to_owned))
-                .unwrap_or_default()
+            match lockdown.get_value(Some(key), None).await {
+                Ok(v) => v.as_string().map(str::to_owned).unwrap_or_default(),
+                Err(e) => {
+                    tracing::warn!("读设备信息 {key} 失败：{e}");
+                    String::new()
+                }
+            }
         };
         Ok(DeviceInfo {
             udid: self.udid.clone(),
@@ -215,12 +233,15 @@ impl Device {
 
     /// 建立 CoreDeviceProxy 用户态隧道并完成 RSD 握手。锁屏时报 [`DeviceError::PasswordProtected`]。
     pub async fn open_tunnel(&self) -> Result<Tunnel> {
-        let proxy = CoreDeviceProxy::connect(&*self.provider).await?;
-        let rsd_port = proxy.tunnel_info().server_rsd_port;
-        let mut adapter = proxy.create_software_tunnel()?.to_async_handle();
-        let stream = adapter.connect(rsd_port).await?;
-        let handshake = RsdHandshake::new(stream).await?;
-        Ok(Tunnel { adapter, handshake })
+        limit("建隧道", Duration::from_secs(30), async {
+            let proxy = CoreDeviceProxy::connect(&*self.provider).await?;
+            let rsd_port = proxy.tunnel_info().server_rsd_port;
+            let mut adapter = proxy.create_software_tunnel()?.to_async_handle();
+            let stream = adapter.connect(rsd_port).await?;
+            let handshake = RsdHandshake::new(stream).await?;
+            Ok(Tunnel { adapter, handshake, hid: None })
+        })
+        .await
     }
 
     /// 已安装的 App。`include_system` 为 false 只列用户 App，为 true 只列系统 App（与 toolkit 一致）。
@@ -230,7 +251,7 @@ impl Device {
         Ok(apps::parse_apps(proxy.get_apps(Some(kind), None).await?))
     }
 
-    /// 经 usbmuxd 直连手机上的 TCP 端口（WDA bridge 用）
+    /// 经 usbmuxd 直连手机上的 TCP 端口（`iphone-control wda-bridge` 用）
     pub async fn connect_port(&self, port: u16) -> Result<Box<dyn idevice::ReadWrite>> {
         let dev = self.provider.connect(port).await?;
         dev.get_socket().ok_or_else(|| DeviceError::Idevice("连接没有套接字".into()))
@@ -244,9 +265,14 @@ impl Device {
 }
 
 /// 一条活着的隧道。HID、截图、cryptexd 都经它访问 RSD 服务；丢掉它隧道就断了。
+///
+/// HID 会话归隧道所有：它持有屏幕媒体流，必须在隧道断开之前停掉，否则手机端一直挂着这个会话
+/// （灵动岛「配对的电脑」图标常驻、不会自动锁屏，进程退出和拔插数据线都清不掉）。
+/// 所以不要直接丢掉 `Tunnel`，用 [`Tunnel::close`]。
 pub struct Tunnel {
     adapter: AdapterHandle,
     handshake: RsdHandshake,
+    hid: Option<HidSession>,
 }
 
 impl Tunnel {
@@ -257,110 +283,55 @@ impl Tunnel {
 
     /// 已挂载的开发者镜像版本，未挂载返回 None
     pub async fn ddi_mounted(&mut self) -> Result<Option<String>> {
-        Ok(installed_ddi(&mut self.adapter, &mut self.handshake).await?.map(|c| c.version))
-    }
-
-    /// 诊断用：逐个调用 cryptexd 的只读例程，每个限时，返回 (例程, 结果) 列表
-    pub async fn probe_cryptexd(&mut self, timeout: std::time::Duration) -> Vec<(&'static str, String)> {
-        use idevice::{RsdService as _, cryptexd::CryptexdClient};
-        let mut out = Vec::new();
-        for routine in ["read-personalization-id", "copy-installed"] {
-            let fut = async {
-                let c: CryptexdClient<Box<dyn idevice::ReadWrite>> =
-                    CryptexdClient::connect_rsd(&mut self.adapter, &mut self.handshake).await?;
-                c.invoke(routine, Default::default()).await
-            };
-            let r = match tokio::time::timeout(timeout, fut).await {
-                Err(_) => "超时".to_owned(),
-                Ok(Err(e)) => format!("错误：{e}"),
-                Ok(Ok(v)) => format!("成功：{}", format!("{v:?}").chars().take(160).collect::<String>()),
-            };
-            out.push((routine, r));
-        }
-        out
-    }
-
-    /// 诊断用：分步挂载开发者镜像（读标识 → 取 nonce → TSS 签票 → install），每步限时并打印耗时。
-    /// 不调用 copy-installed，用于排查它挂住的情况（idevice 补丁前在 iOS 27.0.1 上出现过，见 spike/RESULTS.md）
-    pub async fn mount_ddi_steps(&mut self, restore_dir: &Path, step_timeout: std::time::Duration) -> Result<()> {
-        use idevice::{
-            RsdService as _,
-            cryptexd::{CryptexInstallRequest, CryptexdClient},
-            tss::TSSRequest,
-        };
-        macro_rules! step {
-            ($name:expr, $fut:expr) => {{
-                let t0 = std::time::Instant::now();
-                let r = tokio::time::timeout(step_timeout, $fut).await;
-                let el = t0.elapsed().as_secs_f64();
-                match r {
-                    Err(_) => {
-                        println!("  {}：超时（{el:.1}s）", $name);
-                        return Err(DeviceError::Io(std::io::Error::other(format!("{} 超时", $name))));
-                    }
-                    Ok(Err(e)) => {
-                        println!("  {}：失败（{el:.1}s）{e}", $name);
-                        return Err(e.into());
-                    }
-                    Ok(Ok(v)) => {
-                        println!("  {}：成功（{el:.1}s）", $name);
-                        v
-                    }
-                }
-            }};
-        }
-        let assets = Cryptex1Assets::load(restore_dir).await?;
-        let (a, h) = (&mut self.adapter, &mut self.handshake);
-        let chip = step!("读个性化标识", async {
-            let c: CryptexdClient<Box<dyn idevice::ReadWrite>> = CryptexdClient::connect_rsd(a, h).await?;
-            c.read_personalization_identifiers().await
-        });
-        let domain = assets.nonce_domain()?;
-        let (a, h) = (&mut self.adapter, &mut self.handshake);
-        let nonce = step!("取 cryptex nonce", async {
-            let c: CryptexdClient<Box<dyn idevice::ReadWrite>> = CryptexdClient::connect_rsd(a, h).await?;
-            c.cryptex_nonce(domain).await
-        });
-        let mut req = TSSRequest::new();
-        req.add_cryptex1_tags(&assets.build_identity, &chip, &nonce)?;
-        let resp = step!("TSS 签票", req.send());
-        let resp = resp.into_dictionary().ok_or_else(|| DeviceError::Io(std::io::Error::other("TSS 响应不是字典")))?;
-        let key = if resp.contains_key("Cryptex1,Ticket") { "Cryptex1,Ticket" } else { "ApImg4Ticket" };
-        println!("  票据字段：{key}");
-        let im4m = resp
-            .get(key)
-            .and_then(|v| v.as_data())
-            .ok_or_else(|| DeviceError::Io(std::io::Error::other("TSS 响应里没有票据")))?
-            .to_vec();
-        let request = CryptexInstallRequest::new(
-            assets.image.clone(),
-            assets.trustcache.clone(),
-            im4m,
-            assets.info.clone(),
-            assets.volumehash.clone(),
-            assets.cryptex1_properties()?,
-        );
-        let (a, h) = (&mut self.adapter, &mut self.handshake);
-        step!("install", async {
-            let c: CryptexdClient<Box<dyn idevice::ReadWrite>> = CryptexdClient::connect_rsd(a, h).await?;
-            c.install(request).await
-        });
-        Ok(())
+        limit("查询开发者镜像", Duration::from_secs(20), async {
+            Ok(installed_ddi(&mut self.adapter, &mut self.handshake).await?.map(|c| c.version))
+        })
+        .await
     }
 
     /// 个性化并安装开发者镜像。`restore_dir` 见 [`ddi::ensure_cache`]
     pub async fn mount_ddi(&mut self, restore_dir: &Path) -> Result<String> {
         let assets = Cryptex1Assets::load(restore_dir).await?;
-        Ok(install_ddi(&mut self.adapter, &mut self.handshake, &assets).await?.version)
+        // 含 TSS 联网签票
+        limit("挂载开发者镜像", Duration::from_secs(180), async {
+            Ok(install_ddi(&mut self.adapter, &mut self.handshake, &assets).await?.version)
+        })
+        .await
     }
 
     pub async fn screenshot_png(&mut self) -> Result<Vec<u8>> {
-        let mut client = ScreenCaptureServiceClient::connect_rsd(&mut self.adapter, &mut self.handshake).await?;
-        Ok(client.take_screenshot(None, ImageFormat::Png).await?)
+        limit("截图", Duration::from_secs(30), async {
+            let mut client = ScreenCaptureServiceClient::connect_rsd(&mut self.adapter, &mut self.handshake).await?;
+            Ok(client.take_screenshot(None, ImageFormat::Png).await?)
+        })
+        .await
     }
 
-    /// 开启 HID 会话：先启动显示媒体流（HID 的授权闸门），再连 universalhidservice 和 indigo
-    pub async fn hid(&mut self, screen: ScreenSize) -> Result<HidSession> {
-        HidSession::open(&mut self.adapter, &mut self.handshake, screen).await
+    /// HID 会话；没有就开一个：先启动显示媒体流（HID 的授权闸门），再连 universalhidservice 和 indigo
+    pub async fn hid(&mut self, screen: ScreenSize) -> Result<&mut HidSession> {
+        if self.hid.is_none() {
+            let h = limit("开启 HID 会话", Duration::from_secs(20), async {
+                HidSession::open(&mut self.adapter, &mut self.handshake, screen).await
+            })
+            .await?;
+            self.hid = Some(h);
+        }
+        Ok(self.hid.as_mut().expect("刚建好"))
+    }
+
+    pub fn hid_open(&self) -> bool {
+        self.hid.is_some()
+    }
+
+    /// 停掉 HID 会话（含屏幕媒体流），隧道保留
+    pub async fn close_hid(&mut self) {
+        if let Some(h) = self.hid.take() {
+            let _ = tokio::time::timeout(Duration::from_secs(3), h.close()).await;
+        }
+    }
+
+    /// 关掉隧道：先停 HID 的屏幕媒体流
+    pub async fn close(mut self) {
+        self.close_hid().await;
     }
 }

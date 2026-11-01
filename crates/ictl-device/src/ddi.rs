@@ -15,15 +15,34 @@ pub const DEFAULT_BASE_URL: &str =
 pub const FILES: [&str; 5] =
     ["BuildManifest.plist", "Image.dmg", "Image.dmg.trustcache", "Image.dmg.cryptex_info", "Image.dmg.root_hash"];
 
+/// 记录缓存来自哪个下载地址：换了地址就整套重新下载，免得新旧文件混在一起
+const SOURCE_STAMP: &str = ".source";
+
 /// 缓存是否完整
 pub fn cache_complete(dir: &Path) -> bool {
     FILES.iter().all(|f| dir.join(f).is_file())
 }
 
+/// 删掉缓存（挂载反复失败时调用，下次重新下载）
+pub fn invalidate(dir: &Path) {
+    for f in FILES.iter().chain([&SOURCE_STAMP]) {
+        let _ = std::fs::remove_file(dir.join(f));
+    }
+}
+
 /// 确保 `dir` 里有完整的 DDI，缺的从 `base_url` 下载；返回该目录。
 /// 下载先写临时文件再改名，中途失败不会留下半个文件。
 pub async fn ensure_cache(dir: &Path, base_url: &str) -> Result<PathBuf> {
+    let stamp = std::fs::read_to_string(dir.join(SOURCE_STAMP)).ok();
+    if stamp.as_deref().is_some_and(|s| s.trim() != base_url) {
+        tracing::info!("开发者镜像下载地址变了，重新下载");
+        invalidate(dir);
+    }
     if cache_complete(dir) {
+        if stamp.is_none() {
+            // 早期版本下载的缓存没有记录来源：认作当前地址
+            let _ = std::fs::write(dir.join(SOURCE_STAMP), base_url);
+        }
         return Ok(dir.to_owned());
     }
     tokio::fs::create_dir_all(dir).await?;
@@ -49,6 +68,7 @@ pub async fn ensure_cache(dir: &Path, base_url: &str) -> Result<PathBuf> {
         tokio::fs::write(&tmp, &bytes).await?;
         tokio::fs::rename(&tmp, &dest).await?;
     }
+    tokio::fs::write(dir.join(SOURCE_STAMP), base_url).await?;
     Ok(dir.to_owned())
 }
 
@@ -66,6 +86,8 @@ mod tests {
         assert!(!cache_complete(&dir));
         std::fs::write(dir.join(FILES[4]), b"x").unwrap();
         assert!(cache_complete(&dir));
+        invalidate(&dir);
+        assert!(!cache_complete(&dir));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

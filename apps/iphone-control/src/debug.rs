@@ -1,16 +1,15 @@
-//! 第 0 步真机验证（docs/spike-plan.md）。每个子命令验证一项，可独立重跑，结果记到 spike/RESULTS.md。
-//! 运行前须停掉 toolkit 容器；`wda` 会中断 toolkit 的 WDA，`ddi --force-uninstall` 会卸载手机上的开发者镜像，都须先征得用户同意。
+//! `iphone-control debug …`：真机诊断（原第 0 步 spike，结果见 docs/spike-results.md）。直接调用设备层和 WDA 客户端，
+//! 不经守护进程。`wda`、`e2e` 会启动 XCTest、`hid` 会开屏幕媒体流，和守护进程同时跑会互相干扰：
+//! 先停掉守护进程（例如在另一个只跑 usbmuxd 的容器里运行）。
 
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use clap::{Parser, Subcommand};
+use clap::{Args, Subcommand};
 use ictl_device::{Button, Device, ScreenSize};
 
-#[derive(Parser)]
-struct Cli {
-    #[arg(long, env = "IPHONE_UDID")]
-    udid: Option<String>,
+#[derive(Args)]
+pub struct DebugArgs {
     /// 屏幕点尺寸（HID 坐标换算用）
     #[arg(long, default_value_t = 430.0)]
     width: f64,
@@ -28,10 +27,6 @@ enum Check {
         #[arg(long, default_value = ictl_device::ddi::DEFAULT_BASE_URL)]
         url: String,
     },
-    /// 诊断：逐个调用 cryptexd 只读例程（不改设备状态）
-    CryptexdProbe,
-    /// 诊断：分步挂载开发者镜像（不依赖 copy-installed），挂完用截图服务确认
-    DdiSteps { restore_dir: PathBuf },
     /// 2. HID：媒体流 + universalhidservice tap，再按 Home（以截图对比为准，调用成功不代表生效）
     Hid { x: f64, y: f64 },
     /// 3. 截图：screencaptureservice PNG
@@ -143,7 +138,7 @@ async fn e2e_with_wda(
     // HID 路线：同样的点击和 Home，以 WDA 的前台 App 判断是否生效
     let screen = wda.screen_size().await?;
     let t = Instant::now();
-    let mut hid = tunnel.hid(screen).await?;
+    let hid = tunnel.hid(screen).await?;
     check("打开 HID 会话", t, true, String::new())?;
     let r = async {
         let t = Instant::now();
@@ -156,21 +151,17 @@ async fn e2e_with_wda(
         check("HID Home", t, now == SPRINGBOARD, format!("前台 {now}"))
     }
     .await;
-    hid.close().await;
+    // 停掉屏幕媒体流，否则手机端一直挂着
+    tunnel.close_hid().await;
     r
 }
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
-        .init();
-    let cli = Cli::parse();
-    let device = Device::find(cli.udid.as_deref()).await?;
+pub async fn run(udid: Option<&str>, args: DebugArgs) -> anyhow::Result<()> {
+    let device = Device::find(udid).await?;
     let info = device.info().await?;
     println!("手机 {} iOS {}", info.product_type, info.product_version);
-    let screen = ScreenSize { width: cli.width, height: cli.height };
-    match cli.check {
+    let screen = ScreenSize { width: args.width, height: args.height };
+    match args.check {
         Check::Ddi { restore_dir, url } => {
             let mut t = device.open_tunnel().await?;
             match t.ddi_mounted().await? {
@@ -185,34 +176,19 @@ async fn main() -> anyhow::Result<()> {
             let t = device.open_tunnel().await?;
             println!("universalhidservice: {}", t.has_service("com.apple.coredevice.hid.universalhidservice"));
         }
-        Check::CryptexdProbe => {
-            let mut t = device.open_tunnel().await?;
-            for (routine, r) in t.probe_cryptexd(Duration::from_secs(20)).await {
-                println!("{routine}: {r}");
-            }
-        }
-        Check::DdiSteps { restore_dir } => {
-            let mut t = device.open_tunnel().await?;
-            let t0 = Instant::now();
-            t.mount_ddi_steps(&restore_dir, Duration::from_secs(120)).await?;
-            println!("挂载流程结束，总耗时 {:.1}s；用截图服务确认镜像是否生效", t0.elapsed().as_secs_f64());
-            let mut t = device.open_tunnel().await?;
-            println!(
-                "screenshot: {}",
-                match t.screenshot_png().await {
-                    Ok(p) => format!("成功 {} 字节", p.len()),
-                    Err(e) => format!("失败 {e}"),
-                }
-            );
-        }
         Check::Hid { x, y } => {
             let mut t = device.open_tunnel().await?;
-            let mut hid = t.hid(screen).await?;
-            hid.tap(x, y).await?;
-            println!("已点 ({x},{y})，3 秒后按 Home");
-            tokio::time::sleep(Duration::from_secs(3)).await;
-            hid.press(Button::Home).await?;
-            hid.close().await;
+            let r = async {
+                let hid = t.hid(screen).await?;
+                hid.tap(x, y).await?;
+                println!("已点 ({x},{y})，3 秒后按 Home");
+                tokio::time::sleep(Duration::from_secs(3)).await;
+                hid.press(Button::Home).await
+            }
+            .await;
+            // 停掉屏幕媒体流，否则手机端一直挂着
+            t.close().await;
+            r?;
             println!("完成：请以截图/肉眼确认是否真的生效");
         }
         Check::Screenshot { out } => {

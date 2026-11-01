@@ -2,7 +2,7 @@
 //!
 //! WDA 直接经 usbmuxd 连手机上的端口，本机不监听任何端口（docs/decisions.md D3）。
 //! idevice 自带的 `WdaClient` 不支持 `excluded_attributes`、appium settings、W3C actions 等，
-//! 所以这里自己发请求：每个请求一条新连接、`Connection: close`，读到 EOF 为止。
+//! 所以这里自己发请求：每个请求一条新连接，读够一个完整响应（Content-Length / chunked 结束块）就关掉。
 
 use std::future::Future;
 use std::sync::Arc;
@@ -49,8 +49,19 @@ impl Transport for DeviceTransport {
             let mut sock = idevice.get_socket().ok_or_else(|| std::io::Error::other("连接没有套接字"))?;
             sock.write_all(&req).await?;
             sock.flush().await?;
+            // WDA 收到 `Connection: close` 也不关连接，不能读到 EOF：读够一个完整响应就停
             let mut buf = Vec::new();
-            sock.read_to_end(&mut buf).await?;
+            let mut chunk = vec![0u8; 64 * 1024];
+            loop {
+                if response_complete(&buf) {
+                    break;
+                }
+                let n = sock.read(&mut chunk).await?;
+                if n == 0 {
+                    break;
+                }
+                buf.extend_from_slice(&chunk[..n]);
+            }
             parse_response(&buf)
         };
         tokio::time::timeout(timeout, fut).await.map_err(|_| {
@@ -70,6 +81,23 @@ pub fn build_request(method: &str, path: &str, body: Option<&[u8]>) -> Vec<u8> {
     let mut out = req.into_bytes();
     out.extend_from_slice(body);
     out
+}
+
+/// 已经收到一个完整的响应了吗：头部结束，并且正文按 Content-Length 收齐或 chunked 收到结束块。
+/// 两者都没有时只能等对方关连接（返回 false 继续读）
+pub fn response_complete(raw: &[u8]) -> bool {
+    let Some(split) = raw.windows(4).position(|w| w == b"\r\n\r\n") else { return false };
+    let head = String::from_utf8_lossy(&raw[..split]).to_ascii_lowercase();
+    let body = &raw[split + 4..];
+    for l in head.split("\r\n").skip(1) {
+        let Some((k, v)) = l.split_once(':') else { continue };
+        match (k.trim(), v.trim()) {
+            ("content-length", n) => return n.parse::<usize>().is_ok_and(|n| body.len() >= n),
+            ("transfer-encoding", "chunked") => return dechunk(body).is_some(),
+            _ => {}
+        }
+    }
+    false
 }
 
 /// 解析完整的 HTTP 响应：状态码和正文。支持 Content-Length、chunked 和读到 EOF 三种正文
@@ -143,6 +171,18 @@ mod tests {
     fn parses_chunked_body() {
         let raw = b"HTTP/1.1 404 Not Found\r\nTransfer-Encoding: chunked\r\n\r\n3\r\nabc\r\n2\r\nde\r\n0\r\n\r\n";
         assert_eq!(parse_response(raw).unwrap(), (404, b"abcde".to_vec()));
+    }
+
+    #[test]
+    fn completeness_does_not_wait_for_eof() {
+        // WDA 回 Content-Length 但不关连接：收齐正文就算完整
+        assert!(response_complete(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}"));
+        assert!(!response_complete(b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\n{}"));
+        assert!(!response_complete(b"HTTP/1.1 200 OK\r\nContent-Len"));
+        assert!(response_complete(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n2\r\n{}\r\n0\r\n\r\n"));
+        assert!(!response_complete(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n2\r\n{}\r\n"));
+        // 两者都没有：只能读到 EOF
+        assert!(!response_complete(b"HTTP/1.1 200 OK\r\n\r\n{}"));
     }
 
     #[test]

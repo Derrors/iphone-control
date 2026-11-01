@@ -73,6 +73,10 @@ Notes:
 - CI must pass: format, clippy with `-D warnings`, tests, the MSRV check, gitleaks and the image build.
 - User-visible changes get a line in [CHANGELOG.md](CHANGELOG.md) under *Unreleased*.
 
+## Documentation site
+
+The user guide at [derrors.github.io/iphone-control](https://derrors.github.io/iphone-control/) is a VitePress site in [`website/`](website/) (Chinese at the root, English under `en/`; keep both in step). Preview it with `cd website && pnpm install && pnpm docs:dev`. [`docs.yml`](.github/workflows/docs.yml) builds it on every pull request (dead links fail the build) and deploys it from `main`.
+
 ## Releasing (maintainers)
 
 1. Move the *Unreleased* entries in [CHANGELOG.md](CHANGELOG.md) under `## [x.y.z] - YYYY-MM-DD` and update the compare links at the bottom.

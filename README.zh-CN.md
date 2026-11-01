@@ -5,6 +5,8 @@
 [![CI](https://github.com/Derrors/iphone-control/actions/workflows/ci.yml/badge.svg)](https://github.com/Derrors/iphone-control/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
+**文档站：[derrors.github.io/iphone-control](https://derrors.github.io/iphone-control/)**
+
 在 Linux 上控制一台通过 USB 连接的真实 iPhone（不需要 Mac，不需要付费开发者账号），并把能力以 [MCP](https://modelcontextprotocol.io) 工具的形式交给 AI agent。用 Rust 写成，产物是一个二进制，外加系统的 `usbmuxd`。
 
 > **状态：早期版本（0.x）。** 下面的功能都在一台真机上完整跑通：iPhone 15 Pro Max，iOS 27.0.1。其他机型和 iOS 17 以上应该也能用，但没测过，欢迎反馈。

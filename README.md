@@ -5,6 +5,8 @@
 [![CI](https://github.com/Derrors/iphone-control/actions/workflows/ci.yml/badge.svg)](https://github.com/Derrors/iphone-control/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
+**Documentation: [derrors.github.io/iphone-control](https://derrors.github.io/iphone-control/en/)**
+
 Control a real, USB-connected iPhone from Linux — no Mac, no paid Apple developer account — and hand it to AI agents as [MCP](https://modelcontextprotocol.io) tools. One Rust binary plus the system `usbmuxd`.
 
 > **Status: early (0.x).** Everything below works end to end on one device: iPhone 15 Pro Max, iOS 27.0.1. Other models and iOS 17+ should work but are untested — reports are welcome.

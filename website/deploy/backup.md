@@ -1,0 +1,40 @@
+# 数据与备份
+
+## 数据目录里有什么
+
+| 路径 | 内容 | 丢了会怎样 |
+|---|---|---|
+| `account/` | Apple ID 会话、开发签名私钥和证书 | 要重新登录；会生成新证书 |
+| `lockdown/` | 配对记录（Docker 部署） | 要在手机上重新点「信任」 |
+| `wda/` | 签好的 WebDriverAgent | 自动重签 |
+| `ddi/` | 开发者镜像缓存 | 自动重新下载 |
+| `secrets/passcode` | 锁屏密码（仅开启自动解锁时） | 要重新 `passcode set` |
+| `state.json` | 状态快照、上次重签结果 | 自动重建 |
+| `logs/` | 日志 | — |
+
+位置：Docker 部署是仓库目录下的 `./data`（root 所有，权限 0700）；从源码运行是 `~/.local/share/iphone-control`，配对记录在系统的 `/var/lib/lockdown`。
+
+::: danger 这些是秘密
+数据目录能用来登录你的 Apple ID 开发者账号、免确认地连接手机，开启自动解锁时还有明文锁屏密码。不要提交到 git，不要发给别人，备份也要加密保存。
+:::
+
+## 备份
+
+```bash
+docker compose stop
+sudo tar czf iphone-control-data.tar.gz data     # 目录是 root 所有，需要 sudo
+docker compose start
+```
+
+从源码运行：
+
+```bash
+systemctl --user stop iphone-control
+tar czf iphone-control-data.tar.gz -C ~/.local/share iphone-control
+sudo tar czf lockdown.tar.gz /var/lib/lockdown     # 配对记录
+systemctl --user start iphone-control
+```
+
+## 迁移到新主机
+
+把数据目录（从源码运行时还有 `/var/lib/lockdown`）原样恢复到新主机的同一位置，再启动即可，不需要重新配对、登录。

@@ -1,0 +1,40 @@
+# Data and Backups
+
+## What's in the data directory
+
+| Path | Contents | If lost |
+|---|---|---|
+| `account/` | Apple ID session, signing key and certificate | Log in again; a new certificate is created |
+| `lockdown/` | Pairing records (Docker) | Tap *Trust* on the phone again |
+| `wda/` | Signed WebDriverAgent | Re-signed automatically |
+| `ddi/` | Developer Disk Image cache | Downloaded again |
+| `secrets/passcode` | Passcode (only with auto-unlock) | Run `passcode set` again |
+| `state.json` | State snapshot, last signing result | Rebuilt automatically |
+| `logs/` | Logs | — |
+
+Location: `./data` in the repository directory for Docker (owned by root, mode 0700); `~/.local/share/iphone-control` for a source install, with pairing records in the system's `/var/lib/lockdown`.
+
+::: danger These are secrets
+The data directory can log in to your Apple ID developer account, connect to the phone without confirmation, and — with auto-unlock — contains the passcode in plain text. Never commit or share it, and keep backups encrypted.
+:::
+
+## Back up
+
+```bash
+docker compose stop
+sudo tar czf iphone-control-data.tar.gz data     # owned by root, hence sudo
+docker compose start
+```
+
+Source install:
+
+```bash
+systemctl --user stop iphone-control
+tar czf iphone-control-data.tar.gz -C ~/.local/share iphone-control
+sudo tar czf lockdown.tar.gz /var/lib/lockdown     # pairing records
+systemctl --user start iphone-control
+```
+
+## Move to a new host
+
+Restore the data directory (and `/var/lib/lockdown` for a source install) to the same location on the new host and start it; no new pairing or login is needed.

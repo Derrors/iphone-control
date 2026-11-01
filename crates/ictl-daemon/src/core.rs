@@ -163,6 +163,8 @@ impl Daemon {
         if let Some(mut c) = g.usbmuxd.take() {
             let _ = c.kill().await;
         }
+        // 经旧 usbmuxd 建立的连接（隧道、runner、WDA）都已失效
+        self.drop_session(g);
         let log = std::fs::OpenOptions::new().create(true).append(true).open(self.cfg.logs().join("usbmuxd.log"));
         let mut cmd = tokio::process::Command::new(&self.cfg.usbmuxd_bin);
         cmd.args(["-U", "root", "-f"]).kill_on_drop(true);
@@ -321,10 +323,9 @@ impl Daemon {
         }
         if g.runner.is_some() {
             self.log.log("WDA 不可用");
-            if let Some(r) = g.runner.take() {
-                r.stop();
-            }
-            g.wda = None;
+            // 隧道和 HID 也一起丢：WDA 掉线常常是底层连接断了（例如 usbmuxd 重启），
+            // 留着旧隧道，下次查镜像就报 socket io failed 并白白退避 60 秒
+            self.drop_session(g);
         }
         g.wda_misses.reset();
         if !g.backoff.ready(Instant::now()) {

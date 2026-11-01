@@ -143,10 +143,27 @@ pub fn parse_passcode_value(value: &str) -> Option<(u32, u32)> {
     }
 }
 
-/// 元素树是不是锁屏界面：锁屏上的日期时间视图标识与语言无关（`lockscreen-date-view`）。
-/// 只在 `/wda/locked` 不可信时用（见 [`crate::WdaClient::locked`]）
-pub fn is_lock_screen(xml: &str) -> bool {
-    xml.contains("\"lockscreen-date-view\"")
+/// SpringBoard 元素树看到的是哪种「封面」界面。用来纠正 `/wda/locked`（见 [`crate::WdaClient::locked`]）。
+/// 标识都与语言无关（iOS 27 真机样本）：
+/// - 锁屏有锁图标 `proud-lock`（灵动岛里还有 `systemApertureElementIdentifierLock`），上滑后的密码键盘有 `passcode-view`
+/// - 通知中心和锁屏是同一个界面（都有 `lockscreen-date-view`），但没有锁图标
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CoverSheet {
+    Locked,
+    NotificationCenter,
+    None,
+}
+
+pub fn cover_sheet(xml: &str) -> CoverSheet {
+    let lock_glyph =
+        ["\"proud-lock\"", "systemApertureElementIdentifierLock", "\"passcode-view\""].iter().any(|m| xml.contains(m));
+    if lock_glyph {
+        CoverSheet::Locked
+    } else if xml.contains("\"lockscreen-date-view\"") {
+        CoverSheet::NotificationCenter
+    } else {
+        CoverSheet::None
+    }
 }
 
 #[cfg(test)]
@@ -157,13 +174,20 @@ mod tests {
     const HOME: &str = include_str!("../tests/fixtures/home.xml");
     const LOCK: &str = include_str!("../tests/fixtures/lockscreen.xml");
     const LOCK_IOS27: &str = include_str!("../tests/fixtures/lockscreen-ios27.xml");
+    const PIN_IOS27: &str = include_str!("../tests/fixtures/passcode-view-ios27.xml");
+    const NC_IOS27: &str = include_str!("../tests/fixtures/notification-center-ios27.xml");
 
     #[test]
-    fn lock_screen_detected_from_real_tree() {
-        assert!(is_lock_screen(LOCK_IOS27));
-        assert!(!is_lock_screen(HOME));
+    fn cover_sheet_kinds_from_real_trees() {
+        assert_eq!(cover_sheet(LOCK_IOS27), CoverSheet::Locked);
+        // 密码键盘界面没有 lockscreen-date-view，也必须算锁屏（自动解锁靠它判断是否解开了）
+        assert_eq!(cover_sheet(PIN_IOS27), CoverSheet::Locked);
+        assert_eq!(cover_sheet(NC_IOS27), CoverSheet::NotificationCenter);
+        assert_eq!(cover_sheet(HOME), CoverSheet::None);
         // 真机样本也要能正常解析
-        assert!(!parse(LOCK_IOS27, SCREEN).is_empty());
+        for xml in [LOCK_IOS27, PIN_IOS27, NC_IOS27] {
+            assert!(!parse(xml, SCREEN).is_empty());
+        }
     }
 
     fn labels(els: &[Element]) -> Vec<String> {

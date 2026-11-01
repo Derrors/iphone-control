@@ -158,37 +158,43 @@ impl<T: Transport> WdaClient<T> {
         Ok(size)
     }
 
-    /// 是否锁屏。WDA 的 `/wda/locked` 只靠 `com.apple.springboard.lockstate` 的变化通知维护，初值为 false：
-    /// WDA 在手机锁着时启动，就会一直报未锁屏，直到下一次锁屏/解锁（WebDriverAgent `XCUIDevice+FBHelpers.m`）。
-    /// 所以在确认过一次「确实没锁屏」之前，WDA 说没锁时再看一眼元素树；确认后只信 WDA，不增加开销
+    /// 是否锁屏。WDA 的 `/wda/locked` 只靠 `com.apple.springboard.lockstate` 的变化通知维护
+    /// （WebDriverAgent `XCUIDevice+FBHelpers.m`），有两处误报，用元素树纠正（[`elements::cover_sheet`]）：
+    /// - 初值为 false：WDA 在手机锁着时启动就一直报未锁屏，直到下一次锁屏/解锁。确认过一次「确实没锁屏」之后
+    ///   WDA 就跟上了，此后它说没锁就直接信，不多发请求
+    /// - 下拉通知中心时报 true（和锁屏同一个界面）：WDA 说锁了时核对一次，是通知中心就算没锁
     pub async fn locked(&mut self) -> Result<bool> {
-        if self.call("GET", "/wda/locked", None, Duration::from_secs(10)).await?["value"] == true {
-            return Ok(true);
-        }
-        if self.lock_state_trusted {
+        let wda_locked = self.call("GET", "/wda/locked", None, Duration::from_secs(10)).await?["value"] == true;
+        if !wda_locked && self.lock_state_trusted {
             return Ok(false);
         }
-        match self.lock_screen_shown().await {
-            Ok(true) => {
+        let sheet = match self.cover_sheet().await {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::debug!("核对锁屏界面失败，按 WDA 的结果：{e}");
+                return Ok(wda_locked);
+            }
+        };
+        match (wda_locked, sheet) {
+            (true, elements::CoverSheet::NotificationCenter) => Ok(false),
+            (true, _) => Ok(true),
+            (false, elements::CoverSheet::Locked) => {
                 tracing::info!("WDA 报未锁屏，但屏幕上是锁屏界面（WDA 在锁屏时启动，状态未同步）");
                 Ok(true)
             }
-            Ok(false) => {
+            (false, _) => {
                 self.lock_state_trusted = true;
-                Ok(false)
-            }
-            Err(e) => {
-                tracing::debug!("核对锁屏界面失败，按 WDA 的结果：{e}");
                 Ok(false)
             }
         }
     }
 
-    async fn lock_screen_shown(&self) -> Result<bool> {
+    /// 前台是 SpringBoard 时看元素树是锁屏、通知中心还是普通界面；前台是别的 App 就是普通界面
+    async fn cover_sheet(&self) -> Result<elements::CoverSheet> {
         if self.active_app().await? != SPRINGBOARD {
-            return Ok(false);
+            return Ok(elements::CoverSheet::None);
         }
-        Ok(elements::is_lock_screen(&self.source_xml().await?))
+        Ok(elements::cover_sheet(&self.source_xml().await?))
     }
 
     pub async fn active_app(&self) -> Result<String> {
@@ -417,9 +423,12 @@ mod tests {
             (200, no),
             (200, sb),
             (200, &home_src),
-            // 3. 之后只问 WDA
+            // 3. 之后 WDA 说没锁就直接信
             (200, no),
+            // 4. WDA 说锁了：核对一次，确实是锁屏
             (200, r#"{"value":true}"#),
+            (200, sb),
+            (200, &lock_src),
         ]);
         let mut c = WdaClient::new(&m);
         assert!(c.locked().await.unwrap());
@@ -427,7 +436,22 @@ mod tests {
         assert!(!c.locked().await.unwrap());
         assert!(c.locked().await.unwrap());
         let paths: Vec<String> = m.seen.lock().unwrap().iter().map(|(_, p, _)| p.clone()).collect();
-        assert_eq!(paths.iter().filter(|p| p.starts_with("/source")).count(), 2, "{paths:?}");
+        assert_eq!(paths.iter().filter(|p| p.starts_with("/source")).count(), 3, "{paths:?}");
+    }
+
+    #[tokio::test]
+    async fn notification_center_is_not_locked_even_if_wda_says_so() {
+        let nc = serde_json::to_string(include_str!("../tests/fixtures/notification-center-ios27.xml")).unwrap();
+        let pin = serde_json::to_string(include_str!("../tests/fixtures/passcode-view-ios27.xml")).unwrap();
+        let sb = r#"{"value":{"bundleId":"com.apple.springboard"}}"#;
+        let yes = r#"{"value":true}"#;
+        let (nc, pin) = (format!(r#"{{"value":{nc}}}"#), format!(r#"{{"value":{pin}}}"#));
+        let m = Mock::with(&[(200, yes), (200, sb), (200, &nc), (200, yes), (200, sb), (200, &pin), (200, yes)]);
+        let mut c = WdaClient::new(&m);
+        assert!(!c.locked().await.unwrap(), "通知中心");
+        assert!(c.locked().await.unwrap(), "密码键盘界面");
+        // 核对失败时按 WDA 的结果
+        assert!(c.locked().await.unwrap());
     }
 
     #[tokio::test]

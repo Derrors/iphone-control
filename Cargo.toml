@@ -77,6 +77,8 @@ ictl-mcp = { path = "crates/ictl-mcp" }
 # 它自己的 [patch] 不生效，所以这里 vendor 打过补丁的副本（docs/decisions.md D6）。
 [patch.crates-io]
 apple-codesign = { path = "vendor/apple-codesign" }
+# idevice 0.1.68 的 cryptexd install 会挂住(persistence 字段错、隧道 MSS),修复在上游 master 但还没发版
+idevice = { git = "https://github.com/jkcoxson/idevice", rev = "89702099f4d7552f704f93b4526756abda319ceb" }
 
 [profile.release]
 lto = "thin"

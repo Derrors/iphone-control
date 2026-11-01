@@ -64,9 +64,17 @@ impl Transport for DeviceTransport {
             }
             parse_response(&buf)
         };
-        tokio::time::timeout(timeout, fut).await.map_err(|_| {
+        let t0 = std::time::Instant::now();
+        let r = tokio::time::timeout(timeout, fut).await.map_err(|_| {
             std::io::Error::new(std::io::ErrorKind::TimedOut, format!("请求超时（{} 秒）", timeout.as_secs()))
-        })?
+        })?;
+        // 路径截掉查询串（/source 的排除属性很长）
+        let short = path.split('?').next().unwrap_or(path);
+        match &r {
+            Ok((status, _)) => tracing::debug!("wda {method} {short} → {status}（{:.2}s）", t0.elapsed().as_secs_f64()),
+            Err(e) => tracing::debug!("wda {method} {short} 失败（{:.2}s）：{e}", t0.elapsed().as_secs_f64()),
+        }
+        r
     }
 }
 

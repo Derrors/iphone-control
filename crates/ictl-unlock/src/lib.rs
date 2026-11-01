@@ -94,11 +94,26 @@ impl UnlockConfig {
 
 /// 未锁屏直接返回；否则按规则解锁
 pub async fn ensure_unlocked<T: Transport>(wda: &mut WdaClient<T>, cfg: &UnlockConfig) -> Result<Outcome> {
-    match wda.locked().await {
-        Ok(false) | Err(WdaError::Unavailable(_)) => return Ok(Outcome::NotLocked),
-        Ok(true) => {}
+    // 先只问 WDA：确定没锁就直接返回，日常操作不多发请求
+    let reported = match wda.wda_reports_locked().await {
+        Ok(v) => v,
+        Err(WdaError::Unavailable(_)) => return Ok(Outcome::NotLocked),
         Err(e) => return Err(e.into()),
+    };
+    if !reported && wda.lock_state_trusted() {
+        return Ok(Outcome::NotLocked);
     }
+    let saved = wda.idle_settings().await?;
+    wda.set_idle_settings(UNLOCK_IDLE).await?;
+    let r = check_and_unlock(wda, cfg, reported).await;
+    if let Err(e) = wda.set_idle_settings(saved).await {
+        tracing::warn!("恢复 WDA 等待设置失败：{e}");
+    }
+    r
+}
+
+/// 可用的密码；不能自动解锁时给出原因（停用、没配、不是纯数字）
+fn passcode(cfg: &UnlockConfig) -> Result<String> {
     if cfg.disabled_by_failure() {
         return Err(UnlockError::Disabled);
     }
@@ -106,13 +121,22 @@ pub async fn ensure_unlocked<T: Transport>(wda: &mut WdaClient<T>, cfg: &UnlockC
     if code.is_empty() || !code.bytes().all(|b| b.is_ascii_digit()) {
         return Err(UnlockError::NotDigits);
     }
-    let saved = wda.idle_settings().await?;
-    wda.set_idle_settings(UNLOCK_IDLE).await?;
-    let r = unlock(wda, cfg, code.as_bytes()).await;
-    if let Err(e) = wda.set_idle_settings(saved).await {
-        tracing::warn!("恢复 WDA 等待设置失败：{e}");
+    Ok(code)
+}
+
+/// `reported`：WDA 自己说锁了。熄屏锁屏时第一个无障碍查询（取元素树、前台 App）要等约 8 秒，
+/// 所以能自动解锁时不先核对，直接进解锁流程——第一步按 Home 唤醒屏幕；若其实是通知中心（WDA 误报），
+/// Home 会收起它，随后核对为未锁屏，一位都不输。不能自动解锁时才先核对，免得把通知中心报成「需要人工解锁」
+async fn check_and_unlock<T: Transport>(wda: &mut WdaClient<T>, cfg: &UnlockConfig, reported: bool) -> Result<Outcome> {
+    let code = passcode(cfg);
+    if !(reported && code.is_ok()) {
+        match wda.locked().await {
+            Ok(false) | Err(WdaError::Unavailable(_)) => return Ok(Outcome::NotLocked),
+            Ok(true) => {}
+            Err(e) => return Err(e.into()),
+        }
     }
-    r
+    unlock(wda, cfg, code?.as_bytes()).await
 }
 
 async fn press<T: Transport>(wda: &mut WdaClient<T>, at: (i64, i64), t: &Timing) -> Result<()> {
@@ -141,10 +165,23 @@ async fn unlock<T: Transport>(wda: &mut WdaClient<T>, cfg: &UnlockConfig, code: 
     let mut keys = None;
     for _ in 0..FIRST_DIGIT_ROUNDS {
         // Home 唤醒；键盘已打开时会收起并清空半截输入
-        wda.press_button("home").await?;
-        tokio::time::sleep(t.wake_settle).await;
-        let (cx, h) = (screen.width / 2.0, screen.height);
-        wda.actions(&swipe_steps((cx, h - 8.0), (cx, h * 0.45), 250)).await?;
+        // 熄屏锁屏刚唤醒时上滑偶尔卡十几秒后报 `point.x != INFINITY`（WDA 还拿不到界面尺寸）：一位没输，算这轮落空重来
+        let woke = async {
+            wda.press_button("home").await?;
+            tokio::time::sleep(t.wake_settle).await;
+            let (cx, h) = (screen.width / 2.0, screen.height);
+            wda.actions(&swipe_steps((cx, h - 8.0), (cx, h * 0.45), 250)).await
+        }
+        .await;
+        if let Err(e) = woke {
+            match e {
+                WdaError::Remote { .. } => {
+                    tracing::info!("唤醒/上滑失败，重来一轮：{e}");
+                    continue;
+                }
+                other => return Err(other.into()),
+            }
+        }
         tokio::time::sleep(t.swipe_settle).await;
         if !wda.locked().await? {
             return Ok(Outcome::Unlocked);
@@ -272,6 +309,16 @@ mod tests {
     async fn keypad_in_tree_but_not_shown_retries_without_counting() {
         let fake = FakeLockScreen::new("123456");
         fake.swipes_ignored(1);
+        let (cfg, dir) = cfg(Some("123456"));
+        assert_eq!(ensure_unlocked(&mut WdaClient::new(&fake), &cfg).await.unwrap(), Outcome::Unlocked);
+        assert_eq!(fake.state().failed_attempts, 0);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn swipe_error_right_after_wake_retries_round() {
+        let fake = FakeLockScreen::new("123456");
+        fake.swipe_errors(1);
         let (cfg, dir) = cfg(Some("123456"));
         assert_eq!(ensure_unlocked(&mut WdaClient::new(&fake), &cfg).await.unwrap(), Outcome::Unlocked);
         assert_eq!(fake.state().failed_attempts, 0);

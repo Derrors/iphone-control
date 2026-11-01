@@ -189,6 +189,16 @@ impl<T: Transport> WdaClient<T> {
         }
     }
 
+    /// WDA 自己报的锁屏状态，不核对。可能误报，见 [`Self::locked`]；配合 [`Self::lock_state_trusted`] 做快速判断
+    pub async fn wda_reports_locked(&self) -> Result<bool> {
+        Ok(self.call("GET", "/wda/locked", None, Duration::from_secs(10)).await?["value"] == true)
+    }
+
+    /// 本次 WDA 启动后是否确认过一次没锁屏。确认过且 WDA 说没锁，就确定没锁
+    pub fn lock_state_trusted(&self) -> bool {
+        self.lock_state_trusted
+    }
+
     /// 前台是 SpringBoard 时看元素树是锁屏、通知中心还是普通界面；前台是别的 App 就是普通界面
     async fn cover_sheet(&self) -> Result<elements::CoverSheet> {
         if self.active_app().await? != SPRINGBOARD {

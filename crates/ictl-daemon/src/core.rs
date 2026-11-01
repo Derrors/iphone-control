@@ -26,6 +26,8 @@ pub const TICK: Duration = Duration::from_secs(10);
 /// 正常 2～10 秒就绪。手机重启后未授权 automation 时，testmanagerd 握手每次卡 30 秒、要重试一两次，
 /// 60 秒常常等不到 runner 启动，也就认不出「需要输入密码」
 const WDA_START_TIMEOUT: Duration = Duration::from_secs(120);
+/// 锁屏后至少等这么久再自动解锁：锁屏过渡没走完就唤醒，WDA 第一下上滑卡约 16 秒后报 `point.x != INFINITY`
+const LOCK_SETTLE: Duration = Duration::from_secs(3);
 const SYSFS_USB: &str = "/sys/bus/usb/devices";
 
 /// 持久化到 `state.json` 的状态（不含秘密）
@@ -86,6 +88,8 @@ struct Inner {
     mux: MuxWatch,
     usbmuxd: Option<tokio::process::Child>,
     offline_since: Option<Instant>,
+    /// 最近一次经本进程锁屏的时间（自动解锁要等锁屏过渡走完，见 [`LOCK_SETTLE`]）
+    last_lock: Option<Instant>,
     dedup: Dedup,
     next_resign: Instant,
     next_session_check: Instant,
@@ -121,6 +125,7 @@ impl Daemon {
             mux: MuxWatch::default(),
             usbmuxd: None,
             offline_since: Some(now),
+            last_lock: None,
             dedup: Dedup::default(),
             // 启动一分钟后再做第一次重签检查和会话验证，先让设备就绪
             next_resign: now + Duration::from_secs(60),
@@ -526,6 +531,10 @@ impl Daemon {
     /// 配置了密码就在锁屏时自动解锁；没配置而手机锁着则报错（与 toolkit 一致）
     async fn ensure_unlocked(&self, g: &mut Inner) -> Result<(), String> {
         let cfg = self.unlock_cfg();
+        // 刚锁屏就唤醒，第一下上滑会卡十几秒后报错（真机实测；锁屏后等 3 秒再解锁一次就成）
+        if let Some(left) = g.last_lock.and_then(|t| LOCK_SETTLE.checked_sub(t.elapsed())) {
+            tokio::time::sleep(left).await;
+        }
         let Some(wda) = self.wda(g) else { return Ok(()) };
         match ictl_unlock::ensure_unlocked(wda, &cfg).await {
             Ok(_) => Ok(()),
@@ -742,9 +751,11 @@ impl Daemon {
             if let Some(w) = self.wda(g)
                 && w.lock().await.is_ok()
             {
+                g.last_lock = Some(Instant::now());
                 return Ok("已锁屏".into());
             }
             self.hid_do(g, |h| Box::pin(h.press(Button::Lock))).await?;
+            g.last_lock = Some(Instant::now());
             return Ok("已锁屏".into());
         }
         let (wda_name, hid_button) = match button {

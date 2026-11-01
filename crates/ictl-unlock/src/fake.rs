@@ -37,6 +37,7 @@ pub struct State {
     pub failed_attempts: u32,
     pub digits_typed: u32,
     swipes_to_ignore: u32,
+    swipe_errors: u32,
     press_count: u32,
     drop_press: Option<u32>,
 }
@@ -62,6 +63,11 @@ impl FakeLockScreen {
 
     pub fn swipes_ignored(&self, n: u32) {
         self.st.lock().unwrap().swipes_to_ignore = n;
+    }
+
+    /// 接下来 n 次上滑 WDA 报 500（真机：熄屏锁屏刚唤醒时 `point.x != INFINITY`）
+    pub fn swipe_errors(&self, n: u32) {
+        self.st.lock().unwrap().swipe_errors = n;
     }
 
     /// 第 n 次有效按键（从 1 数）被键盘吞掉
@@ -95,6 +101,11 @@ impl FakeLockScreen {
                 let downs = steps.iter().filter(|a| a["type"] == "pointerDown").count();
                 let is_swipe =
                     steps.iter().any(|a| a["type"] == "pointerMove" && a["duration"].as_u64().unwrap_or(0) > 0);
+                if is_swipe && s.swipe_errors > 0 {
+                    s.swipe_errors -= 1;
+                    let msg = "Invalid parameter not satisfying: point.x != INFINITY && point.y != INFINITY";
+                    return (500, json!({"value": {"error": "unknown error", "message": msg}}));
+                }
                 if is_swipe {
                     if s.swipes_to_ignore > 0 {
                         s.swipes_to_ignore -= 1;

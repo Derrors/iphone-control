@@ -12,9 +12,8 @@ It works as a set of [MCP](https://modelcontextprotocol.io) (Model Context Proto
 
 ## How it works
 
-```
-AI client ──stdio──▶ iphone-control mcp ──Unix socket──▶ iphone-control daemon ──USB──▶ iPhone
-```
+![Architecture: an MCP client talks to iphone-control mcp over stdio, which talks to the daemon over a Unix socket; the daemon drives the iPhone over USB through WebDriverAgent](/architecture-light.svg){.light-only}
+![Architecture: an MCP client talks to iphone-control mcp over stdio, which talks to the daemon over a Unix socket; the daemon drives the iPhone over USB through WebDriverAgent](/architecture-dark.svg){.dark-only}
 
 - A **daemon** runs all the time and owns the phone: it pairs, mounts the Developer Disk Image, opens a tunnel, and runs [WebDriverAgent](https://github.com/appium/WebDriverAgent) (WDA, an agent on top of Apple's XCTest automation) on the phone to read the screen, tap and type.
 - The **MCP server** is started by the AI client on demand and simply forwards tool calls to the daemon.

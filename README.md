@@ -45,18 +45,12 @@ AI agents can drive browsers and desktops, but a real iPhone is harder: Apple's 
 
 iphone-control does it all in **one Rust binary** on Linux, built on [idevice](https://github.com/jkcoxson/idevice), [Impactor](https://github.com/claration/impactor) and [WebDriverAgent](https://github.com/appium/WebDriverAgent). A long-running daemon owns the phone — tunnel, HID session, WebDriverAgent session — and exposes it to Claude Code or any MCP client. It succeeds [iphone-control-toolkit](https://github.com/Derrors/iphone-control-toolkit) and keeps its MCP tools compatible.
 
-```
-Claude Code / any MCP client
-        │  MCP over stdio
-        ▼
-┌──────── iphone-control daemon (Docker or systemd) ────────┐
-│  WebDriverAgent                        (primary)           │
-│  CoreDevice HID                        (fallback)          │
-│  supervisor: usbmuxd · reconnect · re-sign · notify        │
-└─────────────────────────────┬──────────────────────────────┘
-                              │ USB (no network port opened)
-                           iPhone
-```
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="website/public/architecture-dark.svg">
+    <img src="website/public/architecture-light.svg" alt="Architecture: an MCP client talks to iphone-control mcp over stdio, which talks to the daemon over a Unix socket; the daemon drives the iPhone over USB through WebDriverAgent, with CoreDevice HID as fallback" width="900">
+  </picture>
+</p>
 
 ## Features
 

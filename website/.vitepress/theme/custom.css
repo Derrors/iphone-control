@@ -30,3 +30,9 @@
     --vp-home-hero-image-filter: blur(68px);
   }
 }
+
+/* 浅色/深色两版的图：跟随文档站的外观切换 */
+.dark .light-only,
+html:not(.dark) .dark-only {
+  display: none;
+}

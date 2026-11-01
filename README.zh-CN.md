@@ -45,18 +45,12 @@ AI agent 已经能操作浏览器和电脑桌面，但真实的 iPhone 难得多
 
 iphone-control 在 Linux 上用**一个 Rust 二进制**把这些事都做了，基于 [idevice](https://github.com/jkcoxson/idevice)、[Impactor](https://github.com/claration/impactor) 和 [WebDriverAgent](https://github.com/appium/WebDriverAgent)。一个常驻守护进程独占手机（隧道、HID 会话、WebDriverAgent 会话常驻复用），把它交给 Claude Code 或任何 MCP 客户端。它是 [iphone-control-toolkit](https://github.com/Derrors/iphone-control-toolkit) 的继任者，MCP 工具保持兼容。
 
-```
-Claude Code / any MCP client
-        │  MCP over stdio
-        ▼
-┌──────── iphone-control daemon (Docker or systemd) ────────┐
-│  WebDriverAgent                        (primary)           │
-│  CoreDevice HID                        (fallback)          │
-│  supervisor: usbmuxd · reconnect · re-sign · notify        │
-└─────────────────────────────┬──────────────────────────────┘
-                              │ USB (no network port opened)
-                           iPhone
-```
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="website/public/architecture-dark.svg">
+    <img src="website/public/architecture-light.svg" alt="架构：MCP 客户端经 stdio 调用 iphone-control mcp，再经 Unix socket 交给守护进程；守护进程经 USB 用 WebDriverAgent 操作 iPhone，CoreDevice HID 作为后备" width="900">
+  </picture>
+</p>
 
 ## 功能特性
 

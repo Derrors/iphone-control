@@ -154,6 +154,11 @@ impl Session {
         let team = &self.team_id;
         let new_id = if orig.ends_with(&format!(".{team}")) { orig.clone() } else { format!("{orig}.{team}") };
 
+        // 证书必须在申请描述文件之前定下来：本地没有私钥时这里会吊销旧证书、新建一张，
+        // 而描述文件只包含生成那一刻团队里有效的证书，先拿描述文件会装不上（0xe8008015）
+        let cert =
+            CertificateIdentity::new_with_session(&self.inner, self.dir.dir.clone(), None, team, false, None).await?;
+
         // 只有带 entitlements 的 bundle（App/扩展）需要换 ID 并申请描述文件；WDA 里只有主程序一个
         let mut profiles = Vec::new();
         for b in bundles.iter().filter(|b| b.kind.has_entitlements()) {
@@ -172,8 +177,6 @@ impl Session {
             profiles.push((b.dir.clone(), MobileProvision::load_with_bytes(data)?));
         }
 
-        let cert =
-            CertificateIdentity::new_with_session(&self.inner, self.dir.dir.clone(), None, team, false, None).await?;
         for b in bundles.iter().filter(|b| b.kind.should_be_signed()) {
             let mut settings = SigningSettings::default();
             cert.load_into_signing_settings(&mut settings)?;
@@ -194,7 +197,7 @@ impl Session {
             key.finish()?;
         }
 
-        let profile = verify_signed(&app, udid)?;
+        let profile = verify_signed(&app, udid, cert.cert.as_ref().map(|c| c.constructed_data()))?;
         ipa::pack(work, output)?;
         Ok(Signed { team_id: team.clone(), bundle_id: new_id, profile })
     }
@@ -202,7 +205,7 @@ impl Session {
 
 /// 签名后自检：每个要签名的嵌套 bundle 都要有 `_CodeSignature/CodeResources`（`.xctest` 漏签会在这里暴露），
 /// 主程序的描述文件包含这台手机、带 get-task-allow（XCTest 要能附加调试）。
-pub fn verify_signed(app_dir: &Path, udid: &str) -> Result<Profile> {
+pub fn verify_signed(app_dir: &Path, udid: &str, signing_cert: Option<&[u8]>) -> Result<Profile> {
     for b in bundle::collect_sorted(app_dir)? {
         if matches!(b.kind, bundle::BundleType::Unknown | bundle::BundleType::Dylib) {
             continue;
@@ -218,6 +221,11 @@ pub fn verify_signed(app_dir: &Path, udid: &str) -> Result<Profile> {
     }
     if !p.get_task_allow {
         return Err(SignError::Verify("描述文件不带 get-task-allow，WDA 起不来".into()));
+    }
+    if let Some(der) = signing_cert
+        && !p.certificates.iter().any(|c| c == der)
+    {
+        return Err(SignError::Verify("描述文件里没有签名用的证书（证书在描述文件生成后才换过），手机会拒装".into()));
     }
     Ok(p)
 }
@@ -253,7 +261,7 @@ mod tests {
     fn verify_catches_unsigned_xctest() {
         let root = std::env::temp_dir().join(format!("ictl-verify-{}", uuid::Uuid::new_v4()));
         let app = signed_fake(&root, false, &["UDID-1"]);
-        let err = verify_signed(&app, "UDID-1").unwrap_err().to_string();
+        let err = verify_signed(&app, "UDID-1", None).unwrap_err().to_string();
         assert!(err.contains(".xctest"), "{err}");
         std::fs::remove_dir_all(root).unwrap();
     }
@@ -262,8 +270,10 @@ mod tests {
     fn verify_passes_and_checks_device() {
         let root = std::env::temp_dir().join(format!("ictl-verify-{}", uuid::Uuid::new_v4()));
         let app = signed_fake(&root, true, &["UDID-1"]);
-        assert!(verify_signed(&app, "UDID-1").is_ok());
-        assert!(verify_signed(&app, "UDID-2").unwrap_err().to_string().contains("没有这台手机"));
+        assert!(verify_signed(&app, "UDID-1", Some(b"CERT-A")).is_ok());
+        assert!(verify_signed(&app, "UDID-2", None).unwrap_err().to_string().contains("没有这台手机"));
+        // 描述文件生成后证书被换掉（本地无私钥时 plume 会吊销重建）
+        assert!(verify_signed(&app, "UDID-1", Some(b"CERT-B")).unwrap_err().to_string().contains("签名用的证书"));
         std::fs::remove_dir_all(root).unwrap();
     }
 }

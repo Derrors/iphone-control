@@ -13,6 +13,8 @@ pub struct Profile {
     pub get_task_allow: bool,
     /// 形如 `TEAMID.com.example.app`
     pub application_identifier: String,
+    /// 允许签名的证书（DER）。签名用的证书不在其中时手机拒装（0xe8008015）
+    pub certificates: Vec<Vec<u8>>,
 }
 
 impl Profile {
@@ -43,6 +45,11 @@ impl Profile {
                 .and_then(|v| v.as_string())
                 .unwrap_or_default()
                 .to_owned(),
+            certificates: d
+                .get("DeveloperCertificates")
+                .and_then(|v| v.as_array())
+                .map(|a| a.iter().filter_map(|v| v.as_data().map(<[u8]>::to_vec)).collect())
+                .unwrap_or_default(),
         })
     }
 
@@ -75,6 +82,7 @@ pub(crate) mod tests {
         d.insert("ExpirationDate".into(), plist::Value::Date(expires.into()));
         d.insert("ProvisionedDevices".into(), plist::Value::Array(devices.iter().map(|s| (*s).into()).collect()));
         d.insert("Entitlements".into(), plist::Value::Dictionary(ent));
+        d.insert("DeveloperCertificates".into(), plist::Value::Array(vec![plist::Value::Data(b"CERT-A".to_vec())]));
         let mut xml = Vec::new();
         plist::Value::Dictionary(d).to_writer_xml(&mut xml).unwrap();
         let mut out = vec![0x30, 0x82, 0x01, 0x00, 0xfa, 0xde];
@@ -92,6 +100,7 @@ pub(crate) mod tests {
         assert!(p.get_task_allow);
         assert_eq!(p.expires, exp);
         assert!(p.application_identifier.starts_with("TEAM000000."));
+        assert_eq!(p.certificates, [b"CERT-A".to_vec()]);
     }
 
     #[test]

@@ -29,7 +29,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0 # 页面的「最后更新」时间取自 git 历史
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
         with:
           package_json_file: website/package.json
       - uses: actions/setup-node@v4

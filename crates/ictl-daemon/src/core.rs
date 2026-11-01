@@ -837,8 +837,11 @@ impl Daemon {
     async fn launch_app(&self, g: &mut Inner, app: &str) -> Result<String, String> {
         let bid = self.resolve_app(g, app).await?;
         self.ensure_unlocked(g).await?;
-        self.require_wda(g)?.launch_app(&bid).await.map_err(|e| e.to_string())?;
-        Ok(format!("已启动 {bid}"))
+        if self.require_wda(g)?.launch_app(&bid).await.map_err(|e| e.to_string())? {
+            Ok(format!("已启动 {bid}"))
+        } else {
+            Ok(format!("已启动 {bid},但 8 秒内没到前台(可能有弹窗或启动慢),先截图确认"))
+        }
     }
 
     async fn terminate_app(&self, g: &mut Inner, app: &str) -> Result<String, String> {

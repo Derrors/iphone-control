@@ -82,8 +82,10 @@ impl<T: Transport> WdaClient<T> {
 
     async fn call(&self, method: &str, path: &str, body: Option<Value>, timeout: Duration) -> Result<Value> {
         let body = body.map(|b| b.to_string().into_bytes());
-        let (status, raw) =
-            self.transport.send(method, path, body, timeout).await.map_err(|e| WdaError::Unavailable(e.to_string()))?;
+        let (status, raw) = self.transport.send(method, path, body, timeout).await.map_err(|e| match e.kind() {
+            std::io::ErrorKind::TimedOut => WdaError::Timeout(e.to_string()),
+            _ => WdaError::Unavailable(e.to_string()),
+        })?;
         let v: Value = match serde_json::from_slice(&raw) {
             Ok(v) => v,
             Err(_) if status >= 400 => {
@@ -141,10 +143,6 @@ impl<T: Transport> WdaClient<T> {
 
     async fn post(&mut self, path: &str, body: Value) -> Result<Value> {
         self.in_session("POST", path, Some(body), DEFAULT_TIMEOUT).await
-    }
-
-    pub async fn status(&self) -> Result<Value> {
-        self.get("/status").await
     }
 
     pub async fn ready(&self) -> Result<bool> {
@@ -235,8 +233,11 @@ impl<T: Transport> WdaClient<T> {
     }
 
     pub async fn screenshot_png(&self) -> Result<Vec<u8>> {
-        let v = self.get("/screenshot").await?;
-        let b64: String = v.as_str().unwrap_or_default().chars().filter(|c| !c.is_whitespace()).collect();
+        // base64 约 11MB：从 JSON 里直接拿走字符串，原地去掉换行，不再另外复制
+        let Value::String(mut b64) = self.get("/screenshot").await? else {
+            return Err(WdaError::Unavailable("截图响应不是字符串".into()));
+        };
+        b64.retain(|c| !c.is_whitespace());
         base64::engine::general_purpose::STANDARD
             .decode(b64)
             .map_err(|e| WdaError::Unavailable(format!("截图不是有效的 base64：{e}")))
@@ -281,16 +282,22 @@ impl<T: Transport> WdaClient<T> {
         self.post("/wda/lock", json!({})).await.map(drop)
     }
 
-    /// 启动并等到前台后再停 1 秒（冷启动后立即点击会被吞）
-    pub async fn launch_app(&mut self, bundle_id: &str) -> Result<()> {
+    /// 启动并等到前台后再停 1 秒（冷启动后立即点击会被吞）。返回 8 秒内是否到了前台；
+    /// 等待期间查前台出错不算失败（启动命令已经成功了）
+    pub async fn launch_app(&mut self, bundle_id: &str) -> Result<bool> {
         self.in_session("POST", "/wda/apps/launch", Some(json!({"bundleId": bundle_id})), Duration::from_secs(60))
             .await?;
         let deadline = tokio::time::Instant::now() + Duration::from_secs(8);
-        while tokio::time::Instant::now() < deadline && self.active_app().await? != bundle_id {
+        let mut foreground = false;
+        while tokio::time::Instant::now() < deadline {
+            if self.active_app().await.is_ok_and(|a| a == bundle_id) {
+                foreground = true;
+                break;
+            }
             tokio::time::sleep(Duration::from_millis(500)).await;
         }
         tokio::time::sleep(Duration::from_secs(1)).await;
-        Ok(())
+        Ok(foreground)
     }
 
     pub async fn terminate_app(&mut self, bundle_id: &str) -> Result<()> {
@@ -392,7 +399,7 @@ mod tests {
             }
             other => panic!("{other:?}"),
         }
-        assert!(matches!(c.status().await, Err(WdaError::Unavailable(_))));
+        assert!(matches!(c.active_app().await, Err(WdaError::Unavailable(_))));
     }
 
     #[tokio::test]

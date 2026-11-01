@@ -35,6 +35,10 @@ impl DeviceTransport {
     }
 }
 
+/// 建立到 WDA 端口的连接的时限。连不上（或连接超时）算 WDA 不可用，调用方可以退到 HID；
+/// 连上之后的超时是「请求已发出、手机可能还在执行」，不能退到 HID 重做一遍
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+
 impl Transport for DeviceTransport {
     async fn send(
         &self,
@@ -43,17 +47,33 @@ impl Transport for DeviceTransport {
         body: Option<Vec<u8>>,
         timeout: Duration,
     ) -> std::io::Result<(u16, Vec<u8>)> {
+        let t0 = std::time::Instant::now();
         let req = build_request(method, path, body.as_deref());
+        let idevice = tokio::time::timeout(CONNECT_TIMEOUT, self.provider.connect(self.port))
+            .await
+            .map_err(|_| std::io::Error::new(std::io::ErrorKind::NotConnected, "连接 WDA 端口超时"))?
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::NotConnected, e.to_string()))?;
+        let mut sock = idevice
+            .get_socket()
+            .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotConnected, "连接没有套接字"))?;
         let fut = async {
-            let idevice = self.provider.connect(self.port).await.map_err(std::io::Error::other)?;
-            let mut sock = idevice.get_socket().ok_or_else(|| std::io::Error::other("连接没有套接字"))?;
             sock.write_all(&req).await?;
             sock.flush().await?;
-            // WDA 收到 `Connection: close` 也不关连接，不能读到 EOF：读够一个完整响应就停
+            // WDA 收到 `Connection: close` 也不关连接，不能读到 EOF：读够一个完整响应就停。
+            // 头部只解析一次；正文按 Content-Length 判断，chunked 只在收到结束块后才完整解一次
             let mut buf = Vec::new();
             let mut chunk = vec![0u8; 64 * 1024];
+            let mut head: Option<(usize, Framing)> = None;
             loop {
-                if response_complete(&buf) {
+                if head.is_none() {
+                    head = parse_head(&buf);
+                    if let Some((split, Framing::Length(n))) = head {
+                        buf.reserve((split + n).saturating_sub(buf.len()));
+                    }
+                }
+                if let Some((split, framing)) = head
+                    && framing.complete(&buf[split..])
+                {
                     break;
                 }
                 let n = sock.read(&mut chunk).await?;
@@ -62,9 +82,8 @@ impl Transport for DeviceTransport {
                 }
                 buf.extend_from_slice(&chunk[..n]);
             }
-            parse_response(&buf)
+            parse_response(buf)
         };
-        let t0 = std::time::Instant::now();
         let r = tokio::time::timeout(timeout, fut).await.map_err(|_| {
             std::io::Error::new(std::io::ErrorKind::TimedOut, format!("请求超时（{} 秒）", timeout.as_secs()))
         })?;
@@ -78,7 +97,7 @@ impl Transport for DeviceTransport {
     }
 }
 
-pub fn build_request(method: &str, path: &str, body: Option<&[u8]>) -> Vec<u8> {
+pub(crate) fn build_request(method: &str, path: &str, body: Option<&[u8]>) -> Vec<u8> {
     let body = body.unwrap_or_default();
     let mut req =
         format!("{method} {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\nAccept: application/json\r\n");
@@ -91,53 +110,79 @@ pub fn build_request(method: &str, path: &str, body: Option<&[u8]>) -> Vec<u8> {
     out
 }
 
-/// 已经收到一个完整的响应了吗：头部结束，并且正文按 Content-Length 收齐或 chunked 收到结束块。
-/// 两者都没有时只能等对方关连接（返回 false 继续读）
-pub fn response_complete(raw: &[u8]) -> bool {
-    let Some(split) = raw.windows(4).position(|w| w == b"\r\n\r\n") else { return false };
+/// 响应正文怎么定长
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Framing {
+    Length(usize),
+    Chunked,
+    /// 两者都没有：只能读到对方关连接
+    UntilEof,
+}
+
+impl Framing {
+    fn complete(self, body: &[u8]) -> bool {
+        match self {
+            Self::Length(n) => body.len() >= n,
+            // 先看结尾是不是结束块，是了才完整解一遍（避免每读 64KB 就把整个正文解一遍）
+            Self::Chunked => body.ends_with(b"0\r\n\r\n") && dechunk(body).is_some(),
+            Self::UntilEof => false,
+        }
+    }
+}
+
+/// 头部收齐了就返回 (正文起点, 定长方式)。头部很短，只在前 64KB 里找结束标记
+fn parse_head(raw: &[u8]) -> Option<(usize, Framing)> {
+    let window = &raw[..raw.len().min(64 * 1024)];
+    let split = window.windows(4).position(|w| w == b"\r\n\r\n")?;
     let head = String::from_utf8_lossy(&raw[..split]).to_ascii_lowercase();
-    let body = &raw[split + 4..];
+    let mut framing = Framing::UntilEof;
     for l in head.split("\r\n").skip(1) {
         let Some((k, v)) = l.split_once(':') else { continue };
         match (k.trim(), v.trim()) {
-            ("content-length", n) => return n.parse::<usize>().is_ok_and(|n| body.len() >= n),
-            ("transfer-encoding", "chunked") => return dechunk(body).is_some(),
+            ("content-length", n) => {
+                if let Ok(n) = n.parse() {
+                    framing = Framing::Length(n);
+                }
+            }
+            ("transfer-encoding", "chunked") => return Some((split + 4, Framing::Chunked)),
             _ => {}
         }
     }
-    false
+    Some((split + 4, framing))
 }
 
-/// 解析完整的 HTTP 响应：状态码和正文。支持 Content-Length、chunked 和读到 EOF 三种正文
-pub fn parse_response(raw: &[u8]) -> std::io::Result<(u16, Vec<u8>)> {
+/// 已经收到一个完整的响应了吗：头部结束，并且正文按 Content-Length 收齐或 chunked 收到结束块。
+/// 两者都没有时只能等对方关连接（返回 false 继续读）。读循环里直接用 [`parse_head`] + [`Framing::complete`]
+#[cfg(test)]
+fn response_complete(raw: &[u8]) -> bool {
+    parse_head(raw).is_some_and(|(split, f)| f.complete(&raw[split..]))
+}
+
+/// 解析完整的 HTTP 响应：状态码和正文。支持 Content-Length、chunked 和读到 EOF 三种正文。
+/// 拿走缓冲区，正文原地截取不再复制（截图正文约 11MB）
+pub(crate) fn parse_response(raw: impl Into<Vec<u8>>) -> std::io::Result<(u16, Vec<u8>)> {
+    let mut raw = raw.into();
     let bad = |m: &str| std::io::Error::new(std::io::ErrorKind::InvalidData, m.to_owned());
-    let split = raw.windows(4).position(|w| w == b"\r\n\r\n").ok_or_else(|| bad("HTTP 响应没有头部结束标记"))?;
-    let head = std::str::from_utf8(&raw[..split]).map_err(|_| bad("HTTP 头不是 UTF-8"))?;
-    let body = &raw[split + 4..];
-    let mut lines = head.split("\r\n");
-    let status: u16 = lines
+    let (split, framing) = parse_head(&raw).ok_or_else(|| bad("HTTP 响应没有头部结束标记"))?;
+    let status: u16 = std::str::from_utf8(&raw[..split])
+        .map_err(|_| bad("HTTP 头不是 UTF-8"))?
+        .split("\r\n")
         .next()
         .and_then(|l| l.split_whitespace().nth(1))
         .and_then(|s| s.parse().ok())
         .ok_or_else(|| bad("HTTP 状态行无效"))?;
-    let mut length = None;
-    let mut chunked = false;
-    for l in lines {
-        let Some((k, v)) = l.split_once(':') else { continue };
-        let (k, v) = (k.trim().to_ascii_lowercase(), v.trim());
-        if k == "content-length" {
-            length = v.parse::<usize>().ok();
-        } else if k == "transfer-encoding" && v.eq_ignore_ascii_case("chunked") {
-            chunked = true;
+    match framing {
+        Framing::Chunked => Ok((status, dechunk(&raw[split..]).ok_or_else(|| bad("chunked 正文不完整"))?)),
+        Framing::Length(n) if raw.len() - split < n => Err(bad("正文比 Content-Length 短，连接提前断了")),
+        Framing::Length(n) => {
+            raw.truncate(split + n);
+            raw.drain(..split);
+            Ok((status, raw))
         }
-    }
-    if chunked {
-        return Ok((status, dechunk(body).ok_or_else(|| bad("chunked 正文不完整"))?));
-    }
-    match length {
-        Some(n) if body.len() < n => Err(bad("正文比 Content-Length 短，连接提前断了")),
-        Some(n) => Ok((status, body[..n].to_vec())),
-        None => Ok((status, body.to_vec())),
+        Framing::UntilEof => {
+            raw.drain(..split);
+            Ok((status, raw))
+        }
     }
 }
 

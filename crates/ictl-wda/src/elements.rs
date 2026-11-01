@@ -58,7 +58,12 @@ pub fn parse(xml: &str, screen: ScreenSize) -> Vec<Element> {
     loop {
         let e = match reader.read_event() {
             Ok(Event::Start(e)) | Ok(Event::Empty(e)) => e,
-            Ok(Event::Eof) | Err(_) => break,
+            Ok(Event::Eof) => break,
+            Err(e) => {
+                // 解析到一半出错：已解析的照常返回，但要留痕，否则「没找到元素」看起来像真结果
+                tracing::warn!("元素树 XML 解析出错（位置 {}），只用了前面的部分：{e}", reader.buffer_position());
+                break;
+            }
             Ok(_) => continue,
         };
         let tag = e.name().as_ref().to_owned();

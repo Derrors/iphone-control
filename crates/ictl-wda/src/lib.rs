@@ -15,8 +15,12 @@ pub use runner::WdaRunner;
 
 #[derive(Debug, thiserror::Error)]
 pub enum WdaError {
+    /// 连不上 WDA（runner 没了、端口不通）：可以退到 HID 重做
     #[error("WDA 不可用：{0}")]
     Unavailable(String),
+    /// 请求已经发出但没在时限内应答：手机可能还在执行，不能退到 HID 再做一遍
+    #[error("WDA 请求超时（请求已发出，手机可能仍在执行，先截图确认）：{0}")]
+    Timeout(String),
     /// 手机重启后首次启用 UI 自动化，需要用户在手机上输入锁屏密码
     #[error("WDA 卡在「Enable UI Automation」密码框，请在手机上输入锁屏密码")]
     NeedsAutomationPin,

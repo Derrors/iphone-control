@@ -1980,6 +1980,7 @@ dependencies = [
  "reqwest 0.13.5",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "tokio",
  "tracing",
 ]
@@ -2013,6 +2014,7 @@ dependencies = [
 name = "ictl-protocol"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "serde",
  "serde_json",
  "tokio",

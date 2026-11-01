@@ -16,11 +16,11 @@ mod debug;
 #[derive(Parser)]
 #[command(name = "iphone-control", version, about = "在 Linux 上控制 iPhone，并提供 MCP 工具")]
 struct Cli {
-    /// 数据根目录（配对记录、账号、描述文件、日志等）
-    #[arg(long, env = "ICTL_DATA_DIR", default_value = "/var/lib/iphone-control")]
+    /// 数据根目录（账号、描述文件、日志等）。默认：root 是 /var/lib/iphone-control，普通用户是 ~/.local/share/iphone-control
+    #[arg(long, env = "ICTL_DATA_DIR", default_value_os_t = protocol::default_data_dir())]
     data_dir: PathBuf,
-    /// 守护进程控制接口
-    #[arg(long, env = "ICTL_SOCKET", default_value = protocol::DEFAULT_SOCKET)]
+    /// 守护进程控制接口。默认：root 是 /run/iphone-control/ctl.sock，普通用户是 $XDG_RUNTIME_DIR/iphone-control/ctl.sock
+    #[arg(long, env = "ICTL_SOCKET", default_value_os_t = protocol::default_socket())]
     socket: PathBuf,
     #[command(subcommand)]
     command: Command,
@@ -28,14 +28,15 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// 常驻守护进程（容器入口）
+    /// 常驻守护进程（容器入口；从源码运行时由 systemd 或手动启动）
     Daemon,
     /// MCP stdio 服务（由 agent 拉起）
     Mcp,
-    /// 打印把 MCP 注册到 Claude Code 的命令
+    /// 打印把 MCP 注册到 Claude Code 的命令：在容器里打印 docker exec 的写法，否则直接调用本程序
     McpConfig {
-        #[arg(long, default_value = "iphone-control")]
-        container: String,
+        /// 容器名；给了就按容器部署打印
+        #[arg(long)]
+        container: Option<String>,
     },
     /// 守护进程和设备状态、最近的日志
     Status,
@@ -108,7 +109,7 @@ async fn main() -> anyhow::Result<()> {
         }
         Command::Mcp => ictl_mcp::serve_stdio(cli.socket).await,
         Command::McpConfig { container } => {
-            println!("claude mcp add iphone -s user -- docker exec -i {container} iphone-control mcp");
+            println!("{}", mcp_config(container, &cli.socket)?);
             Ok(())
         }
         Command::Status => status(&cli.socket).await,
@@ -131,7 +132,10 @@ async fn notify_test(data_dir: &Path, only: Option<&str>) -> anyhow::Result<()> 
     let channels =
         usize::from(cfg.bark_key.is_some()) + usize::from(cfg.tg_bot_token.is_some() && cfg.tg_chat_id.is_some());
     if channels == 0 {
-        bail!("没有配置通知渠道：在 .env 里填 BARK_KEY，或 TG_BOT_TOKEN + TG_CHAT_ID，然后重建容器");
+        bail!(
+            "没有配置通知渠道：填 BARK_KEY，或 TG_BOT_TOKEN + TG_CHAT_ID（容器部署在 .env 里填、重建容器；\
+             从源码运行在守护进程的环境文件里填、重启守护进程）"
+        );
     }
     let events: Vec<Event> =
         Event::samples().into_iter().filter(|e| only.is_none_or(|n| e.sample_name() == n)).collect();
@@ -158,6 +162,33 @@ async fn notify_test(data_dir: &Path, only: Option<&str>) -> anyhow::Result<()> 
     Ok(())
 }
 
+/// 容器部署：MCP 进程由 `docker exec -i` 在容器里拉起。从源码运行：直接调用本程序，
+/// 显式带上 socket，免得 Claude Code 的环境里没有 XDG_RUNTIME_DIR 时算出别的位置
+fn mcp_config(container: Option<String>, socket: &Path) -> anyhow::Result<String> {
+    let in_container = Path::new("/.dockerenv").exists() || Path::new("/run/.containerenv").exists();
+    let container = container
+        .or_else(|| in_container.then(|| env_nonempty("CONTAINER_NAME").unwrap_or_else(|| "iphone-control".into())));
+    Ok(match container {
+        Some(c) => format!("claude mcp add iphone -s user -- docker exec -i {c} iphone-control mcp"),
+        None => {
+            let exe = std::env::current_exe().context("找不到本程序的路径")?;
+            format!(
+                "claude mcp add iphone -s user -- {} --socket {} mcp",
+                shell_quote(&exe.to_string_lossy()),
+                shell_quote(&socket.to_string_lossy())
+            )
+        }
+    })
+}
+
+fn shell_quote(s: &str) -> String {
+    if !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || "/._-+=:@%".contains(c)) {
+        s.to_owned()
+    } else {
+        format!("'{}'", s.replace('\'', r"'\''"))
+    }
+}
+
 /// 读环境变量，去掉首尾空白，空值当作没设（.env 里常留着 `KEY=`）
 fn env_nonempty(key: &str) -> Option<String> {
     std::env::var(key).ok().map(|v| v.trim().to_owned()).filter(|v| !v.is_empty())
@@ -170,7 +201,11 @@ async fn ask(socket: &Path, req: Request) -> anyhow::Result<Response> {
         _ => Some(Duration::from_secs(180)),
     };
     protocol::call(socket, &req, timeout).await.with_context(|| {
-        format!("连不上守护进程（{}）：先启动 iphone-control daemon（容器里是入口进程）", socket.display())
+        format!(
+            "连不上守护进程（{}）：先启动 iphone-control daemon（容器里是入口进程）；\
+             守护进程以别的用户运行时，用 --socket 或 ICTL_SOCKET 指到它的控制接口",
+            socket.display()
+        )
     })
 }
 
@@ -228,7 +263,9 @@ fn read_line(prompt: &str) -> anyhow::Result<String> {
     print!("{prompt}");
     std::io::stdout().flush()?;
     let mut s = String::new();
-    std::io::stdin().lock().read_line(&mut s)?;
+    if std::io::stdin().lock().read_line(&mut s)? == 0 {
+        bail!("读不到输入（标准输入已关闭）：在终端里运行；容器部署用 docker exec -it");
+    }
     Ok(s.trim().to_owned())
 }
 
@@ -266,7 +303,13 @@ async fn login(data_dir: &Path, email: Option<String>) -> anyhow::Result<()> {
         Some(e) => e,
         None => read_line("Apple ID 邮箱: ")?,
     };
+    if email.is_empty() {
+        bail!("没有输入 Apple ID 邮箱");
+    }
     let password = read_secret("密码(输入不显示): ")?;
+    if password.is_empty() {
+        bail!("没有输入密码");
+    }
     let two_factor = |req: ictl_sign::TwoFactorRequest| -> Result<ictl_sign::TwoFactorAction, String> {
         let sms = !req.trusted_phone_numbers.is_empty();
         let prompt = match req.method {
@@ -410,7 +453,7 @@ async fn setup(cli: &Cli) -> anyhow::Result<()> {
     println!("  {}", if ready { "WDA 就绪" } else { "10 分钟内 WDA 没就绪,运行 iphone-control doctor 看看卡在哪" });
 
     println!("\n可选设置");
-    println!("  通知:在 .env 里填 TG_* 或 BARK_*,然后重启容器");
+    println!("  通知:填 TG_* 或 BARK_*(容器部署在 .env 里,然后重建容器;从源码运行在守护进程的环境文件里,然后重启它)");
     println!("  自动解锁:iphone-control passcode set");
     println!("  注册到 Claude Code:iphone-control mcp-config");
     println!();

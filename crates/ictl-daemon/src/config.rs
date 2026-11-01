@@ -1,4 +1,4 @@
-//! 守护进程配置：全部来自环境变量（容器里由 .env 注入），都有默认值。秘密只放文件，不放环境变量以外的地方。
+//! 守护进程配置：全部来自环境变量（容器里由 .env 注入；从源码运行时由 systemd 的环境文件或 shell 给），都有默认值。秘密只放文件，不放环境变量以外的地方。
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -11,10 +11,11 @@ pub struct Config {
     pub socket: PathBuf,
     /// 指定要控制的手机；None 用第一台
     pub udid: Option<String>,
-    /// 由守护进程拉起并看护 usbmuxd（容器里为 true；宿主机已有 usbmuxd 服务时设 false）
+    /// 由守护进程拉起并看护 usbmuxd。默认以 root 运行（容器）时为 true；普通用户拉起的 usbmuxd 碰不到 USB，
+    /// 改用系统的 usbmuxd 服务。宿主机以 root 运行、又已有 usbmuxd 服务时设 ICTL_MANAGE_USBMUXD=0
     pub manage_usbmuxd: bool,
     pub usbmuxd_bin: String,
-    /// 未签名的 WDA（镜像里自带）
+    /// 未签名的 WDA：镜像里自带；从源码运行时是数据目录里的 [`Config::wda_unsigned_cache`]，第一次签名前下载
     pub wda_unsigned: PathBuf,
     pub ddi_url: String,
     /// 自己从 Xcode 提取的 DDI Restore 目录；设了就不下载
@@ -48,6 +49,10 @@ fn env(k: &str) -> Option<String> {
     std::env::var(k).ok().map(|v| v.trim().to_owned()).filter(|v| !v.is_empty())
 }
 
+fn wda_unsigned_cache(data_dir: &Path) -> PathBuf {
+    data_dir.join("wda/WDA-unsigned.ipa")
+}
+
 fn env_num<T: std::str::FromStr>(k: &str, default: T) -> T {
     env(k).and_then(|v| v.parse().ok()).unwrap_or(default)
 }
@@ -62,13 +67,15 @@ impl Config {
         Self {
             data_dir: data_dir.to_owned(),
             // 实际值由命令行给（--socket / ICTL_SOCKET，见 apps/iphone-control）
-            socket: crate::protocol::DEFAULT_SOCKET.into(),
+            socket: crate::protocol::default_socket(),
             udid: env("IPHONE_UDID"),
-            manage_usbmuxd: env("ICTL_MANAGE_USBMUXD").is_none_or(|v| v != "0" && v != "false"),
+            manage_usbmuxd: env("ICTL_MANAGE_USBMUXD")
+                .map_or_else(crate::protocol::running_as_root, |v| v != "0" && v != "false"),
             usbmuxd_bin: env("ICTL_USBMUXD_BIN").unwrap_or_else(|| "usbmuxd".into()),
-            wda_unsigned: env("ICTL_WDA_UNSIGNED")
-                .map(PathBuf::from)
-                .unwrap_or_else(|| "/usr/share/iphone-control/WDA-unsigned.ipa".into()),
+            wda_unsigned: env("ICTL_WDA_UNSIGNED").map(PathBuf::from).unwrap_or_else(|| {
+                let image = Path::new(crate::wda_pkg::IMAGE_PATH);
+                if image.is_file() { image.to_owned() } else { wda_unsigned_cache(data_dir) }
+            }),
             ddi_url: env("ICTL_DDI_URL").unwrap_or_else(|| ictl_device::ddi::DEFAULT_BASE_URL.into()),
             ddi_dir: env("ICTL_DDI_DIR").map(PathBuf::from),
             anisette_url: env("ICTL_ANISETTE_URL"),
@@ -97,6 +104,10 @@ impl Config {
     }
     pub fn wda_signed(&self) -> PathBuf {
         self.wda_dir().join("WDA-signed.ipa")
+    }
+    /// 未签名的 WDA 用的是数据目录里下载来的那份（不是镜像自带或 ICTL_WDA_UNSIGNED 指定的）
+    pub fn wda_unsigned_is_cache(&self) -> bool {
+        self.wda_unsigned == wda_unsigned_cache(&self.data_dir)
     }
     pub fn ddi_cache(&self) -> PathBuf {
         self.ddi_dir.clone().unwrap_or_else(|| self.data_dir.join("ddi"))

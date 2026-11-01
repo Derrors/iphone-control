@@ -29,6 +29,29 @@ pub fn pack(root: &Path, out: &Path) -> io::Result<()> {
     Ok(())
 }
 
+/// 根目录直接是 `X.app/` 的 zip（Appium 发布的 WDA 真机包）改成 ipa：每项加上 `Payload/` 前缀，
+/// 文件原样复制压缩数据和权限位，不解压。目录项重新写：Appium 的包里目录项的类型位记成了普通文件
+pub fn from_app_zip(src: &Path, out: &Path) -> io::Result<()> {
+    let mut zip = ZipArchive::new(File::open(src)?).map_err(io::Error::other)?;
+    if !zip.file_names().any(|n| n.split('/').next().is_some_and(|top| top.ends_with(".app"))) {
+        return Err(io::Error::new(io::ErrorKind::NotFound, "zip 根目录下没有 .app"));
+    }
+    let mut w = ZipWriter::new(File::create(out)?);
+    w.add_directory("Payload/", SimpleFileOptions::default().unix_permissions(0o755)).map_err(io::Error::other)?;
+    for i in 0..zip.len() {
+        let f = zip.by_index_raw(i).map_err(io::Error::other)?;
+        let name = format!("Payload/{}", f.name());
+        if f.is_dir() {
+            let mode = f.unix_mode().map_or(0o755, |m| m & 0o7777);
+            w.add_directory(name, SimpleFileOptions::default().unix_permissions(mode)).map_err(io::Error::other)?;
+        } else {
+            w.raw_copy_file_rename(f, name).map_err(io::Error::other)?;
+        }
+    }
+    w.finish().map_err(io::Error::other)?;
+    Ok(())
+}
+
 fn add_dir(zip: &mut ZipWriter<File>, root: &Path, dir: &Path) -> io::Result<()> {
     use std::os::unix::fs::PermissionsExt;
     let mut entries: Vec<_> = std::fs::read_dir(dir)?.flatten().map(|e| e.path()).collect();
@@ -74,6 +97,43 @@ mod tests {
         let mode = std::fs::metadata(app2.join("WebDriverAgentRunner-Runner")).unwrap().permissions().mode();
         assert_eq!(mode & 0o111, 0o111);
         assert!(app2.join("PlugIns/WebDriverAgentRunner.xctest/Info.plist").is_file());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn app_zip_becomes_ipa() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = std::env::temp_dir().join(format!("ictl-appzip-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        // 和 Appium 的 WebDriverAgentRunner-Runner.zip 一样：根目录就是 .app
+        let src = root.join("wda.zip");
+        let mut w = ZipWriter::new(File::create(&src).unwrap());
+        let dir = SimpleFileOptions::default().unix_permissions(0o755);
+        w.add_directory("WebDriverAgentRunner-Runner.app/", dir).unwrap();
+        w.start_file("WebDriverAgentRunner-Runner.app/WebDriverAgentRunner-Runner", dir).unwrap();
+        w.write_all(b"\xcf\xfa\xed\xfe").unwrap();
+        w.start_file(
+            "WebDriverAgentRunner-Runner.app/Info.plist",
+            SimpleFileOptions::default().unix_permissions(0o644),
+        )
+        .unwrap();
+        w.write_all(b"<plist/>").unwrap();
+        w.finish().unwrap();
+
+        let ipa = root.join("out.ipa");
+        from_app_zip(&src, &ipa).unwrap();
+        let app = unpack(&ipa, &root.join("unpacked")).unwrap();
+        assert_eq!(app.file_name().unwrap(), "WebDriverAgentRunner-Runner.app");
+        let mode = std::fs::metadata(app.join("WebDriverAgentRunner-Runner")).unwrap().permissions().mode();
+        assert_eq!(mode & 0o111, 0o111);
+        assert_eq!(std::fs::read(app.join("Info.plist")).unwrap(), b"<plist/>");
+
+        // 不是 .app 包的 zip 不收
+        let bad = root.join("bad.zip");
+        let mut w = ZipWriter::new(File::create(&bad).unwrap());
+        w.start_file("README", SimpleFileOptions::default()).unwrap();
+        w.finish().unwrap();
+        assert!(from_app_zip(&bad, &root.join("bad.ipa")).is_err());
         std::fs::remove_dir_all(root).unwrap();
     }
 }

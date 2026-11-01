@@ -35,14 +35,14 @@
 
 | 进程 | 生命周期 | 职责 |
 |---|---|---|
-| `iphone-control daemon` | 常驻，容器入口 | 唯一和设备通信的进程。维护设备状态机，对外提供本地控制接口 |
+| `iphone-control daemon` | 常驻，容器入口（从源码运行时由 systemd 用户服务启动） | 唯一和设备通信的进程。维护设备状态机，对外提供本地控制接口 |
 | `iphone-control mcp` | 每个 agent 会话一个 | MCP stdio 服务，把工具调用翻译成对守护进程的请求 |
-| `usbmuxd` | 守护进程的子进程 | 系统包，GPL-3.0，独立进程运行，不链接 |
+| `usbmuxd` | 容器里是守护进程的子进程；以普通用户从源码运行时用系统的 usbmuxd 服务 | 系统包，GPL-3.0，独立进程运行，不链接 |
 | `iphone-control doctor/setup/sign/...` | 一次性 | 运维命令，也通过控制接口或直接调用库 |
 
-**控制接口**：Unix socket（默认 `/run/iphone-control/ctl.sock`，权限 0600），JSON 行协议。请求/响应类型和客户端 `call(socket, req, timeout)` 在 `ictl-protocol`，MCP 和 CLI 共用。理由：
+**控制接口**：Unix socket（root 默认 `/run/iphone-control/ctl.sock`，普通用户默认 `$XDG_RUNTIME_DIR/iphone-control/ctl.sock`，权限 0600），JSON 行协议。请求/响应类型和客户端 `call(socket, req, timeout)` 在 `ictl-protocol`，MCP 和 CLI 共用。理由：
 
-- MCP 进程由 `docker exec -i` 拉起，短命且可能同时有多个；设备连接（尤其是 HID 需要的显示媒体流、WDA 的 XCTest 会话）只能有一个持有者。
+- MCP 进程由 `docker exec -i`（从源码运行时直接调用二进制）拉起，短命且可能同时有多个；设备连接（尤其是 HID 需要的显示媒体流、WDA 的 XCTest 会话）只能有一个持有者。
 - 不开 TCP 端口，避免重蹈 `ios forward` 监听所有网卡的覆辙。WDA 本身也通过 idevice 的 provider 直连设备端口，**本机不再监听 8100**。如需给外部工具用，`iphone-control wda-bridge` 显式开启，只绑 127.0.0.1，且只转发 Host 头是 `localhost`/`127.0.0.1`/`[::1]` 的请求（挡住 DNS rebinding）。注意容器用 host 网络，**本机的任何用户都能连上 bridge**，而 WDA 没有认证，用完就停。
 
 ### 并发模型
@@ -120,21 +120,21 @@
 
 ## 6. 数据与秘密目录
 
-全部在一个数据根目录下（默认 `/var/lib/iphone-control`，容器里挂卷）：
+全部在一个数据根目录下（root 默认 `/var/lib/iphone-control`，容器里挂卷；普通用户默认 `~/.local/share/iphone-control`）：
 
 | 路径 | 内容 | 权限 | 进 git / 进镜像 |
 |---|---|---|---|
-| `lockdown/` | 配对记录（usbmuxd 读写，即 `/var/lib/lockdown`） | 0700 | 否 |
+| `lockdown/` | 配对记录（容器里的 usbmuxd 读写，即 `/var/lib/lockdown`；用系统的 usbmuxd 服务时不用这里，记录在系统的 `/var/lib/lockdown`） | 0700 | 否 |
 | `account/` | Apple ID 会话、开发私钥、证书 | 0700 | 否 |
 | `profiles/` | 当前描述文件 | 0700 | 否 |
 | `ddi/` | 开发者镜像缓存（运行时下载的苹果文件） | 0755 | **否，不得分发** |
-| `wda/` | 当前签好的包 `WDA-signed.ipa`。未签名包不在这里，在镜像的 `/usr/share/iphone-control/WDA-unsigned.ipa`：构建时下载 Appium 官方的未签名真机包（`WebDriverAgentRunner-Runner.zip` v16.15.3，校验 sha256）重新打包；计划改为本项目 macOS CI 编译 | 0755 | 未签名包进镜像 |
+| `wda/` | 当前签好的包 `WDA-signed.ipa`。未签名包在镜像的 `/usr/share/iphone-control/WDA-unsigned.ipa`：构建时下载 Appium 官方的未签名真机包（`WebDriverAgentRunner-Runner.zip` v16.15.3，校验 sha256）重新打包。从源码运行时没有镜像，第一次签名前按同一版本下载、校验，转成 `wda/WDA-unsigned.ipa`（`crates/ictl-daemon/src/wda_pkg.rs`，版本与 Dockerfile 由单测核对）；计划改为本项目 macOS CI 编译 | 0755 | 未签名包进镜像（从源码运行时在本机下载） |
 | `secrets/passcode` | 锁屏密码（仅启用自动解锁时） | 0600 | 否 |
 | `notify.toml` | 通知渠道配置 | 0600 | 否 |
 | `logs/` | 日志，按大小轮转 | 0755 | 否 |
 | `state.json` | 状态机快照、自动解锁停用标记、上次重签结果 | 0600 | 否 |
 
-没有配置文件：配置全部来自环境变量（容器里由 `.env` 注入，见 `.env.example`、`crates/ictl-daemon/src/config.rs`），都有默认值；秘密只放文件。
+没有配置文件：配置全部来自环境变量（容器里由 `.env` 注入，从源码运行时由 shell 或 systemd 的 `EnvironmentFile` 给，见 `.env.example`、`crates/ictl-daemon/src/config.rs`），都有默认值；秘密只放文件。
 
 实现与上表的差异（2026-11-01）：
 - 没有单独的 `profiles/` 和 `notify.toml`：描述文件只嵌在 `wda/WDA-signed.ipa` 里，到期时间记在 `state.json`；通知渠道走环境变量（`.env`），见 `.env.example`。
@@ -145,4 +145,4 @@
 - 守护进程每 `RESIGN_CHECK_HOURS`（默认 6 小时）检查一次：描述文件剩余 < `RESIGN_MIN_DAYS`（默认 2 天）才重签；另外**每天验证一次 Apple ID 会话**（toolkit 的教训：只在要重签时才发现登录过期，只剩 2 天处理）。两者都在后台跑，不持设备锁。
 - 重签流程：`plume_core` 取新描述文件 → `ictl-sign` 签名（含 `.xctest`）→ `installation_proxy` 安装 → 下一轮巡检重启 WDA。安装成功后才替换旧文件。
 - 通知事件：重签失败、Apple ID 会话失效、需要输入自动化密码、WDA 恢复、自动解锁失败已停用、手机离线超过 10 分钟。同一事件不重复推送，恢复时推送一次。
-- 容器整个挂掉时守护进程发不了通知，这部分仍需宿主机侧的监控（例如 systemd 单元），本项目还没有提供。
+- 容器整个挂掉时守护进程发不了通知，这部分仍需宿主机侧的监控，本项目还没有提供。从源码运行时 `deploy/iphone-control.service` 只负责崩溃后重启，同样不报警。

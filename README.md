@@ -32,6 +32,45 @@ docker exec -it iphone-control iphone-control mcp-config   # 打印注册到 Cla
 >
 > 容器不用 `privileged`：只开放 USB 字符设备（`device_cgroup_rules: "c 189:* rmw"`），`/dev/bus/usb` 绑定挂载。这套设置下的 USB 拔插恢复已在真机上确认。
 
+## 从源码运行（不用 Docker）
+
+需要 Rust 1.88 以上（[rustup](https://rustup.rs)）、C 编译器（编译 bzip2/xz 的捆绑源码）和系统的 usbmuxd。以 Debian/Ubuntu 为例：
+
+```bash
+sudo apt install build-essential git usbmuxd   # usbmuxd 由 udev 在插上手机时拉起
+git clone <本仓库地址> iphone-control && cd iphone-control
+cargo install --path apps/iphone-control --locked   # 装到 ~/.cargo/bin/iphone-control
+iphone-control daemon            # 前台运行;常驻用下面的 systemd 用户服务
+iphone-control setup             # 另开一个终端:配对 → 开发者模式 → 登录 Apple ID → 签名安装 WDA
+iphone-control mcp-config        # 打印 claude mcp add iphone -s user -- ~/.cargo/bin/iphone-control --socket … mcp
+```
+
+以普通用户运行，和容器部署的区别：
+
+| | 容器 | 从源码（普通用户） |
+|---|---|---|
+| 数据目录 | `./data`（容器内 `/var/lib/iphone-control`） | `~/.local/share/iphone-control` |
+| 控制接口 | 容器内 `/run/iphone-control/ctl.sock` | `$XDG_RUNTIME_DIR/iphone-control/ctl.sock` |
+| usbmuxd | 守护进程拉起并看护；容器没有 udev，靠 sysfs 发现漏掉的设备 | 系统服务，udev 处理插拔；守护进程不拉起 |
+| 配对记录 | 数据目录的 `lockdown/` | 系统的 `/var/lib/lockdown`（usbmuxd 管理） |
+| 未签名的 WDA | 镜像自带 | 第一次签名前下载同一版本（核对 sha256），存到数据目录的 `wda/` |
+| 配置 | `.env` | 环境变量：shell 里 `set -a; . ~/.config/iphone-control/env; set +a`，或 systemd 的环境文件 |
+| MCP | `docker exec -i iphone-control iphone-control mcp` | 直接调用二进制 |
+
+常驻运行用 [deploy/iphone-control.service](deploy/iphone-control.service)（systemd 用户服务）：
+
+```bash
+mkdir -p ~/.config/systemd/user ~/.config/iphone-control
+cp deploy/iphone-control.service ~/.config/systemd/user/
+cp .env.example ~/.config/iphone-control/env   # 按需改代理、通知;CONTAINER_NAME、IMAGE、DATA_DIR 只给 compose 用
+systemctl --user daemon-reload && systemctl --user enable --now iphone-control
+loginctl enable-linger "$USER"                   # 不登录也随开机启动
+```
+
+> - 守护进程、`setup` 等命令和 MCP 要用同一个用户运行：路径按用户算，别的用户要用 `--socket`、`--data-dir`（或 `ICTL_SOCKET`、`ICTL_DATA_DIR`）指过去。
+> - 以 root 运行时默认路径和容器里一样（`/var/lib/iphone-control`、`/run/iphone-control/ctl.sock`），守护进程会自己拉起 usbmuxd；宿主机已有 usbmuxd 服务时设 `ICTL_MANAGE_USBMUXD=0`。
+> - 不要和容器版同时连同一部手机。装了系统 usbmuxd 后，一插手机 udev 就会拉起它，和容器里的 usbmuxd 抢设备；还要用容器版时先 `sudo systemctl mask usbmuxd`。
+
 ## 命令
 
 | 命令 | 作用 |
@@ -77,6 +116,7 @@ apps/
   iphone-control/ 唯一的可执行程序（含隐藏的 debug 真机诊断）
 vendor/           Impactor 的 plume_core / plume_store / omnisette 与打过补丁的 apple-codesign（见 THIRD_PARTY.md）
 docker/           Dockerfile（编译 → debian:trixie-slim + usbmuxd）、cargo-about 许可证清单配置
+deploy/           从源码运行时的 systemd 用户服务
 ```
 
 ## 构建与测试

@@ -1,0 +1,24 @@
+# 从源码运行时的 systemd 用户服务（不用 Docker）。安装见 README「从源码运行」。
+#   cp deploy/iphone-control.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload && systemctl --user enable --now iphone-control
+#   loginctl enable-linger "$USER"     # 不登录也随开机启动
+# 数据目录默认 ~/.local/share/iphone-control，控制接口 $XDG_RUNTIME_DIR/iphone-control/ctl.sock；
+# usbmuxd 用系统的服务（以普通用户运行时守护进程不自己拉起）。
+
+[Unit]
+Description=iphone-control daemon (iPhone over USB, MCP)
+After=network-online.target
+
+[Service]
+ExecStart=%h/.cargo/bin/iphone-control daemon
+# 代理、通知、IPHONE_UDID 等，格式同 .env.example；没有这个文件也能启动
+EnvironmentFile=-%h/.config/iphone-control/env
+# 见 docker/Dockerfile：截图时的临时内存释放后能还给系统
+Environment=MALLOC_ARENA_MAX=2
+Restart=on-failure
+RestartSec=10
+# 停止时先停 HID 屏幕媒体流和 runner，给够时间，避免手机端留下会话
+TimeoutStopSec=30
+
+[Install]
+WantedBy=default.target

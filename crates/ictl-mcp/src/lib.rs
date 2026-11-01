@@ -446,7 +446,10 @@ impl McpServer {
     async fn call(&self, req: &Request) -> Response {
         // 守护进程正忙（例如在自动解锁）时会排队；最多等 150 秒，免得 agent 一直挂着
         protocol::call(&self.socket, req, Some(Duration::from_secs(150))).await.unwrap_or_else(|e| {
-            Response::error(format!("连不上守护进程({}):{e};确认 iphone-control 容器在运行", self.socket.display()))
+            Response::error(format!(
+                "连不上守护进程({}):{e};确认守护进程在运行(容器部署看 iphone-control 容器)",
+                self.socket.display()
+            ))
         })
     }
 

@@ -16,7 +16,12 @@ impl Daemon {
             Ok(_) => out.push("✅ usbmuxd 在运行".into()),
             Err(e) => {
                 out.push(format!(
-                    "❌ 连不上 usbmuxd：{e}\n     → 容器里由守护进程自动拉起；宿主机部署请启动 usbmuxd 服务"
+                    "❌ 连不上 usbmuxd：{e}\n     → {}",
+                    if self.cfg.manage_usbmuxd {
+                        "由守护进程自动拉起，看数据目录 logs/usbmuxd.log；宿主机已有 usbmuxd 服务时设 ICTL_MANAGE_USBMUXD=0"
+                    } else {
+                        "用的是系统的 usbmuxd 服务（插上手机时由 udev 拉起）：确认已安装 usbmuxd、手机已插好"
+                    }
                 ));
                 fails += 1;
             }
@@ -39,7 +44,14 @@ impl Daemon {
                 }
             }
             (None, _) => {
-                out.push("❌ 守护进程看不到手机\n     → 等 30 秒,会自动重启 usbmuxd;仍不行就重启容器".into());
+                out.push(
+                    if self.cfg.manage_usbmuxd {
+                        "❌ 守护进程看不到手机\n     → 等 30 秒,会自动重启 usbmuxd;仍不行就重启容器(或守护进程)"
+                    } else {
+                        "❌ 守护进程看不到手机\n     → 重新插拔数据线;仍不行就 sudo systemctl restart usbmuxd"
+                    }
+                    .into(),
+                );
                 fails += 1;
             }
         }

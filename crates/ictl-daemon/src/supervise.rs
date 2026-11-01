@@ -128,8 +128,9 @@ impl Daemon {
             Some(u) => devices.into_iter().find(|d| &d.udid == u),
             None => devices.into_iter().next(),
         };
+        // 只在容器里（自己看护 usbmuxd、没有 udev）需要；用系统的 usbmuxd 服务时插拔由 udev 处理，也重启不了它
         let usb_present = ictl_device::apple_usb_present(Path::new(SYSFS_USB));
-        if g.mux.observe(usb_present, target.is_some()) {
+        if self.cfg.manage_usbmuxd && g.mux.observe(usb_present, target.is_some()) {
             self.log.log("USB 上有 Apple 设备但 usbmuxd 看不到,重启 usbmuxd");
             self.ensure_usbmuxd(g, true).await;
         }
@@ -391,9 +392,16 @@ impl Daemon {
         let account = self.account();
         let (wda_dir, unsigned, signed_path) =
             (self.cfg.wda_dir(), self.cfg.wda_unsigned.clone(), self.cfg.wda_signed());
+        let fetch = self.cfg.wda_unsigned_is_cache() && !unsigned.is_file();
+        if fetch {
+            self.log.log(&format!("没有未签名的 WDA 包（不在镜像里运行），先下载 {}", crate::wda_pkg::WDA_VERSION));
+        }
         // plume_core 的签名 future 不是 Send（持有 &mut dyn FnMut 和非 Send 的私钥），放到阻塞线程里 block_on
         let r: Result<ictl_sign::Signed, String> = tokio::task::spawn_blocking(move || {
             tokio::runtime::Handle::current().block_on(async move {
+                if fetch {
+                    crate::wda_pkg::ensure(&unsigned).await?;
+                }
                 let session = account.session().await.map_err(|e| e.to_string())?;
                 session.ensure_device(&device.udid, &name).await.map_err(|e| e.to_string())?;
                 std::fs::create_dir_all(&wda_dir).map_err(|e| e.to_string())?;

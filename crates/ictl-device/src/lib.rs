@@ -31,7 +31,7 @@ use idevice::{
     provider::{IdeviceProvider, UsbmuxdProvider},
     rsd::RsdHandshake,
     tcp::handle::AdapterHandle,
-    usbmuxd::{Connection, UsbmuxdAddr, UsbmuxdConnection},
+    usbmuxd::{Connection, UsbmuxdAddr},
 };
 
 pub use apps::AppInfo;
@@ -136,7 +136,8 @@ pub fn apple_usb_present(root: &Path) -> bool {
 
 /// usbmuxd 看到的 USB 设备（不含网络设备）。usbmuxd 没在运行时返回错误。
 pub async fn list_devices() -> Result<Vec<UsbDevice>> {
-    let mut mux = UsbmuxdConnection::default().await?;
+    // 不用 UsbmuxdConnection::default()：它固定连 /var/run/usbmuxd，不看 USBMUXD_SOCKET_ADDRESS
+    let mut mux = usbmuxd_addr().connect(0).await?;
     Ok(mux
         .get_devices()
         .await?

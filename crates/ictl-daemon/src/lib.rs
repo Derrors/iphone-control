@@ -14,6 +14,7 @@ pub mod machine;
 pub mod notify;
 mod supervise;
 mod tools;
+mod wda_pkg;
 
 pub use ictl_protocol as protocol;
 

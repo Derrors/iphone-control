@@ -11,3 +11,4 @@ description = "守护进程控制接口的请求/响应类型和客户端（MCP�
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
+libc.workspace = true

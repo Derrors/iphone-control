@@ -1,0 +1,24 @@
+services:
+  iphone:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+      network: host            # 让构建能用宿主机 127.0.0.1 上的代理
+      args:
+        HTTP_PROXY: ${HTTP_PROXY:-}
+        HTTPS_PROXY: ${HTTPS_PROXY:-}
+    image: ${IMAGE:-iphone-control:local}
+    container_name: ${CONTAINER_NAME:-iphone-control}
+    # 要直接访问 USB 设备；隧道走用户态 TCP 栈，不建网卡、不改宿主机网络
+    privileged: true
+    # WDA 经 usbmuxd 直连手机，本机不监听任何端口；host 网络只为了用宿主机上的代理
+    network_mode: host
+    restart: unless-stopped
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1,::1}
+    volumes:
+      - /dev/bus/usb:/dev/bus/usb
+      - ${DATA_DIR:-./data}:/var/lib/iphone-control

@@ -7,6 +7,8 @@
 - **需修**：上游有，但有已知缺陷要改
 - **需自写**：上游没有，或是我们自己的业务逻辑
 
+> 2026-11-01：表中「已有/需修/需自写」各项均已编码实现，状态和真机待验证项见 [roadmap 的完成情况](roadmap.md#完成情况)。
+
 上游版本基线：idevice 0.1.68、Impactor 2.7.2（plume_core / plume_utils / omnisette）、apple-codesign 0.29.0、rmcp 3.8.0。
 
 ## 1. 设备基础

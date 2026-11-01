@@ -10,12 +10,13 @@
 
 | 依赖 | 用途 | 许可证 | 使用方式 | 义务 |
 |---|---|---|---|---|
-| idevice 0.1.68 | 设备通讯 | MIT | crates.io 依赖 | 保留版权声明 |
+| idevice 0.1.68 | 设备通讯 | MIT | crates.io 依赖；`ictl-device/src/media.rs` 与 HID 键码表改写自它的 tools（MIT） | 保留版权声明 |
 | jktcp 0.1.8 | 用户态 TCP（idevice 间接依赖） | MIT | 间接依赖 | 同上 |
-| plume_core（Impactor） | Apple ID、开发者 API、描述文件 | **MPL-2.0** | vendor 源码 | 被修改的 MPL 文件必须继续以 MPL-2.0 提供源码；文件头保留；不影响我们其它文件的 MIT |
-| plume_utils（Impactor） | Bundle、Signer | MIT（Impactor workspace 许可） | vendor 源码，打 `.xctest` 补丁 | 保留版权声明 |
-| omnisette（Impactor 3rdparty） | anisette 数据 | MIT（Impactor workspace 许可） | vendor 源码 | 保留版权声明 |
-| apple-codesign 0.29.0 | 代码签名 | **MPL-2.0** | crates.io 依赖 + Impactor 的权限补丁 | 补丁后的文件以 MPL-2.0 提供源码（放在 `vendor/` 或 `patches/` 里即满足） |
+| plume_core（Impactor） | Apple ID、开发者 API、描述文件、证书 | **MPL-2.0**（目录内 LICENSE） | vendor 到 `vendor/plume_core`，源码未改，只改了 Cargo.toml 的 workspace 继承 | 以 MPL-2.0 随仓库提供源码；文件头保留 |
+| plume_store（Impactor） | 账号会话存储 | MIT（Impactor 根 LICENSE） | vendor 到 `vendor/plume_store`，源码未改 | 保留版权声明（`vendor/plume_store/LICENSE-MIT-Impactor`） |
+| omnisette（Impactor 3rdparty） | anisette 数据 | **MPL-2.0**（目录内 LICENSE；早期文档误写为 MIT，读源码后更正） | vendor 到 `vendor/omnisette`，源码未改；它依赖 git 上的 android-loader，提交号锁在 Cargo.lock | 同 plume_core |
+| plume_utils（Impactor） | Bundle、Signer | MIT（Impactor 根 LICENSE） | **未 vendor**：`ictl-sign/src/bundle.rs` 改写自它的 `bundle.rs`，签名流程在 `ictl-sign/src/lib.rs` 重写 | 文件头注明来源和版权 |
+| apple-codesign 0.29.0 | 代码签名 | **MPL-2.0** | vendor 到 `vendor/apple-codesign`（Impactor 打过 0o755 权限补丁的副本），经 `[patch.crates-io]` 替换 | 以 MPL-2.0 随仓库提供源码 |
 | rmcp 3.8.0 | MCP SDK | Apache-2.0（部分历史代码 MIT） | crates.io 依赖 | 保留 NOTICE/版权声明 |
 | tokio、reqwest、quick-xml、image、clap、serde 等 | 通用 | MIT / Apache-2.0 | crates.io 依赖 | 保留声明，用 `cargo about` 或 `cargo deny` 生成第三方清单 |
 | WebDriverAgent（Appium fork） | 手机端代理 | BSD-3-Clause（Facebook 原始） | 发布未签名 IPA（自己在 macOS CI 上编译） | 保留 BSD 声明 |

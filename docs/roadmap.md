@@ -2,6 +2,26 @@
 
 每个阶段都有明确的完成标准；未达标不进入下一阶段。toolkit 在阶段 7 之前一直是正式版本。
 
+## 完成情况
+
+2026-11-01。「代码」= 已实现并有离线单测；「真机」= 必须在真机上确认（[spike-plan](spike-plan.md)）。到目前为止**没有任何一项在真机上跑过**。
+
+| 阶段 | 代码 | 仍待真机确认 / 未完成 |
+|---|---|---|
+| 0 spike | `spike/` 5 个子命令已实现，调用与守护进程相同的库 | 全部 5 项待执行；`spike/RESULTS.md` 未产出 |
+| 1 设备核心库 | usbmux 发现、sysfs 兜底、配对、开发者模式、CoreDeviceProxy 用户态隧道 + RSD、cryptexd 查询/挂载、DDI 下载缓存、截图、HID（持有媒体流）、列 App/安装；WDA 直连设备端口的 HTTP 客户端、会话自动重建、元素树解析、XCTest 启动 runner | iOS 27 上 TSS 个性化能否成功（最高风险）；HID 事件是否生效（调用不报错不代表生效）；`XCUITestService` 能否拉起我们签的 WDA；「Enable UI Automation」超时的报错文字是否和 go-ios 一样含 `enabling automation mode`；500KB 元素树和 5MB 截图经 jktcp 读回的稳定性 |
+| 2 守护进程 | 状态机、usbmuxd 子进程看护、WDA 就绪判定与退避、密码框 60 秒重试、控制 socket、事件日志轮转、state.json | 冷启动 ≤90 秒、拔插/杀 usbmuxd/手机重启三种恢复、24 小时内存 |
+| 3 MCP | 13 个工具，参数与返回文字对齐 toolkit；区域放大；HID 后备 | 用 toolkit 的回归脚本实跑；纯坐标（游戏）和元素（设置）两种场景 |
+| 4 签名与重签 | vendor plume_core/plume_store/omnisette/apple-codesign；登录（2FA、短信）、注册设备、App ID、描述文件、深度优先签名（XCTest 无 entitlements）、签后自检、定期重签、每日会话验证 | 签出来的 WDA 能否启动（XCTest 签名是否需要空 entitlements 而不是不带）；修复提交 Impactor 上游未做 |
+| 5 通知 | Bark、Telegram，事件去重（重签/会话失效 20 小时冷却） | 实发一次 |
+| 6 自动解锁 | 规则全部实现，用假锁屏验证（键盘常驻树中、首位不生效重来、中间位被吞即停、输错一次即停用） | 6 种锁屏场景各 5 次 |
+| 7 打包 | 多阶段 Dockerfile（单二进制 + Debian usbmuxd）、compose、.env.example、setup/doctor、GitHub Actions（fmt/clippy/test、gitleaks、镜像构建） | macOS CI 编译 WDA、多架构镜像、SBOM、镜像发布未做；数据目录归属（PUID/PGID）未做，容器内以 root 运行 |
+
+已知简化：
+- `iphone_status` 在 toolkit 的输出后多一行「守护进程: …」。
+- 控制 socket 的请求在主循环串行处理，一个长请求（例如自动解锁约 11 秒）期间巡检会推迟。
+- 开发者模式状态只在未就绪时检查；就绪后关掉开发者模式要等 WDA 掉线才会发现。
+
 ## 阶段 0：真机验证（spike）
 
 见 [spike-plan.md](spike-plan.md)。

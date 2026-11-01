@@ -10,3 +10,4 @@
 notify.toml
 config.toml
 !/docs/**
+.env

@@ -14,6 +14,10 @@ use crate::protocol::Response;
 
 /// 锁屏后至少等这么久再自动解锁：锁屏过渡没走完就唤醒，WDA 第一下上滑卡约 16 秒后报 `point.x != INFINITY`
 pub(crate) const LOCK_SETTLE: Duration = Duration::from_secs(3);
+/// 元素少于这么多个就按画面判断是否稳定（游戏只有几个状态栏元素；普通 App 页面通常几十个）
+const VISUAL_SETTLE_BELOW: usize = 12;
+/// 两帧缩略图平均逐像素差低于这个值算静止（0～255）。游戏背景的轻微摆动约 1～2，消除动画几十
+const VISUAL_STILL: f64 = 3.0;
 /// 按 Home 后最多等这么久，确认主屏到了前台
 const HOME_SETTLE: Duration = Duration::from_secs(2);
 const SPRINGBOARD: &str = "com.apple.springboard";
@@ -189,31 +193,58 @@ impl Daemon {
         Ok(if lines.is_empty() { "没有找到带文字的元素".into() } else { lines.join("\n") } + &more)
     }
 
-    /// 等界面稳定：每隔一小会儿读一次元素树，连续两次一样就算稳定。读元素树时 WDA 本身也会等界面空闲。
-    /// 游戏这类元素很少的界面会马上判为稳定，看画面要截图
+    /// 等界面稳定，最多等 `max`：
+    /// - 有元素树的界面：连续两次读到的元素一样（读元素树时 WDA 本身也会等界面空闲）
+    /// - 元素很少的界面（游戏、地图，画面变化不反映在元素树里）：改看画面，连续两帧缩略图几乎一样。
+    ///   截图约 0.2 秒一张，两帧之间再隔一点，避免两帧落在同一段静止的过渡里
     pub(crate) async fn settle(&self, g: &mut Inner, max: Duration) -> Result<String, String> {
         let t0 = Instant::now();
         let Some(w) = self.wda(g) else {
             tokio::time::sleep(max.min(Duration::from_millis(500))).await;
             return Ok("WDA 不可用,等了 0.5 秒".into());
         };
-        let mut prev: Option<Vec<elements::Element>> = None;
+        let first = w.elements().await.map_err(|e| e.to_string())?;
+        if first.len() < VISUAL_SETTLE_BELOW {
+            return self.settle_visually(g, t0, max).await;
+        }
+        let mut prev = first;
         let msg = loop {
+            // 读元素树时 WDA 本身会等界面空闲，两次之间不用再多等
+            tokio::time::sleep(Duration::from_millis(50)).await;
             let cur = w.elements().await.map_err(|e| e.to_string())?;
-            if prev.as_ref() == Some(&cur) {
+            let same = cur == prev;
+            prev = cur;
+            if same {
                 break format!("界面已稳定({:.1} 秒)", t0.elapsed().as_secs_f64());
             }
             if t0.elapsed() >= max {
-                prev = Some(cur);
                 break format!("{:.1} 秒内界面一直在变(可能有动画),按最后的状态返回", max.as_secs_f64());
             }
-            prev = Some(cur);
-            // 读元素树时 WDA 本身会等界面空闲，两次之间不用再多等
-            tokio::time::sleep(Duration::from_millis(50)).await;
         };
         // 紧接着的 then=elements 直接用这棵树
-        g.elements_cache = prev.map(|els| (Instant::now(), els));
+        g.elements_cache = Some((Instant::now(), prev));
         Ok(msg)
+    }
+
+    async fn settle_visually(&self, g: &mut Inner, t0: Instant, max: Duration) -> Result<String, String> {
+        let w = self.require_wda(g)?;
+        let mut prev: Option<Vec<u8>> = None;
+        loop {
+            let png = w.screenshot_png().await.map_err(|e| e.to_string())?;
+            let cur = tokio::task::spawn_blocking(move || imaging::thumbnail(&png))
+                .await
+                .map_err(|e| format!("图像处理任务异常：{e}"))??;
+            if let Some(p) = &prev
+                && imaging::thumb_diff(p, &cur) < VISUAL_STILL
+            {
+                return Ok(format!("画面已静止({:.1} 秒)", t0.elapsed().as_secs_f64()));
+            }
+            if t0.elapsed() >= max {
+                return Ok(format!("{:.1} 秒内画面一直在动,按最后的状态返回", max.as_secs_f64()));
+            }
+            prev = Some(cur);
+            tokio::time::sleep(Duration::from_millis(150)).await;
+        }
     }
 
     /// 等包含 `text` 的元素出现

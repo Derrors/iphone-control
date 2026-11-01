@@ -47,6 +47,24 @@ fn filter_for(from: (u32, u32), to: (u32, u32)) -> FilterType {
     if to.0 > from.0 || to.1 > from.1 { FilterType::CatmullRom } else { FilterType::Triangle }
 }
 
+/// 画面「指纹」：缩成 THUMB_W×THUMB_H 的灰度图。用来判断没有元素树的界面（游戏、地图）动画是否停了
+pub const THUMB_W: u32 = 48;
+pub const THUMB_H: u32 = 104;
+
+pub fn thumbnail(png: &[u8]) -> Result<Vec<u8>, String> {
+    let img = image::load_from_memory(png).map_err(|e| format!("截图解码失败：{e}"))?;
+    // 最近邻足够：只比较前后两帧，不看画质；比三角滤波快一个数量级
+    Ok(img.resize_exact(THUMB_W, THUMB_H, FilterType::Nearest).into_luma8().into_raw())
+}
+
+/// 两个指纹的平均逐像素差（0～255）。尺寸不同算完全不同
+pub fn thumb_diff(a: &[u8], b: &[u8]) -> f64 {
+    if a.len() != b.len() || a.is_empty() {
+        return 255.0;
+    }
+    a.iter().zip(b).map(|(x, y)| f64::from(x.abs_diff(*y))).sum::<f64>() / a.len() as f64
+}
+
 /// 整屏缩放到点尺寸：图像像素即点坐标。返回 (jpeg, 说明文字)
 pub fn full_screen(png: &[u8], screen: ScreenSize, via: &str) -> Result<(Vec<u8>, String), String> {
     let img = decode(png)?;
@@ -197,6 +215,20 @@ mod tests {
             (fmt_3g(2.790697), fmt_3g(12.0), fmt_3g(3.0), fmt_3g(0.5)),
             ("2.79".into(), "12".into(), "3".into(), "0.5".into())
         );
+    }
+
+    #[test]
+    fn thumbnails_tell_still_from_changed() {
+        let a = thumbnail(&png(1290, 2796)).unwrap();
+        assert_eq!(a.len(), (THUMB_W * THUMB_H) as usize);
+        assert_eq!(thumb_diff(&a, &a), 0.0);
+        let mut out = Cursor::new(Vec::new());
+        image::RgbImage::from_pixel(1290, 2796, image::Rgb([200, 200, 200]))
+            .write_to(&mut out, image::ImageFormat::Png)
+            .unwrap();
+        let b = thumbnail(&out.into_inner()).unwrap();
+        assert!(thumb_diff(&a, &b) > 50.0);
+        assert_eq!(thumb_diff(&a, &[]), 255.0);
     }
 
     #[test]

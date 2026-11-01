@@ -64,7 +64,11 @@ fn then_props() -> Value {
     json!({
         "then": {"type": "string", "enum": ["none", "elements", "screenshot"], "default": "none",
                  "description": "操作后等界面稳定,再顺带返回界面:elements=元素列表(最多 80 个),screenshot=截图。省一次单独的调用"},
-        "then_filter": {"type": "string", "default": "", "description": "then=elements 时只列包含这段文字的元素"}
+        "then_filter": {"type": "string", "default": "", "description": "then=elements 时只列包含这段文字的元素"},
+        "then_region": {"type": "array", "items": {"type": "number"}, "minItems": 4, "maxItems": 4,
+                        "description": "then=screenshot 时只返回这块区域的放大图 [x, y, width, height](点),例如游戏棋盘"},
+        "then_settle": {"type": "number", "default": 1.5,
+                        "description": "顺带返回界面前最多等几秒让界面稳定(不超过 10)。游戏、地图按画面是否静止判断,消除连锁等长动画可调大,画面一静止就返回"}
     })
 }
 
@@ -290,17 +294,41 @@ pub fn to_request(name: &str, args: &Map<String, Value>) -> Result<Request, Stri
 pub enum Then {
     None,
     Elements(String),
-    Screenshot,
+    Screenshot(Option<(f64, f64, f64, f64)>),
 }
 
-pub fn parse_then(args: &Map<String, Value>) -> Result<Then, String> {
+/// then 带的选项：返回什么 + 最多等多久让界面稳定
+#[derive(Debug, Clone, PartialEq)]
+pub struct ThenOpts {
+    pub then: Then,
+    pub settle_ms: u64,
+}
+
+pub fn parse_then(args: &Map<String, Value>) -> Result<ThenOpts, String> {
     let a = Args(args);
-    match a.s_or("then", "none")?.as_str() {
-        "none" | "" => Ok(Then::None),
-        "elements" => Ok(Then::Elements(a.s_or("then_filter", "")?)),
-        "screenshot" => Ok(Then::Screenshot),
-        other => Err(format!("then 只能是 none / elements / screenshot,不是 {other}")),
+    let then = match a.s_or("then", "none")?.as_str() {
+        "none" | "" => Then::None,
+        "elements" => Then::Elements(a.s_or("then_filter", "")?),
+        "screenshot" => {
+            let region = match a.get("then_region") {
+                None => None,
+                Some(v) => {
+                    let xs: Option<Vec<f64>> = v.as_array().map(|arr| arr.iter().filter_map(number).collect());
+                    match xs.as_deref() {
+                        Some([x, y, w, h]) if *w > 0.0 && *h > 0.0 => Some((*x, *y, *w, *h)),
+                        _ => return Err("then_region 要是 [x, y, width, height] 四个数,宽高大于 0".into()),
+                    }
+                }
+            };
+            Then::Screenshot(region)
+        }
+        other => return Err(format!("then 只能是 none / elements / screenshot,不是 {other}")),
+    };
+    let secs = a.f_or("then_settle", THEN_SETTLE_MS as f64 / 1000.0)?;
+    if !(0.0..=10.0).contains(&secs) {
+        return Err("then_settle 要在 0 到 10 秒之间".into());
     }
+    Ok(ThenOpts { then, settle_ms: (secs * 1000.0) as u64 })
 }
 
 /// 批量里的一步
@@ -397,11 +425,12 @@ impl ServerHandler for McpServer {
             Err(e) => return Ok(to_result(Response::error(e)).into()),
         };
         // then 只对操作类工具有意义；看界面的工具本身就是返回界面
-        let then = if req.is_device_action() { then } else { Then::None };
         let resp = self.call(&req).await;
-        Ok(match (resp, then) {
-            (Response::Text { text }, then) if then != Then::None => self.finish(text, false, then).await,
-            (resp, _) => to_result(resp),
+        Ok(match resp {
+            Response::Text { text } if req.is_device_action() && then.then != Then::None => {
+                self.finish(text, false, then).await
+            }
+            resp => to_result(resp),
         }
         .into())
     }
@@ -416,14 +445,15 @@ impl McpServer {
     }
 
     /// 操作完成后：按 then 等界面稳定，再附上元素列表或截图
-    async fn finish(&self, mut text: String, failed: bool, then: Then) -> CallToolResult {
+    async fn finish(&self, mut text: String, failed: bool, opts: ThenOpts) -> CallToolResult {
         let done = |blocks: Vec<ContentBlock>| {
             if failed { CallToolResult::error(blocks) } else { CallToolResult::success(blocks) }
         };
+        let then = opts.then;
         if then == Then::None {
             return done(vec![ContentBlock::text(text)]);
         }
-        match self.call(&Request::Settle { max_ms: THEN_SETTLE_MS }).await {
+        match self.call(&Request::Settle { max_ms: opts.settle_ms }).await {
             Response::Text { text: t } => text += &format!("\n{t}"),
             Response::Error { message } => text += &format!("\n(等界面稳定失败:{message})"),
             Response::Image { .. } => {}
@@ -439,7 +469,7 @@ impl McpServer {
                 }
                 done(vec![ContentBlock::text(text)])
             }
-            Then::Screenshot => match self.call(&Request::Screenshot { region: None }).await {
+            Then::Screenshot(region) => match self.call(&Request::Screenshot { region }).await {
                 Response::Image { jpeg_base64, caption } => done(vec![
                     ContentBlock::text(text),
                     ContentBlock::image(jpeg_base64, "image/jpeg"),
@@ -453,7 +483,7 @@ impl McpServer {
     }
 
     /// 按顺序执行；某一步出错就停，说明是第几步、后面几步没执行。出错时也按 then 附上当前界面，方便看停在哪
-    async fn batch(&self, args: &Map<String, Value>, then: Then) -> CallToolResult {
+    async fn batch(&self, args: &Map<String, Value>, then: ThenOpts) -> CallToolResult {
         let steps = match batch_steps(args) {
             Ok(s) => s,
             Err(e) => return to_result(Response::error(e)),
@@ -559,13 +589,19 @@ mod tests {
         for n in ["iphone_status", "iphone_screenshot", "iphone_list_elements", "iphone_wait_for"] {
             assert!(!has_then(n), "{n}");
         }
-        assert_eq!(parse_then(&Map::new()).unwrap(), Then::None);
+        let then = |v: Value| parse_then(&args(v)).map(|o| o.then);
+        assert_eq!(parse_then(&Map::new()).unwrap(), ThenOpts { then: Then::None, settle_ms: THEN_SETTLE_MS });
+        assert_eq!(then(json!({"then": "elements", "then_filter": "设置"})).unwrap(), Then::Elements("设置".into()));
+        assert_eq!(then(json!({"then": "screenshot"})).unwrap(), Then::Screenshot(None));
         assert_eq!(
-            parse_then(&args(json!({"then": "elements", "then_filter": "设置"}))).unwrap(),
-            Then::Elements("设置".into())
+            then(json!({"then": "screenshot", "then_region": [0, 295, 430, 460]})).unwrap(),
+            Then::Screenshot(Some((0.0, 295.0, 430.0, 460.0)))
         );
-        assert_eq!(parse_then(&args(json!({"then": "screenshot"}))).unwrap(), Then::Screenshot);
-        assert!(parse_then(&args(json!({"then": "video"}))).is_err());
+        assert!(then(json!({"then": "screenshot", "then_region": [0, 1, 2]})).is_err());
+        assert!(then(json!({"then": "screenshot", "then_region": [0, 1, 0, 5]})).is_err());
+        assert!(then(json!({"then": "video"})).is_err());
+        assert_eq!(parse_then(&args(json!({"then": "screenshot", "then_settle": 5}))).unwrap().settle_ms, 5000);
+        assert!(parse_then(&args(json!({"then_settle": 30}))).is_err());
     }
 
     #[test]

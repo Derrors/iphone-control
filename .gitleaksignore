@@ -1,0 +1,5 @@
+# 上游 apple-codesign 自带的示例,不是真实密钥:
+#   docs/apple_codesign_github_actions.rst — 文档里演示 PEM 格式的样例
+#   tests/cmd/generate-self-signed-cert.trycmd — 测试期望输出,私钥内容是 [..] 占位
+de25cad2134600b81a6f0bbafff0cdd545e521a0:vendor/apple-codesign/docs/apple_codesign_github_actions.rst:private-key:33
+de25cad2134600b81a6f0bbafff0cdd545e521a0:vendor/apple-codesign/tests/cmd/generate-self-signed-cert.trycmd:private-key:102

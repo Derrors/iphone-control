@@ -14,7 +14,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       # 锁定工具链（与 Docker 构建镜像一致）：新版 clippy 的 lint 不会在代码没变时把 CI 弄挂
-      - uses: dtolnay/rust-toolchain@1.99.1
+      - uses: dtolnay/rust-toolchain@1.120.0
         with:
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
@@ -29,7 +29,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.88.0
+      - uses: dtolnay/rust-toolchain@1.120.0
       - uses: Swatinem/rust-cache@v2
       - run: cargo check --workspace --locked
 

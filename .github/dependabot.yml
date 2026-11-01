@@ -18,3 +18,7 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    ignore:
+      # 这个 action 的版本号就是 Rust 工具链版本：@1.99.1 是开发/CI 用的版本，@1.88.0 是 MSRV（rust-version），
+      # 都是有意固定的，手动升级
+      - dependency-name: dtolnay/rust-toolchain

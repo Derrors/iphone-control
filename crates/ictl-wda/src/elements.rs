@@ -143,6 +143,12 @@ pub fn parse_passcode_value(value: &str) -> Option<(u32, u32)> {
     }
 }
 
+/// 元素树是不是锁屏界面：锁屏上的日期时间视图标识与语言无关（`lockscreen-date-view`）。
+/// 只在 `/wda/locked` 不可信时用（见 [`crate::WdaClient::locked`]）
+pub fn is_lock_screen(xml: &str) -> bool {
+    xml.contains("\"lockscreen-date-view\"")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -150,6 +156,15 @@ mod tests {
     const SCREEN: ScreenSize = ScreenSize { width: 430.0, height: 932.0 };
     const HOME: &str = include_str!("../tests/fixtures/home.xml");
     const LOCK: &str = include_str!("../tests/fixtures/lockscreen.xml");
+    const LOCK_IOS27: &str = include_str!("../tests/fixtures/lockscreen-ios27.xml");
+
+    #[test]
+    fn lock_screen_detected_from_real_tree() {
+        assert!(is_lock_screen(LOCK_IOS27));
+        assert!(!is_lock_screen(HOME));
+        // 真机样本也要能正常解析
+        assert!(!parse(LOCK_IOS27, SCREEN).is_empty());
+    }
 
     fn labels(els: &[Element]) -> Vec<String> {
         els.iter().map(|e| if e.label.is_empty() { e.name.clone() } else { e.label.clone() }).collect()

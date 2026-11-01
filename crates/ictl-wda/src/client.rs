@@ -57,15 +57,19 @@ pub struct IdleSettings {
     pub animation_cool_off_timeout: f64,
 }
 
+const SPRINGBOARD: &str = "com.apple.springboard";
+
 pub struct WdaClient<T> {
     transport: T,
     session: Option<String>,
     screen: Option<ScreenSize>,
+    /// 本客户端（对应一次 WDA 启动）是否确认过一次「确实没锁屏」，确认后 `/wda/locked` 就可信了
+    lock_state_trusted: bool,
 }
 
 impl<T: Transport> WdaClient<T> {
     pub fn new(transport: T) -> Self {
-        Self { transport, session: None, screen: None }
+        Self { transport, session: None, screen: None, lock_state_trusted: false }
     }
 
     async fn call(&self, method: &str, path: &str, body: Option<Value>, timeout: Duration) -> Result<Value> {
@@ -154,8 +158,37 @@ impl<T: Transport> WdaClient<T> {
         Ok(size)
     }
 
-    pub async fn locked(&self) -> Result<bool> {
-        Ok(self.call("GET", "/wda/locked", None, Duration::from_secs(10)).await?["value"] == true)
+    /// 是否锁屏。WDA 的 `/wda/locked` 只靠 `com.apple.springboard.lockstate` 的变化通知维护，初值为 false：
+    /// WDA 在手机锁着时启动，就会一直报未锁屏，直到下一次锁屏/解锁（WebDriverAgent `XCUIDevice+FBHelpers.m`）。
+    /// 所以在确认过一次「确实没锁屏」之前，WDA 说没锁时再看一眼元素树；确认后只信 WDA，不增加开销
+    pub async fn locked(&mut self) -> Result<bool> {
+        if self.call("GET", "/wda/locked", None, Duration::from_secs(10)).await?["value"] == true {
+            return Ok(true);
+        }
+        if self.lock_state_trusted {
+            return Ok(false);
+        }
+        match self.lock_screen_shown().await {
+            Ok(true) => {
+                tracing::info!("WDA 报未锁屏，但屏幕上是锁屏界面（WDA 在锁屏时启动，状态未同步）");
+                Ok(true)
+            }
+            Ok(false) => {
+                self.lock_state_trusted = true;
+                Ok(false)
+            }
+            Err(e) => {
+                tracing::debug!("核对锁屏界面失败，按 WDA 的结果：{e}");
+                Ok(false)
+            }
+        }
+    }
+
+    async fn lock_screen_shown(&self) -> Result<bool> {
+        if self.active_app().await? != SPRINGBOARD {
+            return Ok(false);
+        }
+        Ok(elements::is_lock_screen(&self.source_xml().await?))
     }
 
     pub async fn active_app(&self) -> Result<String> {
@@ -366,5 +399,43 @@ mod tests {
         assert_eq!(a["actions"][2]["duration"], 80);
         let s = swipe_steps((1.0, 2.0), (3.0, 4.0), 300);
         assert_eq!(s[3], PointerStep::Move { x: 3.0, y: 4.0, ms: 300 });
+    }
+
+    #[tokio::test]
+    async fn locked_checks_tree_until_unlocked_once_then_trusts_wda() {
+        let lock_xml = serde_json::to_string(include_str!("../tests/fixtures/lockscreen-ios27.xml")).unwrap();
+        let home_xml = serde_json::to_string(include_str!("../tests/fixtures/home.xml")).unwrap();
+        let sb = r#"{"value":{"bundleId":"com.apple.springboard"}}"#;
+        let no = r#"{"value":false}"#;
+        let (lock_src, home_src) = (format!(r#"{{"value":{lock_xml}}}"#), format!(r#"{{"value":{home_xml}}}"#));
+        let m = Mock::with(&[
+            // 1. WDA 在锁屏时启动：/wda/locked 误报 false，元素树是锁屏
+            (200, no),
+            (200, sb),
+            (200, &lock_src),
+            // 2. 人工解锁后：主屏幕，确认一次
+            (200, no),
+            (200, sb),
+            (200, &home_src),
+            // 3. 之后只问 WDA
+            (200, no),
+            (200, r#"{"value":true}"#),
+        ]);
+        let mut c = WdaClient::new(&m);
+        assert!(c.locked().await.unwrap());
+        assert!(!c.locked().await.unwrap());
+        assert!(!c.locked().await.unwrap());
+        assert!(c.locked().await.unwrap());
+        let paths: Vec<String> = m.seen.lock().unwrap().iter().map(|(_, p, _)| p.clone()).collect();
+        assert_eq!(paths.iter().filter(|p| p.starts_with("/source")).count(), 2, "{paths:?}");
+    }
+
+    #[tokio::test]
+    async fn locked_falls_back_to_wda_when_tree_check_fails() {
+        // 核对失败（例如取元素树超时）不能把可用的手机误判成锁屏，也不能就此信任 WDA
+        let m = Mock::with(&[(200, r#"{"value":false}"#)]);
+        let mut c = WdaClient::new(&m);
+        assert!(!c.locked().await.unwrap());
+        assert!(!c.lock_state_trusted);
     }
 }

@@ -339,7 +339,7 @@ impl<T: Transport> WdaClient<T> {
         self.post("/wda/lock", json!({})).await.map(drop)
     }
 
-    /// 启动并等到前台后再停 1 秒（冷启动后立即点击会被吞）。返回 8 秒内是否到了前台；
+    /// 启动并等到前台、界面稳定（冷启动后立即点击会被吞）。返回 8 秒内是否到了前台；
     /// 等待期间查前台出错不算失败（启动命令已经成功了）
     pub async fn launch_app(&mut self, bundle_id: &str) -> Result<bool> {
         self.in_session("POST", "/wda/apps/launch", Some(json!({"bundleId": bundle_id})), Duration::from_secs(60))
@@ -353,7 +353,19 @@ impl<T: Transport> WdaClient<T> {
             }
             tokio::time::sleep(Duration::from_millis(500)).await;
         }
-        tokio::time::sleep(Duration::from_secs(1)).await;
+        // 冷启动后立即点击会被吞（回归用例 #13）。原来固定再等 1 秒；改为等界面稳定：连续两次元素树一样
+        // （读元素树时 WDA 本身也等界面空闲），最多仍是 1 秒
+        if foreground {
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(1);
+            let mut prev = None;
+            while tokio::time::Instant::now() < deadline {
+                let cur = self.source_xml().await.ok();
+                if cur.is_some() && cur == prev {
+                    break;
+                }
+                prev = cur;
+            }
+        }
         Ok(foreground)
     }
 

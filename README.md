@@ -30,7 +30,7 @@ docker exec -it iphone-control iphone-control mcp-config   # 打印注册到 Cla
 
 > 不要和 toolkit 同时连着同一部手机：两边都会拉起 usbmuxd、各自持有 XCTest 会话。
 >
-> 容器不用 `privileged`：只开放 USB 字符设备（`device_cgroup_rules: "c 189:* rmw"`），`/dev/bus/usb` 绑定挂载。改成这套设置后的 USB 拔插恢复还要在真机上再确认一次。
+> 容器不用 `privileged`：只开放 USB 字符设备（`device_cgroup_rules: "c 189:* rmw"`），`/dev/bus/usb` 绑定挂载。这套设置下的 USB 拔插恢复已在真机上确认。
 
 ## 命令
 

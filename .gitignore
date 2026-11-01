@@ -7,7 +7,5 @@
 *.mobileprovision
 *.pem
 *.ipa
-notify.toml
-config.toml
 !/docs/**
 .env

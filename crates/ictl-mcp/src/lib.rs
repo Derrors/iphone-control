@@ -96,7 +96,7 @@ pub fn tools() -> Vec<Tool> {
         ),
         t(
             "iphone_list_elements",
-            "列出屏幕上带文字的界面元素:类型、标签、中心点坐标、尺寸。\n\nfilter: 只返回标签/名字/值里包含该文字的元素(不区分大小写)。\n注意:按坐标判断是否在屏幕内,被弹窗遮住的元素也可能列出来,不确定时截图核对。",
+            "列出屏幕上带文字的界面元素:类型、标签、中心点坐标、尺寸。\n\nfilter: 只返回类型/标签/名字/值里包含该文字的元素(不区分大小写),例如 SearchField、Button。\n注意:按坐标判断是否在屏幕内,被弹窗遮住的元素也可能列出来,不确定时截图核对。",
             schema(
                 json!({"filter": {"type": "string", "default": ""}, "limit": {"type": "integer", "default": 150}}),
                 &[],
@@ -109,7 +109,7 @@ pub fn tools() -> Vec<Tool> {
         ),
         t(
             "iphone_tap_element",
-            "按文字点击元素:先找标签/名字完全相同的,找不到再找包含该文字的。\n\nindex: 匹配到多个时点第几个(从 0 开始,顺序同 iphone_list_elements)。",
+            "按文字点击元素:先找标签/名字完全相同的,找不到再找包含该文字的。中心被悬浮栏、键盘等盖住时改点没被盖住的部分,整个被盖住就不点。\n\nindex: 匹配到多个时点第几个(从 0 开始,顺序同 iphone_list_elements)。",
             schema(
                 with_then(json!({"text": {"type": "string"}, "index": {"type": "integer", "default": 0}})),
                 &["text"],
@@ -135,7 +135,7 @@ pub fn tools() -> Vec<Tool> {
         ),
         t(
             "iphone_type_text",
-            "在当前获得焦点的输入框里输入文字(支持中文)。需要先点中输入框。submit=True 时末尾按回车。",
+            "在当前获得焦点的输入框里输入文字(支持中文)。需要先点中输入框。submit=True 时末尾按回车。\n输完会读回输入框核对:少了结尾几个字会自动补上;对不上就报错,不按回车。",
             schema(
                 with_then(json!({"text": {"type": "string"}, "submit": {"type": "boolean", "default": false}})),
                 &["text"],
@@ -171,7 +171,7 @@ pub fn tools() -> Vec<Tool> {
         ),
         t(
             "iphone_wait_for",
-            "等包含某段文字的界面元素出现(例如页面加载完、弹窗出现),出现就立即返回;超时报错。代替反复截图轮询。",
+            "等包含某段文字的界面元素出现(例如页面加载完、弹窗出现),出现就立即返回;超时报错。代替反复截图轮询。输入框里的字不算。",
             schema(
                 json!({"text": {"type": "string"}, "timeout": {"type": "number", "default": 5, "description": "最多等几秒(不超过 30)"}}),
                 &["text"],
@@ -373,9 +373,15 @@ pub fn batch_steps(args: &Map<String, Value>) -> Result<Vec<Step>, String> {
         .collect()
 }
 
-/// tap_element 的结果是不是「没点到」（没找到、或 index 超出匹配个数）
+/// tap_element 的结果是不是「没点到」（没找到、index 超出匹配个数、或整个被别的东西盖住）
 pub fn tap_missed(text: &str) -> bool {
-    text.starts_with("没找到") || text.starts_with("只匹配到")
+    text.starts_with("没找到") || text.starts_with("只匹配到") || text.starts_with("被挡住")
+}
+
+/// 不带 then 的操作做完后要不要查系统弹窗（弹窗挡着时操作都落在弹窗上，WDA 照样报成功）。
+/// 按键自己处理（Home 先查弹窗；锁屏后不用查），结束 App 后前台是主屏，不会冒出新弹窗
+pub fn wants_alert_check(req: &Request) -> bool {
+    req.is_device_action() && !matches!(req, Request::PressButton { .. } | Request::TerminateApp { .. })
 }
 
 /// 守护进程响应 → MCP 结果。错误走工具错误（is_error），文字原样给客户端
@@ -427,8 +433,8 @@ impl ServerHandler for McpServer {
         // then 只对操作类工具有意义；看界面的工具本身就是返回界面
         let resp = self.call(&req).await;
         Ok(match resp {
-            Response::Text { text } if req.is_device_action() && then.then != Then::None => {
-                self.finish(text, false, then).await
+            Response::Text { text } if req.is_device_action() => {
+                self.finish(text, false, then, wants_alert_check(&req)).await
             }
             resp => to_result(resp),
         }
@@ -444,13 +450,21 @@ impl McpServer {
         })
     }
 
-    /// 操作完成后：按 then 等界面稳定，再附上元素列表或截图
-    async fn finish(&self, mut text: String, failed: bool, opts: ThenOpts) -> CallToolResult {
+    /// 操作完成后：按 then 等界面稳定，再附上元素列表或截图（等稳定时顺带提醒弹窗）。
+    /// 不带 then 时，`alert_check` 为真就查一下有没有系统弹窗挡着
+    async fn finish(&self, mut text: String, failed: bool, opts: ThenOpts, alert_check: bool) -> CallToolResult {
         let done = |blocks: Vec<ContentBlock>| {
             if failed { CallToolResult::error(blocks) } else { CallToolResult::success(blocks) }
         };
         let then = opts.then;
         if then == Then::None {
+            // 结果里已经说了有弹窗（启动 App 被挡）就不再查
+            if alert_check
+                && !text.contains("系统弹窗")
+                && let Response::Text { text: t } = self.call(&Request::AlertCheck).await
+            {
+                text += &t;
+            }
             return done(vec![ContentBlock::text(text)]);
         }
         match self.call(&Request::Settle { max_ms: opts.settle_ms }).await {
@@ -490,6 +504,8 @@ impl McpServer {
         };
         let total = steps.len();
         let mut lines = Vec::new();
+        // 最后一步是不是需要查弹窗的操作
+        let mut check = false;
         for (i, step) in steps.into_iter().enumerate() {
             let n = i + 1;
             match step {
@@ -504,21 +520,24 @@ impl McpServer {
                         if n < total {
                             lines.push(format!("第 {n} 步没点到,后面 {} 步没有执行", total - n));
                         }
-                        return self.finish(lines.join("\n"), true, then).await;
+                        return self.finish(lines.join("\n"), true, then, false).await;
                     }
-                    Response::Text { text } => lines.push(format!("{n}. {tool} → {text}")),
+                    Response::Text { text } => {
+                        lines.push(format!("{n}. {tool} → {text}"));
+                        check = wants_alert_check(&req);
+                    }
                     Response::Image { caption, .. } => lines.push(format!("{n}. {tool} → {caption}")),
                     Response::Error { message } => {
                         lines.push(format!("{n}. {tool} → 出错:{message}"));
                         if n < total {
                             lines.push(format!("第 {n} 步出错,后面 {} 步没有执行", total - n));
                         }
-                        return self.finish(lines.join("\n"), true, then).await;
+                        return self.finish(lines.join("\n"), true, then, true).await;
                     }
                 },
             }
         }
-        self.finish(lines.join("\n"), false, then).await
+        self.finish(lines.join("\n"), false, then, check).await
     }
 }
 
@@ -535,6 +554,15 @@ mod tests {
 
     fn args(v: Value) -> Map<String, Value> {
         v.as_object().cloned().unwrap()
+    }
+
+    #[test]
+    fn alert_check_after_actions_but_not_buttons_or_reads() {
+        assert!(wants_alert_check(&Request::Swipe { from: (0.0, 0.0), to: (1.0, 1.0), seconds: 0.3 }));
+        assert!(wants_alert_check(&Request::LaunchApp { app: "微信".into() }));
+        assert!(!wants_alert_check(&Request::PressButton { button: "home".into() }));
+        assert!(!wants_alert_check(&Request::TerminateApp { app: "微信".into() }));
+        assert!(!wants_alert_check(&Request::Status));
     }
 
     #[test]
@@ -663,6 +691,8 @@ mod tests {
         assert!(tap_missed("没找到包含 \"x\" 的元素,先用 iphone_list_elements 或截图看看屏幕"));
         assert!(tap_missed("只匹配到 1 个:\nButton \"x\""));
         assert!(!tap_missed("已点击 Button \"x\""));
+        assert!(tap_missed("被挡住:Button \"x\" 整个被「浮层」盖住,没有点"));
+        assert!(!tap_missed("已点击 Button \"x\";它的中心被「搜索」盖住,改点没被盖住的 (215,848)"));
     }
 
     #[test]

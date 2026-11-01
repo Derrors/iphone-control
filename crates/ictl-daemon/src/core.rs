@@ -114,7 +114,7 @@ pub(crate) struct Inner {
     /// HID 会话最近一次使用的时间；空闲超过 [`crate::supervise::HID_IDLE`] 就关掉（它持有屏幕媒体流）
     pub hid_used: Option<Instant>,
     /// 最近一次读到的元素树。只在调用方允许（max_age_ms）时复用；改变界面的操作做完就清掉
-    pub elements_cache: Option<(Instant, Vec<ictl_wda::Element>)>,
+    pub elements_cache: Option<(Instant, ictl_wda::elements::Tree)>,
     pub dedup: Dedup,
     pub next_resign: Instant,
     pub next_session_check: Instant,
@@ -341,6 +341,7 @@ impl Daemon {
             Request::TerminateApp { app } => self.terminate_app(g, &app).await,
             Request::OpenUrl { url } => self.open_url(g, &url).await,
             Request::Settle { max_ms } => self.settle(g, Duration::from_millis(max_ms)).await,
+            Request::AlertCheck => self.alert_check(g).await,
             Request::WaitFor { text, timeout_ms } => self.wait_for(g, &text, Duration::from_millis(timeout_ms)).await,
             Request::Doctor => Ok(self.doctor(g).await),
             Request::UnlockReset => {

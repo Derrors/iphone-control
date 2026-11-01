@@ -1,0 +1,351 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<XCUIElementTypeApplication type="XCUIElementTypeApplication" name="设置" label="设置" x="0" y="0" width="430" height="932" processId="1222" bundleId="com.apple.Preferences">
+  <XCUIElementTypeWindow type="XCUIElementTypeWindow" x="0" y="0" width="430" height="932">
+    <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="430" height="932">
+      <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="430" height="932">
+        <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="430" height="932">
+          <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="430" height="932">
+            <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="430" height="932">
+              <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="430" height="932">
+                <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="430" height="932">
+                  <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="430" height="932">
+                    <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="430" height="932">
+                      <XCUIElementTypeNavigationBar type="XCUIElementTypeNavigationBar" name="设置" x="0" y="59" width="430" height="54">
+                        <XCUIElementTypeStaticText type="XCUIElementTypeStaticText" value="设置" name="设置" label="设置" x="198" y="70" width="34" height="22"/>
+                      </XCUIElementTypeNavigationBar>
+                      <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="430" height="932">
+                        <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="430" height="932">
+                          <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="430" height="932">
+                            <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="430" height="932">
+                              <XCUIElementTypeCollectionView type="XCUIElementTypeCollectionView" name="com.apple.settings.sidebar.collectionView" x="0" y="0" width="430" height="933">
+                                <XCUIElementTypeOther type="XCUIElementTypeOther" x="-20" y="-284" width="470" height="664"/>
+                                <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="430" height="933">
+                                  <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="430" height="153"/>
+                                  <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="806" width="430" height="127"/>
+                                </XCUIElementTypeOther>
+                                <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="430" height="933">
+                                  <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="430" height="153"/>
+                                  <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="806" width="430" height="127"/>
+                                </XCUIElementTypeOther>
+                                <XCUIElementTypeCell type="XCUIElementTypeCell" x="20" y="-5" width="390" height="53">
+                                  <XCUIElementTypeOther type="XCUIElementTypeOther" x="20" y="-5" width="390" height="53">
+                                    <XCUIElementTypeOther type="XCUIElementTypeOther" x="20" y="-5" width="390" height="53"/>
+                                  </XCUIElementTypeOther>
+                                  <XCUIElementTypeOther type="XCUIElementTypeOther" x="20" y="-5" width="390" height="53">
+                                    <XCUIElementTypeOther type="XCUIElementTypeOther" x="20" y="-5" width="390" height="53">
+                                      <XCUIElementTypeOther type="XCUIElementTypeOther" x="20" y="-5" width="390" height="53">
+                                        <XCUIElementTypeButton type="XCUIElementTypeButton" name="com.apple.settings.wallpaper" label="墙纸" x="20" y="-5" width="390" height="53">
+                                          <XCUIElementTypeStaticText type="XCUIElementTypeStaticText" value="墙纸" name="墙纸" label="墙纸" x="38" y="7" width="76" height="29"/>
+                                          <XCUIElementTypeImage type="XCUIElementTypeImage" x="38" y="7" width="28" height="29"/>
+                                          <XCUIElementTypeImage type="XCUIElementTypeImage" name="chevron.forward" x="380" y="15" width="8" height="13"/>
+                                        </XCUIElementTypeButton>
+                                      </XCUIElementTypeOther>
+                                    </XCUIElementTypeOther>
+                                  </XCUIElementTypeOther>
+                                </XCUIElementTypeCell>
+                                <XCUIElementTypeCell type="XCUIElementTypeCell" x="20" y="47" width="390" height="53">
+                                  <XCUIElementTypeOther type="XCUIElementTypeOther" x="20" y="47" width="390" height="53">
+                                    <XCUIElementTypeOther type="XCUIElementTypeOther" x="20" y="47" width="390" height="53"/>
+                                  </XCUIElementTypeOther>
+                                  <XCUIElementTypeOther type="XCUIElementTypeOther" x="20" y="47" width="390" height="53">
+                                    <XCUIElementTypeOther type="XCUIElementTypeOther" x="20" y="47" width="390" height="53">
+                                      <XCUIElementTypeOther type="XCUIElementTypeOther" x="20" y="47" width="390" height="53">
+                                        <XCUIElementTypeButton type="XCUIElementTypeButton" name="com.apple.settings.search" label="搜索" x="20" y="47" width="390" height="53">
+                                          <XCUIElementTypeImage type="XCUIElementTypeImage" x="38" y="59" width="28" height="29"/>
+                                          <XCUIElementTypeStaticText type="XCUIElementTypeStaticText" value="搜索" name="搜索" label="搜索" x="38" y="60" width="76" height="28"/>
+                                          <XCUIElementTypeImage type="XCUIElementTypeImage" name="chevron.forward" x="380" y="67" width="8" height="13"/>
+                                        </XCUIElementTypeButton>
+                                      </XCUIElementTypeOther>
+                                    </XCUIElementTypeOther>
+                                  </XCUIElementTypeOther>
+                                </XCUIElementTypeCell>
+                                <XCUIElementTypeOther type="XCUIElementTypeOther" x="80" y="46" width="310" height="2"/>
+                                <XCUIElementTypeCell type="XCUIElementTypeCell" x="20" y="100" width="390" height="53">
+                                  <XCUIElementTypeOther type="XCUIElementTypeOther" x="20" y="100" width="390" height="53">
+                                    <XCUIElementTypeOther type="XCUIElementTypeOther" x="20" y="100" width="390" height="53"/>
+                                  </XCUIElementTypeOther>
+                                  <XCUIElementTypeOther type="XCUIElementTypeOther" x="20" y="100" width="390" height="53">
+                                    <XCUIElementTypeOther type="XCUIElementTypeOther" x="20" y="100" width="390" height="53">
+                                      <XCUIElementTypeOther type="XCUIElementTypeOther" x="20" y="100" width="390" height="53">
+                                        <XCUIElementTypeButton type="XCUIElementTypeButton" name="com.apple.settings.appearance" label="外观" x="20" y="100" width="390" height="53">
+                                          <XCUIElementTypeImage type="XCUIElementTypeImage" x="38" y="112" width="28" height="29"/>
+                                          <XCUIElementTypeStaticText type="XCUIElementTypeStaticText" value="外观" name="外观" label="外观" x="38" y="112" width="76" height="29"/>
+                                          <XCUIElementTypeImage type="XCUIElementTypeImage" name="chevron.forward" x="380" y="120" width="8" height="13"/>
+                                        </XCUIElementTypeButton>
+                                      </XCUIElementTypeOther>
+                                    </XCUIElementTypeOther>
+                                  </XCUIElementTypeOther>
+                                </XCUIElementTypeCell>
+                                <XCUIElementTypeOther type="XCUIElementTypeOther" x="80" y="99" width="310" height="1"/>
+                                <XCUIElementTypeCell type="XCUIElementTypeCell" x="20" y="152" width="390" height="53">
+                                  <XCUIElementTypeOther type="XCUIElementTypeOther" x="20" y="152" width="390" height="53">
+                                    <XCUIElementTypeOther type="XCUIElementTypeOther" x="20" y="152" width="390" height="53"/>
+                                  </XCUIElementTypeOther>
+                                  <XCUIElementTypeOther type="XCUIElementTypeOther" x="20" y="152" width="390" height="53">
+                                    <XCUIElementTypeOther type="XCUIElementTypeOther" x="20" y="152" width="390" height="53">
+                                      <XCUIElementTypeOther type="XCUIElementTypeOther" x="20" y="152" width="390" height="53">
+                                        <XCUIElementTypeButton type="XCUIElementTypeButton" name="com.apple.settings.displayAndBrightness" label="显示与亮度" x="20" y="152" width="390" height="53">
+                                          <XCUIElementTypeImage type="XCUIElementTypeImage" x="38" y="164" width="28" height="29"/>
+                                          <XCUIElementTypeStaticText type="XCUIElementTypeStaticText" value="显示与亮度" name="显示与亮度" label="显示与亮度" x="38" y="164" width="127" height="29"/>
+                                          <XCUIElementTypeImage type="XCUIElementTypeImage" name="chevron.forward" x="380" y="172" width="8" height="13"/>
+                                        </XCUIElementTypeButton>
+                                      </XCUIElementTypeOther>
+                                    </XCUIElementTypeOther>
+                                  </XCUIElementTypeOther>
+                                </XCUIElementTypeCell>
+                                <XCUIElementTypeOther type="XCUIElementTypeOther" x="80" y="151" width="310" height="2"/>
+                                <XCUIElementTypeCell type="XCUIElementTypeCell" x="20" y="204" width="390" height="54">
+                                  <XCUIElementTypeOther type="XCUIElementTypeOther" x="20" y="204" width="390" height="54">
+                                    <XCUIElementTypeOther type="XCUIElementTypeOther" x="20" y="204" width="390" height="54"/>
+                                  </XCUIElementTypeOther>
+                                  <XCUIElementTypeOther type="XCUIElementTypeOther" x="20" y="204" width="390" height="54">
+                                    <XCUIElementTypeOther type="XCUIElementTypeOther" x="20" y="204" width="390" height="54">
+                                      <XCUIElementTypeOther type="XCUIElementTypeOther" x="20" y="204" width="390" height="54">
+                                        <XCUIElementTypeButton type="XCUIElementTypeButton" name="com.apple.settings.camera" label="相机" x="20" y="204" width="390" height="54">
+                                          <XCUIElementTypeStaticText type="XCUIElementTypeStaticText" value="相机" name="相机" label="相机" x="38" y="217" width="76" height="28"/>
+                                          <XCUIElementTypeImage type="XCUIElementTypeImage" x="38" y="217" width="28" height="29"/>
+                                          <XCUIElementTypeImage type="XCUIElementTypeImage" name="chevron.forward" x="380" y="225" width="8" height="13"/>
+                                        </XCUIElementTypeButton>
+                                      </XCUIElementTypeOther>
+                                    </XCUIElementTypeOther>
+                                  </XCUIElementTypeOther>
+                                </XCUIElementTypeCell>
+                                <XCUIElementTypeOther type="XCUIElementTypeOther" x="80" y="203" width="310" height="2"/>
+                                <XCUIElementTypeCell type="XCUIElementTypeCell" x="20" y="256" width="390" height="54">
+                                  <XCUIElementTypeOther type="XCUIElementTypeOther" x="20" y="256" width="390" height="54">
+                                    <XCUIElementTypeOther type="XCUIElementTypeOther" x="20" y="256" width="390" height="54"/>
+                                  </XCUIElementTypeOther>
+                                  <XCUIElementTypeOther type="XCUIElementTypeOther" x="20" y="256" width="390" height="54">
+                                    <XCUIElementTypeOther type="XCUIElementTypeOther" x="20" y="256" width="390" height="54">
+                                      <XCUIElementTypeOther type="XCUIElementTypeOther" x="20" y="256" width="390" height="54">
+                                        <XCUIElementTypeButton type="XCUIElementTypeButton" name="com.apple.settings.homeScreen" label="主屏幕与App资源库" x="20" y="256" width="390" height="54">
+                                          <XCUIElementTypeImage type="XCUIElementTypeImage" x="38" y="269" width="28" height="29"/>
+                                          <XCUIElementTypeStaticText type="XCUIElementTypeStaticText" value="主屏幕与App资源库" name="主屏幕与App资源库" label="主屏幕与App资源库" x="38" y="269" width="196" height="29"/>
+                                          <XCUIElementTypeImage type="XCUIElementTypeImage" name="chevron.forward" x="380" y="277" width="8" height="13"/>
+                                        </XCUIElementTypeButton>
+                                      </XCUIElementTypeOther>
+                                    </XCUIElementTypeOther>
+                                  </XCUIElementTypeOther>
+                                </XCUIElementTypeCell>
+                                <XCUIElementTypeOther type="XCUIElementTypeOther" x="80" y="255" width="310" height="2"/>
+                                <XCUIElementTypeCell type="XCUIElementTypeCell" x="20" y="309" width="390" height="53">
+                                  <XCUIElementTypeOther type="XCUIElementTypeOther" x="20" y="309" width="390" height="53">
+                                    <XCUIElementTypeOther type="XCUIElementTypeOther" x="20" y="309" width="390" height="53"/>
+                                  </XCUIElementTypeOther>
+                                  <XCUIElementTypeOther type="XCUIElementTypeOther" x="20" y="309" width="390" height="53">
+                                    <XCUIElementTypeOther type="XCUIElementTypeOther" x="20" y="309" width="390" height="53">
+                                      <XCUIElementTypeOther type="XCUIElementTypeOther" x="20" y="309" width="390" height="53">
+                                        <XCUIElementTypeButton type="XCUIElementTypeButton" name="com.apple.settings.siri" label="Siri" x="20" y="309" width="390" height="53">
+                                          <XCUIElementTypeStaticText type="XCUIElementTypeStaticText" value="Siri" name="Siri" label="Siri" x="38" y="321" width="66" height="29"/>
+                                          <XCUIElementTypeImage type="XCUIElementTypeImage" x="38" y="321" width="28" height="29"/>
+                                          <XCUIElementTypeImage type="XCUIElementTypeImage" name="chevron.forward" x="380" y="329" width="8" height="13"/>
+                                        </XCUIElementTypeButton>
+                                      </XCUIElementTypeOther>
+                                    </XCUIElementTypeOther>
+                                  </XCUIElementTypeOther>
+                                </XCUIElementTypeCell>
+                                <XCUIElementTypeOther type="XCUIElementTypeOther" x="80" y="308" width="310" height="2"/>
+                                <XCUIElementTypeOther type="XCUIElementTypeOther" x="-20" y="379" width="470" height="245"/>
+                                <XCUIElementTypeCell type="XCUIElementTypeCell" x="20" y="396" width="390" height="53">
+                                  <XCUIElementTypeOther type="XCUIElementTypeOther" x="20" y="396" width="390" height="53">
+                                    <XCUIElementTypeOther type="XCUIElementTypeOther" x="20" y="396" width="390" height="53"/>
+                                  </XCUIElementTypeOther>
+                                  <XCUIElementTypeOther type="XCUIElementTypeOther" x="20" y="396" width="390" height="53">
+                                    <XCUIElementTypeOther type="XCUIElementTypeOther" x="20" y="396" width="390" height="53">
+                                      <XCUIElementTypeOther type="XCUIElementTypeOther" x="20" y="396" width="390" height="53">
+                                        <XCUIElementTypeButton type="XCUIElementTypeButton" name="com.apple.settings.notifications" label="通知" x="20" y="396" width="390" height="53">
+                                          <XCUIElementTypeImage type="XCUIElementTypeImage" x="38" y="408" width="28" height="29"/>
+                                          <XCUIElementTypeStaticText type="XCUIElementTypeStaticText" value="通知" name="通知" label="通知" x="38" y="409" width="76" height="28"/>
+                                          <XCUIElementTypeImage type="XCUIElementTypeImage" name="chevron.forward" x="380" y="416" width="8" height="13"/>
+                                        </XCUIElementTypeButton>
+                                      </XCUIElementTypeOther>
+                                    </XCUIElementTypeOther>
+                                  </XCUIElementTypeOther>
+                                </XCUIElementTypeCell>
+                                <XCUIElementTypeCell type="XCUIElementTypeCell" x="20" y="448" width="390" height="54">
+                                  <XCUIElementTypeOther type="XCUIElementTypeOther" x="20" y="448" width="390" height="54">
+                                    <XCUIElementTypeOther type="XCUIElementTypeOther" x="20" y="448" width="390" height="54"/>
+                                  </XCUIElementTypeOther>
+                                  <XCUIElementTypeOther type="XCUIElementTypeOther" x="20" y="448" width="390" height="54">
+                                    <XCUIElementTypeOther type="XCUIElementTypeOther" x="20" y="448" width="390" height="54">
+                                      <XCUIElementTypeOther type="XCUIElementTypeOther" x="20" y="448" width="390" height="54">
+                                        <XCUIElementTypeButton type="XCUIElementTypeButton" name="com.apple.settings.sounds" label="声效与触感反馈" x="20" y="448" width="390" height="54">
+                                          <XCUIElementTypeImage type="XCUIElementTypeImage" x="38" y="461" width="28" height="29"/>
+                                          <XCUIElementTypeStaticText type="XCUIElementTypeStaticText" value="声效与触感反馈" name="声效与触感反馈" label="声效与触感反馈" x="38" y="461" width="160" height="29"/>
+                                          <XCUIElementTypeImage type="XCUIElementTypeImage" name="chevron.forward" x="380" y="469" width="8" height="13"/>
+                                        </XCUIElementTypeButton>
+                                      </XCUIElementTypeOther>
+                                    </XCUIElementTypeOther>
+                                  </XCUIElementTypeOther>
+                                </XCUIElementTypeCell>
+                                <XCUIElementTypeOther type="XCUIElementTypeOther" x="80" y="447" width="310" height="2"/>
+                                <XCUIElementTypeCell type="XCUIElementTypeCell" x="20" y="501" width="390" height="53">
+                                  <XCUIElementTypeOther type="XCUIElementTypeOther" x="20" y="501" width="390" height="53">
+                                    <XCUIElementTypeOther type="XCUIElementTypeOther" x="20" y="501" width="390" height="53"/>
+                                  </XCUIElementTypeOther>
+                                  <XCUIElementTypeOther type="XCUIElementTypeOther" x="20" y="501" width="390" height="53">
+                                    <XCUIElementTypeOther type="XCUIElementTypeOther" x="20" y="501" width="390" height="53">
+                                      <XCUIElementTypeOther type="XCUIElementTypeOther" x="20" y="501" width="390" height="53">
+                                        <XCUIElementTypeButton type="XCUIElementTypeButton" name="com.apple.settings.focus" label="专注模式" x="20" y="501" width="390" height="53">
+                                          <XCUIElementTypeImage type="XCUIElementTypeImage" x="38" y="513" width="28" height="29"/>
+                                          <XCUIElementTypeStaticText type="XCUIElementTypeStaticText" value="专注模式" name="专注模式" label="专注模式" x="38" y="513" width="110" height="29"/>
+                                          <XCUIElementTypeImage type="XCUIElementTypeImage" name="chevron.forward" x="380" y="521" width="8" height="13"/>
+                                        </XCUIElementTypeButton>
+                                      </XCUIElementTypeOther>
+                                    </XCUIElementTypeOther>
+                                  </XCUIElementTypeOther>
+                                </XCUIElementTypeCell>
+                                <XCUIElementTypeOther type="XCUIElementTypeOther" x="80" y="500" width="310" height="2"/>
+                                <XCUIElementTypeCell type="XCUIElementTypeCell" x="20" y="553" width="390" height="53">
+                                  <XCUIElementTypeOther type="XCUIElementTypeOther" x="20" y="553" width="390" height="53">
+                                    <XCUIElementTypeOther type="XCUIElementTypeOther" x="20" y="553" width="390" height="53"/>
+                                  </XCUIElementTypeOther>
+                                  <XCUIElementTypeOther type="XCUIElementTypeOther" x="20" y="553" width="390" height="53">
+                                    <XCUIElementTypeOther type="XCUIElementTypeOther" x="20" y="553" width="390" height="53">
+                                      <XCUIElementTypeOther type="XCUIElementTypeOther" x="20" y="553" width="390" height="53">
+                                        <XCUIElementTypeButton type="XCUIElementTypeButton" name="com.apple.settings.screenTime" label="屏幕时间" x="20" y="553" width="390" height="53">
+                                          <XCUIElementTypeImage type="XCUIElementTypeImage" x="38" y="566" width="28" height="28"/>
+                                          <XCUIElementTypeStaticText type="XCUIElementTypeStaticText" value="屏幕时间" name="屏幕时间" label="屏幕时间" x="38" y="566" width="110" height="28"/>
+                                          <XCUIElementTypeImage type="XCUIElementTypeImage" name="chevron.forward" x="380" y="574" width="8" height="12"/>
+                                        </XCUIElementTypeButton>
+                                      </XCUIElementTypeOther>
+                                    </XCUIElementTypeOther>
+                                  </XCUIElementTypeOther>
+                                </XCUIElementTypeCell>
+                                <XCUIElementTypeOther type="XCUIElementTypeOther" x="80" y="552" width="310" height="2"/>
+                                <XCUIElementTypeOther type="XCUIElementTypeOther" x="-20" y="623" width="470" height="193"/>
+                                <XCUIElementTypeCell type="XCUIElementTypeCell" x="20" y="640" width="390" height="54">
+                                  <XCUIElementTypeOther type="XCUIElementTypeOther" x="20" y="640" width="390" height="54">
+                                    <XCUIElementTypeOther type="XCUIElementTypeOther" x="20" y="640" width="390" height="54"/>
+                                  </XCUIElementTypeOther>
+                                  <XCUIElementTypeOther type="XCUIElementTypeOther" x="20" y="640" width="390" height="54">
+                                    <XCUIElementTypeOther type="XCUIElementTypeOther" x="20" y="640" width="390" height="54">
+                                      <XCUIElementTypeOther type="XCUIElementTypeOther" x="20" y="640" width="390" height="54">
+                                        <XCUIElementTypeButton type="XCUIElementTypeButton" name="com.apple.settings.passcodeAndBiometrics" label="面容ID与密码" x="20" y="640" width="390" height="54">
+                                          <XCUIElementTypeStaticText type="XCUIElementTypeStaticText" value="面容ID与密码" name="面容ID与密码" label="面容ID与密码" x="38" y="653" width="147" height="29"/>
+                                          <XCUIElementTypeImage type="XCUIElementTypeImage" x="38" y="653" width="28" height="29"/>
+                                          <XCUIElementTypeImage type="XCUIElementTypeImage" name="chevron.forward" x="380" y="661" width="8" height="13"/>
+                                        </XCUIElementTypeButton>
+                                      </XCUIElementTypeOther>
+                                    </XCUIElementTypeOther>
+                                  </XCUIElementTypeOther>
+                                </XCUIElementTypeCell>
+                                <XCUIElementTypeCell type="XCUIElementTypeCell" x="20" y="693" width="390" height="53">
+                                  <XCUIElementTypeOther type="XCUIElementTypeOther" x="20" y="693" width="390" height="53">
+                                    <XCUIElementTypeOther type="XCUIElementTypeOther" x="20" y="693" width="390" height="53"/>
+                                  </XCUIElementTypeOther>
+                                  <XCUIElementTypeOther type="XCUIElementTypeOther" x="20" y="693" width="390" height="53">
+                                    <XCUIElementTypeOther type="XCUIElementTypeOther" x="20" y="693" width="390" height="53">
+                                      <XCUIElementTypeOther type="XCUIElementTypeOther" x="20" y="693" width="390" height="53">
+                                        <XCUIElementTypeButton type="XCUIElementTypeButton" name="com.apple.settings.sos" label="SOS紧急联络" x="20" y="693" width="390" height="53">
+                                          <XCUIElementTypeImage type="XCUIElementTypeImage" x="38" y="705" width="28" height="29"/>
+                                          <XCUIElementTypeStaticText type="XCUIElementTypeStaticText" value="SOS紧急联络" name="SOS紧急联络" label="SOS紧急联络" x="38" y="705" width="146" height="29"/>
+                                          <XCUIElementTypeImage type="XCUIElementTypeImage" name="chevron.forward" x="380" y="713" width="8" height="13"/>
+                                        </XCUIElementTypeButton>
+                                      </XCUIElementTypeOther>
+                                    </XCUIElementTypeOther>
+                                  </XCUIElementTypeOther>
+                                </XCUIElementTypeCell>
+                                <XCUIElementTypeOther type="XCUIElementTypeOther" x="80" y="692" width="310" height="2"/>
+                                <XCUIElementTypeCell type="XCUIElementTypeCell" x="20" y="745" width="390" height="53">
+                                  <XCUIElementTypeOther type="XCUIElementTypeOther" x="20" y="745" width="390" height="53">
+                                    <XCUIElementTypeOther type="XCUIElementTypeOther" x="20" y="745" width="390" height="53"/>
+                                  </XCUIElementTypeOther>
+                                  <XCUIElementTypeOther type="XCUIElementTypeOther" x="20" y="745" width="390" height="53">
+                                    <XCUIElementTypeOther type="XCUIElementTypeOther" x="20" y="745" width="390" height="53">
+                                      <XCUIElementTypeOther type="XCUIElementTypeOther" x="20" y="745" width="390" height="53">
+                                        <XCUIElementTypeButton type="XCUIElementTypeButton" name="com.apple.settings.privacyAndSecurity" label="隐私与安全" x="20" y="745" width="390" height="53">
+                                          <XCUIElementTypeImage type="XCUIElementTypeImage" x="38" y="758" width="28" height="28"/>
+                                          <XCUIElementTypeStaticText type="XCUIElementTypeStaticText" value="隐私与安全" name="隐私与安全" label="隐私与安全" x="38" y="758" width="127" height="28"/>
+                                          <XCUIElementTypeImage type="XCUIElementTypeImage" name="chevron.forward" x="380" y="766" width="8" height="12"/>
+                                        </XCUIElementTypeButton>
+                                      </XCUIElementTypeOther>
+                                    </XCUIElementTypeOther>
+                                  </XCUIElementTypeOther>
+                                </XCUIElementTypeCell>
+                                <XCUIElementTypeOther type="XCUIElementTypeOther" x="80" y="744" width="310" height="2"/>
+                                <XCUIElementTypeOther type="XCUIElementTypeOther" x="-20" y="815" width="470" height="193"/>
+                                <XCUIElementTypeCell type="XCUIElementTypeCell" x="20" y="832" width="390" height="54">
+                                  <XCUIElementTypeOther type="XCUIElementTypeOther" x="20" y="832" width="390" height="54">
+                                    <XCUIElementTypeOther type="XCUIElementTypeOther" x="20" y="832" width="390" height="54"/>
+                                  </XCUIElementTypeOther>
+                                  <XCUIElementTypeOther type="XCUIElementTypeOther" x="20" y="832" width="390" height="54">
+                                    <XCUIElementTypeOther type="XCUIElementTypeOther" x="20" y="832" width="390" height="54">
+                                      <XCUIElementTypeOther type="XCUIElementTypeOther" x="20" y="832" width="390" height="54">
+                                        <XCUIElementTypeButton type="XCUIElementTypeButton" name="com.apple.settings.walletAndApplePay" label="钱包与Apple Pay" x="20" y="832" width="390" height="54">
+                                          <XCUIElementTypeStaticText type="XCUIElementTypeStaticText" value="钱包与Apple Pay" name="钱包与Apple Pay" label="钱包与Apple Pay" x="38" y="845" width="171" height="29"/>
+                                          <XCUIElementTypeImage type="XCUIElementTypeImage" x="38" y="845" width="28" height="29"/>
+                                          <XCUIElementTypeImage type="XCUIElementTypeImage" name="chevron.forward" x="380" y="853" width="8" height="13"/>
+                                        </XCUIElementTypeButton>
+                                      </XCUIElementTypeOther>
+                                    </XCUIElementTypeOther>
+                                  </XCUIElementTypeOther>
+                                </XCUIElementTypeCell>
+                                <XCUIElementTypeCell type="XCUIElementTypeCell" x="20" y="885" width="390" height="53">
+                                  <XCUIElementTypeOther type="XCUIElementTypeOther" x="20" y="885" width="390" height="53">
+                                    <XCUIElementTypeOther type="XCUIElementTypeOther" x="20" y="885" width="390" height="53"/>
+                                  </XCUIElementTypeOther>
+                                  <XCUIElementTypeOther type="XCUIElementTypeOther" x="20" y="885" width="390" height="53">
+                                    <XCUIElementTypeOther type="XCUIElementTypeOther" x="20" y="885" width="390" height="53">
+                                      <XCUIElementTypeOther type="XCUIElementTypeOther" x="20" y="885" width="390" height="53">
+                                        <XCUIElementTypeButton type="XCUIElementTypeButton" name="com.apple.settings.gameCenter" label="Game Center" x="20" y="885" width="390" height="53">
+                                          <XCUIElementTypeImage type="XCUIElementTypeImage" x="38" y="897" width="28" height="29"/>
+                                          <XCUIElementTypeStaticText type="XCUIElementTypeStaticText" value="Game Center" name="Game Center" label="Game Center" x="38" y="897" width="143" height="29"/>
+                                          <XCUIElementTypeImage type="XCUIElementTypeImage" name="chevron.forward" x="380" y="905" width="8" height="13"/>
+                                        </XCUIElementTypeButton>
+                                      </XCUIElementTypeOther>
+                                    </XCUIElementTypeOther>
+                                  </XCUIElementTypeOther>
+                                </XCUIElementTypeCell>
+                                <XCUIElementTypeOther type="XCUIElementTypeOther" x="80" y="884" width="310" height="2"/>
+                                <XCUIElementTypeOther type="XCUIElementTypeOther" value="73%" name="垂直滚动条, 3页" label="垂直滚动条, 3页" x="397" y="113" width="30" height="765">
+                                  <XCUIElementTypeOther type="XCUIElementTypeOther" x="424" y="431" width="3" height="325"/>
+                                </XCUIElementTypeOther>
+                                <XCUIElementTypeOther type="XCUIElementTypeOther" value="73%" name="垂直滚动条, 3页" label="垂直滚动条, 3页" x="397" y="113" width="30" height="765">
+                                  <XCUIElementTypeOther type="XCUIElementTypeOther" x="424" y="431" width="3" height="325"/>
+                                </XCUIElementTypeOther>
+                              </XCUIElementTypeCollectionView>
+                              <XCUIElementTypeOther type="XCUIElementTypeOther" x="215" y="479" width="0" height="1"/>
+                            </XCUIElementTypeOther>
+                          </XCUIElementTypeOther>
+                        </XCUIElementTypeOther>
+                      </XCUIElementTypeOther>
+                      <XCUIElementTypeToolbar type="XCUIElementTypeToolbar" name="Toolbar" label="工具栏" x="0" y="0" width="430" height="932">
+                        <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="430" height="932">
+                          <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="59" width="430" height="873">
+                            <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="59" width="430" height="873">
+                              <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="59" width="0" height="0">
+                                <XCUIElementTypeOther type="XCUIElementTypeOther" x="28" y="856" width="374" height="48">
+                                  <XCUIElementTypeOther type="XCUIElementTypeOther" x="28" y="856" width="374" height="48">
+                                    <XCUIElementTypeOther type="XCUIElementTypeOther" x="28" y="866" width="374" height="28">
+                                      <XCUIElementTypeSearchField type="XCUIElementTypeSearchField" value="搜索" name="搜索" label="搜索" x="28" y="866" width="374" height="28">
+                                        <XCUIElementTypeButton type="XCUIElementTypeButton" name="Dictate" label="听写" x="369" y="869" width="18" height="22"/>
+                                        <XCUIElementTypeImage type="XCUIElementTypeImage" name="magnifyingglass" label="搜索" x="40" y="870" width="21" height="20"/>
+                                        <XCUIElementTypeButton type="XCUIElementTypeButton" name="Dictate" label="听写" x="369" y="869" width="18" height="22"/>
+                                      </XCUIElementTypeSearchField>
+                                    </XCUIElementTypeOther>
+                                  </XCUIElementTypeOther>
+                                </XCUIElementTypeOther>
+                              </XCUIElementTypeOther>
+                            </XCUIElementTypeOther>
+                          </XCUIElementTypeOther>
+                        </XCUIElementTypeOther>
+                      </XCUIElementTypeToolbar>
+                    </XCUIElementTypeOther>
+                  </XCUIElementTypeOther>
+                  <XCUIElementTypeToolbar type="XCUIElementTypeToolbar" name="Toolbar" label="工具栏" x="0" y="0" width="430" height="932">
+                    <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="430" height="932"/>
+                  </XCUIElementTypeToolbar>
+                </XCUIElementTypeOther>
+              </XCUIElementTypeOther>
+              <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="430" height="932">
+                <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="430" height="932"/>
+              </XCUIElementTypeOther>
+            </XCUIElementTypeOther>
+          </XCUIElementTypeOther>
+        </XCUIElementTypeOther>
+      </XCUIElementTypeOther>
+    </XCUIElementTypeOther>
+  </XCUIElementTypeWindow>
+</XCUIElementTypeApplication>
+

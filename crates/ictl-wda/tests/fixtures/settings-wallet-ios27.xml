@@ -1,0 +1,205 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<XCUIElementTypeApplication type="XCUIElementTypeApplication" name="设置" label="设置" x="0" y="0" width="430" height="932" processId="1322" bundleId="com.apple.Preferences">
+  <XCUIElementTypeWindow type="XCUIElementTypeWindow" x="0" y="0" width="430" height="932">
+    <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="430" height="932">
+      <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="430" height="932">
+        <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="430" height="932">
+          <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="430" height="932">
+            <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="430" height="932">
+              <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="430" height="932">
+                <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="430" height="932">
+                  <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="430" height="932">
+                    <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="430" height="932">
+                      <XCUIElementTypeNavigationBar type="XCUIElementTypeNavigationBar" name="钱包与Apple Pay" x="0" y="59" width="430" height="54">
+                        <XCUIElementTypeButton type="XCUIElementTypeButton" name="BackButton" label="设置" x="20" y="59" width="44" height="44"/>
+                        <XCUIElementTypeStaticText type="XCUIElementTypeStaticText" value="钱包与Apple Pay" name="钱包与Apple Pay" label="钱包与Apple Pay" x="149" y="70" width="132" height="22"/>
+                      </XCUIElementTypeNavigationBar>
+                      <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="430" height="932">
+                        <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="430" height="932">
+                          <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="430" height="932">
+                            <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="430" height="932">
+                              <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="113" width="430" height="785">
+                                <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="430" height="932">
+                                  <XCUIElementTypeTable type="XCUIElementTypeTable" x="0" y="0" width="430" height="932">
+                                    <XCUIElementTypeOther type="XCUIElementTypeOther" name="允许钱包与Apple Pay访问" x="0" y="113" width="430" height="56">
+                                      <XCUIElementTypeOther type="XCUIElementTypeOther" name="允许钱包与Apple Pay访问" label="允许钱包与Apple Pay访问" x="20" y="-10" width="390" height="56"/>
+                                    </XCUIElementTypeOther>
+                                    <XCUIElementTypeCell type="XCUIElementTypeCell" name="SIRI" label="Apple智能与Siri" x="20" y="45" width="390" height="54">
+                                      <XCUIElementTypeOther type="XCUIElementTypeOther" x="20" y="45" width="360" height="54">
+                                        <XCUIElementTypeOther type="XCUIElementTypeOther" x="20" y="45" width="360" height="54">
+                                          <XCUIElementTypeButton type="XCUIElementTypeButton" name="SIRI" label="Apple智能与Siri" x="38" y="58" width="165" height="28">
+                                            <XCUIElementTypeImage type="XCUIElementTypeImage" x="38" y="57" width="28" height="29"/>
+                                            <XCUIElementTypeStaticText type="XCUIElementTypeStaticText" value="Apple智能与Siri" name="Apple智能与Siri" label="Apple智能与Siri" x="38" y="58" width="165" height="28"/>
+                                          </XCUIElementTypeButton>
+                                        </XCUIElementTypeOther>
+                                      </XCUIElementTypeOther>
+                                      <XCUIElementTypeOther type="XCUIElementTypeOther" x="20" y="45" width="390" height="54">
+                                        <XCUIElementTypeOther type="XCUIElementTypeOther" x="20" y="45" width="390" height="54"/>
+                                      </XCUIElementTypeOther>
+                                      <XCUIElementTypeOther type="XCUIElementTypeOther" x="80" y="97" width="310" height="2"/>
+                                      <XCUIElementTypeButton type="XCUIElementTypeButton" name="chevron" label="chevron" x="379" y="64" width="11" height="15"/>
+                                    </XCUIElementTypeCell>
+                                    <XCUIElementTypeCell type="XCUIElementTypeCell" name="SEARCH" label="搜索" x="20" y="98" width="390" height="54">
+                                      <XCUIElementTypeOther type="XCUIElementTypeOther" x="20" y="98" width="360" height="54">
+                                        <XCUIElementTypeOther type="XCUIElementTypeOther" x="20" y="98" width="360" height="54">
+                                          <XCUIElementTypeButton type="XCUIElementTypeButton" name="SEARCH" label="搜索" x="38" y="111" width="76" height="29">
+                                            <XCUIElementTypeStaticText type="XCUIElementTypeStaticText" value="搜索" name="搜索" label="搜索" x="38" y="111" width="76" height="29"/>
+                                            <XCUIElementTypeImage type="XCUIElementTypeImage" x="38" y="111" width="28" height="29"/>
+                                          </XCUIElementTypeButton>
+                                        </XCUIElementTypeOther>
+                                      </XCUIElementTypeOther>
+                                      <XCUIElementTypeOther type="XCUIElementTypeOther" x="20" y="98" width="390" height="54">
+                                        <XCUIElementTypeOther type="XCUIElementTypeOther" x="20" y="98" width="390" height="54"/>
+                                      </XCUIElementTypeOther>
+                                      <XCUIElementTypeOther type="XCUIElementTypeOther" x="80" y="150" width="310" height="2"/>
+                                      <XCUIElementTypeButton type="XCUIElementTypeButton" name="chevron" label="chevron" x="379" y="118" width="11" height="15"/>
+                                    </XCUIElementTypeCell>
+                                    <XCUIElementTypeCell type="XCUIElementTypeCell" name="NOTIFICATIONS" x="20" y="151" width="390" height="75">
+                                      <XCUIElementTypeOther type="XCUIElementTypeOther" x="20" y="151" width="360" height="75">
+                                        <XCUIElementTypeOther type="XCUIElementTypeOther" x="20" y="151" width="360" height="75">
+                                          <XCUIElementTypeButton type="XCUIElementTypeButton" name="NOTIFICATIONS" label="通知、隐式推送" x="38" y="167" width="102" height="43">
+                                            <XCUIElementTypeImage type="XCUIElementTypeImage" x="38" y="174" width="28" height="29"/>
+                                            <XCUIElementTypeStaticText type="XCUIElementTypeStaticText" value="通知" name="通知" label="通知" x="80" y="167" width="34" height="21"/>
+                                            <XCUIElementTypeStaticText type="XCUIElementTypeStaticText" value="隐式推送" name="隐式推送" label="隐式推送" x="80" y="191" width="60" height="19"/>
+                                          </XCUIElementTypeButton>
+                                        </XCUIElementTypeOther>
+                                      </XCUIElementTypeOther>
+                                      <XCUIElementTypeOther type="XCUIElementTypeOther" x="20" y="151" width="390" height="75">
+                                        <XCUIElementTypeOther type="XCUIElementTypeOther" x="20" y="151" width="390" height="75"/>
+                                      </XCUIElementTypeOther>
+                                      <XCUIElementTypeOther type="XCUIElementTypeOther" x="80" y="224" width="310" height="2"/>
+                                      <XCUIElementTypeButton type="XCUIElementTypeButton" name="chevron" label="chevron" x="379" y="181" width="11" height="15"/>
+                                    </XCUIElementTypeCell>
+                                    <XCUIElementTypeCell type="XCUIElementTypeCell" name="实时活动" x="20" y="225" width="390" height="54">
+                                      <XCUIElementTypeOther type="XCUIElementTypeOther" x="20" y="225" width="390" height="54">
+                                        <XCUIElementTypeOther type="XCUIElementTypeOther" x="20" y="225" width="390" height="54">
+                                          <XCUIElementTypeSwitch type="XCUIElementTypeSwitch" value="1" name="实时活动" label="实时活动" x="38" y="238" width="352" height="28">
+                                            <XCUIElementTypeButton type="XCUIElementTypeButton" name="实时活动" x="38" y="237" width="28" height="29"/>
+                                            <XCUIElementTypeButton type="XCUIElementTypeButton" name="实时活动" label="实时活动" x="80" y="241" width="68" height="22"/>
+                                            <XCUIElementTypeSwitch type="XCUIElementTypeSwitch" value="1" x="329" y="237" width="63" height="29"/>
+                                          </XCUIElementTypeSwitch>
+                                        </XCUIElementTypeOther>
+                                      </XCUIElementTypeOther>
+                                    </XCUIElementTypeCell>
+                                    <XCUIElementTypeCell type="XCUIElementTypeCell" name="com.apple.Passbook.wireless" x="20" y="278" width="390" height="54">
+                                      <XCUIElementTypeOther type="XCUIElementTypeOther" x="20" y="278" width="390" height="54">
+                                        <XCUIElementTypeOther type="XCUIElementTypeOther" x="20" y="278" width="390" height="54">
+                                          <XCUIElementTypeSwitch type="XCUIElementTypeSwitch" value="1" name="com.apple.Passbook.wireless" label="蜂窝数据" x="38" y="291" width="352" height="29">
+                                            <XCUIElementTypeButton type="XCUIElementTypeButton" name="com.apple.Passbook.wireless" x="38" y="291" width="28" height="29"/>
+                                            <XCUIElementTypeButton type="XCUIElementTypeButton" name="com.apple.Passbook.wireless" label="蜂窝数据" x="80" y="295" width="68" height="21"/>
+                                            <XCUIElementTypeSwitch type="XCUIElementTypeSwitch" value="1" x="329" y="291" width="63" height="29"/>
+                                          </XCUIElementTypeSwitch>
+                                        </XCUIElementTypeOther>
+                                      </XCUIElementTypeOther>
+                                    </XCUIElementTypeCell>
+                                    <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="331" width="430" height="19"/>
+                                    <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="349" width="430" height="18"/>
+                                    <XCUIElementTypeCell type="XCUIElementTypeCell" name="Apple Pay默认设置" x="20" y="366" width="390" height="75">
+                                      <XCUIElementTypeOther type="XCUIElementTypeOther" x="20" y="366" width="360" height="75">
+                                        <XCUIElementTypeOther type="XCUIElementTypeOther" x="20" y="366" width="360" height="75">
+                                          <XCUIElementTypeButton type="XCUIElementTypeButton" name="Apple Pay默认设置" label="Apple Pay默认设置、卡片、地址、偏好设置" x="38" y="382" width="192" height="43">
+                                            <XCUIElementTypeImage type="XCUIElementTypeImage" x="38" y="389" width="28" height="29"/>
+                                            <XCUIElementTypeStaticText type="XCUIElementTypeStaticText" value="Apple Pay默认设置" name="Apple Pay默认设置" label="Apple Pay默认设置" x="80" y="382" width="146" height="21"/>
+                                            <XCUIElementTypeStaticText type="XCUIElementTypeStaticText" value="卡片、地址、偏好设置" name="卡片、地址、偏好设置" label="卡片、地址、偏好设置" x="80" y="406" width="150" height="19"/>
+                                          </XCUIElementTypeButton>
+                                        </XCUIElementTypeOther>
+                                      </XCUIElementTypeOther>
+                                      <XCUIElementTypeOther type="XCUIElementTypeOther" x="20" y="366" width="390" height="75">
+                                        <XCUIElementTypeOther type="XCUIElementTypeOther" x="20" y="366" width="390" height="75"/>
+                                      </XCUIElementTypeOther>
+                                      <XCUIElementTypeOther type="XCUIElementTypeOther" x="20" y="439" width="390" height="2"/>
+                                      <XCUIElementTypeButton type="XCUIElementTypeButton" name="chevron" label="chevron" x="379" y="396" width="11" height="15"/>
+                                    </XCUIElementTypeCell>
+                                    <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="440" width="430" height="18"/>
+                                    <XCUIElementTypeOther type="XCUIElementTypeOther" name="付款卡" x="0" y="457" width="430" height="39">
+                                      <XCUIElementTypeOther type="XCUIElementTypeOther" name="付款卡" label="付款卡" x="20" y="457" width="390" height="39"/>
+                                    </XCUIElementTypeOther>
+                                    <XCUIElementTypeCell type="XCUIElementTypeCell" name="添加卡片" label="添加卡片" x="20" y="495" width="390" height="54">
+                                      <XCUIElementTypeOther type="XCUIElementTypeOther" x="20" y="547" width="390" height="2"/>
+                                      <XCUIElementTypeStaticText type="XCUIElementTypeStaticText" value="添加卡片" name="添加卡片" label="添加卡片" x="40" y="512" width="68" height="21"/>
+                                    </XCUIElementTypeCell>
+                                    <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="548" width="430" height="66">
+                                      <XCUIElementTypeTextView type="XCUIElementTypeTextView" value="通过iPhone在线上、App中和任何支持免接触式支付的地方使用Apple Pay付款。无需解锁设备或者通过面容ID或密码认证，即可在交通读卡器上快速付款。 了解数据的管理方式…" x="40" y="556" width="350" height="49">
+                                        <XCUIElementTypeTextView type="XCUIElementTypeTextView" name="通过iPhone在线上、App中和任何支持免接触式支付的地方使用Apple Pay付款。无需解锁设备或者通过面容ID或密码认证，即可在交通读卡器上快速付款。 了解数据的管理方式…" label="通过iPhone在线上、App中和任何支持免接触式支付的地方使用Apple Pay付款。无需解锁设备或者通过面容ID或密码认证，即可在交通读卡器上快速付款。 了解数据的管理方式…" x="40" y="556" width="350" height="49">
+                                          <XCUIElementTypeLink type="XCUIElementTypeLink" name="了解数据的管理方式…" label="了解数据的管理方式…" x="263" y="588" width="127" height="17"/>
+                                        </XCUIElementTypeTextView>
+                                        <XCUIElementTypeOther type="XCUIElementTypeOther" value="0%" name="水平滚动条, 1页" label="水平滚动条, 1页" x="40" y="577" width="350" height="25">
+                                          <XCUIElementTypeOther type="XCUIElementTypeOther" x="1" y="598" width="36" height="4"/>
+                                        </XCUIElementTypeOther>
+                                      </XCUIElementTypeTextView>
+                                    </XCUIElementTypeOther>
+                                    <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="612" width="430" height="19"/>
+                                    <XCUIElementTypeCell type="XCUIElementTypeCell" name="自动填充卡片" label="自动填充卡片、2" x="20" y="630" width="390" height="54">
+                                      <XCUIElementTypeOther type="XCUIElementTypeOther" x="20" y="630" width="360" height="54">
+                                        <XCUIElementTypeOther type="XCUIElementTypeOther" x="20" y="630" width="360" height="54">
+                                          <XCUIElementTypeButton type="XCUIElementTypeButton" name="自动填充卡片" label="自动填充卡片、2" x="40" y="647" width="332" height="21">
+                                            <XCUIElementTypeStaticText type="XCUIElementTypeStaticText" value="自动填充卡片" name="自动填充卡片" label="自动填充卡片" x="40" y="647" width="102" height="21"/>
+                                            <XCUIElementTypeStaticText type="XCUIElementTypeStaticText" value="2" name="2" label="2" x="361" y="647" width="11" height="21"/>
+                                          </XCUIElementTypeButton>
+                                        </XCUIElementTypeOther>
+                                      </XCUIElementTypeOther>
+                                      <XCUIElementTypeOther type="XCUIElementTypeOther" x="20" y="630" width="390" height="54">
+                                        <XCUIElementTypeOther type="XCUIElementTypeOther" x="20" y="630" width="390" height="54"/>
+                                      </XCUIElementTypeOther>
+                                      <XCUIElementTypeOther type="XCUIElementTypeOther" x="20" y="682" width="390" height="2"/>
+                                      <XCUIElementTypeButton type="XCUIElementTypeButton" name="chevron" label="chevron" x="379" y="650" width="11" height="15"/>
+                                    </XCUIElementTypeCell>
+                                    <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="683" width="430" height="19"/>
+                                    <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="701" width="430" height="18"/>
+                                    <XCUIElementTypeCell type="XCUIElementTypeCell" name="隐藏已过期的凭证" x="20" y="718" width="390" height="55">
+                                      <XCUIElementTypeOther type="XCUIElementTypeOther" x="20" y="718" width="390" height="55">
+                                        <XCUIElementTypeOther type="XCUIElementTypeOther" x="20" y="718" width="390" height="55">
+                                          <XCUIElementTypeSwitch type="XCUIElementTypeSwitch" value="1" name="隐藏已过期的凭证" label="隐藏已过期的凭证" x="40" y="731" width="350" height="29">
+                                            <XCUIElementTypeButton type="XCUIElementTypeButton" name="隐藏已过期的凭证" label="隐藏已过期的凭证" x="40" y="735" width="135" height="21"/>
+                                            <XCUIElementTypeSwitch type="XCUIElementTypeSwitch" value="1" x="329" y="731" width="63" height="29"/>
+                                          </XCUIElementTypeSwitch>
+                                        </XCUIElementTypeOther>
+                                      </XCUIElementTypeOther>
+                                    </XCUIElementTypeCell>
+                                    <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="772" width="430" height="18"/>
+                                    <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="789" width="430" height="19"/>
+                                    <XCUIElementTypeCell type="XCUIElementTypeCell" name="PKOrderManagementDisabled" x="20" y="807" width="390" height="54">
+                                      <XCUIElementTypeOther type="XCUIElementTypeOther" x="20" y="807" width="390" height="54">
+                                        <XCUIElementTypeOther type="XCUIElementTypeOther" x="20" y="807" width="390" height="54">
+                                          <XCUIElementTypeSwitch type="XCUIElementTypeSwitch" value="1" name="PKOrderManagementDisabled" label="订单追踪" x="40" y="820" width="350" height="28">
+                                            <XCUIElementTypeButton type="XCUIElementTypeButton" name="PKOrderManagementDisabled" label="订单追踪" x="40" y="823" width="68" height="22"/>
+                                            <XCUIElementTypeSwitch type="XCUIElementTypeSwitch" value="1" x="329" y="819" width="63" height="29"/>
+                                          </XCUIElementTypeSwitch>
+                                        </XCUIElementTypeOther>
+                                      </XCUIElementTypeOther>
+                                    </XCUIElementTypeCell>
+                                    <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="860" width="430" height="18"/>
+                                    <XCUIElementTypeOther type="XCUIElementTypeOther" value="100%" name="垂直滚动条, 2页" label="垂直滚动条, 2页" x="397" y="113" width="30" height="764">
+                                      <XCUIElementTypeOther type="XCUIElementTypeOther" x="424" y="204" width="3" height="670"/>
+                                    </XCUIElementTypeOther>
+                                    <XCUIElementTypeOther type="XCUIElementTypeOther" value="0%" name="水平滚动条, 1页" label="水平滚动条, 1页" x="55" y="899" width="320" height="30">
+                                      <XCUIElementTypeOther type="XCUIElementTypeOther" x="58" y="926" width="314" height="3"/>
+                                    </XCUIElementTypeOther>
+                                  </XCUIElementTypeTable>
+                                </XCUIElementTypeOther>
+                              </XCUIElementTypeOther>
+                            </XCUIElementTypeOther>
+                          </XCUIElementTypeOther>
+                        </XCUIElementTypeOther>
+                      </XCUIElementTypeOther>
+                      <XCUIElementTypeToolbar type="XCUIElementTypeToolbar" name="Toolbar" label="工具栏" x="0" y="0" width="430" height="932">
+                        <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="430" height="932"/>
+                      </XCUIElementTypeToolbar>
+                    </XCUIElementTypeOther>
+                  </XCUIElementTypeOther>
+                  <XCUIElementTypeToolbar type="XCUIElementTypeToolbar" name="Toolbar" label="工具栏" x="0" y="0" width="430" height="932">
+                    <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="430" height="932"/>
+                  </XCUIElementTypeToolbar>
+                </XCUIElementTypeOther>
+              </XCUIElementTypeOther>
+              <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="430" height="932">
+                <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="430" height="932"/>
+              </XCUIElementTypeOther>
+            </XCUIElementTypeOther>
+          </XCUIElementTypeOther>
+        </XCUIElementTypeOther>
+      </XCUIElementTypeOther>
+    </XCUIElementTypeOther>
+  </XCUIElementTypeWindow>
+</XCUIElementTypeApplication>
+

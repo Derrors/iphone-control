@@ -65,6 +65,53 @@ pub fn thumb_diff(a: &[u8], b: &[u8]) -> f64 {
     a.iter().zip(b).map(|(x, y)| f64::from(x.abs_diff(*y))).sum::<f64>() / a.len() as f64
 }
 
+/// 两帧之间的变化：整体平均差，和变化最大的一小块（8×8 像素，约 70×70 点）的平均差。
+/// 加载圈这种小东西在整体平均里几乎看不出来，在小块里很明显
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Motion {
+    pub mean: f64,
+    pub max_tile: f64,
+}
+
+const TILE: usize = 8;
+
+/// 画面大部分是同一种颜色（白底/灰底的加载页、空白页）。加载圈和游戏、地图上的小动画单看画面变化分不开
+/// （真机：小红书搜索加载圈和消消乐地图待机动画，变化最大的小块都在 4 左右），加载页几乎是空白的，游戏、地图满屏是图
+pub fn mostly_blank(thumb: &[u8]) -> bool {
+    if thumb.is_empty() {
+        return false;
+    }
+    let mut hist = [0usize; 256];
+    for &p in thumb {
+        hist[p as usize] += 1;
+    }
+    let mode = (0..256).max_by_key(|&v| hist[v]).unwrap_or(0);
+    let near: usize = hist[mode.saturating_sub(12)..=(mode + 12).min(255)].iter().sum();
+    near as f64 >= thumb.len() as f64 * 0.7
+}
+
+pub fn thumb_motion(a: &[u8], b: &[u8]) -> Motion {
+    let mean = thumb_diff(a, b);
+    if a.len() != b.len() || a.len() != (THUMB_W * THUMB_H) as usize {
+        return Motion { mean, max_tile: mean };
+    }
+    let (w, h) = (THUMB_W as usize, THUMB_H as usize);
+    let mut max_tile = 0f64;
+    for ty in (0..h).step_by(TILE) {
+        for tx in (0..w).step_by(TILE) {
+            let (mut sum, mut n) = (0u32, 0u32);
+            for y in ty..(ty + TILE).min(h) {
+                for x in tx..(tx + TILE).min(w) {
+                    sum += u32::from(a[y * w + x].abs_diff(b[y * w + x]));
+                    n += 1;
+                }
+            }
+            max_tile = max_tile.max(f64::from(sum) / f64::from(n));
+        }
+    }
+    Motion { mean, max_tile }
+}
+
 /// 整屏缩放到点尺寸：图像像素即点坐标。返回 (jpeg, 说明文字)
 pub fn full_screen(png: &[u8], screen: ScreenSize, via: &str) -> Result<(Vec<u8>, String), String> {
     let img = decode(png)?;
@@ -143,6 +190,31 @@ mod tests {
     use super::*;
 
     const SCREEN: ScreenSize = ScreenSize { width: 430.0, height: 932.0 };
+
+    /// 只有一小块在变（加载圈）：整体平均差低于静止阈值，最大的小块很明显
+    #[test]
+    fn small_spinner_shows_up_in_tiles_only() {
+        let len = (THUMB_W * THUMB_H) as usize;
+        let a = vec![200u8; len];
+        let mut b = a.clone();
+        for (x, y) in [(24, 50), (25, 50), (24, 51), (25, 52)] {
+            b[y * THUMB_W as usize + x] = 40;
+        }
+        let m = thumb_motion(&a, &b);
+        assert!(m.mean < 3.0, "{m:?}");
+        assert!(m.max_tile >= 4.0, "{m:?}");
+        assert_eq!(thumb_motion(&a, &a), Motion { mean: 0.0, max_tile: 0.0 });
+    }
+
+    #[test]
+    fn blank_page_vs_busy_picture() {
+        let len = (THUMB_W * THUMB_H) as usize;
+        let mut page = vec![245u8; len];
+        page[..len / 5].fill(30);
+        assert!(mostly_blank(&page));
+        let busy: Vec<u8> = (0..len).map(|i| (i * 37 % 251) as u8).collect();
+        assert!(!mostly_blank(&busy));
+    }
 
     fn png(w: u32, h: u32) -> Vec<u8> {
         let mut out = Cursor::new(Vec::new());

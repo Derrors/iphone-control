@@ -1,0 +1,610 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<XCUIElementTypeApplication type="XCUIElementTypeApplication" name=" " label=" " x="0" y="0" width="430" height="932" processId="37" bundleId="com.apple.springboard">
+  <XCUIElementTypeWindow type="XCUIElementTypeWindow" x="0" y="0" width="430" height="932">
+    <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="430" height="932">
+      <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="430" height="932">
+        <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="430" height="100"/>
+      </XCUIElementTypeOther>
+      <XCUIElementTypeOther type="XCUIElementTypeOther" name="Home screen icons" x="0" y="0" width="430" height="932">
+        <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="430" height="932">
+          <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="430" height="932">
+            <XCUIElementTypeOther type="XCUIElementTypeOther" x="860" y="0" width="430" height="932"/>
+            <XCUIElementTypeIcon type="XCUIElementTypeIcon" x="0" y="0" width="0" height="0">
+              <XCUIElementTypeIcon type="XCUIElementTypeIcon" value="小组件, 叠放" name="天气" label="天气" x="27" y="81" width="179" height="203">
+                <XCUIElementTypeOther type="XCUIElementTypeOther" x="29" y="83" width="175" height="190">
+                  <XCUIElementTypeOther type="XCUIElementTypeOther" x="29" y="83" width="175" height="176">
+                    <XCUIElementTypeOther type="XCUIElementTypeOther" x="29" y="83" width="175" height="176">
+                      <XCUIElementTypeOther type="XCUIElementTypeOther" name="widget-stack:&lt;天气,地图,备忘录&gt;" x="29" y="83" width="175" height="176">
+                        <XCUIElementTypeScrollView type="XCUIElementTypeScrollView" x="29" y="83" width="175" height="176">
+                          <XCUIElementTypeOther type="XCUIElementTypeOther" x="29" y="84" width="175" height="175">
+                            <XCUIElementTypeOther type="XCUIElementTypeOther" x="29" y="84" width="175" height="175">
+                              <XCUIElementTypeOther type="XCUIElementTypeOther" x="29" y="84" width="175" height="175">
+                                <XCUIElementTypeOther type="XCUIElementTypeOther" x="29" y="84" width="175" height="175">
+                                  <XCUIElementTypeOther type="XCUIElementTypeOther" x="29" y="84" width="175" height="175">
+                                    <XCUIElementTypeOther type="XCUIElementTypeOther" x="29" y="84" width="175" height="175">
+                                      <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="175" height="175">
+                                        <XCUIElementTypeOther type="XCUIElementTypeOther" name="天气" label="天气" x="0" y="0" width="175" height="175">
+                                          <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="175" height="175">
+                                            <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="175" height="175">
+                                              <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="175" height="175">
+                                                <XCUIElementTypeOther type="XCUIElementTypeOther" x="19" y="19" width="135" height="137">
+                                                  <XCUIElementTypeOther type="XCUIElementTypeOther" name="上海市，20°摄氏度，多云，明天气温降低，最高气温21°，最高气温26°摄氏度，最低气温17°摄氏度" label="上海市，20°摄氏度，多云，明天气温降低，最高气温21°，最高气温26°摄氏度，最低气温17°摄氏度" x="19" y="19" width="135" height="137">
+                                                    <XCUIElementTypeStaticText type="XCUIElementTypeStaticText" value="上海市" name="上海市" label="上海市" x="19" y="19" width="52" height="13"/>
+                                                    <XCUIElementTypeStaticText type="XCUIElementTypeStaticText" value="20°" name="20°" label="20°" x="19" y="30" width="69" height="54"/>
+                                                    <XCUIElementTypeImage type="XCUIElementTypeImage" name="温度计" label="温度计" x="19" y="96" width="14" height="23"/>
+                                                    <XCUIElementTypeStaticText type="XCUIElementTypeStaticText" value="明天气温降低，最高气温21°" name="明天气温降低，最高气温21°" label="明天气温降低，最高气温21°" x="19" y="123" width="135" height="33"/>
+                                                  </XCUIElementTypeOther>
+                                                </XCUIElementTypeOther>
+                                                <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="0" height="0"/>
+                                              </XCUIElementTypeOther>
+                                            </XCUIElementTypeOther>
+                                          </XCUIElementTypeOther>
+                                          <XCUIElementTypeOther type="XCUIElementTypeOther" name="天气" label="天气" x="0" y="0" width="175" height="175"/>
+                                        </XCUIElementTypeOther>
+                                      </XCUIElementTypeOther>
+                                    </XCUIElementTypeOther>
+                                  </XCUIElementTypeOther>
+                                </XCUIElementTypeOther>
+                                <XCUIElementTypeOther type="XCUIElementTypeOther" x="29" y="84" width="175" height="175">
+                                  <XCUIElementTypeOther type="XCUIElementTypeOther" x="29" y="84" width="175" height="175">
+                                    <XCUIElementTypeOther type="XCUIElementTypeOther" x="29" y="84" width="175" height="175"/>
+                                  </XCUIElementTypeOther>
+                                </XCUIElementTypeOther>
+                              </XCUIElementTypeOther>
+                            </XCUIElementTypeOther>
+                          </XCUIElementTypeOther>
+                          <XCUIElementTypeOther type="XCUIElementTypeOther" value="0%" name="水平滚动条, 1页" label="水平滚动条, 1页" x="29" y="225" width="175" height="31">
+                            <XCUIElementTypeOther type="XCUIElementTypeOther" x="32" y="252" width="166" height="4"/>
+                          </XCUIElementTypeOther>
+                          <XCUIElementTypeOther type="XCUIElementTypeOther" value="0%" name="水平滚动条, 1页" label="水平滚动条, 1页" x="29" y="225" width="175" height="31">
+                            <XCUIElementTypeOther type="XCUIElementTypeOther" x="32" y="252" width="166" height="4"/>
+                          </XCUIElementTypeOther>
+                        </XCUIElementTypeScrollView>
+                      </XCUIElementTypeOther>
+                    </XCUIElementTypeOther>
+                  </XCUIElementTypeOther>
+                  <XCUIElementTypeOther type="XCUIElementTypeOther" name="label-view" x="96" y="261" width="41" height="21">
+                    <XCUIElementTypeOther type="XCUIElementTypeOther" x="96" y="261" width="41" height="21">
+                      <XCUIElementTypeOther type="XCUIElementTypeOther" x="96" y="261" width="41" height="21">
+                        <XCUIElementTypeImage type="XCUIElementTypeImage" x="63" y="227" width="107" height="88"/>
+                        <XCUIElementTypeImage type="XCUIElementTypeImage" x="96" y="261" width="41" height="21"/>
+                      </XCUIElementTypeOther>
+                    </XCUIElementTypeOther>
+                  </XCUIElementTypeOther>
+                </XCUIElementTypeOther>
+              </XCUIElementTypeIcon>
+              <XCUIElementTypeIcon type="XCUIElementTypeIcon" value="小组件, 叠放" name="日历" label="日历" x="224" y="81" width="179" height="203">
+                <XCUIElementTypeOther type="XCUIElementTypeOther" x="226" y="83" width="175" height="190">
+                  <XCUIElementTypeOther type="XCUIElementTypeOther" x="226" y="83" width="175" height="176">
+                    <XCUIElementTypeOther type="XCUIElementTypeOther" x="226" y="83" width="175" height="176">
+                      <XCUIElementTypeOther type="XCUIElementTypeOther" name="widget-stack:&lt;日历,照片&gt;" x="226" y="83" width="175" height="176">
+                        <XCUIElementTypeScrollView type="XCUIElementTypeScrollView" x="226" y="83" width="175" height="176">
+                          <XCUIElementTypeOther type="XCUIElementTypeOther" x="226" y="84" width="175" height="175">
+                            <XCUIElementTypeOther type="XCUIElementTypeOther" x="226" y="84" width="175" height="175">
+                              <XCUIElementTypeOther type="XCUIElementTypeOther" x="226" y="84" width="175" height="175">
+                                <XCUIElementTypeOther type="XCUIElementTypeOther" x="226" y="84" width="175" height="175">
+                                  <XCUIElementTypeOther type="XCUIElementTypeOther" x="226" y="84" width="175" height="175">
+                                    <XCUIElementTypeOther type="XCUIElementTypeOther" x="226" y="84" width="175" height="175">
+                                      <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="175" height="175">
+                                        <XCUIElementTypeOther type="XCUIElementTypeOther" name="日历" label="日历" x="0" y="0" width="175" height="175">
+                                          <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="175" height="175">
+                                            <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="175" height="175">
+                                              <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="175" height="175">
+                                                <XCUIElementTypeOther type="XCUIElementTypeOther" x="19" y="17" width="85" height="101">
+                                                  <XCUIElementTypeOther type="XCUIElementTypeOther" name="iconic-date-header-view" label="11月01日 星期日" x="19" y="17" width="64" height="41">
+                                                    <XCUIElementTypeStaticText type="XCUIElementTypeStaticText" value="1" name="1" label="1" x="19" y="14" width="17" height="44"/>
+                                                    <XCUIElementTypeStaticText type="XCUIElementTypeStaticText" value="廿三" name="廿三" label="廿三" x="43" y="21" width="16" height="32"/>
+                                                    <XCUIElementTypeStaticText type="XCUIElementTypeStaticText" value="周日" name="周日" label="周日" x="67" y="21" width="16" height="32"/>
+                                                  </XCUIElementTypeOther>
+                                                  <XCUIElementTypeStaticText type="XCUIElementTypeStaticText" value="今天无日程" name="今天无日程" label="今天无日程" x="19" y="97" width="85" height="21"/>
+                                                </XCUIElementTypeOther>
+                                                <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="0" height="0"/>
+                                              </XCUIElementTypeOther>
+                                            </XCUIElementTypeOther>
+                                          </XCUIElementTypeOther>
+                                          <XCUIElementTypeOther type="XCUIElementTypeOther" name="日历" label="日历" x="0" y="0" width="175" height="175"/>
+                                        </XCUIElementTypeOther>
+                                      </XCUIElementTypeOther>
+                                    </XCUIElementTypeOther>
+                                  </XCUIElementTypeOther>
+                                </XCUIElementTypeOther>
+                                <XCUIElementTypeOther type="XCUIElementTypeOther" x="226" y="84" width="175" height="175">
+                                  <XCUIElementTypeOther type="XCUIElementTypeOther" x="226" y="84" width="175" height="175">
+                                    <XCUIElementTypeOther type="XCUIElementTypeOther" x="226" y="84" width="175" height="175"/>
+                                  </XCUIElementTypeOther>
+                                </XCUIElementTypeOther>
+                              </XCUIElementTypeOther>
+                            </XCUIElementTypeOther>
+                          </XCUIElementTypeOther>
+                          <XCUIElementTypeOther type="XCUIElementTypeOther" value="0%" name="水平滚动条, 1页" label="水平滚动条, 1页" x="226" y="225" width="175" height="31">
+                            <XCUIElementTypeOther type="XCUIElementTypeOther" x="229" y="252" width="166" height="4"/>
+                          </XCUIElementTypeOther>
+                          <XCUIElementTypeOther type="XCUIElementTypeOther" value="0%" name="水平滚动条, 1页" label="水平滚动条, 1页" x="226" y="225" width="175" height="31">
+                            <XCUIElementTypeOther type="XCUIElementTypeOther" x="229" y="252" width="166" height="4"/>
+                          </XCUIElementTypeOther>
+                        </XCUIElementTypeScrollView>
+                      </XCUIElementTypeOther>
+                    </XCUIElementTypeOther>
+                  </XCUIElementTypeOther>
+                  <XCUIElementTypeOther type="XCUIElementTypeOther" name="label-view" x="293" y="261" width="41" height="21">
+                    <XCUIElementTypeOther type="XCUIElementTypeOther" x="293" y="261" width="41" height="21">
+                      <XCUIElementTypeOther type="XCUIElementTypeOther" x="293" y="261" width="41" height="21">
+                        <XCUIElementTypeImage type="XCUIElementTypeImage" x="261" y="227" width="106" height="88"/>
+                        <XCUIElementTypeImage type="XCUIElementTypeImage" x="293" y="261" width="41" height="21"/>
+                      </XCUIElementTypeOther>
+                    </XCUIElementTypeOther>
+                  </XCUIElementTypeOther>
+                </XCUIElementTypeOther>
+              </XCUIElementTypeIcon>
+              <XCUIElementTypeIcon type="XCUIElementTypeIcon" name="FaceTime通话" label="FaceTime通话" x="17" y="295" width="100" height="95">
+                <XCUIElementTypeOther type="XCUIElementTypeOther" x="33" y="297" width="68" height="83">
+                  <XCUIElementTypeOther type="XCUIElementTypeOther" x="33" y="297" width="68" height="69">
+                    <XCUIElementTypeOther type="XCUIElementTypeOther" x="33" y="297" width="68" height="69">
+                      <XCUIElementTypeOther type="XCUIElementTypeOther" x="33" y="297" width="68" height="69"/>
+                    </XCUIElementTypeOther>
+                  </XCUIElementTypeOther>
+                  <XCUIElementTypeOther type="XCUIElementTypeOther" name="label-view" x="19" y="368" width="96" height="20">
+                    <XCUIElementTypeOther type="XCUIElementTypeOther" x="19" y="368" width="96" height="20">
+                      <XCUIElementTypeOther type="XCUIElementTypeOther" x="19" y="368" width="96" height="20">
+                        <XCUIElementTypeImage type="XCUIElementTypeImage" x="-14" y="333" width="163" height="89"/>
+                        <XCUIElementTypeImage type="XCUIElementTypeImage" x="19" y="368" width="96" height="20"/>
+                      </XCUIElementTypeOther>
+                    </XCUIElementTypeOther>
+                  </XCUIElementTypeOther>
+                </XCUIElementTypeOther>
+              </XCUIElementTypeIcon>
+              <XCUIElementTypeIcon type="XCUIElementTypeIcon" value="11月01日 星期日" name="日历" label="日历" x="129" y="295" width="73" height="95">
+                <XCUIElementTypeOther type="XCUIElementTypeOther" x="131" y="297" width="69" height="83">
+                  <XCUIElementTypeOther type="XCUIElementTypeOther" x="131" y="297" width="69" height="69">
+                    <XCUIElementTypeOther type="XCUIElementTypeOther" x="131" y="297" width="69" height="69">
+                      <XCUIElementTypeOther type="XCUIElementTypeOther" x="131" y="297" width="69" height="69"/>
+                    </XCUIElementTypeOther>
+                  </XCUIElementTypeOther>
+                  <XCUIElementTypeOther type="XCUIElementTypeOther" name="label-view" x="145" y="368" width="41" height="20">
+                    <XCUIElementTypeOther type="XCUIElementTypeOther" x="145" y="368" width="41" height="20">
+                      <XCUIElementTypeOther type="XCUIElementTypeOther" x="145" y="368" width="41" height="20">
+                        <XCUIElementTypeImage type="XCUIElementTypeImage" x="113" y="333" width="106" height="89"/>
+                        <XCUIElementTypeImage type="XCUIElementTypeImage" x="145" y="368" width="41" height="20"/>
+                      </XCUIElementTypeOther>
+                    </XCUIElementTypeOther>
+                  </XCUIElementTypeOther>
+                </XCUIElementTypeOther>
+              </XCUIElementTypeIcon>
+              <XCUIElementTypeIcon type="XCUIElementTypeIcon" name="照片" label="照片" x="228" y="295" width="73" height="95">
+                <XCUIElementTypeOther type="XCUIElementTypeOther" x="230" y="297" width="69" height="83">
+                  <XCUIElementTypeOther type="XCUIElementTypeOther" x="230" y="297" width="69" height="69">
+                    <XCUIElementTypeOther type="XCUIElementTypeOther" x="230" y="297" width="69" height="69">
+                      <XCUIElementTypeOther type="XCUIElementTypeOther" x="230" y="297" width="69" height="69"/>
+                    </XCUIElementTypeOther>
+                  </XCUIElementTypeOther>
+                  <XCUIElementTypeOther type="XCUIElementTypeOther" name="label-view" x="244" y="368" width="41" height="20">
+                    <XCUIElementTypeOther type="XCUIElementTypeOther" x="244" y="368" width="41" height="20">
+                      <XCUIElementTypeOther type="XCUIElementTypeOther" x="244" y="368" width="41" height="20">
+                        <XCUIElementTypeImage type="XCUIElementTypeImage" x="211" y="333" width="107" height="89"/>
+                        <XCUIElementTypeImage type="XCUIElementTypeImage" x="244" y="368" width="41" height="20"/>
+                      </XCUIElementTypeOther>
+                    </XCUIElementTypeOther>
+                  </XCUIElementTypeOther>
+                </XCUIElementTypeOther>
+              </XCUIElementTypeIcon>
+              <XCUIElementTypeIcon type="XCUIElementTypeIcon" name="相机" label="相机" x="327" y="295" width="72" height="95">
+                <XCUIElementTypeOther type="XCUIElementTypeOther" x="329" y="297" width="68" height="83">
+                  <XCUIElementTypeOther type="XCUIElementTypeOther" x="329" y="297" width="68" height="69">
+                    <XCUIElementTypeOther type="XCUIElementTypeOther" x="329" y="297" width="68" height="69">
+                      <XCUIElementTypeOther type="XCUIElementTypeOther" x="329" y="297" width="68" height="69"/>
+                    </XCUIElementTypeOther>
+                  </XCUIElementTypeOther>
+                  <XCUIElementTypeOther type="XCUIElementTypeOther" name="label-view" x="343" y="368" width="40" height="20">
+                    <XCUIElementTypeOther type="XCUIElementTypeOther" x="343" y="368" width="40" height="20">
+                      <XCUIElementTypeOther type="XCUIElementTypeOther" x="343" y="368" width="40" height="20">
+                        <XCUIElementTypeImage type="XCUIElementTypeImage" x="310" y="333" width="107" height="89"/>
+                        <XCUIElementTypeImage type="XCUIElementTypeImage" x="343" y="368" width="40" height="20"/>
+                      </XCUIElementTypeOther>
+                    </XCUIElementTypeOther>
+                  </XCUIElementTypeOther>
+                </XCUIElementTypeOther>
+              </XCUIElementTypeIcon>
+              <XCUIElementTypeIcon type="XCUIElementTypeIcon" value="无未读电子邮件" name="邮件" label="邮件" x="31" y="402" width="72" height="95">
+                <XCUIElementTypeOther type="XCUIElementTypeOther" x="33" y="404" width="68" height="82">
+                  <XCUIElementTypeOther type="XCUIElementTypeOther" x="33" y="404" width="68" height="68">
+                    <XCUIElementTypeOther type="XCUIElementTypeOther" x="33" y="404" width="68" height="68">
+                      <XCUIElementTypeOther type="XCUIElementTypeOther" x="33" y="404" width="68" height="68"/>
+                    </XCUIElementTypeOther>
+                  </XCUIElementTypeOther>
+                  <XCUIElementTypeOther type="XCUIElementTypeOther" name="label-view" x="47" y="475" width="40" height="20">
+                    <XCUIElementTypeOther type="XCUIElementTypeOther" x="47" y="475" width="40" height="20">
+                      <XCUIElementTypeOther type="XCUIElementTypeOther" x="47" y="475" width="40" height="20">
+                        <XCUIElementTypeImage type="XCUIElementTypeImage" x="14" y="440" width="107" height="89"/>
+                        <XCUIElementTypeImage type="XCUIElementTypeImage" x="47" y="475" width="40" height="20"/>
+                      </XCUIElementTypeOther>
+                    </XCUIElementTypeOther>
+                  </XCUIElementTypeOther>
+                </XCUIElementTypeOther>
+              </XCUIElementTypeIcon>
+              <XCUIElementTypeIcon type="XCUIElementTypeIcon" name="备忘录" label="备忘录" x="129" y="402" width="73" height="95">
+                <XCUIElementTypeOther type="XCUIElementTypeOther" x="131" y="404" width="69" height="82">
+                  <XCUIElementTypeOther type="XCUIElementTypeOther" x="131" y="404" width="69" height="68">
+                    <XCUIElementTypeOther type="XCUIElementTypeOther" x="131" y="404" width="69" height="68">
+                      <XCUIElementTypeOther type="XCUIElementTypeOther" x="131" y="404" width="69" height="68"/>
+                    </XCUIElementTypeOther>
+                  </XCUIElementTypeOther>
+                  <XCUIElementTypeOther type="XCUIElementTypeOther" name="label-view" x="139" y="475" width="53" height="20">
+                    <XCUIElementTypeOther type="XCUIElementTypeOther" x="139" y="475" width="53" height="20">
+                      <XCUIElementTypeOther type="XCUIElementTypeOther" x="139" y="475" width="53" height="20">
+                        <XCUIElementTypeImage type="XCUIElementTypeImage" x="107" y="440" width="118" height="89"/>
+                        <XCUIElementTypeImage type="XCUIElementTypeImage" x="139" y="475" width="53" height="20"/>
+                      </XCUIElementTypeOther>
+                    </XCUIElementTypeOther>
+                  </XCUIElementTypeOther>
+                </XCUIElementTypeOther>
+              </XCUIElementTypeIcon>
+              <XCUIElementTypeIcon type="XCUIElementTypeIcon" value="20:51" name="时钟" label="时钟" x="228" y="402" width="73" height="95">
+                <XCUIElementTypeOther type="XCUIElementTypeOther" x="230" y="404" width="69" height="82">
+                  <XCUIElementTypeOther type="XCUIElementTypeOther" x="230" y="404" width="69" height="68">
+                    <XCUIElementTypeOther type="XCUIElementTypeOther" x="230" y="404" width="69" height="68">
+                      <XCUIElementTypeOther type="XCUIElementTypeOther" x="230" y="404" width="69" height="68"/>
+                    </XCUIElementTypeOther>
+                  </XCUIElementTypeOther>
+                  <XCUIElementTypeOther type="XCUIElementTypeOther" name="label-view" x="244" y="475" width="41" height="20">
+                    <XCUIElementTypeOther type="XCUIElementTypeOther" x="244" y="475" width="41" height="20">
+                      <XCUIElementTypeOther type="XCUIElementTypeOther" x="244" y="475" width="41" height="20">
+                        <XCUIElementTypeImage type="XCUIElementTypeImage" x="211" y="440" width="107" height="89"/>
+                        <XCUIElementTypeImage type="XCUIElementTypeImage" x="244" y="475" width="41" height="20"/>
+                      </XCUIElementTypeOther>
+                    </XCUIElementTypeOther>
+                  </XCUIElementTypeOther>
+                </XCUIElementTypeOther>
+              </XCUIElementTypeIcon>
+              <XCUIElementTypeIcon type="XCUIElementTypeIcon" name="地图" label="地图" x="327" y="402" width="72" height="95">
+                <XCUIElementTypeOther type="XCUIElementTypeOther" x="329" y="404" width="68" height="82">
+                  <XCUIElementTypeOther type="XCUIElementTypeOther" x="329" y="404" width="68" height="68">
+                    <XCUIElementTypeOther type="XCUIElementTypeOther" x="329" y="404" width="68" height="68">
+                      <XCUIElementTypeOther type="XCUIElementTypeOther" x="329" y="404" width="68" height="68"/>
+                    </XCUIElementTypeOther>
+                  </XCUIElementTypeOther>
+                  <XCUIElementTypeOther type="XCUIElementTypeOther" name="label-view" x="343" y="475" width="40" height="20">
+                    <XCUIElementTypeOther type="XCUIElementTypeOther" x="343" y="475" width="40" height="20">
+                      <XCUIElementTypeOther type="XCUIElementTypeOther" x="343" y="475" width="40" height="20">
+                        <XCUIElementTypeImage type="XCUIElementTypeImage" x="310" y="440" width="107" height="89"/>
+                        <XCUIElementTypeImage type="XCUIElementTypeImage" x="343" y="475" width="40" height="20"/>
+                      </XCUIElementTypeOther>
+                    </XCUIElementTypeOther>
+                  </XCUIElementTypeOther>
+                </XCUIElementTypeOther>
+              </XCUIElementTypeIcon>
+              <XCUIElementTypeIcon type="XCUIElementTypeIcon" name="TV" label="TV" x="31" y="508" width="72" height="96">
+                <XCUIElementTypeOther type="XCUIElementTypeOther" x="33" y="510" width="68" height="83">
+                  <XCUIElementTypeOther type="XCUIElementTypeOther" x="33" y="510" width="68" height="69">
+                    <XCUIElementTypeOther type="XCUIElementTypeOther" x="33" y="510" width="68" height="69">
+                      <XCUIElementTypeOther type="XCUIElementTypeOther" x="33" y="510" width="68" height="69"/>
+                    </XCUIElementTypeOther>
+                  </XCUIElementTypeOther>
+                  <XCUIElementTypeOther type="XCUIElementTypeOther" name="label-view" x="50" y="581" width="33" height="21">
+                    <XCUIElementTypeOther type="XCUIElementTypeOther" x="50" y="581" width="33" height="21">
+                      <XCUIElementTypeOther type="XCUIElementTypeOther" x="50" y="581" width="33" height="21">
+                        <XCUIElementTypeImage type="XCUIElementTypeImage" x="18" y="547" width="99" height="88"/>
+                        <XCUIElementTypeImage type="XCUIElementTypeImage" x="50" y="581" width="33" height="21"/>
+                      </XCUIElementTypeOther>
+                    </XCUIElementTypeOther>
+                  </XCUIElementTypeOther>
+                </XCUIElementTypeOther>
+              </XCUIElementTypeIcon>
+              <XCUIElementTypeIcon type="XCUIElementTypeIcon" name="App Store" label="App Store" x="126" y="508" width="79" height="96">
+                <XCUIElementTypeOther type="XCUIElementTypeOther" x="131" y="510" width="69" height="83">
+                  <XCUIElementTypeOther type="XCUIElementTypeOther" x="131" y="510" width="69" height="69">
+                    <XCUIElementTypeOther type="XCUIElementTypeOther" x="131" y="510" width="69" height="69">
+                      <XCUIElementTypeOther type="XCUIElementTypeOther" x="131" y="510" width="69" height="69"/>
+                    </XCUIElementTypeOther>
+                  </XCUIElementTypeOther>
+                  <XCUIElementTypeOther type="XCUIElementTypeOther" name="label-view" x="128" y="581" width="75" height="21">
+                    <XCUIElementTypeOther type="XCUIElementTypeOther" x="128" y="581" width="75" height="21">
+                      <XCUIElementTypeOther type="XCUIElementTypeOther" x="128" y="581" width="75" height="21">
+                        <XCUIElementTypeImage type="XCUIElementTypeImage" x="96" y="547" width="140" height="88"/>
+                        <XCUIElementTypeImage type="XCUIElementTypeImage" x="128" y="581" width="75" height="21"/>
+                      </XCUIElementTypeOther>
+                    </XCUIElementTypeOther>
+                  </XCUIElementTypeOther>
+                </XCUIElementTypeOther>
+              </XCUIElementTypeIcon>
+              <XCUIElementTypeIcon type="XCUIElementTypeIcon" name="游戏" label="游戏" x="228" y="508" width="73" height="96">
+                <XCUIElementTypeOther type="XCUIElementTypeOther" x="230" y="510" width="69" height="83">
+                  <XCUIElementTypeOther type="XCUIElementTypeOther" x="230" y="510" width="69" height="69">
+                    <XCUIElementTypeOther type="XCUIElementTypeOther" x="230" y="510" width="69" height="69">
+                      <XCUIElementTypeOther type="XCUIElementTypeOther" x="230" y="510" width="69" height="69"/>
+                    </XCUIElementTypeOther>
+                  </XCUIElementTypeOther>
+                  <XCUIElementTypeOther type="XCUIElementTypeOther" name="label-view" x="244" y="581" width="41" height="21">
+                    <XCUIElementTypeOther type="XCUIElementTypeOther" x="244" y="581" width="41" height="21">
+                      <XCUIElementTypeOther type="XCUIElementTypeOther" x="244" y="581" width="41" height="21">
+                        <XCUIElementTypeImage type="XCUIElementTypeImage" x="211" y="547" width="107" height="88"/>
+                        <XCUIElementTypeImage type="XCUIElementTypeImage" x="244" y="581" width="41" height="21"/>
+                      </XCUIElementTypeOther>
+                    </XCUIElementTypeOther>
+                  </XCUIElementTypeOther>
+                </XCUIElementTypeOther>
+              </XCUIElementTypeIcon>
+              <XCUIElementTypeIcon type="XCUIElementTypeIcon" name="健康" label="健康" x="327" y="508" width="72" height="96">
+                <XCUIElementTypeOther type="XCUIElementTypeOther" x="329" y="510" width="68" height="83">
+                  <XCUIElementTypeOther type="XCUIElementTypeOther" x="329" y="510" width="68" height="69">
+                    <XCUIElementTypeOther type="XCUIElementTypeOther" x="329" y="510" width="68" height="69">
+                      <XCUIElementTypeOther type="XCUIElementTypeOther" x="329" y="510" width="68" height="69"/>
+                    </XCUIElementTypeOther>
+                  </XCUIElementTypeOther>
+                  <XCUIElementTypeOther type="XCUIElementTypeOther" name="label-view" x="343" y="581" width="40" height="21">
+                    <XCUIElementTypeOther type="XCUIElementTypeOther" x="343" y="581" width="40" height="21">
+                      <XCUIElementTypeOther type="XCUIElementTypeOther" x="343" y="581" width="40" height="21">
+                        <XCUIElementTypeImage type="XCUIElementTypeImage" x="310" y="547" width="107" height="88"/>
+                        <XCUIElementTypeImage type="XCUIElementTypeImage" x="343" y="581" width="40" height="21"/>
+                      </XCUIElementTypeOther>
+                    </XCUIElementTypeOther>
+                  </XCUIElementTypeOther>
+                </XCUIElementTypeOther>
+              </XCUIElementTypeIcon>
+              <XCUIElementTypeIcon type="XCUIElementTypeIcon" name="钱包" label="钱包" x="31" y="615" width="72" height="95">
+                <XCUIElementTypeOther type="XCUIElementTypeOther" x="33" y="617" width="68" height="83">
+                  <XCUIElementTypeOther type="XCUIElementTypeOther" x="33" y="617" width="68" height="69">
+                    <XCUIElementTypeOther type="XCUIElementTypeOther" x="33" y="617" width="68" height="69">
+                      <XCUIElementTypeOther type="XCUIElementTypeOther" x="33" y="617" width="68" height="69"/>
+                    </XCUIElementTypeOther>
+                  </XCUIElementTypeOther>
+                  <XCUIElementTypeOther type="XCUIElementTypeOther" name="label-view" x="47" y="688" width="40" height="20">
+                    <XCUIElementTypeOther type="XCUIElementTypeOther" x="47" y="688" width="40" height="20">
+                      <XCUIElementTypeOther type="XCUIElementTypeOther" x="47" y="688" width="40" height="20">
+                        <XCUIElementTypeImage type="XCUIElementTypeImage" x="14" y="653" width="107" height="89"/>
+                        <XCUIElementTypeImage type="XCUIElementTypeImage" x="47" y="688" width="40" height="20"/>
+                      </XCUIElementTypeOther>
+                    </XCUIElementTypeOther>
+                  </XCUIElementTypeOther>
+                </XCUIElementTypeOther>
+              </XCUIElementTypeIcon>
+              <XCUIElementTypeIcon type="XCUIElementTypeIcon" value="1个新项目" name="设置" label="设置" x="129" y="604" width="84" height="106">
+                <XCUIElementTypeOther type="XCUIElementTypeOther" x="131" y="617" width="69" height="83">
+                  <XCUIElementTypeOther type="XCUIElementTypeOther" x="131" y="617" width="69" height="69">
+                    <XCUIElementTypeOther type="XCUIElementTypeOther" x="184" y="606" width="27" height="27">
+                      <XCUIElementTypeOther type="XCUIElementTypeOther" x="184" y="606" width="27" height="27">
+                        <XCUIElementTypeImage type="XCUIElementTypeImage" x="192" y="609" width="11" height="20"/>
+                      </XCUIElementTypeOther>
+                    </XCUIElementTypeOther>
+                    <XCUIElementTypeOther type="XCUIElementTypeOther" x="131" y="617" width="69" height="69">
+                      <XCUIElementTypeOther type="XCUIElementTypeOther" x="131" y="617" width="69" height="69"/>
+                    </XCUIElementTypeOther>
+                  </XCUIElementTypeOther>
+                  <XCUIElementTypeOther type="XCUIElementTypeOther" name="label-view" x="145" y="688" width="41" height="20">
+                    <XCUIElementTypeOther type="XCUIElementTypeOther" x="145" y="688" width="41" height="20">
+                      <XCUIElementTypeOther type="XCUIElementTypeOther" x="145" y="688" width="41" height="20">
+                        <XCUIElementTypeImage type="XCUIElementTypeImage" x="113" y="653" width="106" height="89"/>
+                        <XCUIElementTypeImage type="XCUIElementTypeImage" x="145" y="688" width="41" height="20"/>
+                      </XCUIElementTypeOther>
+                    </XCUIElementTypeOther>
+                  </XCUIElementTypeOther>
+                </XCUIElementTypeOther>
+              </XCUIElementTypeIcon>
+            </XCUIElementTypeIcon>
+            <XCUIElementTypeIcon type="XCUIElementTypeIcon" x="0" y="0" width="0" height="0">
+              <XCUIElementTypeIcon type="XCUIElementTypeIcon" name="天气" label="天气" x="0" y="0" width="0" height="0"/>
+              <XCUIElementTypeIcon type="XCUIElementTypeIcon" name="股市" label="股市" x="0" y="0" width="0" height="0"/>
+              <XCUIElementTypeIcon type="XCUIElementTypeIcon" name="查找" label="查找" x="0" y="0" width="0" height="0"/>
+              <XCUIElementTypeIcon type="XCUIElementTypeIcon" name="家庭" label="家庭" x="0" y="0" width="0" height="0"/>
+              <XCUIElementTypeIcon type="XCUIElementTypeIcon" name="图书" label="图书" x="0" y="0" width="0" height="0"/>
+              <XCUIElementTypeIcon type="XCUIElementTypeIcon" name="健身" label="健身" x="0" y="0" width="0" height="0"/>
+              <XCUIElementTypeIcon type="XCUIElementTypeIcon" name="提醒事项" label="提醒事项" x="0" y="0" width="0" height="0"/>
+              <XCUIElementTypeIcon type="XCUIElementTypeIcon" name="文件" label="文件" x="0" y="0" width="0" height="0"/>
+              <XCUIElementTypeIcon type="XCUIElementTypeIcon" name="实用工具" label="“实用工具”文件夹" x="0" y="0" width="0" height="0">
+                <XCUIElementTypeIcon type="XCUIElementTypeIcon" name="密码" label="密码" x="0" y="0" width="0" height="0"/>
+                <XCUIElementTypeIcon type="XCUIElementTypeIcon" name="放大器" label="放大器" x="0" y="0" width="0" height="0"/>
+                <XCUIElementTypeIcon type="XCUIElementTypeIcon" name="测距仪" label="测距仪" x="0" y="0" width="0" height="0"/>
+                <XCUIElementTypeIcon type="XCUIElementTypeIcon" name="快捷指令" label="快捷指令" x="0" y="0" width="0" height="0"/>
+                <XCUIElementTypeIcon type="XCUIElementTypeIcon" name="语音备忘录" label="语音备忘录" x="0" y="0" width="0" height="0"/>
+                <XCUIElementTypeIcon type="XCUIElementTypeIcon" name="指南针" label="指南针" x="0" y="0" width="0" height="0"/>
+                <XCUIElementTypeIcon type="XCUIElementTypeIcon" name="计算器" label="计算器" x="0" y="0" width="0" height="0"/>
+              </XCUIElementTypeIcon>
+              <XCUIElementTypeIcon type="XCUIElementTypeIcon" name="联系人" label="联系人" x="0" y="0" width="0" height="0"/>
+              <XCUIElementTypeIcon type="XCUIElementTypeIcon" name="iTunes Store" label="iTunes Store" x="0" y="0" width="0" height="0"/>
+              <XCUIElementTypeIcon type="XCUIElementTypeIcon" name="翻译" label="翻译" x="0" y="0" width="0" height="0"/>
+              <XCUIElementTypeIcon type="XCUIElementTypeIcon" name="爱思全能版" label="爱思全能版" x="0" y="0" width="0" height="0"/>
+              <XCUIElementTypeIcon type="XCUIElementTypeIcon" name="Shadowrocket" label="Shadowrocket" x="0" y="0" width="0" height="0"/>
+              <XCUIElementTypeIcon type="XCUIElementTypeIcon" name="微信" label="微信" x="0" y="0" width="0" height="0"/>
+              <XCUIElementTypeIcon type="XCUIElementTypeIcon" name="高德地图" label="高德地图" x="0" y="0" width="0" height="0"/>
+              <XCUIElementTypeIcon type="XCUIElementTypeIcon" name="小红书" label="小红书" x="0" y="0" width="0" height="0"/>
+              <XCUIElementTypeIcon type="XCUIElementTypeIcon" name="图乐园" label="图乐园" x="0" y="0" width="0" height="0"/>
+              <XCUIElementTypeIcon type="XCUIElementTypeIcon" name="WebDriverAgentRunner-Runner" label="WebDriverAgentRunner-Runner" x="0" y="0" width="0" height="0"/>
+              <XCUIElementTypeIcon type="XCUIElementTypeIcon" name="开心消消乐" label="开心消消乐" x="0" y="0" width="0" height="0"/>
+            </XCUIElementTypeIcon>
+            <XCUIElementTypeOther type="XCUIElementTypeOther" value="第1页（共2页）" name="spotlight-pill" label="搜索" x="184" y="756" width="62" height="31">
+              <XCUIElementTypePageIndicator type="XCUIElementTypePageIndicator" value="第1页（共2页）" name="Page control" x="184" y="756" width="62" height="36"/>
+              <XCUIElementTypeOther type="XCUIElementTypeOther" name="spotlight-pill" x="184" y="756" width="62" height="31">
+                <XCUIElementTypeOther type="XCUIElementTypeOther" x="184" y="756" width="62" height="31">
+                  <XCUIElementTypeImage type="XCUIElementTypeImage" name="magnifyingglass" label="搜索" x="196" y="766" width="12" height="11"/>
+                  <XCUIElementTypeStaticText type="XCUIElementTypeStaticText" value="搜索" name="搜索" label="搜索" x="210" y="764" width="25" height="15"/>
+                </XCUIElementTypeOther>
+              </XCUIElementTypeOther>
+            </XCUIElementTypeOther>
+            <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="812" width="430" height="120">
+              <XCUIElementTypeOther type="XCUIElementTypeOther" x="14" y="812" width="402" height="106">
+                <XCUIElementTypeOther type="XCUIElementTypeOther" name="程序坞" label="程序坞" x="0" y="812" width="430" height="106">
+                  <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="812" width="430" height="106"/>
+                  <XCUIElementTypeIcon type="XCUIElementTypeIcon" name="电话" label="电话" x="31" y="829" width="72" height="72">
+                    <XCUIElementTypeOther type="XCUIElementTypeOther" x="33" y="831" width="68" height="68">
+                      <XCUIElementTypeOther type="XCUIElementTypeOther" x="33" y="831" width="68" height="68">
+                        <XCUIElementTypeOther type="XCUIElementTypeOther" x="33" y="831" width="68" height="68">
+                          <XCUIElementTypeOther type="XCUIElementTypeOther" x="33" y="831" width="68" height="68"/>
+                        </XCUIElementTypeOther>
+                      </XCUIElementTypeOther>
+                    </XCUIElementTypeOther>
+                  </XCUIElementTypeIcon>
+                  <XCUIElementTypeIcon type="XCUIElementTypeIcon" name="Safari浏览器" label="Safari浏览器" x="129" y="829" width="73" height="72">
+                    <XCUIElementTypeOther type="XCUIElementTypeOther" x="131" y="831" width="69" height="68">
+                      <XCUIElementTypeOther type="XCUIElementTypeOther" x="131" y="831" width="69" height="68">
+                        <XCUIElementTypeOther type="XCUIElementTypeOther" x="131" y="831" width="69" height="68">
+                          <XCUIElementTypeOther type="XCUIElementTypeOther" x="131" y="831" width="69" height="68"/>
+                        </XCUIElementTypeOther>
+                      </XCUIElementTypeOther>
+                    </XCUIElementTypeOther>
+                  </XCUIElementTypeIcon>
+                  <XCUIElementTypeIcon type="XCUIElementTypeIcon" name="信息" label="信息" x="228" y="829" width="73" height="72">
+                    <XCUIElementTypeOther type="XCUIElementTypeOther" x="230" y="831" width="69" height="68">
+                      <XCUIElementTypeOther type="XCUIElementTypeOther" x="230" y="831" width="69" height="68">
+                        <XCUIElementTypeOther type="XCUIElementTypeOther" x="230" y="831" width="69" height="68">
+                          <XCUIElementTypeOther type="XCUIElementTypeOther" x="230" y="831" width="69" height="68"/>
+                        </XCUIElementTypeOther>
+                      </XCUIElementTypeOther>
+                    </XCUIElementTypeOther>
+                  </XCUIElementTypeIcon>
+                  <XCUIElementTypeIcon type="XCUIElementTypeIcon" name="音乐" label="音乐" x="327" y="829" width="72" height="72">
+                    <XCUIElementTypeOther type="XCUIElementTypeOther" x="329" y="831" width="68" height="68">
+                      <XCUIElementTypeOther type="XCUIElementTypeOther" x="329" y="831" width="68" height="68">
+                        <XCUIElementTypeOther type="XCUIElementTypeOther" x="329" y="831" width="68" height="68">
+                          <XCUIElementTypeOther type="XCUIElementTypeOther" x="329" y="831" width="68" height="68"/>
+                        </XCUIElementTypeOther>
+                      </XCUIElementTypeOther>
+                    </XCUIElementTypeOther>
+                  </XCUIElementTypeIcon>
+                </XCUIElementTypeOther>
+              </XCUIElementTypeOther>
+            </XCUIElementTypeOther>
+          </XCUIElementTypeOther>
+        </XCUIElementTypeOther>
+        <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="430" height="932">
+          <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="430" height="932">
+            <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="430" height="932">
+              <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="430" height="932">
+                <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="430" height="932">
+                  <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="430" height="932"/>
+                </XCUIElementTypeOther>
+              </XCUIElementTypeOther>
+              <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="430" height="932">
+                <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="430" height="932"/>
+              </XCUIElementTypeOther>
+            </XCUIElementTypeOther>
+          </XCUIElementTypeOther>
+          <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="430" height="932">
+            <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="430" height="932">
+              <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="430" height="932">
+                <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="430" height="932">
+                  <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="430" height="932"/>
+                </XCUIElementTypeOther>
+              </XCUIElementTypeOther>
+              <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="430" height="932">
+                <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="430" height="932"/>
+              </XCUIElementTypeOther>
+            </XCUIElementTypeOther>
+          </XCUIElementTypeOther>
+        </XCUIElementTypeOther>
+      </XCUIElementTypeOther>
+      <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="430" height="932"/>
+      <XCUIElementTypeOther type="XCUIElementTypeOther" x="138" y="922" width="154" height="6">
+        <XCUIElementTypeOther type="XCUIElementTypeOther" x="138" y="922" width="154" height="6">
+          <XCUIElementTypeOther type="XCUIElementTypeOther" x="138" y="922" width="154" height="6"/>
+        </XCUIElementTypeOther>
+      </XCUIElementTypeOther>
+    </XCUIElementTypeOther>
+  </XCUIElementTypeWindow>
+  <XCUIElementTypeWindow type="XCUIElementTypeWindow" x="0" y="0" width="430" height="932">
+    <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="430" height="932">
+      <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="430" height="932">
+        <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="430" height="932"/>
+        <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="430" height="932"/>
+        <XCUIElementTypeOther type="XCUIElementTypeOther" x="152" y="11" width="126" height="37">
+          <XCUIElementTypeOther type="XCUIElementTypeOther" x="152" y="11" width="126" height="37"/>
+        </XCUIElementTypeOther>
+      </XCUIElementTypeOther>
+    </XCUIElementTypeOther>
+  </XCUIElementTypeWindow>
+  <XCUIElementTypeWindow type="XCUIElementTypeWindow" x="0" y="0" width="430" height="932">
+    <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="430" height="932">
+      <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="430" height="932">
+        <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="430" height="932">
+          <XCUIElementTypeOther type="XCUIElementTypeOther" x="152" y="11" width="126" height="37">
+            <XCUIElementTypeOther type="XCUIElementTypeOther" x="152" y="11" width="126" height="37">
+              <XCUIElementTypeOther type="XCUIElementTypeOther" x="152" y="11" width="126" height="37"/>
+            </XCUIElementTypeOther>
+          </XCUIElementTypeOther>
+        </XCUIElementTypeOther>
+        <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="430" height="932">
+          <XCUIElementTypeOther type="XCUIElementTypeOther" x="152" y="11" width="126" height="37">
+            <XCUIElementTypeOther type="XCUIElementTypeOther" x="152" y="11" width="126" height="37"/>
+          </XCUIElementTypeOther>
+          <XCUIElementTypeOther type="XCUIElementTypeOther" x="152" y="11" width="126" height="37"/>
+        </XCUIElementTypeOther>
+        <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="430" height="932">
+          <XCUIElementTypeOther type="XCUIElementTypeOther" name="jindo-container-view:1" x="152" y="11" width="126" height="37">
+            <XCUIElementTypeOther type="XCUIElementTypeOther" x="142" y="10" width="146" height="49"/>
+          </XCUIElementTypeOther>
+        </XCUIElementTypeOther>
+        <XCUIElementTypeOther type="XCUIElementTypeOther" x="232" y="25" width="9" height="10"/>
+      </XCUIElementTypeOther>
+    </XCUIElementTypeOther>
+  </XCUIElementTypeWindow>
+  <XCUIElementTypeWindow type="XCUIElementTypeWindow" x="0" y="0" width="1290" height="2796">
+    <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="1290" height="2796">
+      <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="1290" height="2796"/>
+      <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="1290" height="2796"/>
+      <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="1290" height="2796"/>
+      <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="1290" height="2796"/>
+    </XCUIElementTypeOther>
+  </XCUIElementTypeWindow>
+  <XCUIElementTypeWindow type="XCUIElementTypeWindow" x="0" y="0" width="1290" height="2796">
+    <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="1290" height="2796"/>
+  </XCUIElementTypeWindow>
+  <XCUIElementTypeWindow type="XCUIElementTypeWindow" x="0" y="0" width="430" height="932">
+    <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="430" height="932">
+      <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="430" height="932"/>
+    </XCUIElementTypeOther>
+  </XCUIElementTypeWindow>
+  <XCUIElementTypeWindow type="XCUIElementTypeWindow" x="0" y="0" width="430" height="932">
+    <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="430" height="932">
+      <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="430" height="932"/>
+    </XCUIElementTypeOther>
+  </XCUIElementTypeWindow>
+  <XCUIElementTypeWindow type="XCUIElementTypeWindow" x="0" y="0" width="430" height="932">
+    <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="430" height="932">
+      <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="430" height="932"/>
+    </XCUIElementTypeOther>
+  </XCUIElementTypeWindow>
+  <XCUIElementTypeWindow type="XCUIElementTypeWindow" x="0" y="0" width="430" height="932">
+    <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="430" height="932">
+      <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="430" height="932"/>
+    </XCUIElementTypeOther>
+  </XCUIElementTypeWindow>
+  <XCUIElementTypeWindow type="XCUIElementTypeWindow" x="0" y="0" width="430" height="932">
+    <XCUIElementTypeStatusBar type="XCUIElementTypeStatusBar" x="0" y="0" width="430" height="54">
+      <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="430" height="54">
+        <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="430" height="54">
+          <XCUIElementTypeStaticText type="XCUIElementTypeStaticText" value="20:51" name="20:51" label="20:51" x="57" y="18" width="48" height="23"/>
+          <XCUIElementTypeOther type="XCUIElementTypeOther" value="信号强度：3（共4格）" name="蜂窝网络" label="蜂窝网络" x="305" y="21" width="22" height="15"/>
+          <XCUIElementTypeOther type="XCUIElementTypeOther" value="SSID, 3（共3格Wi-Fi信号）" name="3（共3格Wi-Fi信号）" x="334" y="21" width="20" height="15">
+            <XCUIElementTypeImage type="XCUIElementTypeImage" name="wifi" label="Wi-Fi" x="332" y="19" width="24" height="19"/>
+          </XCUIElementTypeOther>
+          <XCUIElementTypeOther type="XCUIElementTypeOther" value="正在充电" name="电池电量80%" label="电池电量80%" x="361" y="21" width="32" height="16"/>
+        </XCUIElementTypeOther>
+      </XCUIElementTypeOther>
+    </XCUIElementTypeStatusBar>
+  </XCUIElementTypeWindow>
+  <XCUIElementTypeWindow type="XCUIElementTypeWindow" x="0" y="0" width="1290" height="2796">
+    <XCUIElementTypeOther type="XCUIElementTypeOther" x="1573" y="-300" width="17" height="17"/>
+    <XCUIElementTypeOther type="XCUIElementTypeOther" x="1573" y="-300" width="17" height="17"/>
+    <XCUIElementTypeOther type="XCUIElementTypeOther" x="457" y="34" width="376" height="110"/>
+  </XCUIElementTypeWindow>
+  <XCUIElementTypeWindow type="XCUIElementTypeWindow" x="0" y="0" width="430" height="932">
+    <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="430" height="932">
+      <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="0" height="0"/>
+    </XCUIElementTypeOther>
+  </XCUIElementTypeWindow>
+  <XCUIElementTypeWindow type="XCUIElementTypeWindow" x="0" y="0" width="430" height="932">
+    <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="430" height="932"/>
+  </XCUIElementTypeWindow>
+  <XCUIElementTypeWindow type="XCUIElementTypeWindow" x="0" y="0" width="430" height="932">
+    <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="430" height="932"/>
+  </XCUIElementTypeWindow>
+  <XCUIElementTypeWindow type="XCUIElementTypeWindow" x="0" y="0" width="430" height="932">
+    <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="430" height="932">
+      <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="430" height="932">
+        <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="430" height="932">
+          <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="0" height="0"/>
+          <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="0" height="0"/>
+        </XCUIElementTypeOther>
+      </XCUIElementTypeOther>
+    </XCUIElementTypeOther>
+  </XCUIElementTypeWindow>
+</XCUIElementTypeApplication>
+

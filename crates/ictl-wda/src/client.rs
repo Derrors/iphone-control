@@ -64,9 +64,26 @@ impl IdleSettings {
     pub const DEFAULT: Self = Self { wait_for_idle_timeout: 10.0, animation_cool_off_timeout: 2.0 };
     /// 临时调小的值（0 会导致锁屏唤醒失败，所以不是 0）
     pub const QUICK: Self = Self { wait_for_idle_timeout: 1.0, animation_cool_off_timeout: 0.2 };
+    /// 不等动画冷却：滑动、以及「等界面稳定」时轮询元素树用（由调用方比较前后两次判断稳定）。真机（iOS 27，设置列表）：
+    /// - 上下滑 0.3 秒：冷却 0 约 1.0 秒；默认 2 秒约 3 秒；0.2～1.5 秒反而要 18～19 秒（惯性滚动期间一直等）
+    /// - 滑完马上读元素树：冷却 0 约 0.2 秒；默认约 2.2 秒；0.2 秒要约 18 秒
+    pub const NO_COOL_OFF: Self = Self { wait_for_idle_timeout: 1.0, animation_cool_off_timeout: 0.0 };
 }
 
 const SPRINGBOARD: &str = "com.apple.springboard";
+/// 启动 App 后至少过这么久才返回：App 切到前台的放大动画约 0.5 秒，期间的点击会被吞
+const LAUNCH_MIN: Duration = Duration::from_millis(800);
+
+/// [`WdaClient::launch_app`] 的结果
+#[derive(Debug, Clone, PartialEq)]
+pub enum Launch {
+    /// 到了前台
+    Foreground,
+    /// 系统弹窗挡着（弹窗文字）
+    Blocked(String),
+    /// 8 秒内没到前台，也没有弹窗
+    Slow,
+}
 
 /// [`WdaClient::check_lock`] 的结果
 #[derive(Debug)]
@@ -262,8 +279,13 @@ impl<T: Transport> WdaClient<T> {
     }
 
     pub async fn elements(&mut self) -> Result<Vec<elements::Element>> {
+        Ok(self.tree().await?.elements)
+    }
+
+    /// 元素树，带上「谁盖住谁」「有没有加载圈」等信息
+    pub async fn tree(&mut self) -> Result<elements::Tree> {
         let screen = self.screen_size().await?;
-        Ok(elements::parse(&self.source_xml().await?, screen))
+        Ok(elements::parse_tree(&self.source_xml().await?, screen))
     }
 
     /// 点击：一个 W3C actions 单指手势（按下 50ms），期间把等待设置临时调小。真机计时（iOS 27）：
@@ -273,30 +295,53 @@ impl<T: Transport> WdaClient<T> {
     ///
     /// 和 `/wda/tap` 一样不等点击引起的动画结束，调用方要看结果就再截图
     pub async fn tap(&mut self, x: f64, y: f64) -> Result<()> {
-        self.quick_gesture(&tap_steps(x, y, TAP_PRESS_MS)).await
+        self.quick_gesture(&tap_steps(x, y, TAP_PRESS_MS), IdleSettings::QUICK).await
     }
 
     /// 长按：按下、停 `seconds` 秒、抬起，一个 actions 手势。`/wda/touchAndHold` 前后都等界面空闲，
     /// 真机上主屏长按图标 1.2 秒要约 12 秒才返回
     pub async fn touch_and_hold(&mut self, x: f64, y: f64, seconds: f64) -> Result<()> {
-        self.quick_gesture(&tap_steps(x, y, (seconds * 1000.0) as u64)).await
+        self.quick_gesture(&tap_steps(x, y, (seconds * 1000.0) as u64), IdleSettings::QUICK).await
     }
 
-    /// 发一个手势，期间把等待设置临时调小（见 [`Self::tap`]），做完恢复
-    async fn quick_gesture(&mut self, steps: &[PointerStep]) -> Result<()> {
-        let baseline = match self.idle_baseline {
-            Some(b) => b,
-            None => {
-                // 上次没恢复成功的话读到的就是调小的值：按 WDA 默认值算
-                let b = match self.idle_settings().await? {
-                    s if s == IdleSettings::QUICK => IdleSettings::DEFAULT,
-                    s => s,
-                };
-                self.idle_baseline = Some(b);
-                b
-            }
+    /// 滑动：一个 actions 手势，期间用 [`IdleSettings::NO_COOL_OFF`]。做完时列表可能还在惯性滚动，
+    /// 要看结果的调用方自己等界面稳定
+    pub async fn swipe(&mut self, from: (f64, f64), to: (f64, f64), ms: u64) -> Result<()> {
+        self.quick_gesture(&swipe_steps(from, to, ms), IdleSettings::NO_COOL_OFF).await
+    }
+
+    /// 开始轮询界面：读元素树时不等界面空闲、动画冷却（约 0.2 秒一次），由调用方比较前后两次判断稳定。
+    /// 用完调 [`Self::end_polling`] 恢复
+    pub async fn begin_polling(&mut self) -> Result<()> {
+        self.baseline().await?;
+        self.set_idle_settings(IdleSettings::NO_COOL_OFF).await
+    }
+
+    pub async fn end_polling(&mut self) {
+        let b = self.idle_baseline.unwrap_or(IdleSettings::DEFAULT);
+        if let Err(e) = self.set_idle_settings(b).await {
+            tracing::warn!("轮询后恢复 WDA 等待设置失败：{e}");
+        }
+    }
+
+    /// 平时的等待设置（第一次用时读一次）
+    async fn baseline(&mut self) -> Result<IdleSettings> {
+        if let Some(b) = self.idle_baseline {
+            return Ok(b);
+        }
+        // 上次没恢复成功的话读到的就是调小的值：按 WDA 默认值算
+        let b = match self.idle_settings().await? {
+            s if s == IdleSettings::QUICK || s == IdleSettings::NO_COOL_OFF => IdleSettings::DEFAULT,
+            s => s,
         };
-        self.set_idle_settings(IdleSettings::QUICK).await?;
+        self.idle_baseline = Some(b);
+        Ok(b)
+    }
+
+    /// 发一个手势，期间把等待设置临时换成 `during`（见 [`Self::tap`]），做完恢复
+    async fn quick_gesture(&mut self, steps: &[PointerStep], during: IdleSettings) -> Result<()> {
+        let baseline = self.baseline().await?;
+        self.set_idle_settings(during).await?;
         let r = self.actions(steps).await;
         if let Err(e) = self.set_idle_settings(baseline).await {
             tracing::warn!("手势后恢复 WDA 等待设置失败：{e}");
@@ -339,34 +384,54 @@ impl<T: Transport> WdaClient<T> {
         self.post("/wda/lock", json!({})).await.map(drop)
     }
 
-    /// 启动并等到前台、界面稳定（冷启动后立即点击会被吞）。返回 8 秒内是否到了前台；
+    /// 启动并等到前台、界面稳定（冷启动后立即点击会被吞），最多等 8 秒。
     /// 等待期间查前台出错不算失败（启动命令已经成功了）
-    pub async fn launch_app(&mut self, bundle_id: &str) -> Result<bool> {
+    pub async fn launch_app(&mut self, bundle_id: &str) -> Result<Launch> {
+        let started = tokio::time::Instant::now();
         self.in_session("POST", "/wda/apps/launch", Some(json!({"bundleId": bundle_id})), Duration::from_secs(60))
             .await?;
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(8);
+        let t0 = tokio::time::Instant::now();
+        let deadline = t0 + Duration::from_secs(8);
         let mut foreground = false;
         while tokio::time::Instant::now() < deadline {
-            if self.active_app().await.is_ok_and(|a| a == bundle_id) {
-                foreground = true;
-                break;
+            match self.active_app().await {
+                Ok(a) if a == bundle_id => {
+                    foreground = true;
+                    break;
+                }
+                // 系统弹窗（权限请求）挡着时前台一直是 SpringBoard，原来要白等满 8 秒。
+                // 刚启动的一瞬间前台也还是 SpringBoard，过 1 秒还是才去查弹窗（查一次约 0.4 秒）
+                Ok(a) if a == SPRINGBOARD && bundle_id != SPRINGBOARD && t0.elapsed() >= Duration::from_secs(1) => {
+                    if let Ok(Some(text)) = self.alert_text().await {
+                        return Ok(Launch::Blocked(text));
+                    }
+                }
+                _ => {}
             }
             tokio::time::sleep(Duration::from_millis(500)).await;
         }
+        if !foreground {
+            return Ok(match self.alert_text().await {
+                Ok(Some(text)) => Launch::Blocked(text),
+                _ => Launch::Slow,
+            });
+        }
         // 冷启动后立即点击会被吞（回归用例 #13）。原来固定再等 1 秒；改为等界面稳定：连续两次元素树一样
         // （读元素树时 WDA 本身也等界面空闲），最多仍是 1 秒
-        if foreground {
-            let deadline = tokio::time::Instant::now() + Duration::from_secs(1);
-            let mut prev = None;
-            while tokio::time::Instant::now() < deadline {
-                let cur = self.source_xml().await.ok();
-                if cur.is_some() && cur == prev {
-                    break;
-                }
-                prev = cur;
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(1);
+        let mut prev = None;
+        while tokio::time::Instant::now() < deadline {
+            let cur = self.source_xml().await.ok();
+            if cur.is_some() && cur == prev {
+                break;
             }
+            prev = cur;
         }
-        Ok(foreground)
+        // 切回已在后台的 App 时元素树马上就稳定了（约 0.4 秒），放大进场的动画还没完，这时点击会被吞（真机：小红书、高德各一次）
+        if let Some(left) = LAUNCH_MIN.checked_sub(started.elapsed()) {
+            tokio::time::sleep(left).await;
+        }
+        Ok(Launch::Foreground)
     }
 
     pub async fn terminate_app(&mut self, bundle_id: &str) -> Result<()> {

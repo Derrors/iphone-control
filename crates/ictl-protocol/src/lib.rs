@@ -66,6 +66,8 @@ pub enum Request {
     Settle {
         max_ms: u64,
     },
+    /// 查屏幕上有没有挡着的系统弹窗：有就返回提醒文字，没有返回空文字。不带 then 的操作做完后调
+    AlertCheck,
     /// 等包含 `text` 的元素出现，最多等 `timeout_ms`（代替 agent 反复截图轮询）
     WaitFor {
         text: String,

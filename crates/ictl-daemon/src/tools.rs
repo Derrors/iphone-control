@@ -5,7 +5,9 @@ use std::time::{Duration, Instant};
 use base64::Engine;
 use ictl_device::{AppInfo, Button, DeviceError, HidSession, ScreenSize, apps, hid::ascii_to_usage};
 use ictl_unlock::UnlockError;
-use ictl_wda::{WdaError, elements, swipe_steps};
+use ictl_wda::elements::{self, TapPoint, Tree};
+use ictl_wda::http::DeviceTransport;
+use ictl_wda::{Launch, WdaClient, WdaError};
 
 use crate::core::{Daemon, Inner, drop_tunnel, wda_down};
 use crate::imaging::{self, fmt_g};
@@ -18,6 +20,13 @@ pub(crate) const LOCK_SETTLE: Duration = Duration::from_secs(3);
 const VISUAL_SETTLE_BELOW: usize = 12;
 /// 两帧缩略图平均逐像素差低于这个值算静止（0～255）。游戏背景的轻微摆动约 1～2，消除动画几十
 const VISUAL_STILL: f64 = 3.0;
+/// 整体静止时，某一小块的平均差超过这个值算「还有一小块在动」（加载圈、小动画）。完全没动的两帧差是 0。
+/// 只在画面大部分是空白时才提醒（[`imaging::mostly_blank`]），游戏、地图的待机动画不算
+const LOCAL_MOTION: f64 = 4.0;
+/// 等界面稳定时，前后两次元素位置差不超过这么多点就算没动（惯性滚动的尾巴）
+const STILL_TOLERANCE: i64 = 3;
+/// 滑动后最多等这么久让列表停下（快速滑动的惯性滚动约 2 秒）
+const SCROLL_SETTLE: Duration = Duration::from_millis(2500);
 /// 按 Home 后最多等这么久，确认主屏到了前台
 const HOME_SETTLE: Duration = Duration::from_secs(2);
 const SPRINGBOARD: &str = "com.apple.springboard";
@@ -161,16 +170,16 @@ impl Daemon {
     }
 
     /// 当前界面的元素树。缓存不超过 `max_age` 就直接用（0 = 总是重读）；重读的结果写回缓存
-    async fn tree(&self, g: &mut Inner, max_age: Duration) -> Result<Vec<elements::Element>, String> {
+    async fn tree(&self, g: &mut Inner, max_age: Duration) -> Result<Tree, String> {
         if !max_age.is_zero()
-            && let Some((t, els)) = &g.elements_cache
+            && let Some((t, tree)) = &g.elements_cache
             && t.elapsed() <= max_age
         {
-            return Ok(els.clone());
+            return Ok(tree.clone());
         }
-        let els = self.require_wda(g)?.elements().await.map_err(|e| e.to_string())?;
-        g.elements_cache = Some((Instant::now(), els.clone()));
-        Ok(els)
+        let tree = self.require_wda(g)?.tree().await.map_err(|e| e.to_string())?;
+        g.elements_cache = Some((Instant::now(), tree.clone()));
+        Ok(tree)
     }
 
     pub(crate) async fn list_elements(
@@ -181,7 +190,7 @@ impl Daemon {
         max_age: Duration,
     ) -> Result<String, String> {
         self.ensure_unlocked(g).await?;
-        let els = self.tree(g, max_age).await?;
+        let els = self.tree(g, max_age).await?.elements;
         let shown: Vec<&elements::Element> =
             if filter.is_empty() { els.iter().collect() } else { elements::filter(&els, filter) };
         let lines: Vec<_> = shown.iter().take(limit).map(|e| e.describe()).collect();
@@ -194,39 +203,43 @@ impl Daemon {
     }
 
     /// 等界面稳定，最多等 `max`：
-    /// - 有元素树的界面：连续两次读到的元素一样（读元素树时 WDA 本身也会等界面空闲）
+    /// - 有元素树的界面：连续两次读到的元素一样，并且没有加载圈。轮询期间让 WDA 读树时不等界面空闲、动画冷却
+    ///   （否则滑完第一次读要等惯性滚动停下再冷却 2 秒，页面加载时一次能卡好几秒，超过上限很多）
     /// - 元素很少的界面（游戏、地图，画面变化不反映在元素树里）：改看画面，连续两帧缩略图几乎一样。
     ///   截图约 0.2 秒一张，两帧之间再隔一点，避免两帧落在同一段静止的过渡里
+    ///
+    /// 屏幕上有弹窗时在结果里提醒（读树时顺带看，不多花时间）
     pub(crate) async fn settle(&self, g: &mut Inner, max: Duration) -> Result<String, String> {
         let t0 = Instant::now();
         let Some(w) = self.wda(g) else {
             tokio::time::sleep(max.min(Duration::from_millis(500))).await;
             return Ok("WDA 不可用,等了 0.5 秒".into());
         };
-        let first = w.elements().await.map_err(|e| e.to_string())?;
-        if first.len() < VISUAL_SETTLE_BELOW {
-            return self.settle_visually(g, t0, max).await;
-        }
-        let mut prev = first;
-        let msg = loop {
-            // 读元素树时 WDA 本身会等界面空闲，两次之间不用再多等
-            tokio::time::sleep(Duration::from_millis(50)).await;
-            let cur = w.elements().await.map_err(|e| e.to_string())?;
-            let same = cur == prev;
-            prev = cur;
-            if same {
-                break format!("界面已稳定({:.1} 秒)", t0.elapsed().as_secs_f64());
-            }
-            if t0.elapsed() >= max {
-                break format!("{:.1} 秒内界面一直在变(可能有动画),按最后的状态返回", max.as_secs_f64());
-            }
+        w.begin_polling().await.map_err(|e| e.to_string())?;
+        let r = poll_stable(w, t0, max).await;
+        w.end_polling().await;
+        let (first, polled) = r?;
+        let Some((msg, tree)) = polled else {
+            // 元素很少：改看画面
+            let note = alert_note(&first);
+            return Ok(self.settle_visually(g, t0, max).await? + &note);
+        };
+        let note = alert_note(&tree);
+        // 自己画的加载圈（不是 ActivityIndicator）不在树里，树稳定了页面可能还在加载。
+        // 加载中的页面中间是空的：只在这种时候多看一眼画面（约 0.5 秒），平常不多花时间
+        let screen = self.screen(g).await?;
+        let msg = if msg.starts_with("界面已稳定") && middle_is_empty(&tree, screen.height) {
+            msg + &self.motion_note(g).await
+        } else {
+            msg
         };
         // 紧接着的 then=elements 直接用这棵树
-        g.elements_cache = Some((Instant::now(), prev));
-        Ok(msg)
+        g.elements_cache = Some((Instant::now(), tree));
+        Ok(msg + &note)
     }
 
     async fn settle_visually(&self, g: &mut Inner, t0: Instant, max: Duration) -> Result<String, String> {
+        let deadline = t0 + max;
         let w = self.require_wda(g)?;
         let mut prev: Option<Vec<u8>> = None;
         loop {
@@ -234,12 +247,19 @@ impl Daemon {
             let cur = tokio::task::spawn_blocking(move || imaging::thumbnail(&png))
                 .await
                 .map_err(|e| format!("图像处理任务异常：{e}"))??;
-            if let Some(p) = &prev
-                && imaging::thumb_diff(p, &cur) < VISUAL_STILL
-            {
-                return Ok(format!("画面已静止({:.1} 秒)", t0.elapsed().as_secs_f64()));
+            if let Some(p) = &prev {
+                let m = imaging::thumb_motion(p, &cur);
+                if m.mean < VISUAL_STILL {
+                    let local = if m.max_tile >= LOCAL_MOTION && imaging::mostly_blank(&cur) {
+                        ";但有一小块还在动(可能是加载圈或小动画),内容可能还没加载完,要等结果用 iphone_wait_for 或稍后再截图"
+                    } else {
+                        ""
+                    };
+                    return Ok(format!("画面已静止({:.1} 秒){local}", t0.elapsed().as_secs_f64()));
+                }
             }
-            if t0.elapsed() >= max {
+            // 不够再截一张（约 0.2 秒）、隔一下再比的时间了
+            if deadline.saturating_duration_since(Instant::now()) < Duration::from_millis(300) {
                 return Ok(format!("{:.1} 秒内画面一直在动,按最后的状态返回", max.as_secs_f64()));
             }
             prev = Some(cur);
@@ -247,21 +267,65 @@ impl Daemon {
         }
     }
 
+    /// 隔一下截两张图，画面还在动就返回提醒，否则返回空串
+    async fn motion_note(&self, g: &mut Inner) -> String {
+        let Some(w) = self.wda(g) else { return String::new() };
+        let mut thumbs = Vec::new();
+        for i in 0..2 {
+            if i > 0 {
+                tokio::time::sleep(Duration::from_millis(150)).await;
+            }
+            let Ok(png) = w.screenshot_png().await else { return String::new() };
+            match tokio::task::spawn_blocking(move || imaging::thumbnail(&png)).await {
+                Ok(Ok(t)) => thumbs.push(t),
+                _ => return String::new(),
+            }
+        }
+        let m = imaging::thumb_motion(&thumbs[0], &thumbs[1]);
+        if (m.mean >= VISUAL_STILL || m.max_tile >= LOCAL_MOTION) && imaging::mostly_blank(&thumbs[1]) {
+            ";但画面中间是空的、还有东西在动(可能还在加载),要等结果用 iphone_wait_for 或稍后再截图".into()
+        } else {
+            String::new()
+        }
+    }
+
+    /// 前台是 SpringBoard 时查有没有系统弹窗（权限请求等），有就返回提醒，没有返回空串。
+    /// 不带 then 的操作做完后调：弹窗挡着时点击、滑动都会落在弹窗上，WDA 却照样报成功。
+    /// 前台是 App 时只多一次约 0.13 秒的查询；在主屏上再多约 0.4 秒
+    pub(crate) async fn alert_check(&self, g: &mut Inner) -> Result<String, String> {
+        let Some(w) = self.wda(g) else { return Ok(String::new()) };
+        if w.active_app().await.map_err(|e| e.to_string())? != SPRINGBOARD {
+            return Ok(String::new());
+        }
+        Ok(match w.alert_text().await {
+            Ok(Some(text)) => alert_msg(&text),
+            _ => String::new(),
+        })
+    }
+
     /// 等包含 `text` 的元素出现
     pub(crate) async fn wait_for(&self, g: &mut Inner, text: &str, timeout: Duration) -> Result<String, String> {
         self.ensure_unlocked(g).await?;
         let t0 = Instant::now();
         let w = self.require_wda(g)?;
-        loop {
-            let els = w.elements().await.map_err(|e| e.to_string())?;
-            if let Some(e) = elements::find(&els, text).first() {
-                return Ok(format!("已出现 {}({:.1} 秒)", e.describe(), t0.elapsed().as_secs_f64()));
+        // 轮询时不等界面空闲：页面还在加载、播放动画时每次读树也只要约 0.2 秒
+        w.begin_polling().await.map_err(|e| e.to_string())?;
+        let r = async {
+            loop {
+                let els = w.elements().await.map_err(|e| e.to_string())?;
+                // 不算输入框里的字：刚输入的搜索词不能算「结果出来了」
+                if let Some(e) = elements::find_shown(&els, text).first() {
+                    return Ok(format!("已出现 {}({:.1} 秒)", e.describe(), t0.elapsed().as_secs_f64()));
+                }
+                if t0.elapsed() >= timeout {
+                    return Err(format!("{:.0} 秒内没出现包含 \"{text}\" 的元素,截图看看屏幕", timeout.as_secs_f64()));
+                }
+                tokio::time::sleep(Duration::from_millis(300)).await;
             }
-            if t0.elapsed() >= timeout {
-                return Err(format!("{:.0} 秒内没出现包含 \"{text}\" 的元素,截图看看屏幕", timeout.as_secs_f64()));
-            }
-            tokio::time::sleep(Duration::from_millis(300)).await;
         }
+        .await;
+        w.end_polling().await;
+        r
     }
 
     pub(crate) async fn tap(&self, g: &mut Inner, x: f64, y: f64) -> Result<String, String> {
@@ -287,8 +351,8 @@ impl Daemon {
         max_age: Duration,
     ) -> Result<String, String> {
         self.ensure_unlocked(g).await?;
-        let els = self.tree(g, max_age).await?;
-        let matches = elements::find(&els, text);
+        let tree = self.tree(g, max_age).await?;
+        let matches = elements::find(&tree.elements, text);
         if matches.is_empty() {
             return Ok(format!("没找到包含 \"{text}\" 的元素,先用 iphone_list_elements 或截图看看屏幕"));
         }
@@ -297,13 +361,26 @@ impl Daemon {
             return Ok(format!("只匹配到 {} 个:\n{}", matches.len(), list.join("\n")));
         }
         let e = matches[index];
-        self.require_wda(g)?.tap(e.center.0 as f64, e.center.1 as f64).await.map_err(|e| e.to_string())?;
+        // 中心被悬浮栏、键盘、浮层之类盖住时，点上去会落在盖着的东西上
+        let ((x, y), moved) = match tree.tap_point(e) {
+            TapPoint::Center(p) => (p, String::new()),
+            TapPoint::Moved { at, by } => {
+                (at, format!(";它的中心被「{by}」盖住,改点没被盖住的 ({},{})", fmt_g(at.0), fmt_g(at.1)))
+            }
+            TapPoint::Covered { by } => {
+                return Ok(format!(
+                    "被挡住:{} 整个被「{by}」盖住,没有点;先滑动让它露出来,或截图后按坐标点",
+                    e.describe()
+                ));
+            }
+        };
+        self.require_wda(g)?.tap(x, y).await.map_err(|e| e.to_string())?;
         let note = if matches.len() > 1 {
             format!("(共匹配 {} 个,点的是第 {index} 个)", matches.len())
         } else {
             String::new()
         };
-        Ok(format!("已点击 {}{note}", e.describe()))
+        Ok(format!("已点击 {}{note}{moved}", e.describe()))
     }
 
     pub(crate) async fn long_press(&self, g: &mut Inner, x: f64, y: f64, seconds: f64) -> Result<String, String> {
@@ -322,8 +399,13 @@ impl Daemon {
         self.ensure_unlocked(g).await?;
         let desc = format!("({},{}) → ({},{})", fmt_g(from.0), fmt_g(from.1), fmt_g(to.0), fmt_g(to.1));
         if let Some(w) = self.wda(g) {
-            match w.actions(&swipe_steps(from, to, (seconds * 1000.0) as u64)).await {
-                Ok(()) => return Ok(format!("已滑动 {desc}")),
+            match w.swipe(from, to, (seconds * 1000.0) as u64).await {
+                // 滑动请求不等惯性滚动（等的话设置不对能卡十几秒），这里等列表停下再返回：
+                // 列表还在滚时下一次点击只会让它停住，点不到东西
+                Ok(()) => {
+                    let vertical = (to.1 - from.1).abs() >= (to.0 - from.0).abs();
+                    return Ok(format!("已滑动 {desc}{}", wait_scrolled(w, vertical).await));
+                }
                 Err(WdaError::Unavailable(_)) => {}
                 Err(e) => return Err(e.to_string()),
             }
@@ -334,7 +416,6 @@ impl Daemon {
 
     pub(crate) async fn type_text(&self, g: &mut Inner, text: &str, submit: bool) -> Result<String, String> {
         self.ensure_unlocked(g).await?;
-        let payload = if submit { format!("{text}\n") } else { text.to_owned() };
         let n = text.chars().count();
         if let Some(w) = self.wda(g) {
             // /wda/keys 没有输入框获得焦点时也返回成功，其实什么都没输：先看屏幕上有没有键盘
@@ -344,21 +425,39 @@ impl Daemon {
                         "屏幕上没有键盘(没有输入框获得焦点),什么都没输;先点一下输入框,截图确认键盘出来了再输入".into(),
                     );
                 }
-                Ok(true) => w.keys(&payload).await,
+                Ok(true) if text.is_empty() => Ok(()),
+                Ok(true) => w.keys(text).await,
                 Err(e) => Err(e),
             };
             match typed {
-                Ok(()) => return Ok(format!("已输入 {n} 个字符{}", if submit { ",并按了回车" } else { "" })),
+                Ok(()) => {
+                    // 有的 App 边输入边刷新输入框，会吞掉一部分字（高德搜索框「故宫博物院」只剩「故宫博」），WDA 照样报成功：
+                    // 输完读回输入框核对，少了结尾几个字就补上；对不上就不按回车
+                    let note = match verify_typed(w, text).await {
+                        Typed::Ok | Typed::Unknown => String::new(),
+                        Typed::Fixed(k) => format!("(第一次有 {k} 个字没输进去,已补上)"),
+                        Typed::Mismatch(now) => {
+                            return Err(format!(
+                                "输入了 {n} 个字符,但输入框里现在是「{now}」,和要输入的「{text}」对不上(App 可能吞掉了部分字符){};截图确认后再处理",
+                                if submit { ",没有按回车" } else { "" }
+                            ));
+                        }
+                    };
+                    if submit {
+                        w.keys("\n").await.map_err(|e| format!("文字已输入{note},按回车失败:{e}"))?;
+                    }
+                    return Ok(format!("已输入 {n} 个字符{note}{}", if submit { ",并按了回车" } else { "" }));
+                }
                 Err(WdaError::Unavailable(_)) => {}
                 Err(e) => return Err(e.to_string()),
             }
         }
+        let payload = if submit { format!("{text}\n") } else { text.to_owned() };
         // 先检查，一个都不输；不打开 HID 会话
         if let Some(c) = payload.chars().find(|c| ascii_to_usage(*c).is_none()) {
             return Err(format!("WDA 不可用,HID 只能输入美式键盘上的英文和符号,不能输入 {c:?}"));
         }
-        let p = payload.clone();
-        self.hid_do(g, move |h| Box::pin(async move { h.type_ascii(&p).await })).await?;
+        self.hid_do(g, move |h| Box::pin(async move { h.type_ascii(&payload).await })).await?;
         Ok(format!("已输入 {n} 个字符(经 HID)"))
     }
 
@@ -466,14 +565,12 @@ impl Daemon {
         let bid = self.resolve_app(g, app).await?;
         self.ensure_unlocked(g).await?;
         let w = self.require_wda(g)?;
-        if w.launch_app(&bid).await.map_err(|e| e.to_string())? {
-            return Ok(format!("已启动 {bid}"));
-        }
-        Ok(match w.alert_text().await {
-            Ok(Some(text)) => {
+        Ok(match w.launch_app(&bid).await.map_err(|e| e.to_string())? {
+            Launch::Foreground => format!("已启动 {bid}"),
+            Launch::Blocked(text) => {
                 format!("已启动 {bid},但屏幕上有系统弹窗「{text}」挡着;先用 iphone_tap_element 点弹窗上的按钮")
             }
-            _ => format!("已启动 {bid},但 8 秒内没到前台(可能启动慢),先截图确认"),
+            Launch::Slow => format!("已启动 {bid},但 8 秒内没到前台(可能启动慢),先截图确认"),
         })
     }
 
@@ -488,5 +585,192 @@ impl Daemon {
         self.ensure_unlocked(g).await?;
         self.require_wda(g)?.open_url(url).await.map_err(|e| e.to_string())?;
         Ok(format!("已打开 {url}"))
+    }
+}
+
+/// 屏幕中间（上下各去掉一段，留给导航栏、标签栏）几乎没有元素：加载中、空白页
+fn middle_is_empty(tree: &Tree, screen_h: f64) -> bool {
+    let (top, bottom) = ((screen_h * 0.25) as i64, (screen_h * 0.85) as i64);
+    tree.elements.iter().filter(|e| e.center.1 > top && e.center.1 < bottom).count() <= 1
+}
+
+/// 滑动后等列表停下（最多 [`SCROLL_SETTLE`]）：沿滑动方向的位置连续两次差不超过 [`STILL_TOLERANCE`]。
+/// 没停下返回提醒；元素很少（游戏、地图）看不出来，不等
+async fn wait_scrolled(w: &mut WdaClient<DeviceTransport>, vertical: bool) -> String {
+    if w.begin_polling().await.is_err() {
+        return String::new();
+    }
+    let t0 = Instant::now();
+    let r: Result<bool, WdaError> = async {
+        let mut prev = w.tree().await?;
+        if prev.elements.len() < VISUAL_SETTLE_BELOW {
+            return Ok(true);
+        }
+        while t0.elapsed() < SCROLL_SETTLE {
+            tokio::time::sleep(Duration::from_millis(30)).await;
+            let cur = w.tree().await?;
+            if cur.still_along(&prev, vertical, STILL_TOLERANCE) {
+                return Ok(true);
+            }
+            prev = cur;
+        }
+        Ok(false)
+    }
+    .await;
+    w.end_polling().await;
+    match r {
+        Ok(false) => format!("({:.1} 秒后列表还在动,可能还在滚动)", SCROLL_SETTLE.as_secs_f64()),
+        _ => String::new(),
+    }
+}
+
+/// 轮询元素树直到连续两次一样（位置差不超过 [`STILL_TOLERANCE`]，且没有加载圈）或到 `max`。返回第一次读到的树，以及 (结果说明, 最后的树)；
+/// 第一次读到的元素很少（游戏、地图）时第二项是 None，由调用方改看画面。
+/// 不中途丢弃请求：丢掉的请求手机上仍在执行，后面的请求要排在它后面
+async fn poll_stable(
+    w: &mut WdaClient<DeviceTransport>,
+    t0: Instant,
+    max: Duration,
+) -> Result<(Tree, Option<(String, Tree)>), String> {
+    let first = w.tree().await.map_err(|e| e.to_string())?;
+    if first.elements.len() < VISUAL_SETTLE_BELOW {
+        return Ok((first, None));
+    }
+    let mut prev = first.clone();
+    let msg = loop {
+        if t0.elapsed() >= max {
+            break if prev.loading {
+                format!(
+                    "{:.1} 秒内页面一直在加载(有加载圈),按最后的状态返回;要等结果出来用 iphone_wait_for",
+                    max.as_secs_f64()
+                )
+            } else {
+                format!("{:.1} 秒内界面一直在变(可能有动画),按最后的状态返回", max.as_secs_f64())
+            };
+        }
+        // 一次读树本身约 0.2 秒，两次之间不用再多等
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        let cur = w.tree().await.map_err(|e| e.to_string())?;
+        let same = cur.close_to(&prev, STILL_TOLERANCE);
+        prev = cur;
+        if same && !prev.loading {
+            break format!("界面已稳定({:.1} 秒)", t0.elapsed().as_secs_f64());
+        }
+    };
+    Ok((first, Some((msg, prev))))
+}
+
+fn alert_msg(text: &str) -> String {
+    format!("\n注意:屏幕上有系统弹窗「{text}」挡着,点击、滑动都会落在弹窗上;先用 iphone_tap_element 点弹窗上的按钮")
+}
+
+/// 树里有弹窗就返回提醒
+fn alert_note(tree: &Tree) -> String {
+    match tree.alert() {
+        Some(a) => {
+            let title = [&a.label, &a.name].into_iter().find(|s| !s.is_empty()).cloned().unwrap_or_default();
+            format!("\n注意:屏幕上有弹窗「{title}」,先点弹窗上的按钮(见元素列表或截图)")
+        }
+        None => String::new(),
+    }
+}
+
+/// 输入后核对的结果
+#[derive(Debug, PartialEq)]
+enum Typed {
+    Ok,
+    /// 核对不了：没读到输入框、有密码框、或读树失败
+    Unknown,
+    /// 结尾有几个字没输进去，已补上
+    Fixed(usize),
+    /// 对不上（输入框里现在的内容）
+    Mismatch(String),
+}
+
+fn squash(s: &str) -> String {
+    s.chars().filter(|c| !c.is_whitespace()).collect()
+}
+
+/// 输入框里的内容有没有包含刚输入的文字（忽略空白：手机号之类会被自动加空格）
+fn typed_into(values: &[String], text: &str) -> bool {
+    let want = squash(text);
+    values.iter().any(|v| squash(v).contains(&want))
+}
+
+/// 输入框结尾是 `text` 的前几个字（后面的丢了）：返回输进去了几个字
+fn typed_prefix(values: &[String], text: &str) -> Option<usize> {
+    let chars: Vec<char> = text.chars().collect();
+    values
+        .iter()
+        .filter_map(|v| {
+            let v = squash(v);
+            (1..chars.len()).rev().find(|&k| {
+                let p = squash(&chars[..k].iter().collect::<String>());
+                !p.is_empty() && v.ends_with(&p)
+            })
+        })
+        .max()
+}
+
+async fn verify_typed(w: &mut WdaClient<DeviceTransport>, text: &str) -> Typed {
+    if squash(text).is_empty() {
+        return Typed::Unknown;
+    }
+    let mut values = None;
+    // 树可能比输入框慢一拍：第一次对不上隔一下再读一次，确认真的少了再补，免得补重
+    for attempt in 0..2 {
+        if attempt > 0 {
+            tokio::time::sleep(Duration::from_millis(300)).await;
+        }
+        let Some(v) = w.elements().await.ok().and_then(|e| elements::field_values(&e)) else { return Typed::Unknown };
+        if v.is_empty() {
+            return Typed::Unknown;
+        }
+        if typed_into(&v, text) {
+            return Typed::Ok;
+        }
+        values = Some(v);
+    }
+    let values = values.unwrap_or_default();
+    let shown = || values.iter().find(|v| !v.is_empty()).cloned().unwrap_or_default();
+    let Some(k) = typed_prefix(&values, text) else { return Typed::Mismatch(shown()) };
+    // 剩下的一个字一个字慢慢补
+    let rest: Vec<char> = text.chars().skip(k).collect();
+    for c in &rest {
+        if w.keys(&c.to_string()).await.is_err() {
+            return Typed::Mismatch(shown());
+        }
+        tokio::time::sleep(Duration::from_millis(150)).await;
+    }
+    match w.elements().await.ok().and_then(|e| elements::field_values(&e)) {
+        Some(v) if typed_into(&v, text) => Typed::Fixed(rest.len()),
+        Some(v) => Typed::Mismatch(v.into_iter().find(|v| !v.is_empty()).unwrap_or_default()),
+        None => Typed::Unknown,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn v(s: &[&str]) -> Vec<String> {
+        s.iter().map(|x| x.to_string()).collect()
+    }
+
+    #[test]
+    fn typed_text_is_found_ignoring_spaces() {
+        assert!(typed_into(&v(&["搜索", "红烧肉做法"]), "红烧肉做法"));
+        assert!(typed_into(&v(&["130 1234 5678"]), "13012345678"));
+        assert!(!typed_into(&v(&["故宫博"]), "故宫博物院"));
+    }
+
+    #[test]
+    fn dropped_tail_is_detected_after_existing_text() {
+        assert_eq!(typed_prefix(&v(&["故宫博"]), "故宫博物院"), Some(3));
+        // 输入框原来就有字
+        assert_eq!(typed_prefix(&v(&["abc故宫"]), "故宫博物院"), Some(2));
+        // 一个字都没进去（或者是占位文字）：不猜，报对不上
+        assert_eq!(typed_prefix(&v(&["搜索"]), "故宫博物院"), None);
+        assert_eq!(typed_prefix(&v(&[""]), "故宫"), None);
     }
 }

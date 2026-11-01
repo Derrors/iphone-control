@@ -121,3 +121,6 @@ Bark、Telegram；事件见 architecture §7；同一事件去重。
 | 29 | WDA 请求超时后退到 HID，同一个动作做了两遍 | 传输层区分连不上（`WdaError::Unavailable`，可以退到 HID）和请求已发出后超时（`WdaError::Timeout`，不退） | 单测 + 代码审查 |
 | 30 | `.env` 里留空的 `ICTL_LOG=` 生成一个什么都不放行的过滤器，日志全没了 | 空值当作没设 | 真机（`docker logs`） |
 | 31 | `/wda/tap` 每次先等界面空闲：主屏点图标约 1.7 秒（调小等待设置也没用）；W3C actions 手势做完又要等动画冷却（默认 2 秒），App 里切标签约 1.9 秒 | 点击用单个 actions 手势，期间临时把 waitForIdleTimeout/animationCoolOffTimeout 调成 1/0.2，做完恢复（原值只读一次）。真机：主屏点图标 1.70→0.91 秒（到前台 1.80→1.01 秒），App 里 0.62→0.72 秒 | 单测（请求顺序、恢复原值）+ 真机计时 |
+| 32 | `/wda/keys` 没有输入框获得焦点时也返回成功，什么都没输（真机：Safari 地址栏没点中、主屏上直接输入） | 输入前查屏幕上有没有软键盘（`XCUIElementTypeKeyboard`，约 0.2 秒），没有就报错让先点输入框 | 真机 |
+| 33 | 系统弹窗（定位、通知权限）挡着时 Home 不生效、App 到不了前台，WDA 照样报成功；弹窗属于 SpringBoard，看前台 App 发现不了 | 按 Home 前查 `/alert/text`（App 静止时约 0.4 秒；按下后动画中查要好几秒）；有弹窗就说明并不按。launch_app 没到前台时同样带上弹窗文字。按 Home 后等主屏到前台再返回 | 真机计时；弹窗路径待弹窗再出现时复测 |
+| 34 | `/wda/touchAndHold` 前后都等界面空闲：主屏长按图标 1.2 秒要约 12 秒 | 长按和点击一样用单个 actions 手势、临时调小等待：约 2 秒 | 真机计时 |

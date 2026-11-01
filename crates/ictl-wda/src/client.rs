@@ -273,6 +273,17 @@ impl<T: Transport> WdaClient<T> {
     ///
     /// 和 `/wda/tap` 一样不等点击引起的动画结束，调用方要看结果就再截图
     pub async fn tap(&mut self, x: f64, y: f64) -> Result<()> {
+        self.quick_gesture(&tap_steps(x, y, TAP_PRESS_MS)).await
+    }
+
+    /// 长按：按下、停 `seconds` 秒、抬起，一个 actions 手势。`/wda/touchAndHold` 前后都等界面空闲，
+    /// 真机上主屏长按图标 1.2 秒要约 12 秒才返回
+    pub async fn touch_and_hold(&mut self, x: f64, y: f64, seconds: f64) -> Result<()> {
+        self.quick_gesture(&tap_steps(x, y, (seconds * 1000.0) as u64)).await
+    }
+
+    /// 发一个手势，期间把等待设置临时调小（见 [`Self::tap`]），做完恢复
+    async fn quick_gesture(&mut self, steps: &[PointerStep]) -> Result<()> {
         let baseline = match self.idle_baseline {
             Some(b) => b,
             None => {
@@ -286,20 +297,32 @@ impl<T: Transport> WdaClient<T> {
             }
         };
         self.set_idle_settings(IdleSettings::QUICK).await?;
-        let r = self.actions(&tap_steps(x, y, TAP_PRESS_MS)).await;
+        let r = self.actions(steps).await;
         if let Err(e) = self.set_idle_settings(baseline).await {
-            tracing::warn!("点击后恢复 WDA 等待设置失败：{e}");
+            tracing::warn!("手势后恢复 WDA 等待设置失败：{e}");
         }
         r
-    }
-
-    pub async fn touch_and_hold(&mut self, x: f64, y: f64, seconds: f64) -> Result<()> {
-        self.post("/wda/touchAndHold", json!({"x": x, "y": y, "duration": seconds})).await.map(drop)
     }
 
     /// 一次 W3C actions 请求。注意：多次点击合并成一个请求会漏键，解锁时每位单独发
     pub async fn actions(&mut self, steps: &[PointerStep]) -> Result<()> {
         self.post("/actions", actions_body(steps)).await.map(drop)
+    }
+
+    /// 屏幕上的系统弹窗（定位权限、通知权限等）的文字；没有弹窗返回 None。
+    /// 弹窗挡着时 Home 不生效、App 也到不了前台，WDA 却照样报成功
+    pub async fn alert_text(&mut self) -> Result<Option<String>> {
+        match self.in_session("GET", "/alert/text", None, DEFAULT_TIMEOUT).await {
+            Ok(v) => Ok(v.as_str().map(str::to_owned).filter(|t| !t.is_empty())),
+            Err(WdaError::Remote { kind, .. }) if kind.contains("alert") => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// 屏幕上有没有软键盘（有输入框获得了焦点）。`/wda/keys` 在没有焦点时也返回成功，什么都没输进去
+    pub async fn keyboard_shown(&mut self) -> Result<bool> {
+        let v = self.post("/elements", json!({"using": "class name", "value": "XCUIElementTypeKeyboard"})).await?;
+        Ok(v.as_array().is_some_and(|a| !a.is_empty()))
     }
 
     pub async fn keys(&mut self, text: &str) -> Result<()> {

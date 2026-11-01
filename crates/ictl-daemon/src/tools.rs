@@ -14,6 +14,9 @@ use crate::protocol::Response;
 
 /// 锁屏后至少等这么久再自动解锁：锁屏过渡没走完就唤醒，WDA 第一下上滑卡约 16 秒后报 `point.x != INFINITY`
 pub(crate) const LOCK_SETTLE: Duration = Duration::from_secs(3);
+/// 按 Home 后最多等这么久，确认主屏到了前台
+const HOME_SETTLE: Duration = Duration::from_secs(2);
+const SPRINGBOARD: &str = "com.apple.springboard";
 
 impl Daemon {
     /// 配置了密码就在锁屏时自动解锁；没配置而手机锁着则报错（与 toolkit 一致）
@@ -235,7 +238,17 @@ impl Daemon {
         let payload = if submit { format!("{text}\n") } else { text.to_owned() };
         let n = text.chars().count();
         if let Some(w) = self.wda(g) {
-            match w.keys(&payload).await {
+            // /wda/keys 没有输入框获得焦点时也返回成功，其实什么都没输：先看屏幕上有没有键盘
+            let typed = match w.keyboard_shown().await {
+                Ok(false) => {
+                    return Err(
+                        "屏幕上没有键盘(没有输入框获得焦点),什么都没输;先点一下输入框,截图确认键盘出来了再输入".into(),
+                    );
+                }
+                Ok(true) => w.keys(&payload).await,
+                Err(e) => Err(e),
+            };
+            match typed {
                 Ok(()) => return Ok(format!("已输入 {n} 个字符{}", if submit { ",并按了回车" } else { "" })),
                 Err(WdaError::Unavailable(_)) => {}
                 Err(e) => return Err(e.to_string()),
@@ -260,7 +273,33 @@ impl Daemon {
         };
         self.ensure_unlocked(g).await?;
         if let Some(w) = self.wda(g) {
+            // Home 在系统弹窗（定位、通知权限等）挡着时不生效，WDA 却照样返回成功。弹窗属于 SpringBoard，
+            // 看前台 App 发现不了，要单独查；按之前查（App 静止时约 0.4 秒，按下后动画中查要好几秒）
+            if hid_button == Button::Home
+                && let Ok(Some(text)) = w.alert_text().await
+            {
+                return Ok(format!(
+                    "屏幕上有系统弹窗「{text}」挡着,按 Home 不会生效,没有按;先用 iphone_tap_element 点弹窗上的按钮"
+                ));
+            }
             match w.press_button(wda_name).await {
+                // 等主屏真的到前台再说「已按」（紧接着查状态时前台不再是旧 App）
+                Ok(()) if hid_button == Button::Home => {
+                    let deadline = Instant::now() + HOME_SETTLE;
+                    loop {
+                        let app = w.active_app().await.unwrap_or_default();
+                        if app == SPRINGBOARD {
+                            return Ok(format!("已按 {button}"));
+                        }
+                        if Instant::now() >= deadline {
+                            return Ok(format!(
+                                "已按 {button},但 {} 秒后前台还是 {app},先截图看看",
+                                HOME_SETTLE.as_secs()
+                            ));
+                        }
+                        tokio::time::sleep(Duration::from_millis(150)).await;
+                    }
+                }
                 Ok(()) => return Ok(format!("已按 {button}")),
                 Err(WdaError::Unavailable(_)) => {}
                 Err(e) => return Err(e.to_string()),
@@ -327,11 +366,16 @@ impl Daemon {
     pub(crate) async fn launch_app(&self, g: &mut Inner, app: &str) -> Result<String, String> {
         let bid = self.resolve_app(g, app).await?;
         self.ensure_unlocked(g).await?;
-        if self.require_wda(g)?.launch_app(&bid).await.map_err(|e| e.to_string())? {
-            Ok(format!("已启动 {bid}"))
-        } else {
-            Ok(format!("已启动 {bid},但 8 秒内没到前台(可能有弹窗或启动慢),先截图确认"))
+        let w = self.require_wda(g)?;
+        if w.launch_app(&bid).await.map_err(|e| e.to_string())? {
+            return Ok(format!("已启动 {bid}"));
         }
+        Ok(match w.alert_text().await {
+            Ok(Some(text)) => {
+                format!("已启动 {bid},但屏幕上有系统弹窗「{text}」挡着;先用 iphone_tap_element 点弹窗上的按钮")
+            }
+            _ => format!("已启动 {bid},但 8 秒内没到前台(可能启动慢),先截图确认"),
+        })
     }
 
     pub(crate) async fn terminate_app(&self, g: &mut Inner, app: &str) -> Result<String, String> {

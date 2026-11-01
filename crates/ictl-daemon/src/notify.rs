@@ -30,6 +30,24 @@ impl Event {
         }
     }
 
+    /// 每类事件一个样例（`iphone-control notify-test` 用），顺序与枚举一致
+    pub fn samples() -> Vec<Event> {
+        vec![
+            Self::ResignFailed("（测试）苹果服务器返回错误".into()),
+            Self::SessionExpired("（测试）令牌已过期".into()),
+            Self::NeedsAutomationPin,
+            Self::WdaRecovered,
+            Self::UnlockDisabled,
+            Self::DeviceOffline { minutes: 10 },
+            Self::DeviceOnline { minutes: 12 },
+        ]
+    }
+
+    /// 样例的短名，`notify-test <名字>` 只发这一类
+    pub fn sample_name(&self) -> &'static str {
+        self.key()
+    }
+
     pub fn title_body(&self) -> (String, String) {
         match self {
             Self::ResignFailed(why) => (
@@ -138,6 +156,17 @@ pub async fn send(cfg: &NotifyConfig, title: &str, body: &str) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn samples_cover_every_event_kind_once() {
+        let names: Vec<&str> = Event::samples().iter().map(|e| e.sample_name()).collect();
+        let mut uniq = names.clone();
+        uniq.sort();
+        uniq.dedup();
+        assert_eq!(uniq.len(), names.len());
+        // 新增事件时这里的数字要跟着改，提醒同时补样例
+        assert_eq!(names.len(), 7);
+    }
 
     #[test]
     fn same_event_is_sent_once_until_cleared() {

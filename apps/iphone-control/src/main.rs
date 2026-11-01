@@ -65,6 +65,11 @@ enum Command {
         #[arg(long, default_value_t = 8100)]
         port: u16,
     },
+    /// 按已配置的渠道发测试通知：每类事件各一条（标题带「[测试]」），或只发指定的一类
+    NotifyTest {
+        /// resign / session / pin / pin-recovered / unlock / offline / online；不给就全发
+        event: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -106,7 +111,41 @@ async fn main() -> anyhow::Result<()> {
         Command::Passcode { action } => passcode(&cli.data_dir, action),
         Command::UnlockReset => print_text(&cli.socket, Request::UnlockReset).await,
         Command::WdaBridge { port } => wda_bridge(port).await,
+        Command::NotifyTest { event } => notify_test(&cli.data_dir, event.as_deref()).await,
     }
+}
+
+async fn notify_test(data_dir: &Path, only: Option<&str>) -> anyhow::Result<()> {
+    use ictl_daemon::notify::{Event, send};
+    let cfg = ictl_daemon::Config::from_env(data_dir).notify;
+    let channels =
+        usize::from(cfg.bark_key.is_some()) + usize::from(cfg.tg_bot_token.is_some() && cfg.tg_chat_id.is_some());
+    if channels == 0 {
+        bail!("没有配置通知渠道：在 .env 里填 BARK_KEY，或 TG_BOT_TOKEN + TG_CHAT_ID，然后重建容器");
+    }
+    let events: Vec<Event> =
+        Event::samples().into_iter().filter(|e| only.is_none_or(|n| e.sample_name() == n)).collect();
+    if events.is_empty() {
+        let names: Vec<&str> = Event::samples().iter().map(|e| e.sample_name()).collect();
+        bail!("没有这类事件，可选：{}", names.join(" / "));
+    }
+    let mut failed = 0;
+    for e in &events {
+        let (title, body) = e.title_body();
+        let ok = send(&cfg, &format!("[测试] {title}"), &body).await;
+        println!(
+            "{} {:<14} {title}（{ok}/{channels} 个渠道成功）",
+            if ok == channels { "✅" } else { "❌" },
+            e.sample_name()
+        );
+        failed += usize::from(ok < channels);
+        // Bark 同组消息太密会被手机合并，隔一下
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    }
+    if failed > 0 {
+        bail!("{failed} 条没有全部发出去，详见上面的 WARN 日志");
+    }
+    Ok(())
 }
 
 async fn ask(socket: &Path, req: Request) -> anyhow::Result<Response> {

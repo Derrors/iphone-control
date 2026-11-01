@@ -199,7 +199,7 @@ impl Daemon {
         } else {
             String::new()
         };
-        Ok(if lines.is_empty() { "没有找到带文字的元素".into() } else { lines.join("\n") } + &more)
+        Ok(if lines.is_empty() { no_elements_text(filter, els.len()) } else { lines.join("\n") } + &more)
     }
 
     /// 等界面稳定，最多等 `max`：
@@ -660,6 +660,16 @@ async fn poll_stable(
     Ok((first, Some((msg, prev))))
 }
 
+/// 列元素一个都没列出来时的说明。带 filter 没匹配上时要说清楚，不然 agent 会以为屏幕上什么都没有
+fn no_elements_text(filter: &str, total: usize) -> String {
+    if filter.is_empty() || total == 0 {
+        // 与 toolkit 的返回文字一致
+        "没有找到带文字的元素".into()
+    } else {
+        format!("没有找到包含 \"{filter}\" 的元素(屏幕上另有 {total} 个带文字的元素,不带 filter 可全部列出)")
+    }
+}
+
 fn alert_msg(text: &str) -> String {
     format!("\n注意:屏幕上有系统弹窗「{text}」挡着,点击、滑动都会落在弹窗上;先用 iphone_tap_element 点弹窗上的按钮")
 }
@@ -755,6 +765,14 @@ mod tests {
 
     fn v(s: &[&str]) -> Vec<String> {
         s.iter().map(|x| x.to_string()).collect()
+    }
+
+    #[test]
+    fn no_match_with_filter_names_the_filter() {
+        assert_eq!(no_elements_text("", 0), "没有找到带文字的元素");
+        assert_eq!(no_elements_text("通用", 0), "没有找到带文字的元素");
+        let t = no_elements_text("通用", 12);
+        assert!(t.contains("\"通用\"") && t.contains("12 个"), "{t}");
     }
 
     #[test]

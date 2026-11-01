@@ -43,6 +43,116 @@ enum Check {
     },
     /// 5. 启动 WDA：读 /status、/source、/screenshot，最后停掉 runner
     Wda { bundle_id: String },
+    /// 阶段 1 完成标准：隧道 → 镜像 → WDA → 截图 → 读元素 → 点「设置」→ Home，每步以 WDA 报告的前台 App 为准。
+    /// 再用 HID 重做「点设置 → Home」一遍，确认 HID 点击真的生效
+    E2e {
+        bundle_id: String,
+        /// 截图保存位置
+        #[arg(long, default_value = "e2e.png")]
+        out: PathBuf,
+    },
+}
+
+const SPRINGBOARD: &str = "com.apple.springboard";
+const PREFERENCES: &str = "com.apple.Preferences";
+
+/// 等前台 App 变成 `want`，最多 8 秒；返回最后看到的前台 App
+async fn wait_foreground(wda: &ictl_wda::WdaClient<ictl_wda::http::DeviceTransport>, want: &str) -> String {
+    let deadline = Instant::now() + Duration::from_secs(8);
+    loop {
+        let now = wda.active_app().await.unwrap_or_default();
+        if now == want || Instant::now() >= deadline {
+            return now;
+        }
+        tokio::time::sleep(Duration::from_millis(300)).await;
+    }
+}
+
+/// 一步的结果：打印并在失败时带上说明返回错误
+fn check(step: &str, t0: Instant, ok: bool, detail: String) -> anyhow::Result<()> {
+    let el = t0.elapsed().as_secs_f64();
+    if ok {
+        println!("✓ {step}（{el:.2}s）{detail}");
+        Ok(())
+    } else {
+        println!("✗ {step}（{el:.2}s）{detail}");
+        anyhow::bail!("{step} 失败：{detail}")
+    }
+}
+
+async fn e2e(device: &Device, bundle_id: &str, out: &std::path::Path) -> anyhow::Result<()> {
+    let t = Instant::now();
+    let mut tunnel = device.open_tunnel().await?;
+    check("建隧道", t, true, String::new())?;
+
+    let t = Instant::now();
+    let ddi = tunnel.ddi_mounted().await?;
+    check("开发者镜像", t, ddi.is_some(), ddi.unwrap_or_else(|| "未挂载（先运行 ddi 子命令）".into()))?;
+
+    let t = Instant::now();
+    let (runner, mut wda) = ictl_wda::WdaRunner::start(device.provider(), bundle_id, Duration::from_secs(60)).await?;
+    check("启动 WDA", t, true, String::new())?;
+    let r = e2e_with_wda(&mut tunnel, &mut wda, out).await;
+    runner.stop();
+    r
+}
+
+async fn e2e_with_wda(
+    tunnel: &mut ictl_device::Tunnel,
+    wda: &mut ictl_wda::WdaClient<ictl_wda::http::DeviceTransport>,
+    out: &std::path::Path,
+) -> anyhow::Result<()> {
+    // 先回主屏，保证「设置」图标在当前页
+    let t = Instant::now();
+    wda.press_button("home").await?;
+    let now = wait_foreground(wda, SPRINGBOARD).await;
+    check("回主屏", t, now == SPRINGBOARD, format!("前台 {now}"))?;
+
+    let t = Instant::now();
+    let png = wda.screenshot_png().await?;
+    std::fs::write(out, &png)?;
+    check("WDA 截图", t, png.starts_with(b"\x89PNG"), format!("{} 字节 → {}", png.len(), out.display()))?;
+
+    let t = Instant::now();
+    let els = wda.elements().await?;
+    let icon = els.iter().find(|e| e.label == "设置" && e.kind == "Icon").cloned();
+    check(
+        "读元素",
+        t,
+        icon.is_some(),
+        format!("{} 个元素；「设置」{}", els.len(), icon.as_ref().map_or("未找到".into(), |e| e.describe())),
+    )?;
+    let (x, y) = icon.unwrap().center;
+    let (x, y) = (x as f64, y as f64);
+
+    let t = Instant::now();
+    wda.tap(x, y).await?;
+    let now = wait_foreground(wda, PREFERENCES).await;
+    check("WDA 点「设置」", t, now == PREFERENCES, format!("前台 {now}"))?;
+
+    let t = Instant::now();
+    wda.press_button("home").await?;
+    let now = wait_foreground(wda, SPRINGBOARD).await;
+    check("WDA Home", t, now == SPRINGBOARD, format!("前台 {now}"))?;
+
+    // HID 路线：同样的点击和 Home，以 WDA 的前台 App 判断是否生效
+    let screen = wda.screen_size().await?;
+    let t = Instant::now();
+    let mut hid = tunnel.hid(screen).await?;
+    check("打开 HID 会话", t, true, String::new())?;
+    let r = async {
+        let t = Instant::now();
+        hid.tap(x, y).await?;
+        let now = wait_foreground(wda, PREFERENCES).await;
+        check("HID 点「设置」", t, now == PREFERENCES, format!("前台 {now}"))?;
+        let t = Instant::now();
+        hid.press(Button::Home).await?;
+        let now = wait_foreground(wda, SPRINGBOARD).await;
+        check("HID Home", t, now == SPRINGBOARD, format!("前台 {now}"))
+    }
+    .await;
+    hid.close().await;
+    r
 }
 
 #[tokio::main]
@@ -147,6 +257,11 @@ async fn main() -> anyhow::Result<()> {
             println!("截图 {} 字节，耗时 {:.2}s", wda.screenshot_png().await?.len(), t2.elapsed().as_secs_f64());
             runner.stop();
             println!("runner 已停止");
+        }
+        Check::E2e { bundle_id, out } => {
+            let t0 = Instant::now();
+            e2e(&device, &bundle_id, &out).await?;
+            println!("全部通过，总耗时 {:.1}s", t0.elapsed().as_secs_f64());
         }
     }
     Ok(())

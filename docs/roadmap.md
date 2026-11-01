@@ -9,7 +9,7 @@
 | 阶段 | 代码 | 仍待真机确认 / 未完成 |
 |---|---|---|
 | 0 spike | ✅ 5 项全过：TSS/挂载、HID Home 键、截图、30 分钟隧道、WDA 启动与读回 | 手机重启后补跑正式 `ddi` 挂载；HID 点击/drag/键盘；隧道锁屏 |
-| 1 设备核心库 | usbmux 发现、sysfs 兜底、配对、开发者模式、CoreDeviceProxy 用户态隧道 + RSD、cryptexd 查询/挂载、DDI 下载缓存、截图、HID（持有媒体流）、列 App/安装；WDA 直连设备端口的 HTTP 客户端、会话自动重建、元素树解析、XCTest 启动 runner | 完成标准的示例程序（建隧道 → 镜像 → WDA → 截图 → 读元素 → 点「设置」→ Home）；`XCUITestService` 能否拉起**我们自己签**的 WDA（spike 用的是 toolkit 签的）；「Enable UI Automation」超时的报错文字是否和 go-ios 一样含 `enabling automation mode`；500KB 元素树经 jktcp 读回 |
+| 1 设备核心库 | usbmux 发现、sysfs 兜底、配对、开发者模式、CoreDeviceProxy 用户态隧道 + RSD、cryptexd 查询/挂载、DDI 下载缓存、截图、HID（持有媒体流）、列 App/安装；WDA 直连设备端口的 HTTP 客户端、会话自动重建、元素树解析、XCTest 启动 runner。完成标准的示例程序 `ictl-spike e2e` 已在真机通过（9.8 秒；WDA 和 HID 两条路线的点击与 Home 都以前台 App 变化确认生效） | `XCUITestService` 能否拉起**我们自己签**的 WDA（e2e 用的是 toolkit 签的）；「Enable UI Automation」超时的报错文字是否和 go-ios 一样含 `enabling automation mode`；500KB 元素树经 jktcp 读回 |
 | 2 守护进程 | 状态机、usbmuxd 子进程看护、WDA 就绪判定与退避、密码框 60 秒重试、控制 socket、事件日志轮转、state.json | 冷启动 ≤90 秒、拔插/杀 usbmuxd/手机重启三种恢复、24 小时内存 |
 | 3 MCP | 13 个工具，参数与返回文字对齐 toolkit；区域放大；HID 后备 | 用 toolkit 的回归脚本实跑；纯坐标（游戏）和元素（设置）两种场景 |
 | 4 签名与重签 | vendor plume_core/plume_store/omnisette/apple-codesign；登录（2FA、短信）、注册设备、App ID、描述文件、深度优先签名（XCTest 无 entitlements）、签后自检、定期重签、每日会话验证 | 签出来的 WDA 能否启动（XCTest 签名是否需要空 entitlements 而不是不带）；修复提交 Impactor 上游未做 |

@@ -69,8 +69,9 @@ impl AccountDir {
 
     fn anisette(&self) -> AnisetteConfiguration {
         let c = AnisetteConfiguration::default().set_configuration_path(self.dir.clone());
+        // 启用的是 v3 provider，它只看 v3 地址；原来设的是用不到的 v1 地址，自建服务不生效
         match &self.anisette_url {
-            Some(url) => c.set_anisette_url(url.clone()),
+            Some(url) => c.set_anisette_url_v3(url.clone()),
             None => c,
         }
     }
@@ -261,6 +262,15 @@ fn restrict_tree(dir: &Path) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 自建 anisette 服务地址要落到 v3 provider 实际读的字段上（原来设到 v1 字段，不生效）
+    #[test]
+    fn custom_anisette_url_reaches_v3_provider() {
+        let dir = AccountDir { dir: PathBuf::from("/tmp/x"), anisette_url: Some("https://ani.example.com".into()) };
+        assert_eq!(dir.anisette().anisette_url_v3(), "https://ani.example.com");
+        let default = AccountDir { dir: PathBuf::from("/tmp/x"), anisette_url: None };
+        assert_eq!(default.anisette().anisette_url_v3(), "https://mac-ani.jkcoxson.com");
+    }
     use std::time::{Duration, SystemTime};
 
     #[test]

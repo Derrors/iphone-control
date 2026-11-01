@@ -98,6 +98,18 @@ impl AnisetteConfiguration {
         self
     }
 
+    // iphone-control: the v3 provider reads anisette_url_v3, which had no setter, so a custom
+    // server could not be configured (set_anisette_url only changes the unused v1 field).
+    pub fn anisette_url_v3(&self) -> &String {
+        &self.anisette_url_v3
+    }
+
+    // iphone-control: see anisette_url_v3 above.
+    pub fn set_anisette_url_v3(mut self, anisette_url_v3: String) -> AnisetteConfiguration {
+        self.anisette_url_v3 = anisette_url_v3;
+        self
+    }
+
     pub fn set_macos_serial(mut self, macos_serial: String) -> AnisetteConfiguration {
         self.macos_serial = macos_serial;
         self

@@ -14,7 +14,7 @@
 | jktcp 0.1.8 | 用户态 TCP（idevice 间接依赖） | MIT | 间接依赖 | 同上 |
 | plume_core（Impactor） | Apple ID、开发者 API、描述文件、证书 | **MPL-2.0**（目录内 LICENSE） | vendor 到 `vendor/plume_core`，源码未改，只改了 Cargo.toml（workspace 继承、reqwest 不带 aws-lc-rs、omnisette 只开远程 anisette） | 以 MPL-2.0 随仓库提供源码；文件头保留 |
 | plume_store（Impactor） | 账号会话存储 | MIT（Impactor 根 LICENSE） | vendor 到 `vendor/plume_store`，源码未改 | 保留版权声明（`vendor/plume_store/LICENSE-MIT-Impactor`） |
-| omnisette（Impactor 3rdparty） | anisette 数据 | **MPL-2.0**（目录内 LICENSE；早期文档误写为 MIT，读源码后更正） | vendor 到 `vendor/omnisette`，源码未改；Cargo.toml 把本地 anisette 改成可选 feature `local-anisette`，本项目不启用，所以不编译没有许可证声明的 `android-loader`/`sysv64` 和 AGPL-3.0 的 `remove-async-await` | 同 plume_core |
+| omnisette（Impactor 3rdparty） | anisette 数据 | **MPL-2.0**（目录内 LICENSE；早期文档误写为 MIT，读源码后更正） | vendor 到 `vendor/omnisette`，`src/lib.rs` 加了 v3 服务地址的 getter/setter（自建 anisette 服务才能生效），其余源码未改；Cargo.toml 把本地 anisette 改成可选 feature `local-anisette`，本项目不启用，所以不编译没有许可证声明的 `android-loader`/`sysv64` 和 AGPL-3.0 的 `remove-async-await` | 同 plume_core |
 | plume_utils（Impactor） | Bundle、Signer | MIT（Impactor 根 LICENSE） | **未 vendor**：`ictl-sign/src/bundle.rs` 改写自它的 `bundle.rs`，签名流程在 `ictl-sign/src/lib.rs` 重写 | 文件头注明来源和版权 |
 | apple-codesign 0.29.0 | 代码签名 | **MPL-2.0** | vendor 到 `vendor/apple-codesign`（Impactor 打过 0o755 权限补丁的副本；去掉了上游的 tests/、docs/），经 `[patch.crates-io]` 替换 | 以 MPL-2.0 随仓库提供源码 |
 | rmcp 3.8.0 | MCP SDK | Apache-2.0（部分历史代码 MIT） | crates.io 依赖 | 保留 NOTICE/版权声明 |

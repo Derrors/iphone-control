@@ -5,12 +5,12 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
-description = "第 0 步真机验证程序"
+description = "第 0 步真机验证程序（直接调用 ictl-device / ictl-wda，与守护进程同一套代码）"
 
 [dependencies]
-idevice.workspace = true
+ictl-device.workspace = true
+ictl-wda.workspace = true
 clap.workspace = true
 tokio.workspace = true
 anyhow.workspace = true
-tracing.workspace = true
 tracing-subscriber.workspace = true

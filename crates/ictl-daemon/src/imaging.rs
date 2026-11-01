@@ -58,7 +58,15 @@ pub struct ZoomPlan {
     pub region: (f64, f64, f64, f64),
 }
 
-pub fn plan_zoom(img_w: u32, img_h: u32, screen: ScreenSize, x: f64, y: f64, width: f64, height: f64) -> Result<ZoomPlan, String> {
+pub fn plan_zoom(
+    img_w: u32,
+    img_h: u32,
+    screen: ScreenSize,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+) -> Result<ZoomPlan, String> {
     let (w, h) = oriented(img_w, img_h, screen);
     let (w, h) = (w as f64, h as f64);
     let (x1, y1) = (x.max(0.0), y.max(0.0));
@@ -77,7 +85,12 @@ pub fn plan_zoom(img_w: u32, img_h: u32, screen: ScreenSize, x: f64, y: f64, wid
 }
 
 /// 从原始高清截图裁出一块并放大。返回 (jpeg, 说明文字，含坐标换算式)
-pub fn region(png: &[u8], screen: ScreenSize, rect: (f64, f64, f64, f64), via: &str) -> Result<(Vec<u8>, String), String> {
+pub fn region(
+    png: &[u8],
+    screen: ScreenSize,
+    rect: (f64, f64, f64, f64),
+    via: &str,
+) -> Result<(Vec<u8>, String), String> {
     let img = decode(png)?;
     let p = plan_zoom(img.width(), img.height(), screen, rect.0, rect.1, rect.2, rect.3)?;
     let (cx, cy, cw, ch) = p.crop;
@@ -151,7 +164,10 @@ mod tests {
 
     #[test]
     fn region_outside_screen_errors() {
-        assert_eq!(plan_zoom(1290, 2796, SCREEN, 500.0, 10.0, 50.0, 50.0).unwrap_err(), "放大区域不在屏幕内(屏幕 430x932 点)");
+        assert_eq!(
+            plan_zoom(1290, 2796, SCREEN, 500.0, 10.0, 50.0, 50.0).unwrap_err(),
+            "放大区域不在屏幕内(屏幕 430x932 点)"
+        );
     }
 
     /// 回归用例 #16：倍数保留 3 位有效数字（2 位会让右边缘差约 1.4 点）
@@ -159,13 +175,19 @@ mod tests {
     fn zoom_caption_uses_three_significant_digits() {
         let (j, cap) = region(&png(1290, 2796), SCREEN, (0.0, 55.0, 430.0, 40.0), "WDA").unwrap();
         assert_eq!(jpeg_size(&j).0, 1200);
-        assert_eq!(cap, "区域 (0,55) 起 430x40 点,放大 2.79 倍;图中像素 (u,v) 对应屏幕点 (0+u/2.79, 55+v/2.79)(经 WDA)");
+        assert_eq!(
+            cap,
+            "区域 (0,55) 起 430x40 点,放大 2.79 倍;图中像素 (u,v) 对应屏幕点 (0+u/2.79, 55+v/2.79)(经 WDA)"
+        );
     }
 
     #[test]
     fn python_like_number_formatting() {
         assert_eq!((fmt_g(215.0), fmt_g(0.3), fmt_g(10.5)), ("215".into(), "0.3".into(), "10.5".into()));
-        assert_eq!((fmt_3g(2.790697), fmt_3g(12.0), fmt_3g(3.0), fmt_3g(0.5)), ("2.79".into(), "12".into(), "3".into(), "0.5".into()));
+        assert_eq!(
+            (fmt_3g(2.790697), fmt_3g(12.0), fmt_3g(3.0), fmt_3g(0.5)),
+            ("2.79".into(), "12".into(), "3".into(), "0.5".into())
+        );
     }
 
     #[test]

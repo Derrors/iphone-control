@@ -70,19 +70,21 @@ impl<T: Transport> WdaClient<T> {
 
     async fn call(&self, method: &str, path: &str, body: Option<Value>, timeout: Duration) -> Result<Value> {
         let body = body.map(|b| b.to_string().into_bytes());
-        let (status, raw) = self
-            .transport
-            .send(method, path, body, timeout)
-            .await
-            .map_err(|e| WdaError::Unavailable(e.to_string()))?;
+        let (status, raw) =
+            self.transport.send(method, path, body, timeout).await.map_err(|e| WdaError::Unavailable(e.to_string()))?;
         let v: Value = match serde_json::from_slice(&raw) {
             Ok(v) => v,
-            Err(_) if status >= 400 => return Err(WdaError::Remote { kind: "http".into(), message: status.to_string() }),
+            Err(_) if status >= 400 => {
+                return Err(WdaError::Remote { kind: "http".into(), message: status.to_string() });
+            }
             Err(e) => return Err(WdaError::Unavailable(format!("响应不是 JSON：{e}"))),
         };
         if let Some(err) = v.get("value").and_then(|x| x.get("error")).and_then(|e| e.as_str()) {
             let msg = v["value"].get("message").and_then(|m| m.as_str()).unwrap_or_default();
-            return Err(WdaError::Remote { kind: err.to_owned(), message: msg.lines().next().unwrap_or_default().to_owned() });
+            return Err(WdaError::Remote {
+                kind: err.to_owned(),
+                message: msg.lines().next().unwrap_or_default().to_owned(),
+            });
         }
         Ok(v)
     }
@@ -95,9 +97,8 @@ impl<T: Transport> WdaClient<T> {
         if let Some(s) = &self.session {
             return Ok(s.clone());
         }
-        let r = self
-            .call("POST", "/session", Some(json!({"capabilities": {"alwaysMatch": {}}})), DEFAULT_TIMEOUT)
-            .await?;
+        let r =
+            self.call("POST", "/session", Some(json!({"capabilities": {"alwaysMatch": {}}})), DEFAULT_TIMEOUT).await?;
         let id = r
             .get("sessionId")
             .and_then(|s| s.as_str())
@@ -109,7 +110,13 @@ impl<T: Transport> WdaClient<T> {
     }
 
     /// 带会话的请求；会话失效时重建一次再试
-    pub async fn in_session(&mut self, method: &str, path: &str, body: Option<Value>, timeout: Duration) -> Result<Value> {
+    pub async fn in_session(
+        &mut self,
+        method: &str,
+        path: &str,
+        body: Option<Value>,
+        timeout: Duration,
+    ) -> Result<Value> {
         for attempt in 0..2 {
             let sid = self.session_id().await?;
             match self.call(method, &format!("/session/{sid}{path}"), body.clone(), timeout).await {
@@ -204,7 +211,8 @@ impl<T: Transport> WdaClient<T> {
 
     /// 启动并等到前台后再停 1 秒（冷启动后立即点击会被吞）
     pub async fn launch_app(&mut self, bundle_id: &str) -> Result<()> {
-        self.in_session("POST", "/wda/apps/launch", Some(json!({"bundleId": bundle_id})), Duration::from_secs(60)).await?;
+        self.in_session("POST", "/wda/apps/launch", Some(json!({"bundleId": bundle_id})), Duration::from_secs(60))
+            .await?;
         let deadline = tokio::time::Instant::now() + Duration::from_secs(8);
         while tokio::time::Instant::now() < deadline && self.active_app().await? != bundle_id {
             tokio::time::sleep(Duration::from_millis(500)).await;
@@ -236,9 +244,8 @@ impl<T: Transport> WdaClient<T> {
 
     /// 锁屏密码栏的 (总位数, 已输入位数)；找不到密码栏返回 None
     pub async fn passcode_field(&mut self) -> Result<Option<(u32, u32)>> {
-        let els = self
-            .post("/elements", json!({"using": "class name", "value": "XCUIElementTypeSecureTextField"}))
-            .await?;
+        let els =
+            self.post("/elements", json!({"using": "class name", "value": "XCUIElementTypeSecureTextField"})).await?;
         for e in els.as_array().into_iter().flatten() {
             let Some(eid) = e.as_object().and_then(|o| o.values().next()).and_then(|v| v.as_str()) else { continue };
             let v = self.in_session("GET", &format!("/element/{eid}/attribute/value"), None, DEFAULT_TIMEOUT).await?;
@@ -265,12 +272,21 @@ mod tests {
 
     impl Mock {
         fn with(replies: &[(u16, &str)]) -> Self {
-            Self { replies: Mutex::new(replies.iter().map(|(s, b)| (*s, b.to_string())).collect()), ..Default::default() }
+            Self {
+                replies: Mutex::new(replies.iter().map(|(s, b)| (*s, b.to_string())).collect()),
+                ..Default::default()
+            }
         }
     }
 
     impl Transport for &Mock {
-        async fn send(&self, method: &str, path: &str, body: Option<Vec<u8>>, _: Duration) -> std::io::Result<(u16, Vec<u8>)> {
+        async fn send(
+            &self,
+            method: &str,
+            path: &str,
+            body: Option<Vec<u8>>,
+            _: Duration,
+        ) -> std::io::Result<(u16, Vec<u8>)> {
             self.seen.lock().unwrap().push((method.into(), path.into(), body.map(|b| String::from_utf8(b).unwrap())));
             let (s, b) = self.replies.lock().unwrap().pop_front().ok_or_else(|| std::io::Error::other("连接被拒绝"))?;
             Ok((s, b.into_bytes()))
@@ -293,10 +309,15 @@ mod tests {
 
     #[tokio::test]
     async fn remote_error_keeps_first_line_and_unreachable_maps_to_unavailable() {
-        let m = Mock::with(&[(200, r#"{"sessionId":"A"}"#), (500, r#"{"value":{"error":"unknown error","message":"boom\nstack"}}"#)]);
+        let m = Mock::with(&[
+            (200, r#"{"sessionId":"A"}"#),
+            (500, r#"{"value":{"error":"unknown error","message":"boom\nstack"}}"#),
+        ]);
         let mut c = WdaClient::new(&m);
         match c.tap(1.0, 1.0).await {
-            Err(WdaError::Remote { kind, message }) => assert_eq!((kind.as_str(), message.as_str()), ("unknown error", "boom")),
+            Err(WdaError::Remote { kind, message }) => {
+                assert_eq!((kind.as_str(), message.as_str()), ("unknown error", "boom"))
+            }
             other => panic!("{other:?}"),
         }
         assert!(matches!(c.status().await, Err(WdaError::Unavailable(_))));

@@ -12,13 +12,8 @@ pub const DEFAULT_BASE_URL: &str =
     "https://raw.githubusercontent.com/doronz88/DeveloperDiskImage/main/PersonalizedImages/Xcode_iOS_DDI_Cryptex";
 
 /// 缓存目录里必须有的文件。载荷名由上游仓库重写后的 BuildManifest 声明，固定不变
-pub const FILES: [&str; 5] = [
-    "BuildManifest.plist",
-    "Image.dmg",
-    "Image.dmg.trustcache",
-    "Image.dmg.cryptex_info",
-    "Image.dmg.root_hash",
-];
+pub const FILES: [&str; 5] =
+    ["BuildManifest.plist", "Image.dmg", "Image.dmg.trustcache", "Image.dmg.cryptex_info", "Image.dmg.root_hash"];
 
 /// 缓存是否完整
 pub fn cache_complete(dir: &Path) -> bool {

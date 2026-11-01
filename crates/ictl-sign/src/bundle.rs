@@ -51,12 +51,7 @@ impl Bundle {
     }
 
     fn read_string(&self, key: &str) -> Option<String> {
-        plist::Value::from_file(self.info_plist())
-            .ok()?
-            .as_dictionary()?
-            .get(key)?
-            .as_string()
-            .map(str::to_owned)
+        plist::Value::from_file(self.info_plist()).ok()?.as_dictionary()?.get(key)?.as_string().map(str::to_owned)
     }
 
     pub fn identifier(&self) -> Option<String> {

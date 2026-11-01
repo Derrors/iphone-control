@@ -73,10 +73,7 @@ pub(crate) mod tests {
         d.insert("Name".into(), "iOS Team Provisioning Profile: test".into());
         d.insert("TeamIdentifier".into(), plist::Value::Array(vec!["TEAM000000".into()]));
         d.insert("ExpirationDate".into(), plist::Value::Date(expires.into()));
-        d.insert(
-            "ProvisionedDevices".into(),
-            plist::Value::Array(devices.iter().map(|s| (*s).into()).collect()),
-        );
+        d.insert("ProvisionedDevices".into(), plist::Value::Array(devices.iter().map(|s| (*s).into()).collect()));
         d.insert("Entitlements".into(), plist::Value::Dictionary(ent));
         let mut xml = Vec::new();
         plist::Value::Dictionary(d).to_writer_xml(&mut xml).unwrap();

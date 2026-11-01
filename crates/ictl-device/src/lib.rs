@@ -118,9 +118,9 @@ pub fn usbmuxd_addr() -> UsbmuxdAddr {
 /// `root` 一般是 `/sys/bus/usb/devices`。
 pub fn apple_usb_present(root: &Path) -> bool {
     let Ok(entries) = std::fs::read_dir(root) else { return false };
-    entries.flatten().any(|e| {
-        std::fs::read_to_string(e.path().join("idVendor")).map(|v| v.trim() == "05ac").unwrap_or(false)
-    })
+    entries
+        .flatten()
+        .any(|e| std::fs::read_to_string(e.path().join("idVendor")).map(|v| v.trim() == "05ac").unwrap_or(false))
 }
 
 /// usbmuxd 看到的 USB 设备（不含网络设备）。usbmuxd 没在运行时返回错误。
@@ -228,6 +228,12 @@ impl Device {
         let mut proxy = InstallationProxyClient::connect(&*self.provider).await?;
         let kind = if include_system { "System" } else { "User" };
         Ok(apps::parse_apps(proxy.get_apps(Some(kind), None).await?))
+    }
+
+    /// 经 usbmuxd 直连手机上的 TCP 端口（WDA bridge 用）
+    pub async fn connect_port(&self, port: u16) -> Result<Box<dyn idevice::ReadWrite>> {
+        let dev = self.provider.connect(port).await?;
+        dev.get_socket().ok_or_else(|| DeviceError::Idevice("连接没有套接字".into()))
     }
 
     /// 上传并安装 .ipa 或 .app 目录

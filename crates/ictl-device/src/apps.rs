@@ -25,7 +25,7 @@ pub fn parse_apps(lookup: HashMap<String, plist::Value>) -> Vec<AppInfo> {
             }
             let name = ["CFBundleDisplayName", "CFBundleName"]
                 .iter()
-                .find_map(|k| d.get(*k).and_then(|v| v.as_string()).filter(|s| !s.is_empty()))
+                .find_map(|k| d.get(k).and_then(|v| v.as_string()).filter(|s| !s.is_empty()))
                 .unwrap_or_default()
                 .to_owned();
             let bundle_id = d.get("CFBundleIdentifier").and_then(|v| v.as_string()).unwrap_or(&bid).to_owned();

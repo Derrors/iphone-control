@@ -2020,15 +2020,10 @@ name = "ictl-mcp"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "base64 0.23.1",
  "ictl-daemon",
- "image",
  "rmcp",
- "serde",
  "serde_json",
- "thiserror 2.0.21",
  "tokio",
- "tracing",
 ]
 
 [[package]]
@@ -2052,9 +2047,9 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
- "idevice",
+ "ictl-device",
+ "ictl-wda",
  "tokio",
- "tracing",
  "tracing-subscriber",
 ]
 
@@ -2289,8 +2284,10 @@ dependencies = [
  "anyhow",
  "clap",
  "ictl-daemon",
+ "ictl-device",
  "ictl-mcp",
  "ictl-sign",
+ "serde_json",
  "tokio",
  "tracing",
  "tracing-subscriber",

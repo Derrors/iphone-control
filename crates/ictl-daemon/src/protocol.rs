@@ -11,33 +11,74 @@ pub enum Request {
     /// MCP 的 iphone_status：与 toolkit 相同的文字
     Status,
     /// 区域单位为点；None 表示整屏
-    Screenshot { region: Option<(f64, f64, f64, f64)> },
-    ListElements { filter: String, limit: usize },
-    Tap { x: f64, y: f64 },
-    TapElement { text: String, index: usize },
-    LongPress { x: f64, y: f64, seconds: f64 },
-    Swipe { from: (f64, f64), to: (f64, f64), seconds: f64 },
-    TypeText { text: String, submit: bool },
-    PressButton { button: String },
-    ListApps { include_system: bool },
-    LaunchApp { app: String },
-    TerminateApp { app: String },
-    OpenUrl { url: String },
+    Screenshot {
+        region: Option<(f64, f64, f64, f64)>,
+    },
+    ListElements {
+        filter: String,
+        limit: usize,
+    },
+    Tap {
+        x: f64,
+        y: f64,
+    },
+    TapElement {
+        text: String,
+        index: usize,
+    },
+    LongPress {
+        x: f64,
+        y: f64,
+        seconds: f64,
+    },
+    Swipe {
+        from: (f64, f64),
+        to: (f64, f64),
+        seconds: f64,
+    },
+    TypeText {
+        text: String,
+        submit: bool,
+    },
+    PressButton {
+        button: String,
+    },
+    ListApps {
+        include_system: bool,
+    },
+    LaunchApp {
+        app: String,
+    },
+    TerminateApp {
+        app: String,
+    },
+    OpenUrl {
+        url: String,
+    },
     /// 运维：守护进程和设备的状态快照（JSON 文本）
     Daemon,
     /// 运维：逐层诊断，返回多行文字
     Doctor,
-    Resign { force: bool },
+    Resign {
+        force: bool,
+    },
     UnlockReset,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Response {
-    Text { text: String },
+    Text {
+        text: String,
+    },
     /// JPEG base64 + 说明文字（尺寸、放大倍数、坐标换算式）
-    Image { jpeg_base64: String, caption: String },
-    Error { message: String },
+    Image {
+        jpeg_base64: String,
+        caption: String,
+    },
+    Error {
+        message: String,
+    },
 }
 
 impl Response {

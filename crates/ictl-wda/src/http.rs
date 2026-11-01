@@ -36,7 +36,13 @@ impl DeviceTransport {
 }
 
 impl Transport for DeviceTransport {
-    async fn send(&self, method: &str, path: &str, body: Option<Vec<u8>>, timeout: Duration) -> std::io::Result<(u16, Vec<u8>)> {
+    async fn send(
+        &self,
+        method: &str,
+        path: &str,
+        body: Option<Vec<u8>>,
+        timeout: Duration,
+    ) -> std::io::Result<(u16, Vec<u8>)> {
         let req = build_request(method, path, body.as_deref());
         let fut = async {
             let idevice = self.provider.connect(self.port).await.map_err(std::io::Error::other)?;
@@ -47,17 +53,16 @@ impl Transport for DeviceTransport {
             sock.read_to_end(&mut buf).await?;
             parse_response(&buf)
         };
-        tokio::time::timeout(timeout, fut)
-            .await
-            .map_err(|_| std::io::Error::new(std::io::ErrorKind::TimedOut, format!("请求超时（{} 秒）", timeout.as_secs())))?
+        tokio::time::timeout(timeout, fut).await.map_err(|_| {
+            std::io::Error::new(std::io::ErrorKind::TimedOut, format!("请求超时（{} 秒）", timeout.as_secs()))
+        })?
     }
 }
 
 pub fn build_request(method: &str, path: &str, body: Option<&[u8]>) -> Vec<u8> {
     let body = body.unwrap_or_default();
-    let mut req = format!(
-        "{method} {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\nAccept: application/json\r\n"
-    );
+    let mut req =
+        format!("{method} {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\nAccept: application/json\r\n");
     if method != "GET" || !body.is_empty() {
         req.push_str(&format!("Content-Type: application/json\r\nContent-Length: {}\r\n", body.len()));
     }

@@ -85,7 +85,8 @@ impl AccountDir {
         restrict_dir(&self.dir)?;
         let (e, p) = (email.to_owned(), password.to_owned());
         let account = PlumeAccount::login(move || Ok((e.clone(), p.clone())), two_factor, self.anisette()).await?;
-        let mut store = AccountStore::load(&Some(self.store_path())).await.map_err(|e| SignError::Developer(e.to_string()))?;
+        let mut store =
+            AccountStore::load(&Some(self.store_path())).await.map_err(|e| SignError::Developer(e.to_string()))?;
         store
             .accounts_add_from_session(email.to_owned(), account)
             .await
@@ -95,13 +96,15 @@ impl AccountDir {
 
     /// 当前选中账号的邮箱
     pub async fn selected_email(&self) -> Result<String> {
-        let store = AccountStore::load(&Some(self.store_path())).await.map_err(|e| SignError::Developer(e.to_string()))?;
+        let store =
+            AccountStore::load(&Some(self.store_path())).await.map_err(|e| SignError::Developer(e.to_string()))?;
         store.selected_account().map(|a| a.email().clone()).ok_or(SignError::NotLoggedIn)
     }
 
     /// 用保存的令牌恢复会话，取第一个团队
     pub async fn session(&self) -> Result<Session> {
-        let store = AccountStore::load(&Some(self.store_path())).await.map_err(|e| SignError::Developer(e.to_string()))?;
+        let store =
+            AccountStore::load(&Some(self.store_path())).await.map_err(|e| SignError::Developer(e.to_string()))?;
         let acct = store.selected_account().ok_or(SignError::NotLoggedIn)?.clone();
         let inner = DeveloperSession::new(acct.adsid().clone(), acct.xcode_gs_token().clone(), self.anisette())
             .await
@@ -169,7 +172,8 @@ impl Session {
             profiles.push((b.dir.clone(), MobileProvision::load_with_bytes(data)?));
         }
 
-        let cert = CertificateIdentity::new_with_session(&self.inner, self.dir.dir.clone(), None, team, false, None).await?;
+        let cert =
+            CertificateIdentity::new_with_session(&self.inner, self.dir.dir.clone(), None, team, false, None).await?;
         for b in bundles.iter().filter(|b| b.kind.should_be_signed()) {
             let mut settings = SigningSettings::default();
             cert.load_into_signing_settings(&mut settings)?;
@@ -231,7 +235,8 @@ mod tests {
 
     fn signed_fake(root: &Path, sign_xctest: bool, devices: &[&str]) -> PathBuf {
         let app = bundle::tests::fake_wda(root);
-        let mut dirs = vec![app.clone(), app.join("PlugIns/WebDriverAgentRunner.xctest/Frameworks/WebDriverAgentLib.framework")];
+        let mut dirs =
+            vec![app.clone(), app.join("PlugIns/WebDriverAgentRunner.xctest/Frameworks/WebDriverAgentLib.framework")];
         if sign_xctest {
             dirs.push(app.join("PlugIns/WebDriverAgentRunner.xctest"));
         }

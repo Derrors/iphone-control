@@ -110,7 +110,11 @@ pub struct HidSession {
 }
 
 impl HidSession {
-    pub(crate) async fn open(adapter: &mut AdapterHandle, handshake: &mut RsdHandshake, screen: ScreenSize) -> Result<Self> {
+    pub(crate) async fn open(
+        adapter: &mut AdapterHandle,
+        handshake: &mut RsdHandshake,
+        screen: ScreenSize,
+    ) -> Result<Self> {
         let stream = crate::media::start(adapter, handshake, 1).await?;
         // backboardd 要一点时间把 HID 设备和刚授权的媒体流对上
         tokio::time::sleep(Duration::from_millis(300)).await;

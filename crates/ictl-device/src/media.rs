@@ -42,9 +42,8 @@ pub(crate) async fn start(
 ) -> Result<ScreenMediaStream> {
     let fail = |what: &str, e: &dyn std::fmt::Display| DeviceError::Idevice(format!("媒体流 {what}：{e}"));
 
-    let mut client = DisplayServiceClient::connect_rsd(adapter, handshake)
-        .await
-        .map_err(|e| fail("连接 displayservice", &e))?;
+    let mut client =
+        DisplayServiceClient::connect_rsd(adapter, handshake).await.map_err(|e| fail("连接 displayservice", &e))?;
     let audio_udp = adapter.bind_udp(0).await.map_err(|e| fail("绑定音频 UDP", &e))?;
     let video_udp = adapter.bind_udp(0).await.map_err(|e| fail("绑定视频 UDP", &e))?;
     let receiver_ip = adapter.host_ip().to_string();

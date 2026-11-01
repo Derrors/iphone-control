@@ -12,8 +12,8 @@ pub mod machine;
 pub mod notify;
 pub mod protocol;
 
-use tokio::sync::oneshot;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::sync::oneshot;
 
 pub use config::Config;
 pub use core::{Daemon, Snapshot};
@@ -68,7 +68,10 @@ pub async fn run(cfg: Config) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn serve_conn(tx: tokio::sync::mpsc::Sender<(protocol::Request, oneshot::Sender<protocol::Response>)>, stream: tokio::net::UnixStream) {
+async fn serve_conn(
+    tx: tokio::sync::mpsc::Sender<(protocol::Request, oneshot::Sender<protocol::Response>)>,
+    stream: tokio::net::UnixStream,
+) {
     let (r, mut w) = stream.into_split();
     let mut lines = BufReader::new(r).lines();
     while let Ok(Some(line)) = lines.next_line().await {

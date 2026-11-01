@@ -149,7 +149,9 @@ async fn unlock<T: Transport>(wda: &mut WdaClient<T>, cfg: &UnlockConfig, code: 
         if !wda.locked().await? {
             return Ok(Outcome::Unlocked);
         }
-        let (Some(pad), Some((total, entered))) = (elements::keypad(&wda.elements().await?), wda.passcode_field().await?) else {
+        let (Some(pad), Some((total, entered))) =
+            (elements::keypad(&wda.elements().await?), wda.passcode_field().await?)
+        else {
             continue;
         };
         if entered != 0 {

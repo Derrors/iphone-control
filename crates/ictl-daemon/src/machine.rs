@@ -16,7 +16,9 @@ pub enum DeviceState {
     /// 还没签名安装 WDA（iphone-control sign）
     NeedsSigning,
     /// 正在建隧道、挂镜像、启动 WDA，或启动失败在退避
-    WdaStarting { last_error: Option<String> },
+    WdaStarting {
+        last_error: Option<String>,
+    },
     /// 手机重启后首次启用 UI 自动化，等用户在手机上输锁屏密码
     NeedsAutomationPin,
     Ready,

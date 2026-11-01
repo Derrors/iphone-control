@@ -29,7 +29,10 @@ impl ErrorListener {
 }
 
 impl XCUITestListener for ErrorListener {
-    async fn initialization_for_ui_testing_did_fail(&mut self, description: &str) -> std::result::Result<(), IdeviceError> {
+    async fn initialization_for_ui_testing_did_fail(
+        &mut self,
+        description: &str,
+    ) -> std::result::Result<(), IdeviceError> {
         self.push(description);
         Ok(())
     }
@@ -47,8 +50,13 @@ pub struct WdaRunner {
 
 impl WdaRunner {
     /// 启动 runner 并等到 `/status` ready。`bundle_id` 是签名后带团队 ID 的 xctrunner Bundle ID。
-    pub async fn start(provider: Arc<dyn IdeviceProvider>, bundle_id: &str, timeout: Duration) -> Result<(Self, WdaClient<DeviceTransport>)> {
-        let mut ip = InstallationProxyClient::connect(&*provider).await.map_err(|e| WdaError::Unavailable(e.to_string()))?;
+    pub async fn start(
+        provider: Arc<dyn IdeviceProvider>,
+        bundle_id: &str,
+        timeout: Duration,
+    ) -> Result<(Self, WdaClient<DeviceTransport>)> {
+        let mut ip =
+            InstallationProxyClient::connect(&*provider).await.map_err(|e| WdaError::Unavailable(e.to_string()))?;
         let cfg = TestConfig::from_installation_proxy(&mut ip, bundle_id, None).await.map_err(|e| match e {
             IdeviceError::AppNotInstalled => WdaError::NotInstalled(bundle_id.to_owned()),
             other => WdaError::StartFailed(other.to_string()),

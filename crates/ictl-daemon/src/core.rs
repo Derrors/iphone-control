@@ -44,7 +44,8 @@ impl Persisted {
 
     fn save(&self, path: &Path) {
         let tmp = path.with_extension("json.tmp");
-        let r = std::fs::write(&tmp, serde_json::to_vec_pretty(self).unwrap_or_default()).and_then(|_| std::fs::rename(&tmp, path));
+        let r = std::fs::write(&tmp, serde_json::to_vec_pretty(self).unwrap_or_default())
+            .and_then(|_| std::fs::rename(&tmp, path));
         if let Err(e) = r {
             tracing::warn!("保存 state.json 失败：{e}");
         }
@@ -165,10 +166,10 @@ impl Daemon {
         let log = std::fs::OpenOptions::new().create(true).append(true).open(self.cfg.logs().join("usbmuxd.log"));
         let mut cmd = tokio::process::Command::new(&self.cfg.usbmuxd_bin);
         cmd.args(["-U", "root", "-f"]).kill_on_drop(true);
-        if let Ok(f) = log {
-            if let Ok(f2) = f.try_clone() {
-                cmd.stdout(f).stderr(f2);
-            }
+        if let Ok(f) = log
+            && let Ok(f2) = f.try_clone()
+        {
+            cmd.stdout(f).stderr(f2);
         }
         match cmd.spawn() {
             Ok(c) => {
@@ -223,10 +224,11 @@ impl Daemon {
         let now = Instant::now();
         if now >= g.next_resign {
             g.next_resign = now + self.cfg.resign_check;
-            if g.device.is_some() && g.persisted.wda_bundle.is_some() {
-                if let Err(e) = self.resign(g, false).await {
-                    self.notify(g, Event::ResignFailed(e));
-                }
+            if g.device.is_some()
+                && g.persisted.wda_bundle.is_some()
+                && let Err(e) = self.resign(g, false).await
+            {
+                self.notify(g, Event::ResignFailed(e));
             }
         }
         if now >= g.next_session_check {
@@ -257,7 +259,11 @@ impl Daemon {
             match Device::find(Some(udid)).await {
                 Ok(d) => {
                     g.info = d.info().await.ok();
-                    let model = g.info.as_ref().map(|i| format!(" {} iOS {}", i.product_type, i.product_version)).unwrap_or_default();
+                    let model = g
+                        .info
+                        .as_ref()
+                        .map(|i| format!(" {} iOS {}", i.product_type, i.product_version))
+                        .unwrap_or_default();
                     self.log.log(&format!("手机在线{model}"));
                     g.device = Some(d);
                 }
@@ -409,8 +415,14 @@ impl Daemon {
         let device = g.device.clone().ok_or("手机未连接")?;
         self.log.log("开始重签");
         let account = self.account();
-        let name = g.info.as_ref().map(|i| i.name.clone()).filter(|n| !n.is_empty()).unwrap_or_else(|| "iphone-control".into());
-        let (wda_dir, unsigned, signed_path) = (self.cfg.wda_dir(), self.cfg.wda_unsigned.clone(), self.cfg.wda_signed());
+        let name = g
+            .info
+            .as_ref()
+            .map(|i| i.name.clone())
+            .filter(|n| !n.is_empty())
+            .unwrap_or_else(|| "iphone-control".into());
+        let (wda_dir, unsigned, signed_path) =
+            (self.cfg.wda_dir(), self.cfg.wda_unsigned.clone(), self.cfg.wda_signed());
         // plume_core 的签名 future 不是 Send（持有 &mut dyn FnMut 和非 Send 的私钥），放到阻塞线程里 block_on
         let r: Result<ictl_sign::Signed, String> = tokio::task::spawn_blocking(move || {
             tokio::runtime::Handle::current().block_on(async move {
@@ -466,9 +478,10 @@ impl Daemon {
             Request::Swipe { from, to, seconds } => self.swipe(g, from, to, seconds).await,
             Request::TypeText { text, submit } => self.type_text(g, &text, submit).await,
             Request::PressButton { button } => self.press_button(g, &button).await,
-            Request::ListApps { include_system } => self.list_apps(g, include_system).await.map(|a| {
-                a.iter().map(|a| format!("{}\t{}", a.name, a.bundle_id)).collect::<Vec<_>>().join("\n")
-            }),
+            Request::ListApps { include_system } => self
+                .list_apps(g, include_system)
+                .await
+                .map(|a| a.iter().map(|a| format!("{}\t{}", a.name, a.bundle_id)).collect::<Vec<_>>().join("\n")),
             Request::LaunchApp { app } => self.launch_app(g, &app).await,
             Request::TerminateApp { app } => self.terminate_app(g, &app).await,
             Request::OpenUrl { url } => self.open_url(g, &url).await,
@@ -552,7 +565,10 @@ impl Daemon {
 
     async fn hid_do<F>(&self, g: &mut Inner, f: F) -> Result<(), String>
     where
-        F: for<'h> FnOnce(&'h mut HidSession) -> std::pin::Pin<Box<dyn std::future::Future<Output = ictl_device::Result<()>> + Send + 'h>>,
+        F: for<'h> FnOnce(
+            &'h mut HidSession,
+        )
+            -> std::pin::Pin<Box<dyn std::future::Future<Output = ictl_device::Result<()>> + Send + 'h>>,
     {
         let r = f(self.hid(g).await?).await;
         if let Err(e) = r {
@@ -567,7 +583,10 @@ impl Daemon {
         let daemon_line = format!("守护进程: {}", g.state.describe());
         let unlock = self.unlock_cfg();
         let Some(w) = self.wda(g) else {
-            return format!("{}\n读界面元素、按名字点击、启动 App、输入中文要等 WDA 恢复\n{daemon_line}", wda_down(&g.state));
+            return format!(
+                "{}\n读界面元素、按名字点击、启动 App、输入中文要等 WDA 恢复\n{daemon_line}",
+                wda_down(&g.state)
+            );
         };
         let r: Result<String, WdaError> = async {
             let ready = w.ready().await?;
@@ -584,7 +603,11 @@ impl Daemon {
                 lock += ";自动解锁已停用";
             }
             let ready = if ready { "True" } else { "False" };
-            Ok(format!("WDA 就绪: {ready}\n锁屏: {lock}\n前台 App: {app}\n屏幕: {}x{} 点", fmt_g(s.width), fmt_g(s.height)))
+            Ok(format!(
+                "WDA 就绪: {ready}\n锁屏: {lock}\n前台 App: {app}\n屏幕: {}x{} 点",
+                fmt_g(s.width),
+                fmt_g(s.height)
+            ))
         }
         .await;
         match r {
@@ -625,7 +648,8 @@ impl Daemon {
     async fn list_elements(&self, g: &mut Inner, filter: &str, limit: usize) -> Result<String, String> {
         self.ensure_unlocked(g).await?;
         let els = self.require_wda(g)?.elements().await.map_err(|e| e.to_string())?;
-        let shown: Vec<&elements::Element> = if filter.is_empty() { els.iter().collect() } else { elements::filter(&els, filter) };
+        let shown: Vec<&elements::Element> =
+            if filter.is_empty() { els.iter().collect() } else { elements::filter(&els, filter) };
         let lines: Vec<_> = shown.iter().take(limit).map(|e| e.describe()).collect();
         let more = if shown.len() > limit {
             format!("\n……另有 {} 个未列出,可用 filter 缩小范围", shown.len() - limit)
@@ -663,7 +687,11 @@ impl Daemon {
         }
         let e = matches[index];
         w.tap(e.center.0 as f64, e.center.1 as f64).await.map_err(|e| e.to_string())?;
-        let note = if matches.len() > 1 { format!("(共匹配 {} 个,点的是第 {index} 个)", matches.len()) } else { String::new() };
+        let note = if matches.len() > 1 {
+            format!("(共匹配 {} 个,点的是第 {index} 个)", matches.len())
+        } else {
+            String::new()
+        };
         Ok(format!("已点击 {}{note}", e.describe()))
     }
 
@@ -754,7 +782,8 @@ impl Daemon {
             return Ok(b.bundle_id.clone());
         }
         let system = self.list_apps(g, true).await?;
-        apps::resolve(app, [&user[..], &system[..]]).ok_or_else(|| format!("找不到名为 \"{app}\" 的 App,用 iphone_list_apps 查看"))
+        apps::resolve(app, [&user[..], &system[..]])
+            .ok_or_else(|| format!("找不到名为 \"{app}\" 的 App,用 iphone_list_apps 查看"))
     }
 
     async fn launch_app(&self, g: &mut Inner, app: &str) -> Result<String, String> {
@@ -787,7 +816,9 @@ impl Daemon {
         match ictl_device::list_devices().await {
             Ok(_) => out.push("✅ usbmuxd 在运行".into()),
             Err(e) => {
-                out.push(format!("❌ 连不上 usbmuxd：{e}\n     → 容器里由守护进程自动拉起；宿主机部署请启动 usbmuxd 服务"));
+                out.push(format!(
+                    "❌ 连不上 usbmuxd：{e}\n     → 容器里由守护进程自动拉起；宿主机部署请启动 usbmuxd 服务"
+                ));
                 fails += 1;
             }
         }
@@ -847,7 +878,9 @@ impl Daemon {
 
         out.push("== WDA".into());
         match self.wda(g) {
-            Some(w) if w.ready().await.unwrap_or(false) => out.push("✅ WDA 就绪（经 usbmuxd 直连，本机不监听端口）".into()),
+            Some(w) if w.ready().await.unwrap_or(false) => {
+                out.push("✅ WDA 就绪（经 usbmuxd 直连，本机不监听端口）".into())
+            }
             _ => {
                 out.push(format!("❌ WDA 不可用：{}", g.state.describe()));
                 fails += 1;

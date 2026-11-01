@@ -54,10 +54,11 @@ fn env_num<T: std::str::FromStr>(k: &str, default: T) -> T {
 
 impl Config {
     pub fn from_env(data_dir: &Path) -> Self {
-        let screen_fallback = match (env("SCREEN_W").and_then(|v| v.parse().ok()), env("SCREEN_H").and_then(|v| v.parse().ok())) {
-            (Some(width), Some(height)) => Some(ScreenSize { width, height }),
-            _ => None,
-        };
+        let screen_fallback =
+            match (env("SCREEN_W").and_then(|v| v.parse().ok()), env("SCREEN_H").and_then(|v| v.parse().ok())) {
+                (Some(width), Some(height)) => Some(ScreenSize { width, height }),
+                _ => None,
+            };
         Self {
             data_dir: data_dir.to_owned(),
             socket: env("ICTL_SOCKET").map(PathBuf::from).unwrap_or_else(|| crate::protocol::DEFAULT_SOCKET.into()),

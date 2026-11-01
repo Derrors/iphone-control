@@ -30,7 +30,8 @@ impl Element {
 
     /// 与 toolkit 相同的一行描述：`Button "显示与亮度" id="..." @(215,676) 390x53`
     pub fn describe(&self) -> String {
-        let text = [&self.label, &self.name, &self.value].into_iter().find(|s| !s.is_empty()).cloned().unwrap_or_default();
+        let text =
+            [&self.label, &self.name, &self.value].into_iter().find(|s| !s.is_empty()).cloned().unwrap_or_default();
         let mut s = format!("{} \"{}\"", self.kind, text);
         if !self.name.is_empty() && !self.label.is_empty() && self.name != self.label {
             s += &format!(" id=\"{}\"", self.name);
@@ -134,7 +135,8 @@ pub fn keypad(elements: &[Element]) -> Option<[(i64, i64); 10]> {
 
 /// 锁屏密码栏的值形如「共6位数，已输入2位」或英文「6-digit passcode, 2 entered」，返回 (总位数, 已输入位数)
 pub fn parse_passcode_value(value: &str) -> Option<(u32, u32)> {
-    let nums: Vec<u32> = regex::Regex::new(r"\d+").ok()?.find_iter(value).filter_map(|m| m.as_str().parse().ok()).collect();
+    let nums: Vec<u32> =
+        regex::Regex::new(r"\d+").ok()?.find_iter(value).filter_map(|m| m.as_str().parse().ok()).collect();
     match nums[..] {
         [total, entered] => Some((total, entered)),
         _ => None,
@@ -203,7 +205,10 @@ mod tests {
     fn describe_matches_toolkit_format() {
         let h = home();
         let d = |l: &str| h.iter().find(|e| e.label == l).unwrap().describe();
-        assert_eq!(d("显示与亮度"), r#"Button "显示与亮度" id="com.apple.settings.displayAndBrightness" @(215,676) 390x53"#);
+        assert_eq!(
+            d("显示与亮度"),
+            r#"Button "显示与亮度" id="com.apple.settings.displayAndBrightness" @(215,676) 390x53"#
+        );
         assert!(d("设置").contains(r#"value="1个新项目""#));
     }
 
@@ -224,7 +229,14 @@ mod tests {
     }
 
     fn key(label: &str, x: i64, kind: &str) -> Element {
-        Element { kind: kind.into(), label: label.into(), name: label.into(), value: String::new(), center: (x, 100), size: (80, 80) }
+        Element {
+            kind: kind.into(),
+            label: label.into(),
+            name: label.into(),
+            value: String::new(),
+            center: (x, 100),
+            size: (80, 80),
+        }
     }
 
     #[test]

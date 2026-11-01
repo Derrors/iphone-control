@@ -93,7 +93,8 @@ impl FakeLockScreen {
                 s.idle_during_unlock.push(idle);
                 let steps = body.unwrap()["actions"][0]["actions"].as_array().unwrap().clone();
                 let downs = steps.iter().filter(|a| a["type"] == "pointerDown").count();
-                let is_swipe = steps.iter().any(|a| a["type"] == "pointerMove" && a["duration"].as_u64().unwrap_or(0) > 0);
+                let is_swipe =
+                    steps.iter().any(|a| a["type"] == "pointerMove" && a["duration"].as_u64().unwrap_or(0) > 0);
                 if is_swipe {
                     if s.swipes_to_ignore > 0 {
                         s.swipes_to_ignore -= 1;
@@ -124,7 +125,9 @@ impl FakeLockScreen {
             }
             ("GET", p) if p.starts_with("/source") => json!(LOCK_XML),
             ("POST", "/elements") => json!([{"ELEMENT": "E1"}]),
-            ("GET", "/element/E1/attribute/value") => json!(format!("共{}位数，已输入{}位", self.code.len(), s.entered.len())),
+            ("GET", "/element/E1/attribute/value") => {
+                json!(format!("共{}位数，已输入{}位", self.code.len(), s.entered.len()))
+            }
             _ => return (404, json!({"value": {"error": "unknown command", "message": path}})),
         };
         (200, json!({"value": v, "sessionId": "S"}))
@@ -132,7 +135,13 @@ impl FakeLockScreen {
 }
 
 impl Transport for &FakeLockScreen {
-    async fn send(&self, method: &str, path: &str, body: Option<Vec<u8>>, _: Duration) -> std::io::Result<(u16, Vec<u8>)> {
+    async fn send(
+        &self,
+        method: &str,
+        path: &str,
+        body: Option<Vec<u8>>,
+        _: Duration,
+    ) -> std::io::Result<(u16, Vec<u8>)> {
         let body = body.and_then(|b| serde_json::from_slice(&b).ok());
         let (status, v) = self.handle(method, path, body);
         Ok((status, v.to_string().into_bytes()))

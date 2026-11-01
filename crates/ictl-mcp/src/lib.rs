@@ -1,65 +1,290 @@
 //! MCP stdio 服务。工具名、参数、返回文本与 iphone-control-toolkit 一致（docs/decisions.md D10），
-//! 切换时 agent 侧不用改。本 crate 不直接碰设备，全部经守护进程控制接口。
+//! 切换时 agent 侧不用改。本 crate 不直接碰设备，全部经守护进程控制接口（Unix socket）。
 //!
-//! 工具：iphone_status、iphone_screenshot（可选 x/y/width/height 区域放大）、iphone_list_elements、
-//! iphone_tap、iphone_tap_element、iphone_long_press、iphone_swipe、iphone_type_text、
-//! iphone_press_button、iphone_list_apps、iphone_launch_app、iphone_terminate_app、iphone_open_url。
-//!
-//! 基于 rmcp 3.8（`server` + `transport-io`），图片用 `ContentBlock::image(base64, "image/jpeg")` 返回。
+//! 手写 `ServerHandler`（不用宏）：参数 schema 直接写 JSON，省掉 schemars；
+//! 参数到请求的转换（[`to_request`]）是纯函数，可单测。
 
 use std::path::PathBuf;
 
+use ictl_daemon::protocol::{self, Request, Response};
+use rmcp::{
+    ErrorData, RoleServer, ServerHandler, ServiceExt,
+    model::{
+        CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, InitializeResult, ListToolsResult,
+        PaginatedRequestParams, ServerCapabilities, Tool,
+    },
+    service::RequestContext,
+};
+use serde_json::{Map, Value, json};
+
 /// 服务说明（发给客户端的 instructions），与 toolkit 一致
-pub const INSTRUCTIONS: &str = "控制一台通过 USB 连接的真实 iPhone。坐标单位是点(pt)，与 iphone_screenshot 图像像素一致。\
-操作前先用 iphone_screenshot 或 iphone_list_elements 看清屏幕；能按名字点就优先用 iphone_tap_element；\
-手机平时会自动锁屏，各操作工具会先自动解锁。每次操作后再截图确认结果。\
-涉及付款、删除、发送消息、修改账号或隐私设置的操作，先向用户确认。";
+pub const INSTRUCTIONS: &str = "控制一台通过 USB 连接的真实 iPhone。坐标单位是点(pt),与 iphone_screenshot 图像像素一致。\
+操作前先用 iphone_screenshot 或 iphone_list_elements 看清屏幕;能按名字点就优先用 iphone_tap_element。\
+游戏、地图等界面没有元素树,只能看截图按坐标操作;小图标、小字看不清时用 iphone_screenshot 的区域放大。\
+配置了锁屏密码时,各操作工具会先自动解锁。每次操作后再截图确认结果。\
+涉及付款、删除、发送消息、修改账号或隐私设置的操作,先向用户确认。";
 
-/// 区域放大：长边不足这个就放大到它
-pub const ZOOM_MIN_LONG_SIDE: u32 = 600;
-/// 区域放大：长边超过这个就缩到它
-pub const ZOOM_MAX_LONG_SIDE: u32 = 1200;
+fn num(desc: &str) -> Value {
+    json!({"type": "number", "description": desc})
+}
 
-pub struct McpConfig {
+fn schema(props: Value, required: &[&str]) -> Map<String, Value> {
+    let v = json!({"type": "object", "properties": props, "required": required});
+    v.as_object().cloned().unwrap_or_default()
+}
+
+/// 13 个工具的定义
+pub fn tools() -> Vec<Tool> {
+    let t = |name: &'static str, desc: &'static str, s: Map<String, Value>| Tool::new(name, desc, s);
+    vec![
+        t("iphone_status", "查看连接状态:WDA 是否就绪、是否锁屏、当前前台 App、屏幕尺寸。", schema(json!({}), &[])),
+        t(
+            "iphone_screenshot",
+            "截取当前屏幕。图像已缩放到点尺寸,像素坐标可直接用于点击和滑动。\n\n看不清小图标、小字时,传 x/y/width/height(点)放大这块区域:从原始高清截图裁剪,\n小区域再额外放大。返回文字里有放大倍数,图中坐标换算回屏幕点:x + 像素/倍数。",
+            schema(
+                json!({"x": num("区域左上角 x(点)"), "y": num("区域左上角 y(点)"), "width": num("区域宽(点)"), "height": num("区域高(点)")}),
+                &[],
+            ),
+        ),
+        t(
+            "iphone_list_elements",
+            "列出屏幕上带文字的界面元素:类型、标签、中心点坐标、尺寸。\n\nfilter: 只返回标签/名字/值里包含该文字的元素(不区分大小写)。\n注意:按坐标判断是否在屏幕内,被弹窗遮住的元素也可能列出来,不确定时截图核对。",
+            schema(
+                json!({"filter": {"type": "string", "default": ""}, "limit": {"type": "integer", "default": 150}}),
+                &[],
+            ),
+        ),
+        t("iphone_tap", "点击屏幕坐标(点)。", schema(json!({"x": num("x(点)"), "y": num("y(点)")}), &["x", "y"])),
+        t(
+            "iphone_tap_element",
+            "按文字点击元素:先找标签/名字完全相同的,找不到再找包含该文字的。\n\nindex: 匹配到多个时点第几个(从 0 开始,顺序同 iphone_list_elements)。",
+            schema(json!({"text": {"type": "string"}, "index": {"type": "integer", "default": 0}}), &["text"]),
+        ),
+        t(
+            "iphone_long_press",
+            "长按屏幕坐标(点)。",
+            schema(
+                json!({"x": num("x(点)"), "y": num("y(点)"), "seconds": {"type": "number", "default": 1.0}}),
+                &["x", "y"],
+            ),
+        ),
+        t(
+            "iphone_swipe",
+            "从一点滑到另一点(点坐标)。向上滑看下面的内容:from_y 大、to_y 小。",
+            schema(
+                json!({"from_x": num(""), "from_y": num(""), "to_x": num(""), "to_y": num(""), "seconds": {"type": "number", "default": 0.3}}),
+                &["from_x", "from_y", "to_x", "to_y"],
+            ),
+        ),
+        t(
+            "iphone_type_text",
+            "在当前获得焦点的输入框里输入文字(支持中文)。需要先点中输入框。submit=True 时末尾按回车。",
+            schema(json!({"text": {"type": "string"}, "submit": {"type": "boolean", "default": false}}), &["text"]),
+        ),
+        t(
+            "iphone_press_button",
+            "按硬件键:home(回主屏幕)、volume_up、volume_down、lock(锁屏;配置了密码时之后的操作会自动解锁)。",
+            schema(
+                json!({"button": {"type": "string", "enum": ["home", "volume_up", "volume_down", "lock"]}}),
+                &["button"],
+            ),
+        ),
+        t(
+            "iphone_list_apps",
+            "列出已安装的 App(名字和 Bundle ID)。include_system=True 时列出系统 App。",
+            schema(json!({"include_system": {"type": "boolean", "default": false}}), &[]),
+        ),
+        t(
+            "iphone_launch_app",
+            "启动 App 并切到前台。app 可以是 Bundle ID,也可以是显示名(如「设置」「微信」)。",
+            schema(json!({"app": {"type": "string"}}), &["app"]),
+        ),
+        t(
+            "iphone_terminate_app",
+            "结束 App 进程。app 可以是 Bundle ID 或显示名。",
+            schema(json!({"app": {"type": "string"}}), &["app"]),
+        ),
+        t(
+            "iphone_open_url",
+            "用系统默认方式打开链接或 URL Scheme(网页会在 Safari 打开)。",
+            schema(json!({"url": {"type": "string"}}), &["url"]),
+        ),
+    ]
+}
+
+struct Args<'a>(&'a Map<String, Value>);
+
+impl Args<'_> {
+    fn f(&self, k: &str) -> Result<f64, String> {
+        self.0.get(k).and_then(Value::as_f64).ok_or_else(|| format!("缺少数字参数 {k}"))
+    }
+    fn f_or(&self, k: &str, d: f64) -> f64 {
+        self.0.get(k).and_then(Value::as_f64).unwrap_or(d)
+    }
+    fn opt_f(&self, k: &str) -> Option<f64> {
+        self.0.get(k).and_then(Value::as_f64)
+    }
+    fn s(&self, k: &str) -> Result<String, String> {
+        self.0.get(k).and_then(Value::as_str).map(str::to_owned).ok_or_else(|| format!("缺少文字参数 {k}"))
+    }
+    fn s_or(&self, k: &str, d: &str) -> String {
+        self.0.get(k).and_then(Value::as_str).unwrap_or(d).to_owned()
+    }
+    fn u_or(&self, k: &str, d: usize) -> usize {
+        self.0.get(k).and_then(Value::as_u64).map(|v| v as usize).unwrap_or(d)
+    }
+    fn b_or(&self, k: &str, d: bool) -> bool {
+        self.0.get(k).and_then(Value::as_bool).unwrap_or(d)
+    }
+}
+
+/// 工具调用 → 守护进程请求
+pub fn to_request(name: &str, args: &Map<String, Value>) -> Result<Request, String> {
+    let a = Args(args);
+    Ok(match name {
+        "iphone_status" => Request::Status,
+        "iphone_screenshot" => {
+            let r = [a.opt_f("x"), a.opt_f("y"), a.opt_f("width"), a.opt_f("height")];
+            let region = match r {
+                [None, None, None, None] => None,
+                [Some(x), Some(y), Some(w), Some(h)] => Some((x, y, w, h)),
+                _ => return Err("放大区域要同时给出 x、y、width、height".into()),
+            };
+            Request::Screenshot { region }
+        }
+        "iphone_list_elements" => Request::ListElements { filter: a.s_or("filter", ""), limit: a.u_or("limit", 150) },
+        "iphone_tap" => Request::Tap { x: a.f("x")?, y: a.f("y")? },
+        "iphone_tap_element" => Request::TapElement { text: a.s("text")?, index: a.u_or("index", 0) },
+        "iphone_long_press" => Request::LongPress { x: a.f("x")?, y: a.f("y")?, seconds: a.f_or("seconds", 1.0) },
+        "iphone_swipe" => Request::Swipe {
+            from: (a.f("from_x")?, a.f("from_y")?),
+            to: (a.f("to_x")?, a.f("to_y")?),
+            seconds: a.f_or("seconds", 0.3),
+        },
+        "iphone_type_text" => Request::TypeText { text: a.s("text")?, submit: a.b_or("submit", false) },
+        "iphone_press_button" => Request::PressButton { button: a.s("button")? },
+        "iphone_list_apps" => Request::ListApps { include_system: a.b_or("include_system", false) },
+        "iphone_launch_app" => Request::LaunchApp { app: a.s("app")? },
+        "iphone_terminate_app" => Request::TerminateApp { app: a.s("app")? },
+        "iphone_open_url" => Request::OpenUrl { url: a.s("url")? },
+        other => return Err(format!("未知工具 {other}")),
+    })
+}
+
+/// 守护进程响应 → MCP 结果。错误走工具错误（is_error），文字原样给客户端
+pub fn to_result(r: Response) -> CallToolResult {
+    match r {
+        Response::Text { text } => CallToolResult::success(vec![ContentBlock::text(text)]),
+        Response::Image { jpeg_base64, caption } => {
+            CallToolResult::success(vec![ContentBlock::image(jpeg_base64, "image/jpeg"), ContentBlock::text(caption)])
+        }
+        Response::Error { message } => CallToolResult::error(vec![ContentBlock::text(message)]),
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct McpServer {
     pub socket: PathBuf,
 }
 
-/// 在 stdin/stdout 上运行 MCP 服务直到客户端断开
-pub async fn serve_stdio(config: McpConfig) -> anyhow::Result<()> {
-    let _ = config;
-    todo!("rmcp::ServiceExt::serve(rmcp::transport::stdio())")
+impl ServerHandler for McpServer {
+    fn get_info(&self) -> InitializeResult {
+        InitializeResult::new(ServerCapabilities::builder().enable_tools().build()).with_instructions(INSTRUCTIONS)
+    }
+
+    async fn list_tools(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ListToolsResult, ErrorData> {
+        Ok(ListToolsResult::with_all_items(tools()))
+    }
+
+    async fn call_tool(
+        &self,
+        request: CallToolRequestParams,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<CallToolResponse, ErrorData> {
+        let args = request.arguments.unwrap_or_default();
+        let resp = match to_request(&request.name, &args) {
+            Err(e) => Response::error(e),
+            Ok(req) => protocol::call(&self.socket, &req).await.unwrap_or_else(|e| {
+                Response::error(format!("连不上守护进程({}):{e};确认 iphone-control 容器在运行", self.socket.display()))
+            }),
+        };
+        Ok(to_result(resp).into())
+    }
 }
 
-/// 计算区域放大后的尺寸和倍数；返回 (宽, 高, 倍数)
-pub fn zoom_target(region_w_px: u32, region_h_px: u32, px_per_pt: f64) -> (u32, u32, f64) {
-    let long = region_w_px.max(region_h_px) as f64;
-    let k = if long < ZOOM_MIN_LONG_SIDE as f64 {
-        ZOOM_MIN_LONG_SIDE as f64 / long
-    } else {
-        (ZOOM_MAX_LONG_SIDE as f64 / long).min(1.0)
-    };
-    let w = (region_w_px as f64 * k).round() as u32;
-    let h = (region_h_px as f64 * k).round() as u32;
-    (w, h, w as f64 / (region_w_px as f64 / px_per_pt))
+/// 在 stdin/stdout 上运行 MCP 服务直到客户端断开
+pub async fn serve_stdio(socket: PathBuf) -> anyhow::Result<()> {
+    let running = McpServer { socket }.serve(rmcp::transport::stdio()).await?;
+    running.waiting().await?;
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn zoom_small_region_upscales() {
-        // 200x60 点、3x 像素 → 600x180 像素 → 已经是 600，不再放大，倍数 3
-        let (w, h, z) = zoom_target(600, 180, 3.0);
-        assert_eq!((w, h), (600, 180));
-        assert!((z - 3.0).abs() < 1e-9);
+    fn args(v: Value) -> Map<String, Value> {
+        v.as_object().cloned().unwrap()
     }
 
     #[test]
-    fn zoom_wide_region_downscales() {
-        // 430x40 点、3x → 1290x120 → 缩到 1200 宽，倍数约 2.79
-        let (w, _, z) = zoom_target(1290, 120, 3.0);
-        assert_eq!(w, 1200);
-        assert_eq!(format!("{z:.3}"), "2.791");
+    fn thirteen_tools_with_toolkit_names() {
+        let names: Vec<_> = tools().iter().map(|t| t.name.to_string()).collect();
+        assert_eq!(names.len(), 13);
+        for n in ["iphone_status", "iphone_screenshot", "iphone_tap_element", "iphone_open_url"] {
+            assert!(names.contains(&n.to_owned()), "{n}");
+        }
+        for t in tools() {
+            let no_required = t.input_schema.get("required").unwrap().as_array().unwrap().is_empty();
+            assert_eq!(to_request(&t.name, &Map::new()).is_ok(), no_required, "{}", t.name);
+        }
+    }
+
+    #[test]
+    fn defaults_match_toolkit() {
+        assert_eq!(
+            to_request("iphone_list_elements", &Map::new()).unwrap(),
+            Request::ListElements { filter: String::new(), limit: 150 }
+        );
+        assert_eq!(
+            to_request("iphone_swipe", &args(json!({"from_x": 1, "from_y": 2, "to_x": 3, "to_y": 4}))).unwrap(),
+            Request::Swipe { from: (1.0, 2.0), to: (3.0, 4.0), seconds: 0.3 }
+        );
+        assert_eq!(
+            to_request("iphone_long_press", &args(json!({"x": 1, "y": 2}))).unwrap(),
+            Request::LongPress { x: 1.0, y: 2.0, seconds: 1.0 }
+        );
+        assert_eq!(
+            to_request("iphone_type_text", &args(json!({"text": "设置"}))).unwrap(),
+            Request::TypeText { text: "设置".into(), submit: false }
+        );
+    }
+
+    #[test]
+    fn screenshot_region_needs_all_four() {
+        assert_eq!(to_request("iphone_screenshot", &Map::new()).unwrap(), Request::Screenshot { region: None });
+        assert_eq!(
+            to_request("iphone_screenshot", &args(json!({"x": 0, "y": 55, "width": 430, "height": 40}))).unwrap(),
+            Request::Screenshot { region: Some((0.0, 55.0, 430.0, 40.0)) }
+        );
+        assert_eq!(
+            to_request("iphone_screenshot", &args(json!({"x": 10, "y": 10}))).unwrap_err(),
+            "放大区域要同时给出 x、y、width、height"
+        );
+    }
+
+    /// 回归用例 #17：预期内的错误要作为工具错误、带可读文字返回
+    #[test]
+    fn errors_become_tool_errors_with_text() {
+        let r = to_result(Response::error("button 只能是 home / volume_up / volume_down / lock"));
+        assert_eq!(r.is_error, Some(true));
+        assert!(matches!(&r.content[0], ContentBlock::Text(t) if t.text.contains("button 只能是")));
+        let img = to_result(Response::Image { jpeg_base64: "AAAA".into(), caption: "430x932 点".into() });
+        assert_eq!(img.content.len(), 2);
+        assert!(to_request("iphone_nope", &Map::new()).is_err());
     }
 }

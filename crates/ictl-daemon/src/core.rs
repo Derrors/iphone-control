@@ -26,6 +26,9 @@ pub const TICK: Duration = Duration::from_secs(10);
 /// 正常 2～10 秒就绪。手机重启后未授权 automation 时，testmanagerd 握手每次卡 30 秒、要重试一两次，
 /// 60 秒常常等不到 runner 启动，也就认不出「需要输入密码」
 const WDA_START_TIMEOUT: Duration = Duration::from_secs(120);
+/// HID 会话空闲这么久就关掉。它持有屏幕媒体流，开着时 iOS 当作屏幕被远程查看：不会自动锁屏，
+/// 还会弹「viewed remotely」通知。重开约 0.5 秒
+const HID_IDLE: Duration = Duration::from_secs(30);
 /// 锁屏后至少等这么久再自动解锁：锁屏过渡没走完就唤醒，WDA 第一下上滑卡约 16 秒后报 `point.x != INFINITY`
 const LOCK_SETTLE: Duration = Duration::from_secs(3);
 const SYSFS_USB: &str = "/sys/bus/usb/devices";
@@ -90,6 +93,8 @@ struct Inner {
     offline_since: Option<Instant>,
     /// 最近一次经本进程锁屏的时间（自动解锁要等锁屏过渡走完，见 [`LOCK_SETTLE`]）
     last_lock: Option<Instant>,
+    /// HID 会话最近一次使用的时间；空闲超过 [`HID_IDLE`] 就关掉（它持有屏幕媒体流）
+    hid_used: Option<Instant>,
     dedup: Dedup,
     next_resign: Instant,
     next_session_check: Instant,
@@ -100,6 +105,14 @@ pub struct Daemon {
     pub cfg: Config,
     pub log: EventLog,
     inner: Mutex<Inner>,
+}
+
+/// 先停 HID 会话的屏幕媒体流再丢掉（要在隧道断开之前）。直接丢的话手机一直以为「配对的电脑」在看屏幕：
+/// 灵动岛常驻图标、不会自动锁屏，本进程退出后也不消失（iOS 27 真机，要拔插数据线才清掉）
+async fn close_hid(g: &mut Inner) {
+    if let Some(h) = g.hid.take() {
+        let _ = tokio::time::timeout(Duration::from_secs(3), h.close()).await;
+    }
 }
 
 fn wda_down(state: &DeviceState) -> String {
@@ -126,6 +139,7 @@ impl Daemon {
             usbmuxd: None,
             offline_since: Some(now),
             last_lock: None,
+            hid_used: None,
             dedup: Dedup::default(),
             // 启动一分钟后再做第一次重签检查和会话验证，先让设备就绪
             next_resign: now + Duration::from_secs(60),
@@ -171,7 +185,7 @@ impl Daemon {
             let _ = c.kill().await;
         }
         // 经旧 usbmuxd 建立的连接（隧道、runner、WDA）都已失效
-        self.drop_session(g);
+        self.drop_session(g).await;
         let log = std::fs::OpenOptions::new().create(true).append(true).open(self.cfg.logs().join("usbmuxd.log"));
         let mut cmd = tokio::process::Command::new(&self.cfg.usbmuxd_bin);
         cmd.args(["-U", "root", "-f"]).kill_on_drop(true);
@@ -192,12 +206,12 @@ impl Daemon {
 
     // ------------------------------------------------------------------ 状态机
 
-    fn drop_session(&self, g: &mut Inner) {
+    async fn drop_session(&self, g: &mut Inner) {
         if let Some(r) = g.runner.take() {
             r.stop();
         }
         g.wda = None;
-        g.hid = None;
+        close_hid(g).await;
         g.tunnel = None;
         g.wda_misses.reset();
     }
@@ -214,6 +228,11 @@ impl Daemon {
         let g = &mut *g;
         self.ensure_usbmuxd(g, false).await;
 
+        if g.hid.is_some() && g.hid_used.is_none_or(|t| t.elapsed() >= HID_IDLE) {
+            close_hid(g).await;
+            tracing::info!("HID 会话空闲，已关闭（停止屏幕媒体流）");
+        }
+
         let devices = ictl_device::list_devices().await.unwrap_or_default();
         let target = match &self.cfg.udid {
             Some(u) => devices.into_iter().find(|d| &d.udid == u),
@@ -226,7 +245,7 @@ impl Daemon {
         }
 
         match target {
-            None => self.offline(g),
+            None => self.offline(g).await,
             Some(d) => self.online(g, &d.udid).await,
         }
 
@@ -246,11 +265,11 @@ impl Daemon {
         }
     }
 
-    fn offline(&self, g: &mut Inner) {
+    async fn offline(&self, g: &mut Inner) {
         let now = Instant::now();
         if g.device.take().is_some() {
             self.log.log("手机离线");
-            self.drop_session(g);
+            self.drop_session(g).await;
             g.offline_since = Some(now);
             g.apps.clear();
         }
@@ -264,7 +283,7 @@ impl Daemon {
 
     async fn online(&self, g: &mut Inner, udid: &str) {
         if g.device.as_ref().map(|d| d.udid.as_str()) != Some(udid) {
-            self.drop_session(g);
+            self.drop_session(g).await;
             match Device::find(Some(udid)).await {
                 Ok(d) => {
                     g.info = d.info().await.ok();
@@ -332,7 +351,7 @@ impl Daemon {
             self.log.log("WDA 不可用");
             // 隧道和 HID 也一起丢：WDA 掉线常常是底层连接断了（例如 usbmuxd 重启），
             // 留着旧隧道，下次查镜像就报 socket io failed 并白白退避 60 秒
-            self.drop_session(g);
+            self.drop_session(g).await;
         }
         g.wda_misses.reset();
         if !g.backoff.ready(Instant::now()) {
@@ -455,7 +474,7 @@ impl Daemon {
                 g.persisted.last_resign = Some(format!("{} 成功", crate::eventlog::timestamp()));
                 g.persisted.save(&self.cfg.state_file());
                 // 新包装上后旧的 runner 会失效，下一轮巡检重新拉起
-                self.drop_session(g);
+                self.drop_session(g).await;
                 g.backoff.reset();
                 g.dedup.clear("resign");
                 let msg = format!("重签完成,新描述文件到期 {} UTC", crate::eventlog::format_utc(exp));
@@ -583,8 +602,9 @@ impl Daemon {
             -> std::pin::Pin<Box<dyn std::future::Future<Output = ictl_device::Result<()>> + Send + 'h>>,
     {
         let r = f(self.hid(g).await?).await;
+        g.hid_used = Some(Instant::now());
         if let Err(e) = r {
-            g.hid = None;
+            close_hid(g).await;
             g.tunnel = None;
             return Err(format!("HID 命令失败: {e}"));
         }
@@ -604,14 +624,17 @@ impl Daemon {
             let ready = w.ready().await?;
             let app = w.active_app().await?;
             let s = w.screen_size().await?;
-            let mut lock = if !w.locked().await? {
+            let locked = w.locked().await?;
+            let mut lock = if !locked {
                 "未锁屏".to_owned()
+            } else if unlock.disabled_by_failure() {
+                "已锁屏(自动解锁之前失败过已停用,需要人工解锁,核对密码后运行 iphone-control unlock-reset)".to_owned()
             } else if unlock.enabled() {
                 "已锁屏(操作时会自动解锁)".to_owned()
             } else {
                 "已锁屏(未配置自动解锁,需要人工解锁)".to_owned()
             };
-            if unlock.disabled_by_failure() {
+            if !locked && unlock.disabled_by_failure() {
                 lock += ";自动解锁已停用";
             }
             let ready = if ready { "True" } else { "False" };
@@ -642,8 +665,8 @@ impl Daemon {
                 match t.screenshot_png().await {
                     Ok(p) => (p, "HID"),
                     Err(e) => {
+                        close_hid(g).await;
                         g.tunnel = None;
-                        g.hid = None;
                         return Err(format!("HID 命令失败: {e}"));
                     }
                 }
@@ -748,11 +771,19 @@ impl Daemon {
 
     async fn press_button(&self, g: &mut Inner, button: &str) -> Result<String, String> {
         if button == "lock" {
-            if let Some(w) = self.wda(g)
-                && w.lock().await.is_ok()
-            {
-                g.last_lock = Some(Instant::now());
-                return Ok("已锁屏".into());
+            if let Some(w) = self.wda(g) {
+                // WDA 锁屏偶尔等 5 秒报 500（手机其实已锁）：确认锁了就不退到 HID（HID 会开屏幕媒体流）
+                let locked = match w.lock().await {
+                    Ok(()) => true,
+                    Err(e) => {
+                        tracing::info!("WDA 锁屏报错：{e}");
+                        w.wda_reports_locked().await.unwrap_or(false)
+                    }
+                };
+                if locked {
+                    g.last_lock = Some(Instant::now());
+                    return Ok("已锁屏".into());
+                }
             }
             self.hid_do(g, |h| Box::pin(h.press(Button::Lock))).await?;
             g.last_lock = Some(Instant::now());
@@ -924,7 +955,7 @@ impl Daemon {
     pub async fn shutdown(&self) {
         let mut g = self.inner.lock().await;
         self.log.log("收到停止信号,退出");
-        self.drop_session(&mut g);
+        self.drop_session(&mut g).await;
         if let Some(mut c) = g.usbmuxd.take() {
             let _ = c.kill().await;
         }

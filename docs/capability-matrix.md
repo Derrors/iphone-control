@@ -9,7 +9,7 @@
 
 > 2026-11-01：表中「已有/需修/需自写」各项均已编码实现，状态和真机待验证项见 [roadmap 的完成情况](roadmap.md#完成情况)。
 
-上游版本基线：idevice 0.1.68、Impactor 2.7.2（plume_core / plume_utils / omnisette）、apple-codesign 0.29.0、rmcp 3.8.0。
+上游版本基线：idevice 0.1.68（现锁上游 master `89702099`，见 decisions D1）、Impactor 2.7.2（plume_core / plume_utils / omnisette）、apple-codesign 0.29.0、rmcp 3.8.0。
 
 ## 1. 设备基础
 
@@ -46,10 +46,10 @@
 | 能力 | toolkit 现在靠 | D 方案实现 | 状态 | 风险 / 待验证 |
 |---|---|---|---|---|
 | 启动 WDA | `ios runwda --bundleid ... --xctestconfig=WebDriverAgentRunner.xctest` | `XCUITestService::run_until_wda_ready()`，`TestConfig::from_installation_proxy(runner_bundle_id)`；返回 `WdaRunHandle`（`abort`、`wait`、`status`） | 已有 | iOS 27.0.1 上能否启动待验证；自动化密码框的错误文本要能识别 |
-| WDA 访问方式 | `pymobiledevice3 usbmux forward` 绑 127.0.0.1:8100 | `idevice::services::wda::WdaClient` 通过 provider 直连设备 8100 端口，本机不监听 | 已有 | `WdaClient` 自述是"bootstrap"级，长连接和大响应（500KB 元素树）待验证；必要时用它建连接、自己发 HTTP |
+| WDA 访问方式 | `pymobiledevice3 usbmux forward` 绑 127.0.0.1:8100 | 自己的客户端（`crates/ictl-wda/src/http.rs` + `client.rs`）经 usbmuxd 直连设备 8100 端口、自己发 HTTP，本机不监听；不用 idevice 的 `WdaClient` | 需自写 | idevice 的 `WdaClient` 自述是"bootstrap"级，且不支持 `excluded_attributes`、appium settings、W3C actions |
 | 守护与自恢复 | `supervisor.sh` | `ictl-daemon` 状态机 | 需自写 | 见 architecture §3 |
 | Apple ID 登录、注册设备、描述文件 | plumesign 命令行 | `plume_core::auth::account`、`developer::qh::{devices, app_ids, profile, certs}`；anisette 用 `omnisette` | 已有 | 默认 anisette 服务是第三方（jkcoxson），需可配置；会话持久化格式自己定 |
-| 签名 WDA（含 `.xctest` 插件） | go-ios `ios sign app`（因为 plumesign 漏签 xctest） | `plume_utils::Signer` + 修复；底层 `apple-codesign` | **需修** | 根因见下文 §4 |
+| 签名 WDA（含 `.xctest` 插件） | go-ios `ios sign app`（因为 plumesign 漏签 xctest） | `ictl-sign`：bundle 逻辑改写自 `plume_utils`（含修复），签名流程自己写；底层 `apple-codesign` | **需修** | 根因见下文 §4 |
 | 7 天自动重签 | `resign-wda.sh` + systemd 定时器 | 守护进程内部调度 | 需自写 | — |
 | 通知（Bark / Telegram） | `notify.sh`（curl） | `reqwest` | 需自写 | — |
 | 锁屏自动解锁 | `iphone_mcp.py` `_ensure_unlocked` | `ictl-unlock` | 需自写 | 见 §5 |

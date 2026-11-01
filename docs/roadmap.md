@@ -4,29 +4,28 @@
 
 ## 完成情况
 
-2026-11-01。「代码」= 已实现并有离线单测；「真机」= 必须在真机上确认（[spike-plan](spike-plan.md)）。spike 5 项已在真机通过（[spike/RESULTS.md](../spike/RESULTS.md)），其余阶段尚未上真机。
+2026-11-01。阶段 0～6 已在真机（iPhone 15 Pro Max，iOS 27.0.1）通过（第 0 步见 [spike-results](spike-results.md)）；中间一列是已实现的内容（有离线单测）和真机结果，右列是仍待真机确认或未完成的。
 
 | 阶段 | 代码 | 仍待真机确认 / 未完成 |
 |---|---|---|
-| 0 spike | ✅ 5 项全过：TSS/挂载、HID Home 键、截图、30 分钟隧道、WDA 启动与读回 | 手机重启后补跑正式 `ddi` 挂载；HID 点击/drag/键盘；隧道锁屏 |
-| 1 设备核心库 | usbmux 发现、sysfs 兜底、配对、开发者模式、CoreDeviceProxy 用户态隧道 + RSD、cryptexd 查询/挂载、DDI 下载缓存、截图、HID（持有媒体流）、列 App/安装；WDA 直连设备端口的 HTTP 客户端、会话自动重建、元素树解析、XCTest 启动 runner。完成标准的示例程序 `ictl-spike e2e` 已在真机通过（9.8 秒；WDA 和 HID 两条路线的点击与 Home 都以前台 App 变化确认生效）。自己签的 WDA 已在真机安装，守护进程拉起后 10 秒就绪，e2e 同样通过 | 500KB 元素树经 jktcp 读回。（「Enable UI Automation」已确认：超时报 `Timed out while enabling automation mode.`，锁屏时报 `com.apple.LocalAuthentication Code=-4`；idevice 解码不了这条错误，从 runner 调试日志识别） |
+| 0 spike | ✅ 5 项全过：TSS/挂载、HID Home 键、截图、30 分钟隧道、WDA 启动与读回 | 手机重启后补跑正式 `debug ddi` 挂载；HID 点击/drag/键盘；隧道锁屏 |
+| 1 设备核心库 | usbmux 发现、sysfs 兜底、配对、开发者模式、CoreDeviceProxy 用户态隧道 + RSD、cryptexd 查询/挂载、DDI 下载缓存、截图、HID（持有媒体流）、列 App/安装；WDA 直连设备端口的 HTTP 客户端、会话自动重建、元素树解析、XCTest 启动 runner。完成标准的示例程序 `iphone-control debug e2e`（原 `ictl-spike e2e`）已在真机通过（9.8 秒；WDA 和 HID 两条路线的点击与 Home 都以前台 App 变化确认生效）。自己签的 WDA 已在真机安装，守护进程拉起后 10 秒就绪，e2e 同样通过 | 500KB 元素树经 jktcp 读回。（「Enable UI Automation」已确认：超时报 `Timed out while enabling automation mode.`，锁屏时报 `com.apple.LocalAuthentication Code=-4`；idevice 解码不了这条错误，从 runner 调试日志识别） |
 | 2 守护进程 | 状态机、usbmuxd 子进程看护、WDA 就绪判定与退避、密码框 60 秒重试、控制 socket、事件日志轮转、state.json。正式容器真机已过：冷启动 10～12 秒；杀 usbmuxd 约 11 秒恢复；拔插 USB 约 40～50 秒恢复（sysfs 兜底重启 usbmuxd）；手机重启 → 61 秒内进入「需要输入密码」并通知 → 输密码后 10 秒就绪 | 24 小时内存（2026-11-01 13:13 开始采样）；拔插恢复可再省 10 秒（重启 usbmuxd 后当轮重新列设备）；iOS 27 上开发者镜像重启后仍在，从未挂载开始的挂载流程没测到 |
 | 3 MCP | 13 个工具，参数与返回文字对齐 toolkit；区域放大；HID 后备。toolkit 的回归脚本 `tests/device/client.py` 原样跑通（13 步，截图确认生效）。Claude Code 已切到本项目 MCP：元素场景（设置 › 显示与亮度 › 自动锁定 改 5 分钟再改回）和纯坐标场景（开心消消乐 392 关，16 步通关 3 星）都完成 | 无（锁屏误判已修，见回归用例 #20、#21） |
-| 4 签名与重签 | vendor plume_core/plume_store/omnisette/apple-codesign；登录（2FA、短信）、注册设备、App ID、描述文件、深度优先签名（XCTest 无 entitlements）、签后自检、定期重签、每日会话验证。真机已验证：登录（2FA）→ 签名 → 安装 → WDA 启动（XCTest 不带 entitlements 可以） | 强制重签后 WDA 自动恢复；会话失效通知；修复提交 Impactor 上游未做 |
+| 4 签名与重签 | vendor plume_core/plume_store/omnisette/apple-codesign（plume_utils 未 vendor，bundle 逻辑改写进 `ictl-sign`）；登录（2FA、短信）、注册设备、App ID、描述文件、深度优先签名（XCTest 无 entitlements）、签后自检、定期重签（每 6 小时检查）、每日会话验证。真机已验证：登录（2FA）→ 签名 → 安装 → WDA 启动（XCTest 不带 entitlements 可以） | 强制重签后 WDA 自动恢复；会话失效通知；修复提交 Impactor 上游未做 |
 | 5 通知 | Bark、Telegram，事件去重（重签/会话失效 20 小时冷却）；`iphone-control notify-test` 每类事件各发一条。Bark 实测 7 类全部收到；守护进程实际触发的「需要输入密码」「已恢复」也已在手机重启测试中走通 | Telegram 未实测（没有配置） |
 | 6 自动解锁 | 规则全部实现，用假锁屏验证（键盘常驻树中、首位不生效重来、中间位被吞即停、输错一次即停用、残留输入用删除键清）。真机 6 种场景各 5 次全部成功、全程无输错：锁屏后 0 秒 15.3～16.0 秒（含有意等的 3 秒）、3/30/70 秒约 12.3 秒、键盘留 2 位残留 13.8～14.6 秒、自然自动锁屏（30 秒）11.8～12.4 秒；配置错误密码只输错一次即停用并推送，恢复密码 + unlock-reset 后正常 | 无 |
-| 7 打包 | 多阶段 Dockerfile（单二进制 + Debian usbmuxd）、compose、.env.example、setup/doctor、GitHub Actions（fmt/clippy/test、gitleaks、镜像构建） | macOS CI 编译 WDA、多架构镜像、SBOM、镜像发布未做；数据目录归属（PUID/PGID）未做，容器内以 root 运行 |
+| 7 打包 | 多阶段 Dockerfile（单二进制 + Debian usbmuxd；构建缓存挂载，首次构建约 2 分钟；release 二进制 strip）、镜像带 cargo-about 生成的第三方许可证清单（`docker/about.toml` 白名单以外的许可证让构建失败）、compose（去掉 `privileged`：`/dev/bus/usb` 绑定挂载 + `device_cgroup_rules: "c 189:* rmw"`，`init: true`，`stop_grace_period: 30s`）、.env.example、setup/doctor、GitHub Actions（fmt/clippy/test 锁 1.99.1、MSRV 1.88 检查、gitleaks、镜像构建用 GHA 缓存） | 新 compose 设置下的 USB 拔插恢复待真机复测；macOS CI 编译 WDA、多架构镜像、SBOM、镜像发布未做；数据目录归属（PUID/PGID）未做，容器内以 root 运行 |
 
 已知简化：
 - `iphone_status` 在 toolkit 的输出后多一行「守护进程: …」。
-- 控制 socket 的请求在主循环串行处理，一个长请求（例如自动解锁约 11 秒）期间巡检会推迟。
 - 开发者模式状态只在未就绪时检查；就绪后关掉开发者模式要等 WDA 掉线才会发现。
 
 ## 阶段 0：真机验证（spike）
 
 见 [spike-plan.md](spike-plan.md)。
 
-**完成标准**：`spike/RESULTS.md` 给出 5 项结论，并按判定表做出继续/折中/暂停的决定。
+**完成标准**：`spike/RESULTS.md`（现为 [spike-results.md](spike-results.md)）给出 5 项结论，并按判定表做出继续/折中/暂停的决定。
 
 ## 阶段 1：设备核心库（`ictl-device`、`ictl-wda`）
 
@@ -57,9 +56,9 @@
 
 ## 阶段 4：签名与重签（`ictl-sign`）
 
-- vendor `plume_core`、`plume_utils`、`omnisette`（保持原许可证文件头），打上 `.xctest` 修复和 apple-codesign 的权限补丁
+- vendor `plume_core`、`plume_store`、`omnisette`（保持原许可证文件头）和打过权限补丁的 apple-codesign；`plume_utils` 不 vendor，bundle 逻辑改写进 `ictl-sign/src/bundle.rs` 并修 `.xctest`
 - `iphone-control login`（交互式密码 + 双重认证）、`sign`、`resign`
-- 守护进程内部每日检查：描述文件剩余 < 2 天重签；每日验证 Apple ID 会话
+- 守护进程内部每 6 小时检查（`RESIGN_CHECK_HOURS`）：描述文件剩余 < 2 天重签；每日验证 Apple ID 会话
 - anisette 服务地址可配置
 
 **完成标准**：用免费 Apple ID 从未签名 WDA 一路签到装好，`.xctest` 带签名，WDA 能启动；强制重签后 WDA 自动恢复；人为让会话失效能收到通知。修复提交到 Impactor 上游。
@@ -115,3 +114,9 @@ Bark、Telegram；事件见 architecture §7；同一事件去重。
 | 22 | iOS 27 上锁屏密码键盘有残留输入时，按 Home 不清空（键隐藏但仍可按） | 用右下角删除键逐位删到 0（按位置认，不依赖语言），每删一位核对 | 单测（真机样本 + 假锁屏）+ 真机 |
 | 23 | 熄屏锁屏时第一个无障碍查询等约 8 秒；锁屏 0.5 秒内唤醒，第一下上滑卡约 16 秒后报 `point.x != INFINITY` | 能自动解锁时先按 Home 再核对；本进程锁屏后 3 秒内不解锁；唤醒/上滑报错算这轮落空重来 | 单测 + 真机计时 |
 | 24 | HID 会话的屏幕媒体流没正常停止时，手机端一直挂着：灵动岛「配对的电脑」图标常驻、不自动锁屏，进程退出和拔插都清不掉 | HID 空闲 30 秒关闭；所有丢弃路径（含退出）先停流；WDA 锁屏报错时确认已锁就不退到 HID | 真机 |
+| 25 | 自动解锁第 2 位之后出错（点击报错、核对锁屏报错、进程被杀）会跳过写停用标记，下次可能把同一个错误密码再输一遍 | 输第 2 位之前先写停用标记，只有确认解开或确认没凑满整串才撤掉；出错返回 `UnlockError::Uncertain` 并推送通知 | 单测（`ictl-unlock`：`error_after_second_digit_keeps_auto_unlock_disabled`、`double_press_that_fills_the_entry_disables`、`dropped_last_digit_is_not_a_wrong_attempt`） |
+| 26 | 最后一位输完后用 WDA 的锁屏状态确认结果：WDA 在锁屏时启动会报 false，把输错当成解开 | 确认时用严格判断 `WdaClient::check_lock(_, strict = true)`：核对出错一律算仍锁着 | 单测（`stale_wda_lock_state_cannot_turn_a_wrong_entry_into_unlocked`） |
+| 27 | HID 会话在屏幕媒体流起来之后才失败，媒体流没停（症状同 #24） | `HidSession::open`、`media::start` 出错时先停流；HID 会话归 `Tunnel` 所有，关隧道必先停流 | 真机 |
+| 28 | 一个长操作（启动 WDA 等自动化密码最长 120 秒）挡住所有工具、`status` 和 SIGTERM，排队的点击几分钟后才执行 | 启动 WDA、重签、会话检查不持设备锁；`status` 读快照；改变手机状态的请求排队超过 30 秒就放弃；停止信号优先处理（architecture §2 并发模型） | 真机 |
+| 29 | WDA 请求超时后退到 HID，同一个动作做了两遍 | 传输层区分连不上（`WdaError::Unavailable`，可以退到 HID）和请求已发出后超时（`WdaError::Timeout`，不退） | 单测 + 代码审查 |
+| 30 | `.env` 里留空的 `ICTL_LOG=` 生成一个什么都不放行的过滤器，日志全没了 | 空值当作没设 | 真机（`docker logs`） |

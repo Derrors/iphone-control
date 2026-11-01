@@ -6,7 +6,7 @@
 ┌──────────────────────── Linux 主机 / 容器 ─────────────────────────────────────┐
 │                                                                               │
 │  Claude Code ──stdio──▶ iphone-control mcp ──unix socket──┐                   │
-│  （每个会话一个，短命）    （ictl-mcp，无设备状态）            │                   │
+│  （每个会话一个，短命）    （ictl-mcp，经 ictl-protocol）      │                   │
 │                                                           ▼                   │
 │                         iphone-control daemon（ictl-daemon，常驻，唯一持有设备）  │
 │                         ┌───────────────────────────────────────────────────┐ │
@@ -40,68 +40,80 @@
 | `usbmuxd` | 守护进程的子进程 | 系统包，GPL-3.0，独立进程运行，不链接 |
 | `iphone-control doctor/setup/sign/...` | 一次性 | 运维命令，也通过控制接口或直接调用库 |
 
-**控制接口**：Unix socket（默认 `/run/iphone-control/ctl.sock`，权限 0600），JSON 行协议。理由：
+**控制接口**：Unix socket（默认 `/run/iphone-control/ctl.sock`，权限 0600），JSON 行协议。请求/响应类型和客户端 `call(socket, req, timeout)` 在 `ictl-protocol`，MCP 和 CLI 共用。理由：
 
 - MCP 进程由 `docker exec -i` 拉起，短命且可能同时有多个；设备连接（尤其是 HID 需要的显示媒体流、WDA 的 XCTest 会话）只能有一个持有者。
-- 不开 TCP 端口，避免重蹈 `ios forward` 监听所有网卡的覆辙。WDA 本身也通过 idevice 的 provider 直连设备端口，**本机不再监听 8100**。如需给外部工具用，`iphone-control wda-bridge` 显式开启，只绑 127.0.0.1。
+- 不开 TCP 端口，避免重蹈 `ios forward` 监听所有网卡的覆辙。WDA 本身也通过 idevice 的 provider 直连设备端口，**本机不再监听 8100**。如需给外部工具用，`iphone-control wda-bridge` 显式开启，只绑 127.0.0.1，且只转发 Host 头是 `localhost`/`127.0.0.1`/`[::1]` 的请求（挡住 DNS rebinding）。注意容器用 host 网络，**本机的任何用户都能连上 bridge**，而 WDA 没有认证，用完就停。
+
+### 并发模型
+
+见 `crates/ictl-daemon/src/core.rs` 开头的模块文档。
+
+- 全部跑在一个 `LocalSet` 里（单线程协作）；设备相关状态（隧道、HID 会话、runner、WDA 客户端）在一把锁后面。
+- 每个连接一个任务，请求在任务里等锁；主循环本身从不阻塞。
+- 10 秒巡检用 `try_lock`：有请求在用设备就跳过这一轮，不排队。
+- 耗时的事不持锁：
+  - 启动 WDA（单独开一条隧道查/挂开发者镜像，再启动 runner，最长约 2 分钟）是后台任务，巡检收结果；期间工具调用照常走 HID 后备路线。
+  - 重签分三段：持锁取参数 → 不持锁签名、安装 → 持锁写结果。
+  - Apple ID 会话检查在后台跑。
+- `status`（`Daemon` 请求）读 watch 通道发布的快照，不碰锁。
+- 改变手机状态的请求排队超过 30 秒就放弃，免得点击落到已经变了的屏幕上。
+- 停止信号优先处理（`biased` select）：取消排队和执行中的请求、巡检，再停 HID 媒体流、runner、usbmuxd。
 
 ## 3. 守护进程状态机
 
-每台设备一个状态机（先支持单设备，结构上允许多设备）。
+状态定义在 `crates/ictl-daemon/src/machine.rs`（`DeviceState`），推进在 `supervise.rs`。先支持单设备（`IPHONE_UDID` 指定，否则用第一台）。
+
+每 10 秒巡检一次，从上往下判断，第一个不满足的就是当前状态：
 
 ```
-          ┌─────────┐ usbmux Attached  ┌──────────┐ 有配对记录    ┌──────────┐
-  ───────▶│ Absent  │─────────────────▶│ Attached │─────────────▶│  Paired  │
-          └─────────┘◀─────────────────└──────────┘              └────┬─────┘
-               ▲        Detached / 掉线        │ 无配对记录              │ 开发者模式已开
-               │                              ▼                        ▼
-               │                        NeedsTrust（提示用户点信任） ┌──────────┐
-               │                                                    │ Tunneling│◀─┐
-               │                                                    └────┬─────┘  │
-               │                    PasswordProtected：锁屏/BFU         │ RSD 握手成功
-               │                    → NeedsUnlock（BFU 必须人工）        ▼          │
-               │                                                    ┌──────────┐  │ 隧道断
-               │                                                    │ DdiCheck │  │
-               │                                                    └────┬─────┘  │
-               │                                    未挂载 → install_ddi │ 已挂载    │
-               │                                                         ▼         │
-               │                                                    ┌──────────┐  │
-               │        「Enable UI Automation」超时 → NeedsAutomationPin │WdaStarting│──┘
-               │        （推送通知，60 秒重试，不指数退避）             └────┬─────┘
-               │                                                         │ /status ready
-               │                                                         ▼
-               │                                                    ┌──────────┐
-               └────────────────────────────────────────────────────│  Ready   │
-                                                                    └──────────┘
-                                                                    子状态：Locked / Unlocked
+  usbmuxd 看得到手机？ ──────── 否 ─▶ Absent（离线超过 10 分钟推送通知）
+        │ 是
+  有配对记录？ ──────────────── 否 ─▶ NeedsTrust（iphone-control setup，手机上点「信任」）
+        │ 是
+  开发者模式已开？ ──────────── 否 ─▶ DeveloperModeOff（只在未就绪时检查）
+        │ 是
+  WDA 签名安装过？ ──────────── 否 ─▶ NeedsSigning（iphone-control sign）
+        │ 是
+  本进程 runner 存活且 /status ready？ ── 是 ─▶ Ready
+        │ 否（runner 还活着时连续 3 次才算）→ 丢掉 runner、WDA 客户端、隧道
+        ▼
+  WdaStarting：后台任务 开隧道 → 查/挂开发者镜像 → 关隧道 → 启动 runner（最长 120 秒）
+        │ 结果由下一轮巡检收
+        ├─ 成功 ──────────────────────────────▶ 健康检查通过后 Ready
+        ├─ 隧道报 PasswordProtected（锁屏/BFU）─▶ NeedsUnlock（BFU 必须人工）
+        ├─「Enable UI Automation」超时 ─────────▶ NeedsAutomationPin（推送通知，60 秒重试，不指数退避）
+        └─ 镜像或 WDA 其它失败 ─────────────────▶ WdaStarting { last_error }，按退避重试
 ```
 
 要点（每一条都来自 toolkit 实际踩过的坑）：
 
-- **热插拔**：容器里没有 udev，usbmuxd 收不到热插拔事件。守护进程同时做两件事：订阅 usbmuxd 的 `Listen` 事件；并每 10 秒检查 sysfs `/sys/bus/usb/devices/*/idVendor` 是否有 `05ac`。连续 3 次"USB 上有 Apple 设备但 usbmuxd 看不到"就重启 usbmuxd 子进程。
-- **隧道**：CoreDeviceProxy + jktcp 用户态 TCP 栈（idevice `tunnel_tcp_stack`），不需要 root，不创建 TUN 网卡。锁屏且从未解锁过（BFU）时报 `PasswordProtected`，进入 `NeedsUnlock`，只能人工解锁。
-- **开发者镜像**：每次进入 `DdiCheck` 都先 `installed_ddi()` 查询（toolkit 实测已挂载时约 1 秒），未挂载才走 `install_ddi()`（个性化 + TSS）。手机重启后镜像会掉，所以这一步不能省。
+- **热插拔**：容器里没有 udev，usbmuxd 收不到热插拔事件。守护进程同时做两件事：订阅 usbmuxd 的 `Listen` 事件；并每 10 秒检查 sysfs `/sys/bus/usb/devices/*/idVendor` 是否有 `05ac`。连续 3 次"USB 上有 Apple 设备但 usbmuxd 看不到"就重启 usbmuxd 子进程。列设备连续 3 轮出错才当作离线，usbmuxd 抖一下不拆会话。
+- **隧道**：CoreDeviceProxy + jktcp 用户态 TCP 栈（idevice `tunnel_tcp_stack`），不需要 root，不创建 TUN 网卡。锁屏且从未解锁过（BFU）时报 `PasswordProtected`，进入 `NeedsUnlock`，只能人工解锁。HID 和截图用的隧道按需建立、常驻复用；WDA 掉线或 usbmuxd 重启时连隧道一起丢。
+- **HID 会话**：归 `Tunnel` 所有（`Tunnel::hid` / `close_hid` / `close`），持有屏幕媒体流。关闭时必须先停媒体流再断隧道，否则手机一直挂着「配对的电脑」会话（灵动岛图标常驻、不自动锁屏）。空闲 30 秒关闭，重开约 0.5 秒。
+- **开发者镜像**：每次启动 WDA 前都先 `installed_ddi()` 查询（toolkit 实测已挂载时约 1 秒），未挂载才走 `install_ddi()`（个性化 + TSS）。手机重启后镜像可能会掉，所以这一步不能省。连续 3 次挂载失败就清掉 DDI 缓存重新下载。
 - **WDA 就绪判定**：必须同时满足"本进程持有的 XCTest 会话存活"和 `/status` 返回 ready。toolkit 踩过：host 侧 runner 退出后，手机上残留的 WDA 还会响应几十秒再自杀，单看 `/status` 会误判。
 - **自动化密码框**：手机重启后首次启用 UI 自动化会弹「为 XCTest 输入 iPhone 密码」，没人输就报 `Timed out while enabling automation mode`。识别到这个错误：进入 `NeedsAutomationPin`、只推送一次通知、保持 60 秒重试；恢复后再推送一次。
-- **退避**：其它 WDA 启动失败按 60s → 120s → 300s 退避，上限 5 分钟；回到 `Absent` 时重置。
+- **退避**：其它 WDA 启动失败按 60s → 120s → 240s → 300s 退避，上限 5 分钟；手机重新连上、WDA 就绪、重签完成时重置。
 
 ## 4. 模块划分
 
 | crate | 职责 | 主要依赖 |
 |---|---|---|
-| `ictl-device` | `Device` 句柄：usbmux 发现与监听、lockdown、配对状态、开发者模式状态、隧道（`TunnelHandle`）、开发者镜像、HID 会话（持有显示媒体流）、截图、App 列表/启动/结束、安装 IPA | `idevice`（锁定版本） |
-| `ictl-wda` | `WdaRunner`（XCUITestService 启动/停止）、`WdaClient`（会话、点击、W3C actions、keys、source、screenshot、appium settings）、元素树解析（纯函数，可单测） | `idevice`（`xctest`、`wda`）、`quick-xml` |
-| `ictl-sign` | Apple ID 登录（含双重认证交互）、会话持久化、注册设备、App ID、描述文件、签名 `.app`/`.ipa`（**包括 `.xctest`**） | 内置的 `plume_core`/`plume_utils`/`omnisette`（vendored，MPL-2.0/MIT），`apple-codesign`（打补丁） |
-| `ictl-unlock` | 锁屏密码键盘定位、逐位输入并核对密码栏、失败即停用 | `ictl-wda` |
-| `ictl-daemon` | 状态机、usbmuxd 子进程看护、重签调度、通知（Bark/Telegram）、控制接口服务端 | 以上全部、`tokio` |
-| `ictl-mcp` | MCP stdio 服务，13 个 `iphone_*` 工具；截图缩放/裁剪 | `rmcp`（`server`、`transport-io`）、`image` |
-| `apps/iphone-control` | CLI 入口：`daemon`、`mcp`、`doctor`、`setup`、`login`、`sign`、`resign`、`status`、`wda-bridge` | `clap` |
+| `ictl-device` | `Device` 句柄：usbmux 发现与监听、lockdown、配对状态、开发者模式状态、隧道（`Tunnel`，持有 HID 会话和显示媒体流）、开发者镜像（含下载缓存）、截图、App 列表/启动/结束、安装 IPA；所有设备调用都有时限 | `idevice`（锁上游 git 提交） |
+| `ictl-wda` | `WdaRunner`（XCUITestService 启动/停止）、`WdaClient`（会话、点击、W3C actions、keys、source、screenshot、appium settings、锁屏核对）、经 usbmuxd 直连设备 8100 端口的 HTTP 传输（区分连不上和请求超时）、元素树解析（纯函数，可单测） | `idevice`（`xctest`）、`quick-xml` |
+| `ictl-protocol` | 控制接口的 `Request`/`Response` 类型和客户端 `call(socket, req, timeout)` | `serde`、`tokio` |
+| `ictl-sign` | Apple ID 登录（含双重认证交互）、会话持久化、注册设备、App ID、描述文件、签名 `.app`/`.ipa`（**包括 `.xctest`**；bundle 逻辑改写自 plume_utils）、签后自检 | vendored 的 `plume_core`/`plume_store`（MPL-2.0/MIT；经 plume_core 用 vendored 的 `omnisette` 和打过补丁的 `apple-codesign`） |
+| `ictl-unlock` | 锁屏密码键盘定位、逐位输入并核对密码栏、从第 2 位起先写停用标记 | `ictl-wda` |
+| `ictl-daemon` | `core`（共享状态、请求分发、快照）、`supervise`（巡检、usbmuxd 看护、后台启动 WDA、重签、会话检查）、`tools`（13 个工具的实现、HID 后备）、`doctor`；通知（Bark/Telegram）、截图缩放/裁剪、控制接口服务端 | 以上全部、`tokio`、`reqwest`、`image` |
+| `ictl-mcp` | MCP stdio 服务，13 个 `iphone_*` 工具，经控制接口调用守护进程 | `ictl-protocol`、`rmcp`（`server`、`transport-io`） |
+| `apps/iphone-control` | CLI 入口：`daemon`、`mcp`、`mcp-config`、`status`、`doctor`、`setup`、`login`、`sign`、`resign`、`passcode`、`unlock-reset`、`wda-bridge`、`notify-test`；隐藏的 `debug <ddi\|hid\|screenshot\|soak\|wda\|e2e>` 真机诊断（原第 0 步 spike，不经守护进程） | `clap` |
 
-依赖方向：`apps` → `ictl-daemon` / `ictl-mcp` → `ictl-unlock` → `ictl-wda` → `ictl-device`；`ictl-sign` 只被 `ictl-daemon` 和 `apps` 使用。`ictl-mcp` 不依赖 `ictl-device`，只依赖控制接口的协议类型（放在 `ictl-daemon::protocol`，后续可拆成 `ictl-proto`）。
+依赖方向：`apps` → `ictl-daemon` / `ictl-mcp`；`ictl-daemon` → `ictl-unlock` → `ictl-wda` → `ictl-device`；`ictl-daemon` 还依赖 `ictl-sign` 和 `ictl-protocol`。`ictl-mcp` 只依赖 `ictl-protocol`，不依赖守护进程和设备层。`apps` 的 `debug` 直接调用 `ictl-device`、`ictl-wda`。
 
 ## 5. 截图与坐标
 
-- 坐标单位统一用**点（pt）**，与 WDA 一致；屏幕点尺寸从 WDA `/wda/screen` 读取并缓存，WDA 不可用时用设备型号表兜底（不写死 430×932）。
+- 坐标单位统一用**点（pt）**，与 WDA 一致；屏幕点尺寸从 WDA `/wda/screen` 读取并缓存到 `state.json`，WDA 不可用时用缓存值，从没连上过 WDA 时用 `.env` 的 `SCREEN_W`/`SCREEN_H`（不写死 430×932）。
 - HID 坐标是 0～65535 归一化，换算 `x / w * 65535`。
 - 截图优先走 WDA（toolkit 实测约 0.4 秒）；WDA 不可用时走 CoreDevice `screencaptureservice`（不需要签名）。
 - 区域放大：从原始像素截图裁剪，长边 < 600 放大到 600，> 1200 缩到 1200，返回倍数和坐标换算式（三位有效数字）。
@@ -116,22 +128,21 @@
 | `account/` | Apple ID 会话、开发私钥、证书 | 0700 | 否 |
 | `profiles/` | 当前描述文件 | 0700 | 否 |
 | `ddi/` | 开发者镜像缓存（运行时下载的苹果文件） | 0755 | **否，不得分发** |
-| `wda/` | 未签名 WDA.ipa（来自本项目 Release，校验 sha256）、当前签好的包 | 0755 | 未签名包作为 Release 附件 |
+| `wda/` | 当前签好的包 `WDA-signed.ipa`。未签名包不在这里，在镜像的 `/usr/share/iphone-control/WDA-unsigned.ipa`：构建时下载 Appium 官方的未签名真机包（`WebDriverAgentRunner-Runner.zip` v16.15.3，校验 sha256）重新打包；计划改为本项目 macOS CI 编译 | 0755 | 未签名包进镜像 |
 | `secrets/passcode` | 锁屏密码（仅启用自动解锁时） | 0600 | 否 |
 | `notify.toml` | 通知渠道配置 | 0600 | 否 |
 | `logs/` | 日志，按大小轮转 | 0755 | 否 |
 | `state.json` | 状态机快照、自动解锁停用标记、上次重签结果 | 0600 | 否 |
 
-配置文件 `config.toml`（数据根目录下）只放非秘密项：UDID（可空，自动探测）、代理、通知开关、重签阈值、自动解锁开关。
+没有配置文件：配置全部来自环境变量（容器里由 `.env` 注入，见 `.env.example`、`crates/ictl-daemon/src/config.rs`），都有默认值；秘密只放文件。
 
 实现与上表的差异（2026-11-01）：
 - 没有单独的 `profiles/` 和 `notify.toml`：描述文件只嵌在 `wda/WDA-signed.ipa` 里，到期时间记在 `state.json`；通知渠道走环境变量（`.env`），见 `.env.example`。
 - 自动解锁停用标记在 `logs/UNLOCK-DISABLED`（与 toolkit 一致，便于人工发现）。
-- 控制接口的连接任务只收发；请求经通道交给主循环串行处理，和巡检共用同一个执行顺序。
 
 ## 7. 重签与通知
 
-- 守护进程每天检查一次：描述文件剩余 < 2 天才重签；同时**每天验证一次 Apple ID 会话**（toolkit 的教训：只在要重签时才发现登录过期，只剩 2 天处理）。
-- 重签流程：`plume_core` 取新描述文件 → `ictl-sign` 签名（含 `.xctest`）→ `installation_proxy` 安装 → 重启 WDA。安装成功后才替换旧文件。
+- 守护进程每 `RESIGN_CHECK_HOURS`（默认 6 小时）检查一次：描述文件剩余 < `RESIGN_MIN_DAYS`（默认 2 天）才重签；另外**每天验证一次 Apple ID 会话**（toolkit 的教训：只在要重签时才发现登录过期，只剩 2 天处理）。两者都在后台跑，不持设备锁。
+- 重签流程：`plume_core` 取新描述文件 → `ictl-sign` 签名（含 `.xctest`）→ `installation_proxy` 安装 → 下一轮巡检重启 WDA。安装成功后才替换旧文件。
 - 通知事件：重签失败、Apple ID 会话失效、需要输入自动化密码、WDA 恢复、自动解锁失败已停用、手机离线超过 10 分钟。同一事件不重复推送，恢复时推送一次。
-- 容器整个挂掉时守护进程发不了通知，这部分仍需宿主机侧的 systemd 单元（可选，放在 `contrib/`）。
+- 容器整个挂掉时守护进程发不了通知，这部分仍需宿主机侧的监控（例如 systemd 单元），本项目还没有提供。

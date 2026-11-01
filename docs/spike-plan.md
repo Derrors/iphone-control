@@ -1,5 +1,8 @@
 # 第 0 步：真机验证（spike）
 
+> **已完成（2026-11-01），本文留作历史记录。** 5 项全部通过，结果见 [spike-results.md](spike-results.md)。
+> 文中的 `spike/` 程序已删除，有用的子命令并入隐藏命令 `iphone-control debug <ddi|hid|screenshot|soak|wda|e2e>`（`apps/iphone-control/src/debug.rs`）。
+
 目的：用最少的代码确认 idevice 在目标设备（iPhone 15 Pro Max，iOS 27.0.1）上能完成 D 方案依赖的 5 项关键能力。**这一步的结果决定 D 方案是否继续。**
 
 代码放在 `spike/`，一个子命令验证一项，每项独立可重跑。
@@ -71,5 +74,5 @@
 
 ## 产出
 
-- `spike/RESULTS.md`：每项的通过与否、耗时、日志摘要（去掉 UDID 等个人信息）
+- `spike/RESULTS.md`（现为 [spike-results.md](spike-results.md)）：每项的通过与否、耗时、日志摘要（去掉 UDID 等个人信息）
 - 发现的上游问题列表（准备提 issue/PR）

@@ -3,7 +3,8 @@
 //! 规则全部来自 toolkit 实测（docs/capability-matrix.md §5）：
 //! 1. 先读 `/wda/locked`，没锁直接返回；WDA 不可用也直接返回（交给后面的调用去报错）
 //! 2. 每轮固定：按 Home → 等 1.0s → 底部上滑 → 等 1.5s。不以「树里有键盘」判断：键盘收起时按键元素也常驻树中
-//! 3. 读密码栏「共N位数，已输入M位」：总位数和配置不符一位都不输；有残留输入就下一轮（Home 会清空）
+//! 3. 读密码栏「共N位数，已输入M位」：总位数和配置不符一位都不输；有残留输入先用右下角删除键逐位删到 0
+//!    （iOS 27 上 Home 不会清空残留），删不掉就下一轮
 //! 4. 每位一个独立 W3C 手势（按下 80ms），按完核对已输入位数正好 +1，不符立即停——输入不完整不算输错。
 //!    多位合成一个手势会漏键；`/wda/tap` 在锁屏上每次约 2.9 秒，太慢
 //! 5. 解锁期间 waitForIdleTimeout=1、animationCoolOffTimeout=0.2（0 会唤醒失败），结束后恢复
@@ -143,6 +144,22 @@ async fn press<T: Transport>(wda: &mut WdaClient<T>, at: (i64, i64), t: &Timing)
     Ok(wda.actions(&tap_steps(at.0 as f64, at.1 as f64, t.key_press_ms)).await?)
 }
 
+/// 用删除键把 `entered` 位残留删到 0；找不到删除键或某次没删掉返回 false（这轮作废，一位没输）
+async fn clear_residual<T: Transport>(
+    wda: &mut WdaClient<T>,
+    delete: Option<(i64, i64)>,
+    entered: u32,
+    t: &Timing,
+) -> Result<bool> {
+    let Some(del) = delete else { return Ok(false) };
+    for left in (0..entered).rev() {
+        if tap_key(wda, del, left, t).await? != left as i64 {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
 /// 按一个数字键，等密码栏已输入位数变成 `expect`；返回实际位数（读不到密码栏为 -1）
 async fn tap_key<T: Transport>(wda: &mut WdaClient<T>, at: (i64, i64), expect: u32, t: &Timing) -> Result<i64> {
     press(wda, at, t).await?;
@@ -164,7 +181,7 @@ async fn unlock<T: Transport>(wda: &mut WdaClient<T>, cfg: &UnlockConfig, code: 
 
     let mut keys = None;
     for _ in 0..FIRST_DIGIT_ROUNDS {
-        // Home 唤醒；键盘已打开时会收起并清空半截输入
+        // Home 唤醒（键盘已打开时 iOS 27 只是把键收起，半截输入还在，下面用删除键处理）
         // 熄屏锁屏刚唤醒时上滑偶尔卡十几秒后报 `point.x != INFINITY`（WDA 还拿不到界面尺寸）：一位没输，算这轮落空重来
         let woke = async {
             wda.press_button("home").await?;
@@ -186,16 +203,16 @@ async fn unlock<T: Transport>(wda: &mut WdaClient<T>, cfg: &UnlockConfig, code: 
         if !wda.locked().await? {
             return Ok(Outcome::Unlocked);
         }
-        let (Some(pad), Some((total, entered))) =
-            (elements::keypad(&wda.elements().await?), wda.passcode_field().await?)
-        else {
+        let els = wda.elements().await?;
+        let (Some(pad), Some((total, entered))) = (elements::keypad(&els), wda.passcode_field().await?) else {
             continue;
         };
-        if entered != 0 {
-            continue;
-        }
         if total != len {
             return Err(UnlockError::LengthMismatch { expected: total, configured: len });
+        }
+        // 有残留输入：iOS 27 上 Home 不会清空，用右下角「删除」逐位删掉，每删一位核对一次
+        if entered != 0 && !clear_residual(wda, elements::delete_key(&els, &pad), entered, t).await? {
+            continue;
         }
         match tap_key(wda, pad[digit(0)], 1, t).await? {
             1 => {
@@ -312,6 +329,18 @@ mod tests {
         let (cfg, dir) = cfg(Some("123456"));
         assert_eq!(ensure_unlocked(&mut WdaClient::new(&fake), &cfg).await.unwrap(), Outcome::Unlocked);
         assert_eq!(fake.state().failed_attempts, 0);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// 键盘上留着别人按的半截（可能是错的）：先删干净再输，不能接在后面凑成一次输错
+    #[tokio::test]
+    async fn residual_input_is_deleted_before_typing() {
+        let fake = FakeLockScreen::new("123456");
+        fake.leave_residual(&[9, 9]);
+        let (cfg, dir) = cfg(Some("123456"));
+        assert_eq!(ensure_unlocked(&mut WdaClient::new(&fake), &cfg).await.unwrap(), Outcome::Unlocked);
+        assert_eq!(fake.state().failed_attempts, 0);
+        assert!(!cfg.disabled_flag.exists());
         std::fs::remove_dir_all(dir).unwrap();
     }
 

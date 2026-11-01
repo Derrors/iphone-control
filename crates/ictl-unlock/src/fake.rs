@@ -3,6 +3,7 @@
 //! - 键盘元素一直在元素树里（不管是否显示）
 //! - 只有「按 Home 后上滑」之后键盘才真正显示，显示前按键落空
 //! - 整串输完：对了就解锁，错了算一次输错并清空
+//! - 按 Home 不清空半截输入（iOS 27 真机）；右下角删除键每按一下删一位
 
 use std::sync::Mutex;
 use std::time::Duration;
@@ -24,6 +25,8 @@ const KEYS: [(i64, i64); 10] = [
     (215, 587),
     (327, 587),
 ];
+/// lockscreen.xml 里右下角按钮（有输入时是「删除」）的中心
+const DELETE: (i64, i64) = (327, 857);
 
 #[derive(Debug, Clone, Default)]
 pub struct State {
@@ -65,6 +68,13 @@ impl FakeLockScreen {
         self.st.lock().unwrap().swipes_to_ignore = n;
     }
 
+    /// 键盘已打开、留着 n 位残留输入（别人按了一半）
+    pub fn leave_residual(&self, digits: &[u8]) {
+        let mut s = self.st.lock().unwrap();
+        s.shown = true;
+        s.entered = digits.to_vec();
+    }
+
     /// 接下来 n 次上滑 WDA 报 500（真机：熄屏锁屏刚唤醒时 `point.x != INFINITY`）
     pub fn swipe_errors(&self, n: u32) {
         self.st.lock().unwrap().swipe_errors = n;
@@ -88,11 +98,8 @@ impl FakeLockScreen {
                 s.idle = (b["waitForIdleTimeout"].as_f64().unwrap(), b["animationCoolOffTimeout"].as_f64().unwrap());
                 Value::Null
             }
-            ("POST", "/wda/pressButton") => {
-                s.shown = false;
-                s.entered.clear();
-                Value::Null
-            }
+            // iOS 27：Home 只唤醒/收起键，半截输入还在，键盘界面也还在（键隐藏但仍能按）
+            ("POST", "/wda/pressButton") => Value::Null,
             ("POST", "/actions") => {
                 s.requests_to_actions += 1;
                 let idle = s.idle;
@@ -115,6 +122,12 @@ impl FakeLockScreen {
                 } else {
                     s.presses_per_action_max = s.presses_per_action_max.max(downs);
                     let (x, y) = (steps[0]["x"].as_f64().unwrap() as i64, steps[0]["y"].as_f64().unwrap() as i64);
+                    if (x, y) == DELETE {
+                        if s.shown {
+                            s.entered.pop();
+                        }
+                        return (200, json!({"value": null, "sessionId": "S"}));
+                    }
                     let digit = KEYS.iter().position(|k| *k == (x, y)).expect("按在键盘以外") as u8;
                     if s.shown {
                         s.press_count += 1;

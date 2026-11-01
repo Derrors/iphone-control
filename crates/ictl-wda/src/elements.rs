@@ -133,6 +133,17 @@ pub fn keypad(elements: &[Element]) -> Option<[(i64, i64); 10]> {
     Some(out)
 }
 
+/// 密码键盘右下角的按钮：有输入时是「删除」（每按一下删一位），没输入时是「取消」。
+/// 标签随语言变，按位置认：和 9 同一列、在 0 下面的 Button
+pub fn delete_key(elements: &[Element], pad: &[(i64, i64); 10]) -> Option<(i64, i64)> {
+    let (col, row0) = (pad[9].0, pad[0].1);
+    elements
+        .iter()
+        .filter(|e| e.kind == "Button" && (e.center.0 - col).abs() <= 10 && e.center.1 > row0 + 50)
+        .map(|e| e.center)
+        .next()
+}
+
 /// 锁屏密码栏的值形如「共6位数，已输入2位」或英文「6-digit passcode, 2 entered」，返回 (总位数, 已输入位数)
 pub fn parse_passcode_value(value: &str) -> Option<(u32, u32)> {
     let nums: Vec<u32> =
@@ -176,6 +187,16 @@ mod tests {
     const LOCK_IOS27: &str = include_str!("../tests/fixtures/lockscreen-ios27.xml");
     const PIN_IOS27: &str = include_str!("../tests/fixtures/passcode-view-ios27.xml");
     const NC_IOS27: &str = include_str!("../tests/fixtures/notification-center-ios27.xml");
+    const PARTIAL_IOS27: &str = include_str!("../tests/fixtures/passcode-partial-ios27.xml");
+
+    #[test]
+    fn delete_key_found_by_position_on_real_keypad() {
+        let els = parse(PARTIAL_IOS27, SCREEN);
+        let pad = keypad(&els).unwrap();
+        assert_eq!(delete_key(&els, &pad), Some((327, 857)));
+        // 「紧急情况」在左下，不能认成删除
+        assert!(els.iter().any(|e| e.label == "紧急情况"));
+    }
 
     #[test]
     fn cover_sheet_kinds_from_real_trees() {

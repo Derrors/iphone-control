@@ -16,6 +16,8 @@
       <XCUIElementTypeKey type="XCUIElementTypeKey" label="8" x="159" y="533" width="112" height="108"/>
       <XCUIElementTypeKey type="XCUIElementTypeKey" label="9" x="271" y="533" width="112" height="108"/>
       <XCUIElementTypeKey type="XCUIElementTypeKey" label="0" x="159" y="641" width="112" height="108"/>
+      <XCUIElementTypeButton type="XCUIElementTypeButton" label="紧急情况" x="47" y="803" width="112" height="108"/>
+      <XCUIElementTypeButton type="XCUIElementTypeButton" label="取消" x="271" y="803" width="112" height="108"/>
     </XCUIElementTypeOther>
   </XCUIElementTypeWindow>
 </XCUIElementTypeApplication>

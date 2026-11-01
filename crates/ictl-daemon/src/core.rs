@@ -113,6 +113,8 @@ pub(crate) struct Inner {
     pub last_lock: Option<Instant>,
     /// HID 会话最近一次使用的时间；空闲超过 [`crate::supervise::HID_IDLE`] 就关掉（它持有屏幕媒体流）
     pub hid_used: Option<Instant>,
+    /// 最近一次读到的元素树。只在调用方允许（max_age_ms）时复用；改变界面的操作做完就清掉
+    pub elements_cache: Option<(Instant, Vec<ictl_wda::Element>)>,
     pub dedup: Dedup,
     pub next_resign: Instant,
     pub next_session_check: Instant,
@@ -172,6 +174,7 @@ impl Daemon {
             offline_since: Some(now),
             last_lock: None,
             hid_used: None,
+            elements_cache: None,
             dedup: Dedup::default(),
             // 启动一分钟后再做第一次重签检查和会话验证，先让设备就绪
             next_resign: now + Duration::from_secs(60),
@@ -234,6 +237,7 @@ impl Daemon {
             r.stop();
         }
         g.wda = None;
+        g.elements_cache = None;
         drop_tunnel(g).await;
         g.wda_misses.reset();
     }
@@ -308,6 +312,9 @@ impl Daemon {
                 STALE.as_secs()
             ));
         }
+        // 改变界面的操作做完后缓存的元素树就作废；只有调用方声明「不改变布局」的按名字点击（max_age_ms > 0）保留
+        let keeps_cache = matches!(req, Request::TapElement { max_age_ms, .. } if max_age_ms > 0);
+        let invalidates = req.is_device_action() && !keeps_cache;
         let r = match req {
             Request::Status => Ok(self.status_text(g).await),
             Request::Screenshot { region } => {
@@ -315,9 +322,13 @@ impl Daemon {
                 self.publish(g);
                 return resp;
             }
-            Request::ListElements { filter, limit } => self.list_elements(g, &filter, limit).await,
+            Request::ListElements { filter, limit, max_age_ms } => {
+                self.list_elements(g, &filter, limit, Duration::from_millis(max_age_ms)).await
+            }
             Request::Tap { x, y } => self.tap(g, x, y).await,
-            Request::TapElement { text, index } => self.tap_element(g, &text, index).await,
+            Request::TapElement { text, index, max_age_ms } => {
+                self.tap_element(g, &text, index, Duration::from_millis(max_age_ms)).await
+            }
             Request::LongPress { x, y, seconds } => self.long_press(g, x, y, seconds).await,
             Request::Swipe { from, to, seconds } => self.swipe(g, from, to, seconds).await,
             Request::TypeText { text, submit } => self.type_text(g, &text, submit).await,
@@ -339,6 +350,9 @@ impl Daemon {
             }
             Request::Daemon | Request::Resign { .. } => unreachable!("上面已处理"),
         };
+        if invalidates {
+            g.elements_cache = None;
+        }
         self.publish(g);
         r.map(Response::text).unwrap_or_else(Response::error)
     }

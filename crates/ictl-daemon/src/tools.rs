@@ -156,9 +156,28 @@ impl Daemon {
         Ok(Response::Image { jpeg_base64: base64::engine::general_purpose::STANDARD.encode(jpeg), caption })
     }
 
-    pub(crate) async fn list_elements(&self, g: &mut Inner, filter: &str, limit: usize) -> Result<String, String> {
-        self.ensure_unlocked(g).await?;
+    /// 当前界面的元素树。缓存不超过 `max_age` 就直接用（0 = 总是重读）；重读的结果写回缓存
+    async fn tree(&self, g: &mut Inner, max_age: Duration) -> Result<Vec<elements::Element>, String> {
+        if !max_age.is_zero()
+            && let Some((t, els)) = &g.elements_cache
+            && t.elapsed() <= max_age
+        {
+            return Ok(els.clone());
+        }
         let els = self.require_wda(g)?.elements().await.map_err(|e| e.to_string())?;
+        g.elements_cache = Some((Instant::now(), els.clone()));
+        Ok(els)
+    }
+
+    pub(crate) async fn list_elements(
+        &self,
+        g: &mut Inner,
+        filter: &str,
+        limit: usize,
+        max_age: Duration,
+    ) -> Result<String, String> {
+        self.ensure_unlocked(g).await?;
+        let els = self.tree(g, max_age).await?;
         let shown: Vec<&elements::Element> =
             if filter.is_empty() { els.iter().collect() } else { elements::filter(&els, filter) };
         let lines: Vec<_> = shown.iter().take(limit).map(|e| e.describe()).collect();
@@ -178,19 +197,23 @@ impl Daemon {
             tokio::time::sleep(max.min(Duration::from_millis(500))).await;
             return Ok("WDA 不可用,等了 0.5 秒".into());
         };
-        let mut prev: Option<Vec<String>> = None;
-        loop {
-            let cur: Vec<String> =
-                w.elements().await.map_err(|e| e.to_string())?.iter().map(elements::Element::describe).collect();
+        let mut prev: Option<Vec<elements::Element>> = None;
+        let msg = loop {
+            let cur = w.elements().await.map_err(|e| e.to_string())?;
             if prev.as_ref() == Some(&cur) {
-                return Ok(format!("界面已稳定({:.1} 秒)", t0.elapsed().as_secs_f64()));
+                break format!("界面已稳定({:.1} 秒)", t0.elapsed().as_secs_f64());
             }
             if t0.elapsed() >= max {
-                return Ok(format!("{:.1} 秒内界面一直在变(可能有动画),按最后的状态返回", max.as_secs_f64()));
+                prev = Some(cur);
+                break format!("{:.1} 秒内界面一直在变(可能有动画),按最后的状态返回", max.as_secs_f64());
             }
             prev = Some(cur);
-            tokio::time::sleep(Duration::from_millis(150)).await;
-        }
+            // 读元素树时 WDA 本身会等界面空闲，两次之间不用再多等
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        };
+        // 紧接着的 then=elements 直接用这棵树
+        g.elements_cache = prev.map(|els| (Instant::now(), els));
+        Ok(msg)
     }
 
     /// 等包含 `text` 的元素出现
@@ -225,10 +248,15 @@ impl Daemon {
         Ok(format!("已点击 {pos}(经 HID)"))
     }
 
-    pub(crate) async fn tap_element(&self, g: &mut Inner, text: &str, index: usize) -> Result<String, String> {
+    pub(crate) async fn tap_element(
+        &self,
+        g: &mut Inner,
+        text: &str,
+        index: usize,
+        max_age: Duration,
+    ) -> Result<String, String> {
         self.ensure_unlocked(g).await?;
-        let w = self.require_wda(g)?;
-        let els = w.elements().await.map_err(|e| e.to_string())?;
+        let els = self.tree(g, max_age).await?;
         let matches = elements::find(&els, text);
         if matches.is_empty() {
             return Ok(format!("没找到包含 \"{text}\" 的元素,先用 iphone_list_elements 或截图看看屏幕"));
@@ -238,7 +266,7 @@ impl Daemon {
             return Ok(format!("只匹配到 {} 个:\n{}", matches.len(), list.join("\n")));
         }
         let e = matches[index];
-        w.tap(e.center.0 as f64, e.center.1 as f64).await.map_err(|e| e.to_string())?;
+        self.require_wda(g)?.tap(e.center.0 as f64, e.center.1 as f64).await.map_err(|e| e.to_string())?;
         let note = if matches.len() > 1 {
             format!("(共匹配 {} 个,点的是第 {index} 个)", matches.len())
         } else {

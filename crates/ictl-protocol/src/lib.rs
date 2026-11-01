@@ -17,6 +17,10 @@ pub enum Request {
     ListElements {
         filter: String,
         limit: usize,
+        /// 守护进程缓存的元素树不超过这么旧就直接用，不再读（0 = 总是重读）。
+        /// 用于「等界面稳定」之后紧接着列元素：Settle 刚读过
+        #[serde(default)]
+        max_age_ms: u64,
     },
     Tap {
         x: f64,
@@ -25,6 +29,9 @@ pub enum Request {
     TapElement {
         text: String,
         index: usize,
+        /// 同 ListElements。调用方声明这一串点击不改变界面布局（例如在同一个键盘上连按）时才给
+        #[serde(default)]
+        max_age_ms: u64,
     },
     LongPress {
         x: f64,

@@ -42,6 +42,8 @@ pub const THEN_LIMIT: usize = 80;
 pub const THEN_SETTLE_MS: u64 = 1500;
 /// 一次批量最多几步
 pub const BATCH_MAX_STEPS: usize = 20;
+/// reuse_elements 时按名字点击复用多旧的元素树（毫秒）
+pub const BATCH_REUSE_MS: u64 = 10_000;
 /// 批量里能用的工具：改变界面的操作和等待；看界面用 then
 pub const BATCH_TOOLS: [&str; 11] = [
     "iphone_tap",
@@ -180,9 +182,11 @@ iphone_wait_for,以及 {\"tool\": \"wait\", \"seconds\": 秒数}(不超过 5)。
 适合确定的连续操作;每步的结果不确定(例如点了以后不知道会跳到哪)时,还是一步步来。\n\
 then 同其他操作工具:全部做完后顺带返回界面。",
             schema(
-                with_then(
-                    json!({"steps": {"type": "array", "items": {"type": "object"}, "description": "要执行的步骤"}}),
-                ),
+                with_then(json!({
+                    "steps": {"type": "array", "items": {"type": "object"}, "description": "要执行的步骤"},
+                    "reuse_elements": {"type": "boolean", "default": false,
+                        "description": "这批操作不改变界面布局时(例如在同一个键盘上连按)设为 true:按名字点击复用最近读到的元素树,每步省 0.3~0.8 秒。会跳转页面的不要用,否则可能点到旧位置"}
+                })),
                 &["steps"],
             ),
         ),
@@ -253,9 +257,11 @@ pub fn to_request(name: &str, args: &Map<String, Value>) -> Result<Request, Stri
             };
             Request::Screenshot { region }
         }
-        "iphone_list_elements" => Request::ListElements { filter: a.s_or("filter", "")?, limit: a.u_or("limit", 150)? },
+        "iphone_list_elements" => {
+            Request::ListElements { filter: a.s_or("filter", "")?, limit: a.u_or("limit", 150)?, max_age_ms: 0 }
+        }
         "iphone_tap" => Request::Tap { x: a.f("x")?, y: a.f("y")? },
-        "iphone_tap_element" => Request::TapElement { text: a.s("text")?, index: a.u_or("index", 0)? },
+        "iphone_tap_element" => Request::TapElement { text: a.s("text")?, index: a.u_or("index", 0)?, max_age_ms: 0 },
         "iphone_long_press" => Request::LongPress { x: a.f("x")?, y: a.f("y")?, seconds: a.f_or("seconds", 1.0)? },
         "iphone_swipe" => Request::Swipe {
             from: (a.f("from_x")?, a.f("from_y")?),
@@ -307,6 +313,7 @@ pub enum Step {
 /// 检查并转换批量步骤（一步都不执行就先把参数错误全挡掉）
 pub fn batch_steps(args: &Map<String, Value>) -> Result<Vec<Step>, String> {
     let steps = args.get("steps").and_then(Value::as_array).ok_or("缺少 steps(数组)")?;
+    let reuse = Args(args).b_or("reuse_elements", false)?;
     if steps.is_empty() || steps.len() > BATCH_MAX_STEPS {
         return Err(format!("steps 要有 1 到 {BATCH_MAX_STEPS} 步"));
     }
@@ -327,10 +334,20 @@ pub fn batch_steps(args: &Map<String, Value>) -> Result<Vec<Step>, String> {
                 }
                 return Ok(Step::Wait(std::time::Duration::from_secs_f64(secs)));
             }
-            let req = to_request(tool, obj).map_err(|e| format!("第 {n} 步({tool}):{e}"))?;
+            let req = match to_request(tool, obj).map_err(|e| format!("第 {n} 步({tool}):{e}"))? {
+                Request::TapElement { text, index, .. } if reuse => {
+                    Request::TapElement { text, index, max_age_ms: BATCH_REUSE_MS }
+                }
+                other => other,
+            };
             Ok(Step::Request { tool: tool.to_owned(), req })
         })
         .collect()
+}
+
+/// tap_element 的结果是不是「没点到」（没找到、或 index 超出匹配个数）
+pub fn tap_missed(text: &str) -> bool {
+    text.starts_with("没找到") || text.starts_with("只匹配到")
 }
 
 /// 守护进程响应 → MCP 结果。错误走工具错误（is_error），文字原样给客户端
@@ -413,7 +430,9 @@ impl McpServer {
         }
         match then {
             Then::Elements(filter) => {
-                match self.call(&Request::ListElements { filter, limit: THEN_LIMIT }).await {
+                // Settle 刚读过元素树，直接用它
+                match self.call(&Request::ListElements { filter, limit: THEN_LIMIT, max_age_ms: THEN_SETTLE_MS }).await
+                {
                     Response::Text { text: t } => text += &format!("\n--- 操作后的界面 ---\n{t}"),
                     Response::Error { message } => text += &format!("\n(读界面失败:{message})"),
                     Response::Image { .. } => {}
@@ -449,6 +468,14 @@ impl McpServer {
                     lines.push(format!("{n}. wait → 等了 {} 秒", d.as_secs_f64()));
                 }
                 Step::Request { tool, req } => match self.call(&req).await {
+                    // 按名字没点到（toolkit 兼容：单独调用时是普通结果）在批量里要停下：后面的步骤都建立在它点中的前提上
+                    Response::Text { text } if tool == "iphone_tap_element" && tap_missed(&text) => {
+                        lines.push(format!("{n}. {tool} → {text}"));
+                        if n < total {
+                            lines.push(format!("第 {n} 步没点到,后面 {} 步没有执行", total - n));
+                        }
+                        return self.finish(lines.join("\n"), true, then).await;
+                    }
                     Response::Text { text } => lines.push(format!("{n}. {tool} → {text}")),
                     Response::Image { caption, .. } => lines.push(format!("{n}. {tool} → {caption}")),
                     Response::Error { message } => {
@@ -497,7 +524,7 @@ mod tests {
     fn defaults_match_toolkit() {
         assert_eq!(
             to_request("iphone_list_elements", &Map::new()).unwrap(),
-            Request::ListElements { filter: String::new(), limit: 150 }
+            Request::ListElements { filter: String::new(), limit: 150, max_age_ms: 0 }
         );
         assert_eq!(
             to_request("iphone_swipe", &args(json!({"from_x": 1, "from_y": 2, "to_x": 3, "to_y": 4}))).unwrap(),
@@ -576,6 +603,33 @@ mod tests {
     }
 
     #[test]
+    fn reuse_elements_only_affects_tap_element_steps() {
+        let steps = |reuse: bool| {
+            batch_steps(&args(json!({"reuse_elements": reuse, "steps": [
+                {"tool": "iphone_tap_element", "text": "One"},
+                {"tool": "iphone_tap", "x": 1, "y": 2}
+            ]})))
+            .unwrap()
+        };
+        assert_eq!(
+            steps(true)[0],
+            Step::Request {
+                tool: "iphone_tap_element".into(),
+                req: Request::TapElement { text: "One".into(), index: 0, max_age_ms: BATCH_REUSE_MS }
+            }
+        );
+        assert!(matches!(&steps(false)[0], Step::Request { req: Request::TapElement { max_age_ms: 0, .. }, .. }));
+        assert_eq!(steps(true)[1], steps(false)[1]);
+    }
+
+    #[test]
+    fn missed_tap_texts_are_recognised() {
+        assert!(tap_missed("没找到包含 \"x\" 的元素,先用 iphone_list_elements 或截图看看屏幕"));
+        assert!(tap_missed("只匹配到 1 个:\nButton \"x\""));
+        assert!(!tap_missed("已点击 Button \"x\""));
+    }
+
+    #[test]
     fn wait_for_timeout_is_bounded() {
         assert_eq!(
             to_request("iphone_wait_for", &args(json!({"text": "x"}))).unwrap(),
@@ -593,11 +647,11 @@ mod tests {
         // 写成字符串的数字照收（toolkit 的 pydantic 也收）
         assert_eq!(
             to_request("iphone_tap_element", &args(json!({"text": "设置", "index": "2"}))).unwrap(),
-            Request::TapElement { text: "设置".into(), index: 2 }
+            Request::TapElement { text: "设置".into(), index: 2, max_age_ms: 0 }
         );
         assert_eq!(
             to_request("iphone_list_elements", &args(json!({"limit": null}))).unwrap(),
-            Request::ListElements { filter: String::new(), limit: 150 }
+            Request::ListElements { filter: String::new(), limit: 150, max_age_ms: 0 }
         );
     }
 

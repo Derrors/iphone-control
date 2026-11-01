@@ -227,11 +227,15 @@ async fn unlock<T: Transport>(wda: &mut WdaClient<T>, cfg: &UnlockConfig, code: 
         if !check.locked {
             return Ok(Outcome::Unlocked);
         }
-        // 核对时已取到元素树就直接用；密码栏也从树里读（读不到再单独查）
-        let els = match &check.tree {
+        // 核对时已取到元素树就直接用，密码栏也从树里读。那棵树是上滑后马上取的，键盘有时还没进树：
+        // 缺键盘或密码栏时再取一次（真机上这样省掉一整轮，约 4.5 秒）
+        let mut els = match &check.tree {
             Some(xml) => elements::parse(xml, screen),
             None => wda.elements().await?,
         };
+        if check.tree.is_some() && (elements::keypad(&els).is_none() || elements::passcode_field(&els).is_none()) {
+            els = wda.elements().await?;
+        }
         let field = match elements::passcode_field(&els) {
             Some(f) => Some(f),
             None => wda.passcode_field().await?,

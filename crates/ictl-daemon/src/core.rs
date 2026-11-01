@@ -557,9 +557,9 @@ impl Daemon {
         let Some(wda) = self.wda(g) else { return Ok(()) };
         match ictl_unlock::ensure_unlocked(wda, &cfg).await {
             Ok(_) => Ok(()),
-            Err(UnlockError::WrongPasscode) => {
+            Err(e @ (UnlockError::WrongPasscode | UnlockError::Uncertain(_))) => {
                 self.notify(g, Event::UnlockDisabled);
-                Err(format!("{},已推送通知", UnlockError::WrongPasscode))
+                Err(format!("{e},已推送通知"))
             }
             Err(e) => Err(e.to_string()),
         }

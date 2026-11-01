@@ -5,10 +5,11 @@
 //! 2. 每轮固定：按 Home → 等 1.0s → 底部上滑 → 等 1.5s。不以「树里有键盘」判断：键盘收起时按键元素也常驻树中
 //! 3. 读密码栏「共N位数，已输入M位」：总位数和配置不符一位都不输；有残留输入先用右下角删除键逐位删到 0
 //!    （iOS 27 上 Home 不会清空残留），删不掉就下一轮
-//! 4. 每位一个独立 W3C 手势（按下 80ms），按完核对已输入位数正好 +1，不符立即停——输入不完整不算输错。
-//!    多位合成一个手势会漏键；`/wda/tap` 在锁屏上每次约 2.9 秒，太慢
+//! 4. 每位一个独立 W3C 手势（按下 80ms），按完核对已输入位数正好 +1，不符立即停——确定没凑满整串的不算输错；
+//!    多记一下凑满、密码栏归零或消失，按「可能已提交」去确认。多位合成一个手势会漏键；`/wda/tap` 在锁屏上每次约 2.9 秒，太慢
 //! 5. 解锁期间 waitForIdleTimeout=1、animationCoolOffTimeout=0.2（0 会唤醒失败），结束后恢复
-//! 6. 第一位没生效可以重来（最多 3 轮）；整串输完仍锁着才算真正输错一次：写停用标记，之后拒绝自动解锁直到人工清除
+//! 6. 第一位没生效可以重来（最多 3 轮）。从第 2 位起先写停用标记，确认解开或确认没凑满才撤掉：整串输完仍锁着、
+//!    中途出错、进程被杀都保持停用，直到人工清除。确认结果时核对出错一律当仍锁着
 //! 7. 只支持纯数字；开机后首次解锁（BFU）永远需要人工
 
 use std::path::PathBuf;
@@ -34,6 +35,9 @@ pub enum UnlockError {
     /// 整串输完仍锁着：已写停用标记
     #[error("整串密码输完手机仍锁着，自动解锁已停用（防止输错次数累计）")]
     WrongPasscode,
+    /// 第 2 位之后出错，不知道密码是否已提交：停用标记留着
+    #[error("输入密码途中出错（{0}），无法确认是否已提交，自动解锁已停用（防止输错次数累计）")]
+    Uncertain(String),
     #[error(transparent)]
     Wda(#[from] WdaError),
     #[error("{0}")]
@@ -69,6 +73,9 @@ impl Default for Timing {
 pub const FIRST_DIGIT_ROUNDS: u32 = 3;
 /// 解锁期间的等待上限（不能是 0：唤醒会失败）
 pub const UNLOCK_IDLE: IdleSettings = IdleSettings { wait_for_idle_timeout: 1.0, animation_cool_off_timeout: 0.2 };
+/// WDA 的默认等待设置（上次没恢复时用它恢复）
+pub const WDA_DEFAULT_IDLE: IdleSettings =
+    IdleSettings { wait_for_idle_timeout: 10.0, animation_cool_off_timeout: 2.0 };
 
 pub struct UnlockConfig {
     pub passcode_file: PathBuf,
@@ -104,10 +111,25 @@ pub async fn ensure_unlocked<T: Transport>(wda: &mut WdaClient<T>, cfg: &UnlockC
     if !reported && wda.lock_state_trusted() {
         return Ok(Outcome::NotLocked);
     }
+    let code = passcode(cfg);
+    // WDA 说锁了且能自动解锁：不先核对（熄屏锁屏时第一个无障碍查询要等约 8 秒），直接进解锁流程——第一步按 Home
+    // 唤醒屏幕；若其实是通知中心（WDA 误报），Home 会收起它，随后核对为未锁屏，一位都不输。
+    // 其余情况先核对，不动等待设置：不能自动解锁时免得把通知中心报成「需要人工解锁」，WDA 说没锁时确认一次就可信了
+    if !(reported && code.is_ok()) {
+        match wda.check_lock(Some(reported), false).await {
+            Ok(c) if !c.locked => return Ok(Outcome::NotLocked),
+            Ok(_) => {}
+            Err(WdaError::Unavailable(_)) => return Ok(Outcome::NotLocked),
+            Err(e) => return Err(e.into()),
+        }
+    }
+    let code = code?;
     let saved = wda.idle_settings().await?;
+    // 上次异常退出没恢复的话，读到的就是解锁用的值：恢复成 WDA 默认值
+    let restore = if saved == UNLOCK_IDLE { WDA_DEFAULT_IDLE } else { saved };
     wda.set_idle_settings(UNLOCK_IDLE).await?;
-    let r = check_and_unlock(wda, cfg, reported).await;
-    if let Err(e) = wda.set_idle_settings(saved).await {
+    let r = unlock(wda, cfg, code.as_bytes()).await;
+    if let Err(e) = wda.set_idle_settings(restore).await {
         tracing::warn!("恢复 WDA 等待设置失败：{e}");
     }
     r
@@ -125,21 +147,6 @@ fn passcode(cfg: &UnlockConfig) -> Result<String> {
     Ok(code)
 }
 
-/// `reported`：WDA 自己说锁了。熄屏锁屏时第一个无障碍查询（取元素树、前台 App）要等约 8 秒，
-/// 所以能自动解锁时不先核对，直接进解锁流程——第一步按 Home 唤醒屏幕；若其实是通知中心（WDA 误报），
-/// Home 会收起它，随后核对为未锁屏，一位都不输。不能自动解锁时才先核对，免得把通知中心报成「需要人工解锁」
-async fn check_and_unlock<T: Transport>(wda: &mut WdaClient<T>, cfg: &UnlockConfig, reported: bool) -> Result<Outcome> {
-    let code = passcode(cfg);
-    if !(reported && code.is_ok()) {
-        match wda.locked().await {
-            Ok(false) | Err(WdaError::Unavailable(_)) => return Ok(Outcome::NotLocked),
-            Ok(true) => {}
-            Err(e) => return Err(e.into()),
-        }
-    }
-    unlock(wda, cfg, code?.as_bytes()).await
-}
-
 async fn press<T: Transport>(wda: &mut WdaClient<T>, at: (i64, i64), t: &Timing) -> Result<()> {
     Ok(wda.actions(&tap_steps(at.0 as f64, at.1 as f64, t.key_press_ms)).await?)
 }
@@ -153,24 +160,40 @@ async fn clear_residual<T: Transport>(
 ) -> Result<bool> {
     let Some(del) = delete else { return Ok(false) };
     for left in (0..entered).rev() {
-        if tap_key(wda, del, left, t).await? != left as i64 {
+        if tap_key(wda, del, left as i64 + 1, t).await? != left as i64 {
             return Ok(false);
         }
     }
     Ok(true)
 }
 
-/// 按一个数字键，等密码栏已输入位数变成 `expect`；返回实际位数（读不到密码栏为 -1）
-async fn tap_key<T: Transport>(wda: &mut WdaClient<T>, at: (i64, i64), expect: u32, t: &Timing) -> Result<i64> {
+/// 按一下键（数字或删除），等密码栏已输入位数离开 `before`；返回最后读到的位数（读不到密码栏为 -1）。
+/// 只认「变了」不认方向：删除键是变少，数字键是变多，按键被记成两下时会多变一位
+async fn tap_key<T: Transport>(wda: &mut WdaClient<T>, at: (i64, i64), before: i64, t: &Timing) -> Result<i64> {
     press(wda, at, t).await?;
     let deadline = tokio::time::Instant::now() + t.key_confirm;
     loop {
         let got = wda.passcode_field().await?.map(|f| f.1 as i64).unwrap_or(-1);
-        if got >= expect as i64 || tokio::time::Instant::now() >= deadline {
+        // 读不到密码栏可能只是动画中，等到超时再算
+        if (got >= 0 && got != before) || tokio::time::Instant::now() >= deadline {
             return Ok(got);
         }
         tokio::time::sleep(t.poll.min(Duration::from_millis(150))).await;
     }
+}
+
+/// 第 2 位起输入的结果
+enum Verdict {
+    Unlocked,
+    /// 确定没有凑满整串（第 n 位被吞，或多记了一下但没满）
+    NotSubmitted(u32),
+    /// 凑满整串后仍锁着
+    Wrong,
+}
+
+fn write_flag(cfg: &UnlockConfig, why: &str) -> std::io::Result<()> {
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+    std::fs::write(&cfg.disabled_flag, format!("{now} {why}\n"))
 }
 
 async fn unlock<T: Transport>(wda: &mut WdaClient<T>, cfg: &UnlockConfig, code: &[u8]) -> Result<Outcome> {
@@ -200,11 +223,20 @@ async fn unlock<T: Transport>(wda: &mut WdaClient<T>, cfg: &UnlockConfig, code: 
             }
         }
         tokio::time::sleep(t.swipe_settle).await;
-        if !wda.locked().await? {
+        let check = wda.check_lock(None, false).await?;
+        if !check.locked {
             return Ok(Outcome::Unlocked);
         }
-        let els = wda.elements().await?;
-        let (Some(pad), Some((total, entered))) = (elements::keypad(&els), wda.passcode_field().await?) else {
+        // 核对时已取到元素树就直接用；密码栏也从树里读（读不到再单独查）
+        let els = match &check.tree {
+            Some(xml) => elements::parse(xml, screen),
+            None => wda.elements().await?,
+        };
+        let field = match elements::passcode_field(&els) {
+            Some(f) => Some(f),
+            None => wda.passcode_field().await?,
+        };
+        let (Some(pad), Some((total, entered))) = (elements::keypad(&els), field) else {
             continue;
         };
         if total != len {
@@ -214,7 +246,8 @@ async fn unlock<T: Transport>(wda: &mut WdaClient<T>, cfg: &UnlockConfig, code: 
         if entered != 0 && !clear_residual(wda, elements::delete_key(&els, &pad), entered, t).await? {
             continue;
         }
-        match tap_key(wda, pad[digit(0)], 1, t).await? {
+        // 第一位不可能凑满整串（至少 4 位），出什么情况都不算输错
+        match tap_key(wda, pad[digit(0)], 0, t).await? {
             1 => {
                 keys = Some(pad);
                 break;
@@ -225,26 +258,82 @@ async fn unlock<T: Transport>(wda: &mut WdaClient<T>, cfg: &UnlockConfig, code: 
     }
     let pad = keys.ok_or(UnlockError::NoKeypad)?;
 
-    for n in 2..len {
-        if tap_key(wda, pad[digit(n as usize - 1)], n, t).await? != n as i64 {
-            return Err(UnlockError::Incomplete(n));
+    // 从第 2 位起，任何一下都可能凑满整串让 iOS 判定一次（按键被记成两下、最后一位）。先写停用标记，
+    // 确认解开或确认没凑满才撤掉；中途出错、进程被杀都会留下标记，绝不会把同一个错误密码再输一遍
+    write_flag(cfg, "正在输入密码，未确认结果（若长期存在：上次输入中途出错或进程退出）")?;
+    let verdict = enter_rest(wda, cfg, &pad, code).await;
+    let clear = || {
+        if let Err(e) = std::fs::remove_file(&cfg.disabled_flag) {
+            tracing::warn!("撤掉停用标记失败，自动解锁保持停用：{e}");
+        }
+    };
+    match verdict {
+        Ok(Verdict::Unlocked) => {
+            clear();
+            Ok(Outcome::Unlocked)
+        }
+        Ok(Verdict::NotSubmitted(n)) => {
+            clear();
+            Err(UnlockError::Incomplete(n))
+        }
+        Ok(Verdict::Wrong) => {
+            let _ = write_flag(cfg, "整串密码输完仍是锁屏状态");
+            Err(UnlockError::WrongPasscode)
+        }
+        Err(e) => {
+            let why = format!("输入过程中出错，无法确认密码是否已提交：{e}");
+            let _ = write_flag(cfg, &why);
+            Err(UnlockError::Uncertain(e.to_string()))
         }
     }
+}
 
-    press(wda, pad[digit(code.len() - 1)], t).await?;
+/// 输第 2 位到最后一位并确认结果。出错直接返回（调用方保留停用标记）
+async fn enter_rest<T: Transport>(
+    wda: &mut WdaClient<T>,
+    cfg: &UnlockConfig,
+    pad: &[(i64, i64); 10],
+    code: &[u8],
+) -> Result<Verdict> {
+    let t = &cfg.timing;
+    let len = code.len() as u32;
+    let key = |i: usize| pad[(code[i] - b'0') as usize];
+    let mut last_pressed = true;
+    for n in 2..len {
+        let got = tap_key(wda, key(n as usize - 1), n as i64 - 1, t).await?;
+        if got == n as i64 {
+            continue;
+        }
+        // 被吞（还是 n-1 位）或多记一下但没满：确定没提交
+        if got == n as i64 - 1 || (got > n as i64 && got < len as i64) {
+            return Ok(Verdict::NotSubmitted(n));
+        }
+        // 归零、密码栏消失等：可能已经凑满提交了，按提交处理去确认
+        tracing::warn!("第 {n} 位按后密码栏变成 {got} 位，可能已提交，确认结果");
+        last_pressed = false;
+        break;
+    }
+    if last_pressed {
+        press(wda, key(code.len() - 1), t).await?;
+    }
     let deadline = tokio::time::Instant::now() + t.unlock_confirm;
     loop {
         tokio::time::sleep(t.poll).await;
-        if !wda.locked().await? {
-            return Ok(Outcome::Unlocked);
+        // 严格判断：核对出错一律当仍锁着继续等，宁可多停用一次也不把错误密码当成解开
+        if let Ok(c) = wda.check_lock(None, true).await
+            && !c.locked
+        {
+            return Ok(Verdict::Unlocked);
         }
         if tokio::time::Instant::now() >= deadline {
             break;
         }
     }
-    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
-    std::fs::write(&cfg.disabled_flag, format!("{now} 整串密码输完仍是锁屏状态\n"))?;
-    Err(UnlockError::WrongPasscode)
+    // 仍锁着。最后一位被吞时密码栏停在 len-1 位，说明根本没提交，不算输错
+    if last_pressed && matches!(wda.passcode_field().await, Ok(Some((_, e))) if e == len - 1) {
+        return Ok(Verdict::NotSubmitted(len));
+    }
+    Ok(Verdict::Wrong)
 }
 
 #[cfg(test)]
@@ -373,6 +462,73 @@ mod tests {
         assert!(matches!(ensure_unlocked(&mut WdaClient::new(&fake), &cfg).await, Err(UnlockError::Incomplete(3))));
         assert_eq!(fake.state().failed_attempts, 0);
         assert!(!cfg.disabled_flag.exists());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// 最后一位被吞：没提交，不算输错，也不停用
+    #[tokio::test]
+    async fn dropped_last_digit_is_not_a_wrong_attempt() {
+        let fake = FakeLockScreen::new("123456");
+        fake.drop_press(6);
+        let (cfg, dir) = cfg(Some("123456"));
+        assert!(matches!(ensure_unlocked(&mut WdaClient::new(&fake), &cfg).await, Err(UnlockError::Incomplete(6))));
+        assert_eq!(fake.state().failed_attempts, 0);
+        assert!(!cfg.disabled_flag.exists());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// 某一下被记成两下、凑满了整串：iOS 判了一次，必须当作输错停用
+    #[tokio::test]
+    async fn double_press_that_fills_the_entry_disables() {
+        let fake = FakeLockScreen::new("123456");
+        fake.double_press(5);
+        let (cfg, dir) = cfg(Some("123456"));
+        let mut wda = WdaClient::new(&fake);
+        assert!(matches!(ensure_unlocked(&mut wda, &cfg).await, Err(UnlockError::WrongPasscode)));
+        assert_eq!(fake.state().failed_attempts, 1);
+        assert!(matches!(ensure_unlocked(&mut wda, &cfg).await, Err(UnlockError::Disabled)));
+        assert_eq!(fake.state().failed_attempts, 1);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// 第 2 位之后出错：不知道是否提交了，停用标记必须留着，下一次不能再输
+    #[tokio::test]
+    async fn error_after_second_digit_keeps_auto_unlock_disabled() {
+        let fake = FakeLockScreen::new("123456");
+        fake.broken_after_press(3);
+        let (cfg, dir) = cfg(Some("123456"));
+        let mut wda = WdaClient::new(&fake);
+        assert!(matches!(ensure_unlocked(&mut wda, &cfg).await, Err(UnlockError::Uncertain(_))));
+        assert!(cfg.disabled_flag.exists());
+        assert!(matches!(ensure_unlocked(&mut wda, &cfg).await, Err(UnlockError::Disabled)));
+        assert_eq!(fake.state().failed_attempts, 0);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// WDA 在锁屏时启动（/wda/locked 一直报 false），输错后取元素树又失败：
+    /// 确认阶段不能按 WDA 的 false 当成解开了
+    #[tokio::test]
+    async fn stale_wda_lock_state_cannot_turn_a_wrong_entry_into_unlocked() {
+        let fake = FakeLockScreen::new("123456");
+        fake.stale_wda_lock();
+        fake.broken_after_press(6);
+        let (cfg, dir) = cfg(Some("654321"));
+        let mut wda = WdaClient::new(&fake);
+        assert!(matches!(ensure_unlocked(&mut wda, &cfg).await, Err(UnlockError::WrongPasscode)));
+        assert_eq!(fake.state().failed_attempts, 1);
+        assert!(cfg.disabled_flag.exists());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// 上次异常退出没恢复等待设置：恢复成 WDA 默认值，而不是把解锁用的值当成原值
+    #[tokio::test]
+    async fn stuck_unlock_idle_settings_are_restored_to_defaults() {
+        let fake = FakeLockScreen::new("123456");
+        let (cfg, dir) = cfg(Some("123456"));
+        let mut wda = WdaClient::new(&fake);
+        wda.set_idle_settings(UNLOCK_IDLE).await.unwrap();
+        assert_eq!(ensure_unlocked(&mut wda, &cfg).await.unwrap(), Outcome::Unlocked);
+        assert_eq!(fake.state().idle, (10.0, 2.0));
         std::fs::remove_dir_all(dir).unwrap();
     }
 

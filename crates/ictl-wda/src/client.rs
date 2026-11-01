@@ -59,6 +59,14 @@ pub struct IdleSettings {
 
 const SPRINGBOARD: &str = "com.apple.springboard";
 
+/// [`WdaClient::check_lock`] 的结果
+#[derive(Debug)]
+pub struct LockCheck {
+    pub locked: bool,
+    /// 核对时取到的 SpringBoard 元素树（没核对或前台不是 SpringBoard 时为 None）
+    pub tree: Option<String>,
+}
+
 pub struct WdaClient<T> {
     transport: T,
     session: Option<String>,
@@ -163,30 +171,44 @@ impl<T: Transport> WdaClient<T> {
     /// - 初值为 false：WDA 在手机锁着时启动就一直报未锁屏，直到下一次锁屏/解锁。确认过一次「确实没锁屏」之后
     ///   WDA 就跟上了，此后它说没锁就直接信，不多发请求
     /// - 下拉通知中心时报 true（和锁屏同一个界面）：WDA 说锁了时核对一次，是通知中心就算没锁
+    ///
+    /// 核对失败时按 WDA 的结果；需要「拿不准就算锁着」时用 [`Self::check_lock`] 的 strict 模式
     pub async fn locked(&mut self) -> Result<bool> {
-        let wda_locked = self.call("GET", "/wda/locked", None, Duration::from_secs(10)).await?["value"] == true;
-        if !wda_locked && self.lock_state_trusted {
-            return Ok(false);
+        Ok(self.check_lock(None, false).await?.locked)
+    }
+
+    /// 锁屏判断，并带回核对时取到的元素树（解锁流程接着用，省一次 `/source`）。
+    /// - `reported`：调用方刚问过的 `/wda/locked`，省一次请求
+    /// - `strict`：拿不准就算锁着。确认整串密码是否解开时用：把仍锁着误判成已解锁，下一次会把同一个错误密码再输一遍
+    pub async fn check_lock(&mut self, reported: Option<bool>, strict: bool) -> Result<LockCheck> {
+        let wda_locked = match reported {
+            Some(v) => v,
+            None => self.wda_reports_locked().await?,
+        };
+        if self.lock_state_trusted && (!wda_locked || strict) {
+            // 已同步过：WDA 说没锁就是没锁；strict 场景在密码键盘上，WDA 说锁了也不会是通知中心
+            return Ok(LockCheck { locked: wda_locked, tree: None });
         }
-        let sheet = match self.cover_sheet().await {
-            Ok(s) => s,
+        let (sheet, tree) = match self.cover_tree().await {
+            Ok(x) => x,
             Err(e) => {
-                tracing::debug!("核对锁屏界面失败，按 WDA 的结果：{e}");
-                return Ok(wda_locked);
+                tracing::debug!("核对锁屏界面失败，按{}处理：{e}", if strict { "锁着" } else { " WDA 的结果" });
+                return Ok(LockCheck { locked: strict || wda_locked, tree: None });
             }
         };
-        match (wda_locked, sheet) {
-            (true, elements::CoverSheet::NotificationCenter) => Ok(false),
-            (true, _) => Ok(true),
+        let locked = match (wda_locked, sheet) {
+            (true, elements::CoverSheet::NotificationCenter) => false,
+            (true, _) => true,
             (false, elements::CoverSheet::Locked) => {
                 tracing::info!("WDA 报未锁屏，但屏幕上是锁屏界面（WDA 在锁屏时启动，状态未同步）");
-                Ok(true)
+                true
             }
             (false, _) => {
                 self.lock_state_trusted = true;
-                Ok(false)
+                false
             }
-        }
+        };
+        Ok(LockCheck { locked, tree })
     }
 
     /// WDA 自己报的锁屏状态，不核对。可能误报，见 [`Self::locked`]；配合 [`Self::lock_state_trusted`] 做快速判断
@@ -199,12 +221,13 @@ impl<T: Transport> WdaClient<T> {
         self.lock_state_trusted
     }
 
-    /// 前台是 SpringBoard 时看元素树是锁屏、通知中心还是普通界面；前台是别的 App 就是普通界面
-    async fn cover_sheet(&self) -> Result<elements::CoverSheet> {
+    /// 前台是 SpringBoard 时看元素树是锁屏、通知中心还是普通界面，并带回元素树；前台是别的 App 就是普通界面
+    async fn cover_tree(&self) -> Result<(elements::CoverSheet, Option<String>)> {
         if self.active_app().await? != SPRINGBOARD {
-            return Ok(elements::CoverSheet::None);
+            return Ok((elements::CoverSheet::None, None));
         }
-        Ok(elements::cover_sheet(&self.source_xml().await?))
+        let xml = self.source_xml().await?;
+        Ok((elements::cover_sheet(&xml), Some(xml)))
     }
 
     pub async fn active_app(&self) -> Result<String> {

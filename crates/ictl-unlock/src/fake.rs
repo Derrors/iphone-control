@@ -12,6 +12,7 @@ use ictl_wda::http::Transport;
 use serde_json::{Value, json};
 
 const LOCK_XML: &str = include_str!("../../ictl-wda/tests/fixtures/lockscreen.xml");
+const HOME_XML: &str = include_str!("../../ictl-wda/tests/fixtures/home.xml");
 /// 与 lockscreen.xml 里各键的中心点一致
 const KEYS: [(i64, i64); 10] = [
     (215, 695),
@@ -43,6 +44,11 @@ pub struct State {
     swipe_errors: u32,
     press_count: u32,
     drop_press: Option<u32>,
+    double_press: Option<u32>,
+    /// WDA 在锁屏时启动：`/wda/locked` 一直报 false
+    stale_wda_lock: bool,
+    /// 第 n 次有效按键之后，取元素树和点击都报错（隧道断了）
+    broken_after_press: Option<u32>,
 }
 
 pub struct FakeLockScreen {
@@ -85,11 +91,30 @@ impl FakeLockScreen {
         self.st.lock().unwrap().drop_press = Some(n);
     }
 
+    /// 第 n 次有效按键被记成两下
+    pub fn double_press(&self, n: u32) {
+        self.st.lock().unwrap().double_press = Some(n);
+    }
+
+    pub fn stale_wda_lock(&self) {
+        self.st.lock().unwrap().stale_wda_lock = true;
+    }
+
+    pub fn broken_after_press(&self, n: u32) {
+        self.st.lock().unwrap().broken_after_press = Some(n);
+    }
+
     fn handle(&self, method: &str, path: &str, body: Option<Value>) -> (u16, Value) {
         let mut s = self.st.lock().unwrap();
         let path = path.strip_prefix("/session/S").unwrap_or(path);
+        if s.broken_after_press.is_some_and(|n| s.press_count >= n)
+            && (path == "/actions" || path.starts_with("/source"))
+        {
+            return (500, json!({"value": {"error": "unknown error", "message": "连接断了"}}));
+        }
         let v = match (method, path) {
-            ("GET", "/wda/locked") => json!(s.locked),
+            ("GET", "/wda/locked") => json!(s.locked && !s.stale_wda_lock),
+            ("GET", "/wda/activeAppInfo") => json!({"bundleId": "com.apple.springboard"}),
             ("GET", "/wda/screen") => json!({"screenSize": {"width": 430, "height": 932}, "scale": 3}),
             ("POST", "/session") => return (200, json!({"sessionId": "S", "value": {}})),
             ("GET", "/appium/settings") => json!({"waitForIdleTimeout": s.idle.0, "animationCoolOffTimeout": s.idle.1}),
@@ -131,23 +156,36 @@ impl FakeLockScreen {
                     let digit = KEYS.iter().position(|k| *k == (x, y)).expect("按在键盘以外") as u8;
                     if s.shown {
                         s.press_count += 1;
-                        if s.drop_press != Some(s.press_count) {
+                        let times = match s.press_count {
+                            n if s.drop_press == Some(n) => 0,
+                            n if s.double_press == Some(n) => 2,
+                            _ => 1,
+                        };
+                        for _ in 0..times {
                             s.entered.push(digit);
                             s.digits_typed += 1;
-                        }
-                        if s.entered.len() == self.code.len() {
-                            if s.entered == self.code {
-                                s.locked = false;
-                            } else {
-                                s.failed_attempts += 1;
+                            if s.entered.len() == self.code.len() {
+                                if s.entered == self.code {
+                                    s.locked = false;
+                                    s.shown = false;
+                                } else {
+                                    s.failed_attempts += 1;
+                                }
+                                s.entered.clear();
                             }
-                            s.entered.clear();
                         }
                     }
                 }
                 Value::Null
             }
-            ("GET", p) if p.starts_with("/source") => json!(LOCK_XML),
+            ("GET", p) if p.starts_with("/source") => {
+                if s.locked {
+                    let field = format!("共{}位数，已输入{}位", self.code.len(), s.entered.len());
+                    json!(LOCK_XML.replace("共6位数，已输入0位", &field))
+                } else {
+                    json!(HOME_XML)
+                }
+            }
             ("POST", "/elements") => json!([{"ELEMENT": "E1"}]),
             ("GET", "/element/E1/attribute/value") => {
                 json!(format!("共{}位数，已输入{}位", self.code.len(), s.entered.len()))

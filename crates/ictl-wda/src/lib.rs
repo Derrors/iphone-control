@@ -9,7 +9,7 @@ pub mod elements;
 pub mod http;
 pub mod runner;
 
-pub use client::{IdleSettings, PointerStep, WdaClient, actions_body, swipe_steps, tap_steps};
+pub use client::{IdleSettings, LockCheck, PointerStep, WdaClient, actions_body, swipe_steps, tap_steps};
 pub use elements::Element;
 pub use runner::WdaRunner;
 

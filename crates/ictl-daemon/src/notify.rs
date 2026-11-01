@@ -65,7 +65,7 @@ impl Event {
             Self::WdaRecovered => ("iPhone WDA 已恢复".into(), "已输入密码,WDA 重新就绪,可以正常操作了。".into()),
             Self::UnlockDisabled => (
                 "iPhone 自动解锁失败,已停用".into(),
-                "整串密码输完手机仍锁着,可能密码配置不对。为免累计输错,自动解锁已停用。\n请人工解锁手机、核对密码(iphone-control passcode set),再运行 iphone-control unlock-reset。".into(),
+                "整串密码输完手机仍锁着(可能密码配置不对),或输入途中出错、无法确认密码是否已提交。为免累计输错,自动解锁已停用。\n请人工解锁手机、核对密码(iphone-control passcode set),再运行 iphone-control unlock-reset。".into(),
             ),
             Self::DeviceOffline { minutes } => (
                 format!("iPhone 已离线 {minutes} 分钟"),

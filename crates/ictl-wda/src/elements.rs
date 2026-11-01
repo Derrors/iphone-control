@@ -117,9 +117,9 @@ pub fn keypad(elements: &[Element]) -> Option<[(i64, i64); 10]> {
         for t in [e.label.trim(), e.name.trim()] {
             let mut chars = t.chars();
             let (Some(first), second) = (chars.next(), chars.next()) else { continue };
-            // 键的标签可能是 "2" 或 "2 ABC"，但不能是 "10"
+            // 键的标签可能是 "2" 或 "2 ABC"；"10"、"3条通知" 这类锁屏上别的按钮不算
             if let Some(d) = first.to_digit(10)
-                && !second.is_some_and(|c| c.is_ascii_digit())
+                && second.is_none_or(char::is_whitespace)
             {
                 keys[d as usize].get_or_insert(e.center);
                 break;
@@ -142,6 +142,11 @@ pub fn delete_key(elements: &[Element], pad: &[(i64, i64); 10]) -> Option<(i64, 
         .filter(|e| e.kind == "Button" && (e.center.0 - col).abs() <= 10 && e.center.1 > row0 + 50)
         .map(|e| e.center)
         .next()
+}
+
+/// 元素树里锁屏密码栏的 (总位数, 已输入位数)
+pub fn passcode_field(elements: &[Element]) -> Option<(u32, u32)> {
+    elements.iter().filter(|e| e.kind == "SecureTextField").find_map(|e| parse_passcode_value(&e.value))
 }
 
 /// 锁屏密码栏的值形如「共6位数，已输入2位」或英文「6-digit passcode, 2 entered」，返回 (总位数, 已输入位数)
@@ -194,6 +199,7 @@ mod tests {
         let els = parse(PARTIAL_IOS27, SCREEN);
         let pad = keypad(&els).unwrap();
         assert_eq!(delete_key(&els, &pad), Some((327, 857)));
+        assert_eq!(passcode_field(&els), Some((6, 2)));
         // 「紧急情况」在左下，不能认成删除
         assert!(els.iter().any(|e| e.label == "紧急情况"));
     }
@@ -315,6 +321,10 @@ mod tests {
         let mut keys: Vec<_> = (0..9).map(|d| key(&d.to_string(), d, "Key")).collect();
         keys.push(key("10", 0, "Key"));
         assert!(keypad(&keys).is_none());
+        // 锁屏通知上的「3条通知」不能占掉 3 的位置
+        let mut keys = vec![key("3条通知", 99, "Button")];
+        keys.extend((0..10).map(|d| key(&d.to_string(), d, "Key")));
+        assert_eq!(keypad(&keys).unwrap()[3], (3, 100));
     }
 
     #[test]

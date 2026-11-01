@@ -65,7 +65,7 @@ jobs:
         env:
           PLATFORM: ${{ matrix.platform }}
       - id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: ${{ env.IMAGE }}
       - uses: docker/setup-buildx-action@v3
@@ -112,7 +112,7 @@ jobs:
           pattern: digests-*
           merge-multiple: true
       - id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: ${{ env.IMAGE }}
           # v1.2.3 → 1.2.3、1.2、latest（预发布版本如 v1.2.3-rc.1 只打自己的版本号，不动 latest）

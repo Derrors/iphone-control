@@ -260,6 +260,94 @@ impl Tunnel {
         Ok(installed_ddi(&mut self.adapter, &mut self.handshake).await?.map(|c| c.version))
     }
 
+    /// 诊断用：逐个调用 cryptexd 的只读例程，每个限时，返回 (例程, 结果) 列表
+    pub async fn probe_cryptexd(&mut self, timeout: std::time::Duration) -> Vec<(&'static str, String)> {
+        use idevice::{RsdService as _, cryptexd::CryptexdClient};
+        let mut out = Vec::new();
+        for routine in ["read-personalization-id", "copy-installed"] {
+            let fut = async {
+                let c: CryptexdClient<Box<dyn idevice::ReadWrite>> =
+                    CryptexdClient::connect_rsd(&mut self.adapter, &mut self.handshake).await?;
+                c.invoke(routine, Default::default()).await
+            };
+            let r = match tokio::time::timeout(timeout, fut).await {
+                Err(_) => "超时".to_owned(),
+                Ok(Err(e)) => format!("错误：{e}"),
+                Ok(Ok(v)) => format!("成功：{}", format!("{v:?}").chars().take(160).collect::<String>()),
+            };
+            out.push((routine, r));
+        }
+        out
+    }
+
+    /// 诊断用：分步挂载开发者镜像（读标识 → 取 nonce → TSS 签票 → install），每步限时并打印耗时。
+    /// 不调用 copy-installed，用于排查它挂住的情况（idevice 补丁前在 iOS 27.0.1 上出现过，见 spike/RESULTS.md）
+    pub async fn mount_ddi_steps(&mut self, restore_dir: &Path, step_timeout: std::time::Duration) -> Result<()> {
+        use idevice::{
+            RsdService as _,
+            cryptexd::{CryptexInstallRequest, CryptexdClient},
+            tss::TSSRequest,
+        };
+        macro_rules! step {
+            ($name:expr, $fut:expr) => {{
+                let t0 = std::time::Instant::now();
+                let r = tokio::time::timeout(step_timeout, $fut).await;
+                let el = t0.elapsed().as_secs_f64();
+                match r {
+                    Err(_) => {
+                        println!("  {}：超时（{el:.1}s）", $name);
+                        return Err(DeviceError::Io(std::io::Error::other(format!("{} 超时", $name))));
+                    }
+                    Ok(Err(e)) => {
+                        println!("  {}：失败（{el:.1}s）{e}", $name);
+                        return Err(e.into());
+                    }
+                    Ok(Ok(v)) => {
+                        println!("  {}：成功（{el:.1}s）", $name);
+                        v
+                    }
+                }
+            }};
+        }
+        let assets = Cryptex1Assets::load(restore_dir).await?;
+        let (a, h) = (&mut self.adapter, &mut self.handshake);
+        let chip = step!("读个性化标识", async {
+            let c: CryptexdClient<Box<dyn idevice::ReadWrite>> = CryptexdClient::connect_rsd(a, h).await?;
+            c.read_personalization_identifiers().await
+        });
+        let domain = assets.nonce_domain()?;
+        let (a, h) = (&mut self.adapter, &mut self.handshake);
+        let nonce = step!("取 cryptex nonce", async {
+            let c: CryptexdClient<Box<dyn idevice::ReadWrite>> = CryptexdClient::connect_rsd(a, h).await?;
+            c.cryptex_nonce(domain).await
+        });
+        let mut req = TSSRequest::new();
+        req.add_cryptex1_tags(&assets.build_identity, &chip, &nonce)?;
+        let resp = step!("TSS 签票", req.send());
+        let resp = resp.into_dictionary().ok_or_else(|| DeviceError::Io(std::io::Error::other("TSS 响应不是字典")))?;
+        let key = if resp.contains_key("Cryptex1,Ticket") { "Cryptex1,Ticket" } else { "ApImg4Ticket" };
+        println!("  票据字段：{key}");
+        let im4m = resp
+            .get(key)
+            .and_then(|v| v.as_data())
+            .ok_or_else(|| DeviceError::Io(std::io::Error::other("TSS 响应里没有票据")))?
+            .to_vec();
+        let request = CryptexInstallRequest::new(
+            assets.image.clone(),
+            assets.trustcache.clone(),
+            im4m,
+            assets.info.clone(),
+            assets.volumehash.clone(),
+            assets.cryptex1_properties()?,
+        );
+        let (a, h) = (&mut self.adapter, &mut self.handshake);
+        step!("install", async {
+            let c: CryptexdClient<Box<dyn idevice::ReadWrite>> = CryptexdClient::connect_rsd(a, h).await?;
+            c.install(request).await
+        });
+        Ok(())
+    }
+
     /// 个性化并安装开发者镜像。`restore_dir` 见 [`ddi::ensure_cache`]
     pub async fn mount_ddi(&mut self, restore_dir: &Path) -> Result<String> {
         let assets = Cryptex1Assets::load(restore_dir).await?;

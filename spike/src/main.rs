@@ -28,6 +28,10 @@ enum Check {
         #[arg(long, default_value = ictl_device::ddi::DEFAULT_BASE_URL)]
         url: String,
     },
+    /// 诊断：逐个调用 cryptexd 只读例程（不改设备状态）
+    CryptexdProbe,
+    /// 诊断：分步挂载开发者镜像（不依赖 copy-installed），挂完用截图服务确认
+    DdiSteps { restore_dir: PathBuf },
     /// 2. HID：媒体流 + universalhidservice tap，再按 Home（以截图对比为准，调用成功不代表生效）
     Hid { x: f64, y: f64 },
     /// 3. 截图：screencaptureservice PNG
@@ -43,7 +47,9 @@ enum Check {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt().init();
+    tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
+        .init();
     let cli = Cli::parse();
     let device = Device::find(cli.udid.as_deref()).await?;
     let info = device.info().await?;
@@ -63,6 +69,26 @@ async fn main() -> anyhow::Result<()> {
             }
             let t = device.open_tunnel().await?;
             println!("universalhidservice: {}", t.has_service("com.apple.coredevice.hid.universalhidservice"));
+        }
+        Check::CryptexdProbe => {
+            let mut t = device.open_tunnel().await?;
+            for (routine, r) in t.probe_cryptexd(Duration::from_secs(20)).await {
+                println!("{routine}: {r}");
+            }
+        }
+        Check::DdiSteps { restore_dir } => {
+            let mut t = device.open_tunnel().await?;
+            let t0 = Instant::now();
+            t.mount_ddi_steps(&restore_dir, Duration::from_secs(120)).await?;
+            println!("挂载流程结束，总耗时 {:.1}s；用截图服务确认镜像是否生效", t0.elapsed().as_secs_f64());
+            let mut t = device.open_tunnel().await?;
+            println!(
+                "screenshot: {}",
+                match t.screenshot_png().await {
+                    Ok(p) => format!("成功 {} 字节", p.len()),
+                    Err(e) => format!("失败 {e}"),
+                }
+            );
         }
         Check::Hid { x, y } => {
             let mut t = device.open_tunnel().await?;

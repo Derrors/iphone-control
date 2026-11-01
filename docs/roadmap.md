@@ -4,12 +4,12 @@
 
 ## 完成情况
 
-2026-11-01。「代码」= 已实现并有离线单测；「真机」= 必须在真机上确认（[spike-plan](spike-plan.md)）。到目前为止**没有任何一项在真机上跑过**。
+2026-11-01。「代码」= 已实现并有离线单测；「真机」= 必须在真机上确认（[spike-plan](spike-plan.md)）。spike 5 项已在真机通过（[spike/RESULTS.md](../spike/RESULTS.md)），其余阶段尚未上真机。
 
 | 阶段 | 代码 | 仍待真机确认 / 未完成 |
 |---|---|---|
-| 0 spike | `spike/` 5 个子命令已实现，调用与守护进程相同的库 | 全部 5 项待执行；`spike/RESULTS.md` 未产出 |
-| 1 设备核心库 | usbmux 发现、sysfs 兜底、配对、开发者模式、CoreDeviceProxy 用户态隧道 + RSD、cryptexd 查询/挂载、DDI 下载缓存、截图、HID（持有媒体流）、列 App/安装；WDA 直连设备端口的 HTTP 客户端、会话自动重建、元素树解析、XCTest 启动 runner | iOS 27 上 TSS 个性化能否成功（最高风险）；HID 事件是否生效（调用不报错不代表生效）；`XCUITestService` 能否拉起我们签的 WDA；「Enable UI Automation」超时的报错文字是否和 go-ios 一样含 `enabling automation mode`；500KB 元素树和 5MB 截图经 jktcp 读回的稳定性 |
+| 0 spike | ✅ 5 项全过：TSS/挂载、HID Home 键、截图、30 分钟隧道、WDA 启动与读回 | 手机重启后补跑正式 `ddi` 挂载；HID 点击/drag/键盘；隧道锁屏 |
+| 1 设备核心库 | usbmux 发现、sysfs 兜底、配对、开发者模式、CoreDeviceProxy 用户态隧道 + RSD、cryptexd 查询/挂载、DDI 下载缓存、截图、HID（持有媒体流）、列 App/安装；WDA 直连设备端口的 HTTP 客户端、会话自动重建、元素树解析、XCTest 启动 runner | 完成标准的示例程序（建隧道 → 镜像 → WDA → 截图 → 读元素 → 点「设置」→ Home）；`XCUITestService` 能否拉起**我们自己签**的 WDA（spike 用的是 toolkit 签的）；「Enable UI Automation」超时的报错文字是否和 go-ios 一样含 `enabling automation mode`；500KB 元素树经 jktcp 读回 |
 | 2 守护进程 | 状态机、usbmuxd 子进程看护、WDA 就绪判定与退避、密码框 60 秒重试、控制 socket、事件日志轮转、state.json | 冷启动 ≤90 秒、拔插/杀 usbmuxd/手机重启三种恢复、24 小时内存 |
 | 3 MCP | 13 个工具，参数与返回文字对齐 toolkit；区域放大；HID 后备 | 用 toolkit 的回归脚本实跑；纯坐标（游戏）和元素（设置）两种场景 |
 | 4 签名与重签 | vendor plume_core/plume_store/omnisette/apple-codesign；登录（2FA、短信）、注册设备、App ID、描述文件、深度优先签名（XCTest 无 entitlements）、签后自检、定期重签、每日会话验证 | 签出来的 WDA 能否启动（XCTest 签名是否需要空 entitlements 而不是不带）；修复提交 Impactor 上游未做 |

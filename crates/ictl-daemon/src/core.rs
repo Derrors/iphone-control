@@ -23,7 +23,9 @@ use crate::notify::{self, Dedup, Event};
 use crate::protocol::{Request, Response};
 
 pub const TICK: Duration = Duration::from_secs(10);
-const WDA_START_TIMEOUT: Duration = Duration::from_secs(60);
+/// 正常 2～10 秒就绪。手机重启后未授权 automation 时，testmanagerd 握手每次卡 30 秒、要重试一两次，
+/// 60 秒常常等不到 runner 启动，也就认不出「需要输入密码」
+const WDA_START_TIMEOUT: Duration = Duration::from_secs(120);
 const SYSFS_USB: &str = "/sys/bus/usb/devices";
 
 /// 持久化到 `state.json` 的状态（不含秘密）

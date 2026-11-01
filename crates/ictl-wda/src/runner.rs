@@ -19,16 +19,89 @@ use crate::{Result, WdaClient, WdaError, is_automation_pin_error};
 
 pub const WDA_PORT: u16 = 8100;
 
-/// 记下 XCTest 过程中报告的错误文字，用来识别「Enable UI Automation」密码框超时
-struct ErrorListener(Arc<Mutex<Vec<String>>>);
+/// runner 等「Enable UI Automation」密码的时长是 60 秒（runner 自己的超时），多留 5 秒收它的报错
+const AUTOMATION_WAIT: Duration = Duration::from_secs(65);
 
-impl ErrorListener {
-    fn push(&self, s: &str) {
-        self.0.lock().unwrap().push(s.to_owned());
+/// runner 调试日志里和「Enable UI Automation」相关的信号。
+/// 手机重启后 runner 一启动就进入 `enabling automation mode` 等待（手机上弹密码框），60 秒没输密码报
+/// `Timed out while enabling automation mode.`。这个报错经 `_XCT_initializationForUITestingDidFailWithError:`
+/// 发回，idevice 解码失败（只给出 unexpected response，不调回调），所以从调试日志里认
+#[derive(Debug, PartialEq)]
+enum AutomationSignal {
+    /// 开始等 automation mode（已授权时会马上结束）
+    Waiting,
+    /// 等待结束（成功或超时都有这一行）
+    Done,
+    /// UI 测试初始化失败，消息里带原因
+    Failed,
+}
+
+fn automation_signal(msg: &str) -> Option<AutomationSignal> {
+    if msg.contains("Failed to initialize for UI testing") {
+        Some(AutomationSignal::Failed)
+    } else if msg.contains("entering wait loop") && msg.contains("enabling automation mode") {
+        Some(AutomationSignal::Waiting)
+    } else if msg.contains("cleaning up enabling automation mode") {
+        Some(AutomationSignal::Done)
+    } else {
+        None
     }
 }
 
+/// XCTest 过程中收集的信息：报错文字（识别密码框超时用），以及 runner 是否正在等 automation mode
+#[derive(Default)]
+struct Progress {
+    errors: Vec<String>,
+    automation_wait: Option<tokio::time::Instant>,
+}
+
+struct ErrorListener(Arc<Mutex<Progress>>);
+
+impl ErrorListener {
+    fn push(&self, s: &str) {
+        self.0.lock().unwrap().errors.push(s.to_owned());
+    }
+}
+
+// 其余回调只记 debug 日志，用于排查启动卡住
 impl XCUITestListener for ErrorListener {
+    async fn log_message(&mut self, message: &str) -> std::result::Result<(), IdeviceError> {
+        tracing::debug!("xctest log: {message}");
+        Ok(())
+    }
+
+    async fn log_debug_message(&mut self, message: &str) -> std::result::Result<(), IdeviceError> {
+        tracing::debug!("xctest debug: {message}");
+        let mut p = self.0.lock().unwrap();
+        match automation_signal(message) {
+            Some(AutomationSignal::Waiting) => p.automation_wait = Some(tokio::time::Instant::now()),
+            Some(AutomationSignal::Done) => p.automation_wait = None,
+            Some(AutomationSignal::Failed) => p.errors.push(message.to_owned()),
+            None => {}
+        }
+        Ok(())
+    }
+
+    async fn did_begin_initializing_for_ui_testing(&mut self) -> std::result::Result<(), IdeviceError> {
+        tracing::debug!("xctest: 开始初始化 UI 测试");
+        Ok(())
+    }
+
+    async fn test_bundle_ready(&mut self) -> std::result::Result<(), IdeviceError> {
+        tracing::debug!("xctest: test bundle ready");
+        Ok(())
+    }
+
+    async fn test_runner_ready_with_capabilities(&mut self) -> std::result::Result<(), IdeviceError> {
+        tracing::debug!("xctest: runner ready");
+        Ok(())
+    }
+
+    async fn did_begin_executing_test_plan(&mut self) -> std::result::Result<(), IdeviceError> {
+        tracing::debug!("xctest: 开始执行测试计划");
+        Ok(())
+    }
+
     async fn initialization_for_ui_testing_did_fail(
         &mut self,
         description: &str,
@@ -62,23 +135,40 @@ impl WdaRunner {
             other => WdaError::StartFailed(other.to_string()),
         })?;
 
-        let errors = Arc::new(Mutex::new(Vec::new()));
+        let progress = Arc::new(Mutex::new(Progress::default()));
         let task = {
-            let (provider, errors) = (provider.clone(), errors.clone());
-            tokio::spawn(async move { XCUITestService::new(provider).run(cfg, &mut ErrorListener(errors), None).await })
+            let (provider, progress) = (provider.clone(), progress.clone());
+            tokio::spawn(
+                async move { XCUITestService::new(provider).run(cfg, &mut ErrorListener(progress), None).await },
+            )
         };
         let runner = Self { bundle_id: bundle_id.to_owned(), task };
         let client = WdaClient::new(DeviceTransport::new(provider, WDA_PORT));
 
         let failure = |extra: Option<String>| {
-            let mut text: Vec<String> = errors.lock().unwrap().clone();
+            let p = progress.lock().unwrap();
+            let mut text = p.errors.clone();
             text.extend(extra);
             let joined = text.join("; ");
-            if is_automation_pin_error(&joined) { WdaError::NeedsAutomationPin } else { WdaError::StartFailed(joined) }
+            // 报错文字没收到、但 runner 停在等 automation mode 也算
+            if is_automation_pin_error(&joined) || p.automation_wait.is_some() {
+                WdaError::NeedsAutomationPin
+            } else {
+                WdaError::StartFailed(joined)
+            }
         };
 
-        let deadline = tokio::time::Instant::now() + timeout;
+        let mut deadline = tokio::time::Instant::now() + timeout;
+        let mut announced = false;
         loop {
+            // runner 在等手机上输密码：等满它自己的 60 秒，期间输了密码就能直接就绪
+            if let Some(since) = progress.lock().unwrap().automation_wait {
+                deadline = deadline.max(since + AUTOMATION_WAIT);
+                if !announced {
+                    announced = true;
+                    tracing::info!("runner 在等手机上的「Enable UI Automation」密码");
+                }
+            }
             if runner.task.is_finished() {
                 let r = runner.task.await;
                 let msg = match r {
@@ -93,7 +183,7 @@ impl WdaRunner {
             }
             if tokio::time::Instant::now() >= deadline {
                 runner.task.abort();
-                return Err(failure(Some(format!("{} 秒内 WDA 没有就绪", timeout.as_secs()))));
+                return Err(failure(Some("WDA 在限定时间内没有就绪".to_owned())));
             }
             tokio::time::sleep(Duration::from_millis(500)).await;
         }
@@ -106,5 +196,27 @@ impl WdaRunner {
 
     pub fn stop(self) {
         self.task.abort();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn automation_signals_from_runner_debug_log() {
+        // iOS 27.0.1 手机重启后真机日志（去掉时间和进程号前缀）
+        let wait =
+            "<XCTWaiter: 0x1089cebb0> entering wait loop for 60.00s with expectations: `enabling automation mode`";
+        let done = "cleaning up enabling automation mode";
+        let fail = "Failed to initialize for UI testing: Error Domain=com.apple.dt.XCTest.XCTFuture Code=1000 \
+                    \"Timed out while enabling automation mode.\" UserInfo={NSLocalizedDescription=Timed out while enabling automation mode.}";
+        assert_eq!(automation_signal(wait), Some(AutomationSignal::Waiting));
+        assert_eq!(automation_signal(done), Some(AutomationSignal::Done));
+        assert_eq!(automation_signal(fail), Some(AutomationSignal::Failed));
+        assert!(is_automation_pin_error(fail));
+        // 创建 future 那一行不算开始等待（已授权时也有）
+        assert_eq!(automation_signal("Creating future for 'enabling automation mode' with timeout 60.00"), None);
+        assert_eq!(automation_signal("Loading test bundle at: file:///..."), None);
     }
 }

@@ -30,9 +30,10 @@ pub enum WdaError {
 
 pub type Result<T> = std::result::Result<T, WdaError>;
 
-/// 识别 XCTest 启动失败是否是「等待自动化密码」（toolkit 实测的报错文字）
+/// 识别 XCTest 启动失败是否是「等待自动化密码」：密码框 60 秒没输（toolkit 和 iOS 27 真机同一文字），
+/// 或手机锁屏时密码框弹不出来、被系统直接取消（LocalAuthentication 错误，如 Code=-4「认证已取消」）
 pub fn is_automation_pin_error(message: &str) -> bool {
-    message.contains("enabling automation mode")
+    message.contains("enabling automation mode") || message.contains("com.apple.LocalAuthentication")
 }
 
 #[cfg(test)]
@@ -41,6 +42,10 @@ mod tests {
     fn automation_pin_error_detection() {
         assert!(super::is_automation_pin_error(
             "Timed out while enabling automation mode. (Error code: 1000, Domain: com.apple.dt.XCTest.XCTFuture)"
+        ));
+        // iOS 27.0.1 锁屏时的真机报错
+        assert!(super::is_automation_pin_error(
+            "Failed to initialize for UI testing: Error Domain=com.apple.LocalAuthentication Code=-4 \"认证已取消。\""
         ));
         assert!(!super::is_automation_pin_error("Failed to load the test bundle (Error code: 103)"));
     }

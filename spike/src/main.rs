@@ -42,7 +42,12 @@ enum Check {
         minutes: u64,
     },
     /// 5. 启动 WDA：读 /status、/source、/screenshot，最后停掉 runner
-    Wda { bundle_id: String },
+    Wda {
+        bundle_id: String,
+        /// 等 WDA 就绪的秒数（排查「Enable UI Automation」时调大）
+        #[arg(long, default_value_t = 60)]
+        timeout: u64,
+    },
     /// 阶段 1 完成标准：隧道 → 镜像 → WDA → 截图 → 读元素 → 点「设置」→ Home，每步以 WDA 报告的前台 App 为准。
     /// 再用 HID 重做「点设置 → Home」一遍，确认 HID 点击真的生效
     E2e {
@@ -239,10 +244,10 @@ async fn main() -> anyhow::Result<()> {
             }
             println!("{n} 次成功、{fails} 次失败，共 {:.1} MB，最慢 {worst:.2}s", bytes as f64 / 1e6);
         }
-        Check::Wda { bundle_id } => {
+        Check::Wda { bundle_id, timeout } => {
             let t0 = Instant::now();
             let (runner, mut wda) =
-                ictl_wda::WdaRunner::start(device.provider(), &bundle_id, Duration::from_secs(60)).await?;
+                ictl_wda::WdaRunner::start(device.provider(), &bundle_id, Duration::from_secs(timeout)).await?;
             println!("WDA 就绪，耗时 {:.1}s", t0.elapsed().as_secs_f64());
             println!("屏幕 {:?}", wda.screen_size().await?);
             let t1 = Instant::now();

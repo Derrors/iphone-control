@@ -72,10 +72,9 @@ impl Default for Timing {
 
 pub const FIRST_DIGIT_ROUNDS: u32 = 3;
 /// 解锁期间的等待上限（不能是 0：唤醒会失败）
-pub const UNLOCK_IDLE: IdleSettings = IdleSettings { wait_for_idle_timeout: 1.0, animation_cool_off_timeout: 0.2 };
+pub const UNLOCK_IDLE: IdleSettings = IdleSettings::QUICK;
 /// WDA 的默认等待设置（上次没恢复时用它恢复）
-pub const WDA_DEFAULT_IDLE: IdleSettings =
-    IdleSettings { wait_for_idle_timeout: 10.0, animation_cool_off_timeout: 2.0 };
+pub const WDA_DEFAULT_IDLE: IdleSettings = IdleSettings::DEFAULT;
 
 pub struct UnlockConfig {
     pub passcode_file: PathBuf,

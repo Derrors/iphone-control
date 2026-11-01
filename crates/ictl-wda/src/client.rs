@@ -10,6 +10,8 @@ use crate::http::Transport;
 use crate::{Result, WdaError, elements};
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
+/// 普通点击按下的时长（毫秒）。太短可能不被识别成点击；解锁按键另有自己的时长
+const TAP_PRESS_MS: u64 = 50;
 
 /// W3C pointer 动作的一步
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -50,11 +52,18 @@ pub fn actions_body(steps: &[PointerStep]) -> Value {
     json!({"actions": [{"type": "pointer", "id": "finger1", "parameters": {"pointerType": "touch"}, "actions": actions}]})
 }
 
-/// appium settings 中与等待有关的两项。锁屏解锁期间要临时调小。
+/// appium settings 中与等待有关的两项。锁屏解锁、点击期间要临时调小。
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct IdleSettings {
     pub wait_for_idle_timeout: f64,
     pub animation_cool_off_timeout: f64,
+}
+
+impl IdleSettings {
+    /// WDA 的默认值
+    pub const DEFAULT: Self = Self { wait_for_idle_timeout: 10.0, animation_cool_off_timeout: 2.0 };
+    /// 临时调小的值（0 会导致锁屏唤醒失败，所以不是 0）
+    pub const QUICK: Self = Self { wait_for_idle_timeout: 1.0, animation_cool_off_timeout: 0.2 };
 }
 
 const SPRINGBOARD: &str = "com.apple.springboard";
@@ -73,11 +82,13 @@ pub struct WdaClient<T> {
     screen: Option<ScreenSize>,
     /// 本客户端（对应一次 WDA 启动）是否确认过一次「确实没锁屏」，确认后 `/wda/locked` 就可信了
     lock_state_trusted: bool,
+    /// 点击前后要恢复的等待设置（第一次点击时读一次）
+    idle_baseline: Option<IdleSettings>,
 }
 
 impl<T: Transport> WdaClient<T> {
     pub fn new(transport: T) -> Self {
-        Self { transport, session: None, screen: None, lock_state_trusted: false }
+        Self { transport, session: None, screen: None, lock_state_trusted: false, idle_baseline: None }
     }
 
     async fn call(&self, method: &str, path: &str, body: Option<Value>, timeout: Duration) -> Result<Value> {
@@ -255,8 +266,31 @@ impl<T: Transport> WdaClient<T> {
         Ok(elements::parse(&self.source_xml().await?, screen))
     }
 
+    /// 点击：一个 W3C actions 单指手势（按下 50ms），期间把等待设置临时调小。真机计时（iOS 27）：
+    /// - `/wda/tap` 先等界面空闲：主屏点图标约 1.7 秒（调小等待也没用），App 里约 0.6 秒，锁屏上约 2.9 秒
+    /// - actions 手势做完要等动画冷却（`animationCoolOffTimeout`，默认 2 秒）：App 里切标签约 1.9 秒
+    /// - actions + 临时调小等待：App 里约 0.7 秒，主屏点图标约 0.9 秒
+    ///
+    /// 和 `/wda/tap` 一样不等点击引起的动画结束，调用方要看结果就再截图
     pub async fn tap(&mut self, x: f64, y: f64) -> Result<()> {
-        self.post("/wda/tap", json!({"x": x, "y": y})).await.map(drop)
+        let baseline = match self.idle_baseline {
+            Some(b) => b,
+            None => {
+                // 上次没恢复成功的话读到的就是调小的值：按 WDA 默认值算
+                let b = match self.idle_settings().await? {
+                    s if s == IdleSettings::QUICK => IdleSettings::DEFAULT,
+                    s => s,
+                };
+                self.idle_baseline = Some(b);
+                b
+            }
+        };
+        self.set_idle_settings(IdleSettings::QUICK).await?;
+        let r = self.actions(&tap_steps(x, y, TAP_PRESS_MS)).await;
+        if let Err(e) = self.set_idle_settings(baseline).await {
+            tracing::warn!("点击后恢复 WDA 等待设置失败：{e}");
+        }
+        r
     }
 
     pub async fn touch_and_hold(&mut self, x: f64, y: f64, seconds: f64) -> Result<()> {
@@ -381,9 +415,49 @@ mod tests {
             (200, r#"{"value":null}"#),
         ]);
         let mut c = WdaClient::new(&m);
-        c.tap(10.0, 20.0).await.unwrap();
+        c.press_button("home").await.unwrap();
         let paths: Vec<_> = m.seen.lock().unwrap().iter().map(|s| s.1.clone()).collect();
-        assert_eq!(paths, ["/session", "/session/A/wda/tap", "/session", "/session/B/wda/tap"]);
+        assert_eq!(paths, ["/session", "/session/A/wda/pressButton", "/session", "/session/B/wda/pressButton"]);
+    }
+
+    #[tokio::test]
+    async fn tap_is_one_gesture_with_quick_waits_then_restores_baseline() {
+        let ok = r#"{"value":null}"#;
+        let m = Mock::with(&[
+            (200, r#"{"sessionId":"A"}"#),
+            (200, r#"{"value":{"waitForIdleTimeout":10,"animationCoolOffTimeout":2}}"#),
+            (200, ok),
+            (200, ok),
+            (200, ok),
+            // 第二次点击不再读设置
+            (200, ok),
+            (200, ok),
+            (200, ok),
+        ]);
+        let mut c = WdaClient::new(&m);
+        c.tap(10.0, 20.0).await.unwrap();
+        c.tap(30.0, 40.0).await.unwrap();
+        let seen = m.seen.lock().unwrap().clone();
+        let paths: Vec<_> = seen.iter().map(|s| s.1.as_str()).collect();
+        assert_eq!(
+            paths,
+            [
+                "/session",
+                "/session/A/appium/settings",
+                "/session/A/appium/settings",
+                "/session/A/actions",
+                "/session/A/appium/settings",
+                "/session/A/appium/settings",
+                "/session/A/actions",
+                "/session/A/appium/settings",
+            ]
+        );
+        let body = |i: usize| serde_json::from_str::<Value>(seen[i].2.as_deref().unwrap()).unwrap();
+        assert_eq!(body(2)["settings"]["animationCoolOffTimeout"], 0.2);
+        assert_eq!(body(4)["settings"]["animationCoolOffTimeout"], 2.0);
+        let a = body(3);
+        let steps = a["actions"][0]["actions"].as_array().unwrap();
+        assert_eq!(steps.iter().filter(|s| s["type"] == "pointerDown").count(), 1);
     }
 
     #[tokio::test]
@@ -393,7 +467,7 @@ mod tests {
             (500, r#"{"value":{"error":"unknown error","message":"boom\nstack"}}"#),
         ]);
         let mut c = WdaClient::new(&m);
-        match c.tap(1.0, 1.0).await {
+        match c.press_button("home").await {
             Err(WdaError::Remote { kind, message }) => {
                 assert_eq!((kind.as_str(), message.as_str()), ("unknown error", "boom"))
             }

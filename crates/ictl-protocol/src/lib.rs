@@ -55,6 +55,15 @@ pub enum Request {
     OpenUrl {
         url: String,
     },
+    /// 等界面稳定：连续两次读到的元素一样，最多等 `max_ms`。操作后顺带返回界面时先调它
+    Settle {
+        max_ms: u64,
+    },
+    /// 等包含 `text` 的元素出现，最多等 `timeout_ms`（代替 agent 反复截图轮询）
+    WaitFor {
+        text: String,
+        timeout_ms: u64,
+    },
     /// 运维：守护进程和设备的状态快照（JSON 文本）
     Daemon,
     /// 运维：逐层诊断，返回多行文字

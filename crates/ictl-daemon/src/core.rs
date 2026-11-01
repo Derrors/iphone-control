@@ -32,6 +32,8 @@ pub const TICK: Duration = Duration::from_secs(10);
 pub const STALE: Duration = Duration::from_secs(30);
 /// 长按、滑动的时长上限（秒）：HID 拖动按时长换算采样点，不设上限一个请求就能占住设备很久
 pub const MAX_GESTURE_SECONDS: f64 = 10.0;
+/// 等界面稳定、等元素出现的上限（毫秒）：持着设备锁等，不能太久
+pub const MAX_WAIT_MS: u64 = 30_000;
 
 /// 持久化到 `state.json` 的状态（不含秘密）
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -327,6 +329,8 @@ impl Daemon {
             Request::LaunchApp { app } => self.launch_app(g, &app).await,
             Request::TerminateApp { app } => self.terminate_app(g, &app).await,
             Request::OpenUrl { url } => self.open_url(g, &url).await,
+            Request::Settle { max_ms } => self.settle(g, Duration::from_millis(max_ms)).await,
+            Request::WaitFor { text, timeout_ms } => self.wait_for(g, &text, Duration::from_millis(timeout_ms)).await,
             Request::Doctor => Ok(self.doctor(g).await),
             Request::UnlockReset => {
                 let _ = std::fs::remove_file(self.cfg.unlock_disabled_flag());
@@ -352,6 +356,14 @@ impl Daemon {
 
 /// 参数检查（与设备无关，不必拿锁）
 fn check_request(req: &Request) -> Result<(), String> {
+    match req {
+        Request::Settle { max_ms } if *max_ms > MAX_WAIT_MS => return Err(format!("max_ms 不能超过 {MAX_WAIT_MS}")),
+        Request::WaitFor { timeout_ms, .. } if *timeout_ms > MAX_WAIT_MS => {
+            return Err(format!("timeout 不能超过 {} 秒", MAX_WAIT_MS / 1000));
+        }
+        Request::WaitFor { text, .. } if text.is_empty() => return Err("text 不能为空".into()),
+        _ => {}
+    }
     let seconds = match req {
         Request::LongPress { seconds, .. } | Request::Swipe { seconds, .. } => *seconds,
         _ => return Ok(()),

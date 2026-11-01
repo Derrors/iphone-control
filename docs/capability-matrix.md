@@ -23,7 +23,7 @@
 | 安装 IPA | `ios install` | `installation_proxy::install`（需先 AFC 上传）或 `installcoordination_proxy` | 已有 | — |
 | 列出 App（过滤 hidden 系统服务） | `ios apps --system` + 过滤 `SBAppTags` 含 `hidden` | `installation_proxy::get_apps`（取 `SBAppTags`） | 已有 + 需自写（过滤） | 必须保留 hidden 过滤，否则「设置」会匹配到 5 个后台服务 |
 
-## 2. 13 个 MCP 工具
+## 2. MCP 工具（toolkit 的 13 个 + 2 个扩展）
 
 | 工具 | toolkit 现在靠 | D 方案实现 | 状态 | 风险 / 待验证 |
 |---|---|---|---|---|
@@ -40,6 +40,9 @@
 | `iphone_launch_app` | WDA `/wda/apps/launch` + 等前台 1 秒 | WDA `launch_app` + 轮询 activeAppInfo；退回 `core_device::app_service::launch_application` | 已有 + 需自写（等前台） | 冷启动立即点击会被吞，必须保留等待 |
 | `iphone_terminate_app` | WDA `/wda/apps/terminate` | WDA `terminate_app` | 已有 | — |
 | `iphone_open_url` | WDA `/url` | WDA 会话 `/url`（idevice 未封装，自己发） | 需自写 | — |
+| `iphone_wait_for`（新增） | 无 | 守护进程轮询元素树，出现即返回 | 已实现 | 只认元素树里的文字，游戏等没有元素的界面要截图 |
+| `iphone_batch`（新增） | 无 | MCP 层按顺序调用守护进程，出错即停；步骤先全部校验再执行 | 已实现 | 步骤间不看界面，只适合结果确定的连续操作 |
+| 操作类工具的 `then` 参数（新增） | 无 | 操作后 `Settle`（连续两次元素树一样，最多 1.5 秒），再附元素列表或截图 | 已实现 | 每次多 0.5～1.3 秒等稳定，换一次往返 |
 
 ## 3. 后台能力
 

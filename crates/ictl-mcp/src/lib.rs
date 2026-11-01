@@ -23,7 +23,9 @@ pub const INSTRUCTIONS: &str = "控制一台通过 USB 连接的真实 iPhone。
 操作前先用 iphone_screenshot 或 iphone_list_elements 看清屏幕;能按名字点就优先用 iphone_tap_element。\
 游戏、地图等界面没有元素树,只能看截图按坐标操作;小图标、小字看不清时用 iphone_screenshot 的区域放大。\
 配置了锁屏密码时,各操作工具会先自动解锁。每次操作后再截图确认结果。\
-涉及付款、删除、发送消息、修改账号或隐私设置的操作,先向用户确认。";
+涉及付款、删除、发送消息、修改账号或隐私设置的操作,先向用户确认。\
+省时间:操作类工具可带 then=elements 或 then=screenshot,等界面稳定后顺带返回操作后的界面,不用再单独调一次;\
+几步确定的连续操作(按键、逐级点菜单、填表)用 iphone_batch 一次发完;等页面加载用 iphone_wait_for,不要反复截图。";
 
 fn num(desc: &str) -> Value {
     json!({"type": "number", "description": desc})
@@ -34,7 +36,46 @@ fn schema(props: Value, required: &[&str]) -> Map<String, Value> {
     v.as_object().cloned().unwrap_or_default()
 }
 
-/// 13 个工具的定义
+/// 操作后顺带返回界面时最多列多少个元素（每步都带太多会占满上下文）
+pub const THEN_LIMIT: usize = 80;
+/// 顺带返回界面前等界面稳定的上限
+pub const THEN_SETTLE_MS: u64 = 1500;
+/// 一次批量最多几步
+pub const BATCH_MAX_STEPS: usize = 20;
+/// 批量里能用的工具：改变界面的操作和等待；看界面用 then
+pub const BATCH_TOOLS: [&str; 11] = [
+    "iphone_tap",
+    "iphone_tap_element",
+    "iphone_long_press",
+    "iphone_swipe",
+    "iphone_type_text",
+    "iphone_press_button",
+    "iphone_launch_app",
+    "iphone_terminate_app",
+    "iphone_open_url",
+    "iphone_wait_for",
+    "wait",
+];
+
+/// 操作类工具共有的可选参数：操作后顺带返回界面
+fn then_props() -> Value {
+    json!({
+        "then": {"type": "string", "enum": ["none", "elements", "screenshot"], "default": "none",
+                 "description": "操作后等界面稳定,再顺带返回界面:elements=元素列表(最多 80 个),screenshot=截图。省一次单独的调用"},
+        "then_filter": {"type": "string", "default": "", "description": "then=elements 时只列包含这段文字的元素"}
+    })
+}
+
+/// 在参数 schema 里加上 then / then_filter
+fn with_then(props: Value) -> Value {
+    let mut p = props;
+    if let (Some(o), Value::Object(extra)) = (p.as_object_mut(), then_props()) {
+        o.extend(extra);
+    }
+    p
+}
+
+/// 15 个工具的定义（toolkit 的 13 个 + iphone_wait_for、iphone_batch）
 pub fn tools() -> Vec<Tool> {
     let t = |name: &'static str, desc: &'static str, s: Map<String, Value>| Tool::new(name, desc, s);
     vec![
@@ -55,17 +96,24 @@ pub fn tools() -> Vec<Tool> {
                 &[],
             ),
         ),
-        t("iphone_tap", "点击屏幕坐标(点)。", schema(json!({"x": num("x(点)"), "y": num("y(点)")}), &["x", "y"])),
+        t(
+            "iphone_tap",
+            "点击屏幕坐标(点)。",
+            schema(with_then(json!({"x": num("x(点)"), "y": num("y(点)")})), &["x", "y"]),
+        ),
         t(
             "iphone_tap_element",
             "按文字点击元素:先找标签/名字完全相同的,找不到再找包含该文字的。\n\nindex: 匹配到多个时点第几个(从 0 开始,顺序同 iphone_list_elements)。",
-            schema(json!({"text": {"type": "string"}, "index": {"type": "integer", "default": 0}}), &["text"]),
+            schema(
+                with_then(json!({"text": {"type": "string"}, "index": {"type": "integer", "default": 0}})),
+                &["text"],
+            ),
         ),
         t(
             "iphone_long_press",
             "长按屏幕坐标(点)。",
             schema(
-                json!({"x": num("x(点)"), "y": num("y(点)"), "seconds": {"type": "number", "default": 1.0}}),
+                with_then(json!({"x": num("x(点)"), "y": num("y(点)"), "seconds": {"type": "number", "default": 1.0}})),
                 &["x", "y"],
             ),
         ),
@@ -73,20 +121,25 @@ pub fn tools() -> Vec<Tool> {
             "iphone_swipe",
             "从一点滑到另一点(点坐标)。向上滑看下面的内容:from_y 大、to_y 小。",
             schema(
-                json!({"from_x": num(""), "from_y": num(""), "to_x": num(""), "to_y": num(""), "seconds": {"type": "number", "default": 0.3}}),
+                with_then(
+                    json!({"from_x": num(""), "from_y": num(""), "to_x": num(""), "to_y": num(""), "seconds": {"type": "number", "default": 0.3}}),
+                ),
                 &["from_x", "from_y", "to_x", "to_y"],
             ),
         ),
         t(
             "iphone_type_text",
             "在当前获得焦点的输入框里输入文字(支持中文)。需要先点中输入框。submit=True 时末尾按回车。",
-            schema(json!({"text": {"type": "string"}, "submit": {"type": "boolean", "default": false}}), &["text"]),
+            schema(
+                with_then(json!({"text": {"type": "string"}, "submit": {"type": "boolean", "default": false}})),
+                &["text"],
+            ),
         ),
         t(
             "iphone_press_button",
             "按硬件键:home(回主屏幕)、volume_up、volume_down、lock(锁屏;配置了密码时之后的操作会自动解锁)。",
             schema(
-                json!({"button": {"type": "string", "enum": ["home", "volume_up", "volume_down", "lock"]}}),
+                with_then(json!({"button": {"type": "string", "enum": ["home", "volume_up", "volume_down", "lock"]}})),
                 &["button"],
             ),
         ),
@@ -98,17 +151,40 @@ pub fn tools() -> Vec<Tool> {
         t(
             "iphone_launch_app",
             "启动 App 并切到前台。app 可以是 Bundle ID,也可以是显示名(如「设置」「微信」)。",
-            schema(json!({"app": {"type": "string"}}), &["app"]),
+            schema(with_then(json!({"app": {"type": "string"}})), &["app"]),
         ),
         t(
             "iphone_terminate_app",
             "结束 App 进程。app 可以是 Bundle ID 或显示名。",
-            schema(json!({"app": {"type": "string"}}), &["app"]),
+            schema(with_then(json!({"app": {"type": "string"}})), &["app"]),
         ),
         t(
             "iphone_open_url",
             "用系统默认方式打开链接或 URL Scheme(网页会在 Safari 打开)。",
-            schema(json!({"url": {"type": "string"}}), &["url"]),
+            schema(with_then(json!({"url": {"type": "string"}})), &["url"]),
+        ),
+        t(
+            "iphone_wait_for",
+            "等包含某段文字的界面元素出现(例如页面加载完、弹窗出现),出现就立即返回;超时报错。代替反复截图轮询。",
+            schema(
+                json!({"text": {"type": "string"}, "timeout": {"type": "number", "default": 5, "description": "最多等几秒(不超过 30)"}}),
+                &["text"],
+            ),
+        ),
+        t(
+            "iphone_batch",
+            "按顺序执行几步操作,一次调用完成(最多 20 步),某一步出错就停下并说明是第几步。\n\n\
+steps 每项是 {\"tool\": 工具名, 其余是该工具的参数},可用:iphone_tap、iphone_tap_element、iphone_long_press、\
+iphone_swipe、iphone_type_text、iphone_press_button、iphone_launch_app、iphone_terminate_app、iphone_open_url、\
+iphone_wait_for,以及 {\"tool\": \"wait\", \"seconds\": 秒数}(不超过 5)。\n\
+适合确定的连续操作;每步的结果不确定(例如点了以后不知道会跳到哪)时,还是一步步来。\n\
+then 同其他操作工具:全部做完后顺带返回界面。",
+            schema(
+                with_then(
+                    json!({"steps": {"type": "array", "items": {"type": "object"}, "description": "要执行的步骤"}}),
+                ),
+                &["steps"],
+            ),
         ),
     ]
 }
@@ -192,8 +268,69 @@ pub fn to_request(name: &str, args: &Map<String, Value>) -> Result<Request, Stri
         "iphone_launch_app" => Request::LaunchApp { app: a.s("app")? },
         "iphone_terminate_app" => Request::TerminateApp { app: a.s("app")? },
         "iphone_open_url" => Request::OpenUrl { url: a.s("url")? },
+        "iphone_wait_for" => {
+            let secs = a.f_or("timeout", 5.0)?;
+            if !(0.0..=30.0).contains(&secs) {
+                return Err("timeout 要在 0 到 30 秒之间".into());
+            }
+            Request::WaitFor { text: a.s("text")?, timeout_ms: (secs * 1000.0) as u64 }
+        }
         other => return Err(format!("未知工具 {other}")),
     })
+}
+
+/// 操作后顺带返回什么
+#[derive(Debug, Clone, PartialEq)]
+pub enum Then {
+    None,
+    Elements(String),
+    Screenshot,
+}
+
+pub fn parse_then(args: &Map<String, Value>) -> Result<Then, String> {
+    let a = Args(args);
+    match a.s_or("then", "none")?.as_str() {
+        "none" | "" => Ok(Then::None),
+        "elements" => Ok(Then::Elements(a.s_or("then_filter", "")?)),
+        "screenshot" => Ok(Then::Screenshot),
+        other => Err(format!("then 只能是 none / elements / screenshot,不是 {other}")),
+    }
+}
+
+/// 批量里的一步
+#[derive(Debug, Clone, PartialEq)]
+pub enum Step {
+    Request { tool: String, req: Request },
+    Wait(std::time::Duration),
+}
+
+/// 检查并转换批量步骤（一步都不执行就先把参数错误全挡掉）
+pub fn batch_steps(args: &Map<String, Value>) -> Result<Vec<Step>, String> {
+    let steps = args.get("steps").and_then(Value::as_array).ok_or("缺少 steps(数组)")?;
+    if steps.is_empty() || steps.len() > BATCH_MAX_STEPS {
+        return Err(format!("steps 要有 1 到 {BATCH_MAX_STEPS} 步"));
+    }
+    steps
+        .iter()
+        .enumerate()
+        .map(|(i, s)| {
+            let n = i + 1;
+            let obj = s.as_object().ok_or_else(|| format!("第 {n} 步不是对象"))?;
+            let tool = obj.get("tool").and_then(Value::as_str).ok_or_else(|| format!("第 {n} 步缺少 tool"))?;
+            if !BATCH_TOOLS.contains(&tool) {
+                return Err(format!("第 {n} 步:批量里不能用 {tool},可用:{}", BATCH_TOOLS.join("、")));
+            }
+            if tool == "wait" {
+                let secs = Args(obj).f("seconds").map_err(|e| format!("第 {n} 步:{e}"))?;
+                if !(0.0..=5.0).contains(&secs) {
+                    return Err(format!("第 {n} 步:wait 的 seconds 要在 0 到 5 之间"));
+                }
+                return Ok(Step::Wait(std::time::Duration::from_secs_f64(secs)));
+            }
+            let req = to_request(tool, obj).map_err(|e| format!("第 {n} 步({tool}):{e}"))?;
+            Ok(Step::Request { tool: tool.to_owned(), req })
+        })
+        .collect()
 }
 
 /// 守护进程响应 → MCP 结果。错误走工具错误（is_error），文字原样给客户端
@@ -231,14 +368,100 @@ impl ServerHandler for McpServer {
         _context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, ErrorData> {
         let args = request.arguments.unwrap_or_default();
-        let resp = match to_request(&request.name, &args) {
-            Err(e) => Response::error(e),
-            // 守护进程正忙（例如在自动解锁）时会排队；最多等 150 秒，免得 agent 一直挂着
-            Ok(req) => protocol::call(&self.socket, &req, Some(Duration::from_secs(150))).await.unwrap_or_else(|e| {
-                Response::error(format!("连不上守护进程({}):{e};确认 iphone-control 容器在运行", self.socket.display()))
-            }),
+        let then = match parse_then(&args) {
+            Ok(t) => t,
+            Err(e) => return Ok(to_result(Response::error(e)).into()),
         };
-        Ok(to_result(resp).into())
+        if request.name == "iphone_batch" {
+            return Ok(self.batch(&args, then).await.into());
+        }
+        let req = match to_request(&request.name, &args) {
+            Ok(r) => r,
+            Err(e) => return Ok(to_result(Response::error(e)).into()),
+        };
+        // then 只对操作类工具有意义；看界面的工具本身就是返回界面
+        let then = if req.is_device_action() { then } else { Then::None };
+        let resp = self.call(&req).await;
+        Ok(match (resp, then) {
+            (Response::Text { text }, then) if then != Then::None => self.finish(text, false, then).await,
+            (resp, _) => to_result(resp),
+        }
+        .into())
+    }
+}
+
+impl McpServer {
+    async fn call(&self, req: &Request) -> Response {
+        // 守护进程正忙（例如在自动解锁）时会排队；最多等 150 秒，免得 agent 一直挂着
+        protocol::call(&self.socket, req, Some(Duration::from_secs(150))).await.unwrap_or_else(|e| {
+            Response::error(format!("连不上守护进程({}):{e};确认 iphone-control 容器在运行", self.socket.display()))
+        })
+    }
+
+    /// 操作完成后：按 then 等界面稳定，再附上元素列表或截图
+    async fn finish(&self, mut text: String, failed: bool, then: Then) -> CallToolResult {
+        let done = |blocks: Vec<ContentBlock>| {
+            if failed { CallToolResult::error(blocks) } else { CallToolResult::success(blocks) }
+        };
+        if then == Then::None {
+            return done(vec![ContentBlock::text(text)]);
+        }
+        match self.call(&Request::Settle { max_ms: THEN_SETTLE_MS }).await {
+            Response::Text { text: t } => text += &format!("\n{t}"),
+            Response::Error { message } => text += &format!("\n(等界面稳定失败:{message})"),
+            Response::Image { .. } => {}
+        }
+        match then {
+            Then::Elements(filter) => {
+                match self.call(&Request::ListElements { filter, limit: THEN_LIMIT }).await {
+                    Response::Text { text: t } => text += &format!("\n--- 操作后的界面 ---\n{t}"),
+                    Response::Error { message } => text += &format!("\n(读界面失败:{message})"),
+                    Response::Image { .. } => {}
+                }
+                done(vec![ContentBlock::text(text)])
+            }
+            Then::Screenshot => match self.call(&Request::Screenshot { region: None }).await {
+                Response::Image { jpeg_base64, caption } => done(vec![
+                    ContentBlock::text(text),
+                    ContentBlock::image(jpeg_base64, "image/jpeg"),
+                    ContentBlock::text(caption),
+                ]),
+                Response::Error { message } => done(vec![ContentBlock::text(format!("{text}\n(截图失败:{message})"))]),
+                Response::Text { text: t } => done(vec![ContentBlock::text(format!("{text}\n{t}"))]),
+            },
+            Then::None => unreachable!("上面已返回"),
+        }
+    }
+
+    /// 按顺序执行；某一步出错就停，说明是第几步、后面几步没执行。出错时也按 then 附上当前界面，方便看停在哪
+    async fn batch(&self, args: &Map<String, Value>, then: Then) -> CallToolResult {
+        let steps = match batch_steps(args) {
+            Ok(s) => s,
+            Err(e) => return to_result(Response::error(e)),
+        };
+        let total = steps.len();
+        let mut lines = Vec::new();
+        for (i, step) in steps.into_iter().enumerate() {
+            let n = i + 1;
+            match step {
+                Step::Wait(d) => {
+                    tokio::time::sleep(d).await;
+                    lines.push(format!("{n}. wait → 等了 {} 秒", d.as_secs_f64()));
+                }
+                Step::Request { tool, req } => match self.call(&req).await {
+                    Response::Text { text } => lines.push(format!("{n}. {tool} → {text}")),
+                    Response::Image { caption, .. } => lines.push(format!("{n}. {tool} → {caption}")),
+                    Response::Error { message } => {
+                        lines.push(format!("{n}. {tool} → 出错:{message}"));
+                        if n < total {
+                            lines.push(format!("第 {n} 步出错,后面 {} 步没有执行", total - n));
+                        }
+                        return self.finish(lines.join("\n"), true, then).await;
+                    }
+                },
+            }
+        }
+        self.finish(lines.join("\n"), false, then).await
     }
 }
 
@@ -258,13 +481,13 @@ mod tests {
     }
 
     #[test]
-    fn thirteen_tools_with_toolkit_names() {
+    fn toolkit_tools_plus_wait_for_and_batch() {
         let names: Vec<_> = tools().iter().map(|t| t.name.to_string()).collect();
-        assert_eq!(names.len(), 13);
+        assert_eq!(names.len(), 15);
         for n in ["iphone_status", "iphone_screenshot", "iphone_tap_element", "iphone_open_url"] {
             assert!(names.contains(&n.to_owned()), "{n}");
         }
-        for t in tools() {
+        for t in tools().into_iter().filter(|t| t.name != "iphone_batch") {
             let no_required = t.input_schema.get("required").unwrap().as_array().unwrap().is_empty();
             assert_eq!(to_request(&t.name, &Map::new()).is_ok(), no_required, "{}", t.name);
         }
@@ -288,6 +511,77 @@ mod tests {
             to_request("iphone_type_text", &args(json!({"text": "设置"}))).unwrap(),
             Request::TypeText { text: "设置".into(), submit: false }
         );
+    }
+
+    #[test]
+    fn then_is_offered_on_actions_only() {
+        let has_then = |name: &str| {
+            let t = tools().into_iter().find(|t| t.name == name).unwrap();
+            t.input_schema["properties"].get("then").is_some()
+        };
+        for n in [
+            "iphone_tap",
+            "iphone_tap_element",
+            "iphone_swipe",
+            "iphone_type_text",
+            "iphone_launch_app",
+            "iphone_batch",
+        ] {
+            assert!(has_then(n), "{n}");
+        }
+        for n in ["iphone_status", "iphone_screenshot", "iphone_list_elements", "iphone_wait_for"] {
+            assert!(!has_then(n), "{n}");
+        }
+        assert_eq!(parse_then(&Map::new()).unwrap(), Then::None);
+        assert_eq!(
+            parse_then(&args(json!({"then": "elements", "then_filter": "设置"}))).unwrap(),
+            Then::Elements("设置".into())
+        );
+        assert_eq!(parse_then(&args(json!({"then": "screenshot"}))).unwrap(), Then::Screenshot);
+        assert!(parse_then(&args(json!({"then": "video"}))).is_err());
+    }
+
+    #[test]
+    fn batch_steps_are_checked_before_anything_runs() {
+        let steps = batch_steps(&args(json!({"steps": [
+            {"tool": "iphone_tap_element", "text": "One"},
+            {"tool": "wait", "seconds": 0.5},
+            {"tool": "iphone_tap", "x": 1, "y": 2},
+            {"tool": "iphone_wait_for", "text": "完成", "timeout": 3}
+        ]})))
+        .unwrap();
+        assert_eq!(steps.len(), 4);
+        assert_eq!(steps[1], Step::Wait(std::time::Duration::from_millis(500)));
+        assert_eq!(
+            steps[3],
+            Step::Request {
+                tool: "iphone_wait_for".into(),
+                req: Request::WaitFor { text: "完成".into(), timeout_ms: 3000 }
+            }
+        );
+        // 第 2 步参数错：一步都不执行，报出是第几步
+        let e = batch_steps(&args(
+            json!({"steps": [{"tool": "iphone_tap", "x": 1, "y": 2}, {"tool": "iphone_tap", "x": 1}]}),
+        ))
+        .unwrap_err();
+        assert!(e.contains("第 2 步"), "{e}");
+        // 看界面的工具、未知工具、批量套批量都不行
+        for bad in ["iphone_screenshot", "iphone_batch", "rm"] {
+            assert!(batch_steps(&args(json!({"steps": [{"tool": bad}]}))).is_err(), "{bad}");
+        }
+        assert!(batch_steps(&args(json!({"steps": [{"tool": "wait", "seconds": 9}]}))).is_err());
+        assert!(batch_steps(&args(json!({"steps": []}))).is_err());
+        let many: Vec<Value> = (0..21).map(|_| json!({"tool": "wait", "seconds": 0})).collect();
+        assert!(batch_steps(&args(json!({"steps": many}))).is_err());
+    }
+
+    #[test]
+    fn wait_for_timeout_is_bounded() {
+        assert_eq!(
+            to_request("iphone_wait_for", &args(json!({"text": "x"}))).unwrap(),
+            Request::WaitFor { text: "x".into(), timeout_ms: 5000 }
+        );
+        assert!(to_request("iphone_wait_for", &args(json!({"text": "x", "timeout": 60}))).is_err());
     }
 
     #[test]

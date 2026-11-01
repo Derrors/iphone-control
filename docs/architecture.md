@@ -106,7 +106,7 @@
 | `ictl-sign` | Apple ID 登录（含双重认证交互）、会话持久化、注册设备、App ID、描述文件、签名 `.app`/`.ipa`（**包括 `.xctest`**；bundle 逻辑改写自 plume_utils）、签后自检 | vendored 的 `plume_core`/`plume_store`（MPL-2.0/MIT；经 plume_core 用 vendored 的 `omnisette` 和打过补丁的 `apple-codesign`） |
 | `ictl-unlock` | 锁屏密码键盘定位、逐位输入并核对密码栏、从第 2 位起先写停用标记 | `ictl-wda` |
 | `ictl-daemon` | `core`（共享状态、请求分发、快照）、`supervise`（巡检、usbmuxd 看护、后台启动 WDA、重签、会话检查）、`tools`（13 个工具的实现、HID 后备）、`doctor`；通知（Bark/Telegram）、截图缩放/裁剪、控制接口服务端 | 以上全部、`tokio`、`reqwest`、`image` |
-| `ictl-mcp` | MCP stdio 服务，13 个 `iphone_*` 工具，经控制接口调用守护进程 | `ictl-protocol`、`rmcp`（`server`、`transport-io`） |
+| `ictl-mcp` | MCP stdio 服务，toolkit 的 13 个 `iphone_*` 工具 + `iphone_wait_for`、`iphone_batch`；操作类工具可带 `then` 顺带返回操作后的界面；经控制接口调用守护进程 | `ictl-protocol`、`rmcp`（`server`、`transport-io`） |
 | `apps/iphone-control` | CLI 入口：`daemon`、`mcp`、`mcp-config`、`status`、`doctor`、`setup`、`login`、`sign`、`resign`、`passcode`、`unlock-reset`、`wda-bridge`、`notify-test`；隐藏的 `debug <ddi\|hid\|screenshot\|soak\|wda\|e2e>` 真机诊断（原第 0 步 spike，不经守护进程） | `clap` |
 
 依赖方向：`apps` → `ictl-daemon` / `ictl-mcp`；`ictl-daemon` → `ictl-unlock` → `ictl-wda` → `ictl-device`；`ictl-daemon` 还依赖 `ictl-sign` 和 `ictl-protocol`。`ictl-mcp` 只依赖 `ictl-protocol`，不依赖守护进程和设备层。`apps` 的 `debug` 直接调用 `ictl-device`、`ictl-wda`。

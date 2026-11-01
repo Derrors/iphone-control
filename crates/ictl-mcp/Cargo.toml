@@ -9,6 +9,7 @@ description = "MCP stdio 服务（13 个 iphone_* 工具）"
 
 [dependencies]
 ictl-protocol.workspace = true
+tokio.workspace = true
 rmcp.workspace = true
 serde_json.workspace = true
 anyhow.workspace = true

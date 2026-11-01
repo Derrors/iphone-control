@@ -170,6 +170,46 @@ impl Daemon {
         Ok(if lines.is_empty() { "没有找到带文字的元素".into() } else { lines.join("\n") } + &more)
     }
 
+    /// 等界面稳定：每隔一小会儿读一次元素树，连续两次一样就算稳定。读元素树时 WDA 本身也会等界面空闲。
+    /// 游戏这类元素很少的界面会马上判为稳定，看画面要截图
+    pub(crate) async fn settle(&self, g: &mut Inner, max: Duration) -> Result<String, String> {
+        let t0 = Instant::now();
+        let Some(w) = self.wda(g) else {
+            tokio::time::sleep(max.min(Duration::from_millis(500))).await;
+            return Ok("WDA 不可用,等了 0.5 秒".into());
+        };
+        let mut prev: Option<Vec<String>> = None;
+        loop {
+            let cur: Vec<String> =
+                w.elements().await.map_err(|e| e.to_string())?.iter().map(elements::Element::describe).collect();
+            if prev.as_ref() == Some(&cur) {
+                return Ok(format!("界面已稳定({:.1} 秒)", t0.elapsed().as_secs_f64()));
+            }
+            if t0.elapsed() >= max {
+                return Ok(format!("{:.1} 秒内界面一直在变(可能有动画),按最后的状态返回", max.as_secs_f64()));
+            }
+            prev = Some(cur);
+            tokio::time::sleep(Duration::from_millis(150)).await;
+        }
+    }
+
+    /// 等包含 `text` 的元素出现
+    pub(crate) async fn wait_for(&self, g: &mut Inner, text: &str, timeout: Duration) -> Result<String, String> {
+        self.ensure_unlocked(g).await?;
+        let t0 = Instant::now();
+        let w = self.require_wda(g)?;
+        loop {
+            let els = w.elements().await.map_err(|e| e.to_string())?;
+            if let Some(e) = elements::find(&els, text).first() {
+                return Ok(format!("已出现 {}({:.1} 秒)", e.describe(), t0.elapsed().as_secs_f64()));
+            }
+            if t0.elapsed() >= timeout {
+                return Err(format!("{:.0} 秒内没出现包含 \"{text}\" 的元素,截图看看屏幕", timeout.as_secs_f64()));
+            }
+            tokio::time::sleep(Duration::from_millis(300)).await;
+        }
+    }
+
     pub(crate) async fn tap(&self, g: &mut Inner, x: f64, y: f64) -> Result<String, String> {
         self.ensure_unlocked(g).await?;
         let pos = format!("({},{})", fmt_g(x), fmt_g(y));

@@ -72,7 +72,7 @@ crates/
   ictl-sign/      Apple ID 登录、注册设备、描述文件、签名（修复 .xctest 漏签）、签后自检
   ictl-unlock/    锁屏自动解锁（默认关闭）
   ictl-daemon/    守护进程：状态机、usbmuxd 看护、重签调度、通知、控制接口服务端
-  ictl-mcp/       MCP 服务（stdio），13 个工具与 toolkit 一致
+  ictl-mcp/       MCP 服务（stdio），toolkit 的 13 个工具 + iphone_wait_for、iphone_batch
 apps/
   iphone-control/ 唯一的可执行程序（含隐藏的 debug 真机诊断）
 vendor/           Impactor 的 plume_core / plume_store / omnisette 与打过补丁的 apple-codesign（见 THIRD_PARTY.md）

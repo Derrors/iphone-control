@@ -2006,6 +2006,7 @@ dependencies = [
  "ictl-protocol",
  "rmcp",
  "serde_json",
+ "tokio",
 ]
 
 [[package]]

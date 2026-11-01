@@ -75,6 +75,8 @@ enum PasscodeAction {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // 依赖树里 rustls 的 ring 和 aws-lc-rs 都开着，不装默认 provider 的话第一个 HTTPS 请求就 panic
+    let _ = rustls::crypto::ring::default_provider().install_default();
     let cli = Cli::parse();
     let quiet = matches!(cli.command, Command::Mcp);
     tracing_subscriber::fmt()

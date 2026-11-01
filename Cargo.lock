@@ -2286,6 +2286,7 @@ dependencies = [
  "ictl-device",
  "ictl-mcp",
  "ictl-sign",
+ "rustls",
  "serde_json",
  "tokio",
  "tracing",

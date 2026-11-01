@@ -4,7 +4,7 @@ All notable changes to this project are documented here. The format is based on 
 
 ## [Unreleased]
 
-## [0.1.0] - unreleased
+## [0.1.0] - 2026-11-02
 
 First public release.
 
@@ -17,11 +17,8 @@ First public release.
 - Notifications through Bark and Telegram, with de-duplication.
 - Optional auto-unlock with strict safeguards (stops after one wrong attempt).
 - `setup` wizard, `doctor` diagnostics, `status`, `mcp-config`, `wda-bridge`, `notify-test`.
-- Docker image (single binary plus Debian's usbmuxd, not privileged) with a generated third-party license list, and a systemd user service for running from source.
-
-### Fixed
-
-- A custom anisette server (`ICTL_ANISETTE_URL`) was silently ignored; the default third-party server was always used.
+- Docker image (single binary plus Debian's usbmuxd, not privileged) with a generated third-party license list, published to `ghcr.io/derrors/iphone-control` for linux/amd64 and linux/arm64.
+- Running without Docker, from source or from the prebuilt Linux binaries (x86_64, aarch64): as a regular user with the system usbmuxd, XDG data and socket paths, the unsigned WebDriverAgent downloaded and checksum-verified before the first signing, `mcp-config` printing a direct command, and a systemd user service.
 
 [Unreleased]: https://github.com/Derrors/iphone-control/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/Derrors/iphone-control/releases/tag/v0.1.0

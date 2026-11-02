@@ -3,6 +3,7 @@
 Everything is configured with environment variables, and all of them are optional:
 
 - **Docker:** in `.env` in the repository directory (copied from `.env.example`); apply with `docker compose up -d`.
+- **Just a compose file:** under `environment:` in your `compose.yaml` (or a `.env` next to it plus `env_file`); apply with `docker compose up -d` as well.
 - **Source install:** in `~/.config/iphone-control/env` (read by the systemd user service); apply with `systemctl --user restart iphone-control`.
 
 ## Common
@@ -28,6 +29,8 @@ Notification variables: see [Notifications](./notifications).
 | `ICTL_LOG` | Log filter, e.g. `info,ictl_wda::http=debug` logs every WDA request with its duration |
 
 ## Docker Compose only
+
+These apply to the repository's own `compose.yaml`; in a compose file you wrote yourself, edit `container_name`, `image` and `volumes` directly.
 
 | Variable | Default | Meaning |
 |---|---|---|

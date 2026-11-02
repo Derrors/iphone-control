@@ -89,7 +89,7 @@ Open a new Claude Code session and ask, for example:
 > { "mcpServers": { "iphone": { "command": "docker", "args": ["exec", "-i", "iphone-control", "iphone-control", "mcp"] } } }
 > ```
 
-Once a release is out you can skip the build: set `IMAGE=ghcr.io/derrors/iphone-control:latest` in `.env` and run `docker compose pull && docker compose up -d --no-build`. Without Docker, use a [prebuilt binary or build from source](https://derrors.github.io/iphone-control/en/deploy/source) and run it as a systemd user service.
+You can also skip both the clone and the build: in a new directory, write a `compose.yaml` that uses the prebuilt image `ghcr.io/derrors/iphone-control:latest` and run `docker compose up -d` — see [Docker](https://derrors.github.io/iphone-control/en/deploy/docker#just-a-compose-file) for the full example. If you already cloned the repository, set `IMAGE=ghcr.io/derrors/iphone-control:latest` in `.env` and run `docker compose pull && docker compose up -d --no-build`. Without Docker, use a [prebuilt binary or build from source](https://derrors.github.io/iphone-control/en/deploy/source) and run it as a systemd user service.
 
 ## MCP Tools
 

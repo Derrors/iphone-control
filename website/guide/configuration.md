@@ -3,6 +3,7 @@
 全部通过环境变量配置，都可以不填：
 
 - **Docker**：写在仓库目录的 `.env`（从 `.env.example` 复制），改完 `docker compose up -d` 重建容器。
+- **只写 compose 文件**：写在 `compose.yaml` 的 `environment:` 里（或同目录的 `.env` 加 `env_file`），改完同样 `docker compose up -d`。
 - **从源码运行**：写在 `~/.config/iphone-control/env`（systemd 用户服务会读），改完 `systemctl --user restart iphone-control`。
 
 ## 常用
@@ -28,6 +29,8 @@
 | `ICTL_LOG` | 日志级别，例如 `info,ictl_wda::http=debug` 记录每个 WDA 请求的耗时 |
 
 ## 只给 Docker Compose 用的
+
+用仓库自带的 `compose.yaml` 时才有这几项；自己写 compose 文件时直接改对应的 `container_name`、`image`、`volumes`。
 
 | 变量 | 默认 | 含义 |
 |---|---|---|

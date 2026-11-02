@@ -89,7 +89,7 @@ claude mcp add iphone -s user -- docker exec -i iphone-control iphone-control mc
 > { "mcpServers": { "iphone": { "command": "docker", "args": ["exec", "-i", "iphone-control", "iphone-control", "mcp"] } } }
 > ```
 
-发布正式版本后可以不自己构建：在 `.env` 里设 `IMAGE=ghcr.io/derrors/iphone-control:latest`，然后 `docker compose pull && docker compose up -d --no-build`。不用 Docker 的话，可以用[预编译二进制或从源码编译](https://derrors.github.io/iphone-control/deploy/source)，以 systemd 用户服务运行。
+也可以不克隆仓库、不自己构建：新建一个目录，写一个使用预构建镜像 `ghcr.io/derrors/iphone-control:latest` 的 `compose.yaml`，然后 `docker compose up -d`，完整示例见 [Docker 部署](https://derrors.github.io/iphone-control/deploy/docker#只写一个-compose-文件)。已经克隆了仓库的话，在 `.env` 里设 `IMAGE=ghcr.io/derrors/iphone-control:latest`，然后 `docker compose pull && docker compose up -d --no-build`。不用 Docker 的话，可以用[预编译二进制或从源码编译](https://derrors.github.io/iphone-control/deploy/source)，以 systemd 用户服务运行。
 
 ## MCP 工具
 

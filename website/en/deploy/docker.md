@@ -4,6 +4,46 @@ The recommended way to run it. The image holds one Rust binary plus Debian's usb
 
 ## Install
 
+Pick any one of the three; they all end up with the same container.
+
+### Just a compose file
+
+No need to clone the repository — the least effort. Create a directory (e.g. `~/iphone-control`) and put a `compose.yaml` in it:
+
+```yaml
+services:
+  iphone:
+    image: ghcr.io/derrors/iphone-control:latest   # or pin a version, e.g. :0.1.0
+    container_name: iphone-control
+    # USB character devices only; no privileged needed
+    device_cgroup_rules:
+      - "c 189:* rmw"
+    init: true
+    stop_grace_period: 30s
+    network_mode: host
+    restart: unless-stopped
+    environment:
+      # All optional — uncomment what you need; see "Configuration" for the full list
+      # HTTP_PROXY: http://127.0.0.1:7890
+      # HTTPS_PROXY: http://127.0.0.1:7890
+      NO_PROXY: localhost,127.0.0.1,::1
+      # BARK_SERVER: https://api.day.app
+      # BARK_KEY: your-key
+      # TG_BOT_TOKEN: "123456:ABC..."
+      # TG_CHAT_ID: "your chat id"
+    volumes:
+      - /dev/bus/usb:/dev/bus/usb
+      - ./data:/var/lib/iphone-control
+```
+
+Then, in that directory:
+
+```bash
+docker compose up -d
+```
+
+`./data` is relative to the directory holding `compose.yaml`; it contains the pairing records and the Apple ID session, so **back it up**. Instead of `environment:` you can put the variables in a `.env` next to it and add `env_file: .env`; if it holds notification keys, keep it out of git. See [Configuration](../guide/configuration) for what each variable does.
+
 ### Build it yourself
 
 ```bash
@@ -38,11 +78,15 @@ Afterwards, run the [setup wizard](../guide/getting-started) once.
 ## Upgrade
 
 ```bash
+docker compose pull && docker compose up -d             # just a compose file
+# or
 git pull
 docker compose up -d --build                            # self-built
 # or
 docker compose pull && docker compose up -d --no-build  # prebuilt image
 ```
+
+If the image tag pins a version, change it in `compose.yaml` to the new one before pulling.
 
 Data lives in `./data` and is untouched. Restarting the container drops the MCP connection in your AI client; reconnect it (`/mcp` in Claude Code).
 

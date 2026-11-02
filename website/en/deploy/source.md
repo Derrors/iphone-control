@@ -10,7 +10,7 @@ After a release, [Releases](https://github.com/Derrors/iphone-control/releases) 
 
 ```bash
 sudo apt install usbmuxd
-tar xzf iphone-control-v*-x86_64-unknown-linux-gnu.tar.gz
+tar xzf iphone-control-v*-x86_64*.tar.gz   # on ARM, aarch64 instead of x86_64 (see uname -m)
 install -Dm755 iphone-control-*/iphone-control ~/.cargo/bin/iphone-control
 ```
 

@@ -10,7 +10,7 @@
 
 ```bash
 sudo apt install usbmuxd
-tar xzf iphone-control-v*-x86_64-unknown-linux-gnu.tar.gz
+tar xzf iphone-control-v*-x86_64*.tar.gz   # ARM 主机把 x86_64 换成 aarch64（看 uname -m）
 install -Dm755 iphone-control-*/iphone-control ~/.cargo/bin/iphone-control
 ```
 

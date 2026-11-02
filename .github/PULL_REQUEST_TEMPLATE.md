@@ -12,5 +12,5 @@
 
 - [ ] MCP tool names, parameters and default outputs stay compatible (docs/decisions.md D10)
 - [ ] New or changed dependencies are pinned to exact versions; vendor changes recorded in THIRD_PARTY.md
-- [ ] User-visible changes noted in CHANGELOG.md under *Unreleased*
+- [ ] User-visible changes noted in CHANGELOG.md (and CHANGELOG.zh-CN.md if you can) under *Unreleased*
 - [ ] No private data in fixtures, screenshots or logs

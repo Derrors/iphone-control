@@ -71,7 +71,7 @@ Notes:
 
 - Keep them focused; describe what changed and how you tested it (offline and/or which device).
 - CI must pass: format, clippy with `-D warnings`, tests, the MSRV check, gitleaks and the image build.
-- User-visible changes get a line in [CHANGELOG.md](CHANGELOG.md) under *Unreleased*.
+- User-visible changes get a line in [CHANGELOG.md](CHANGELOG.md) and [CHANGELOG.zh-CN.md](CHANGELOG.zh-CN.md) under *Unreleased* (a Chinese line is welcome but optional for outside contributors; maintainers add it before release).
 
 ## Documentation site
 
@@ -79,9 +79,9 @@ The user guide at [derrors.github.io/iphone-control](https://derrors.github.io/i
 
 ## Releasing (maintainers)
 
-1. Move the *Unreleased* entries in [CHANGELOG.md](CHANGELOG.md) under `## [x.y.z] - YYYY-MM-DD` and update the compare links at the bottom.
+1. Move the *Unreleased* entries in [CHANGELOG.md](CHANGELOG.md) and [CHANGELOG.zh-CN.md](CHANGELOG.zh-CN.md) under `## [x.y.z] - YYYY-MM-DD` and update the compare links at the bottom. Both files need the section — the release notes are built from the two (English, then Chinese) and the workflow fails if either is missing. Keep entries short: one line per user-visible change, no implementation details.
 2. Set `version` in the root `Cargo.toml` (`[workspace.package]`) and run `cargo check --workspace` to update `Cargo.lock`.
-3. Commit, tag `vx.y.z`, push the tag. [`release.yml`](.github/workflows/release.yml) builds the amd64/arm64 images on native runners and pushes them to `ghcr.io/derrors/iphone-control` (tags `x.y.z`, `x.y`, `latest`; pre-releases such as `v0.2.0-rc.1` only get their own tag), builds the Linux binaries, and creates the GitHub release from the changelog section.
+3. Commit, tag `vx.y.z`, push the tag. [`release.yml`](.github/workflows/release.yml) builds the amd64/arm64 images on native runners and pushes them to `ghcr.io/derrors/iphone-control` (tags `x.y.z`, `x.y`, `latest`; pre-releases such as `v0.2.0-rc.1` only get their own tag), builds the Linux binaries (`iphone-control-vx.y.z-linux-x86_64.tar.gz`, `…-linux-aarch64.tar.gz`), and creates the GitHub release from the two changelog sections.
 4. First release only: make the ghcr package public (*Package settings → Change visibility*) — new packages start private.
 
 By contributing you agree that your contributions are licensed under the MIT license, except for changes to vendored files, which stay under their original licenses.

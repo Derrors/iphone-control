@@ -1,7 +1,7 @@
 name: Release
 
 # 推送 v* tag 时：多架构镜像推到 ghcr（各架构在原生 runner 上构建，不用 QEMU 模拟），
-# 附 SBOM 和构建来源证明；Linux 二进制和 sha256 附在 GitHub Release 上，发布说明取自 CHANGELOG.md。
+# 附 SBOM 和构建来源证明；Linux 二进制和 sha256 附在 GitHub Release 上，发布说明取自 CHANGELOG.md 和 CHANGELOG.zh-CN.md。
 on:
   push:
     tags: ["v*"]
@@ -19,10 +19,13 @@ jobs:
     strategy:
       matrix:
         include:
+          # 文件名用 linux-<arch>（arch 与 uname -m 一致），不用 Rust 的 target 名（x86_64-unknown-linux-gnu）
           - runner: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
+            arch: x86_64
           - runner: ubuntu-22.04-arm
             target: aarch64-unknown-linux-gnu
+            arch: aarch64
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
@@ -33,16 +36,16 @@ jobs:
       - run: cargo build --release --locked -p iphone-control
       - name: Package
         run: |
-          name="iphone-control-${GITHUB_REF_NAME}-${{ matrix.target }}"
+          name="iphone-control-${GITHUB_REF_NAME}-linux-${{ matrix.arch }}"
           mkdir -p "dist/$name"
-          cp target/release/iphone-control LICENSE THIRD_PARTY.md README.md README.zh-CN.md CHANGELOG.md "dist/$name/"
+          cp target/release/iphone-control LICENSE THIRD_PARTY.md README.md README.zh-CN.md CHANGELOG.md CHANGELOG.zh-CN.md "dist/$name/"
           cp -r deploy "dist/$name/"
           cp .env.example "dist/$name/env.example"
           tar -C dist -czf "dist/$name.tar.gz" "$name"
           (cd dist && sha256sum "$name.tar.gz" > "$name.tar.gz.sha256")
       - uses: actions/upload-artifact@v4
         with:
-          name: bin-${{ matrix.target }}
+          name: bin-${{ matrix.arch }}
           path: dist/*.tar.gz*
           if-no-files-found: error
 
@@ -149,22 +152,32 @@ jobs:
           path: dist
           pattern: bin-*
           merge-multiple: true
-      - name: Release notes from CHANGELOG.md
+      # 英文、中文各一节，末尾一行镜像和下载说明。两个文件都要有这个版本的一节，缺了就失败
+      - name: Release notes from CHANGELOG.md and CHANGELOG.zh-CN.md
         run: |
           version="${GITHUB_REF_NAME#v}"
-          # 「## [1.2.3]」到下一个「## [」之间
-          awk -v v="$version" '
-            /^## \[/ { if (found) exit; if (index($0, "## [" v "]") == 1) { found = 1; next } }
-            found { print }
-          ' CHANGELOG.md > notes.md
-          if [ ! -s notes.md ]; then
-            echo "CHANGELOG.md 里没有 ## [$version] 一节" >&2
-            exit 1
-          fi
+          section() {
+            # 「## [1.2.3]」到下一个「## [」之间，去掉链接定义行和首尾空行
+            awk -v v="$version" '
+              /^## \[/ { if (found) exit; if (index($0, "## [" v "]") == 1) { found = 1; next } }
+              found && !/^\[[^]]+\]: / { print }
+            ' "$1" | sed -e '/./,$!d' | sed -e ':a' -e '/^\n*$/{$d;N;ba' -e '}'
+          }
+          en=$(section CHANGELOG.md)
+          zh=$(section CHANGELOG.zh-CN.md)
+          for f in en zh; do
+            if [ -z "${!f}" ]; then
+              echo "更新日志（$f）里没有 ## [$version] 一节" >&2
+              exit 1
+            fi
+          done
           {
-            echo
-            echo "**Docker image:** \`${IMAGE}:${version}\` (linux/amd64, linux/arm64)"
-          } >> notes.md
+            echo "## English"; echo; echo "$en"; echo
+            echo "## 中文"; echo; echo "$zh"; echo
+            echo "---"; echo
+            echo "**Docker:** \`${IMAGE}:${version}\` (linux/amd64, linux/arm64)"; echo
+            echo "**Binaries / 二进制:** \`linux-x86_64\`, \`linux-aarch64\` (glibc 2.34+)"
+          } > notes.md
       - name: Create release
         run: |
           flags=()

@@ -135,7 +135,7 @@ claude mcp add iphone -s user -- docker exec -i iphone-control iphone-control mc
 | 安装 | [Docker](https://derrors.github.io/iphone-control/deploy/docker) · [从源码 / 二进制](https://derrors.github.io/iphone-control/deploy/source) · [数据与备份](https://derrors.github.io/iphone-control/deploy/backup) |
 | 问题 | [常见问题](https://derrors.github.io/iphone-control/troubleshoot/faq) · [排错（英文）](docs/troubleshooting.md) · [Issues](https://github.com/Derrors/iphone-control/issues) |
 | 安全 | [SECURITY.md](SECURITY.md)：存了什么、谁能访问、怎么报告漏洞 |
-| 开发 | [贡献指南](CONTRIBUTING.md) · [架构](docs/architecture.md) · [关键取舍](docs/decisions.md) · [更新日志](CHANGELOG.md) |
+| 开发 | [贡献指南](CONTRIBUTING.md) · [架构](docs/architecture.md) · [关键取舍](docs/decisions.md) · [更新日志](CHANGELOG.zh-CN.md) |
 | 许可证 | [THIRD_PARTY.md](THIRD_PARTY.md)：vendor 组件、版本和许可证 |
 
 ## 限制

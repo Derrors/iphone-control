@@ -20,7 +20,7 @@ export default defineConfig({
         nav: [
           { text: '首页', link: '/' },
           { text: '指南', link: '/guide/what-is-iphone-control' },
-          { text: '更新日志', link: `${repo}/blob/main/CHANGELOG.md` },
+          { text: '更新日志', link: `${repo}/blob/main/CHANGELOG.zh-CN.md` },
         ],
         sidebar: [
           {

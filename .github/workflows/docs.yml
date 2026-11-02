@@ -42,7 +42,7 @@ jobs:
       # 有死链时构建失败
       - run: pnpm run docs:build
         working-directory: website
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/upload-pages-artifact@v5
         if: github.event_name != 'pull_request'
         with:
           path: website/.vitepress/dist

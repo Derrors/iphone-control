@@ -12,9 +12,8 @@ iphone-control 让 AI agent（例如 Claude）操作一台用数据线接在 Lin
 
 ## 怎么工作
 
-```
-AI 客户端 ──stdio──▶ iphone-control mcp ──Unix socket──▶ iphone-control daemon ──USB──▶ iPhone
-```
+![架构：MCP 客户端经 stdio 调用 iphone-control mcp，再经 Unix socket 交给守护进程；守护进程经 USB 用 WebDriverAgent 操作 iPhone](/architecture-light.svg){.light-only}
+![架构：MCP 客户端经 stdio 调用 iphone-control mcp，再经 Unix socket 交给守护进程；守护进程经 USB 用 WebDriverAgent 操作 iPhone](/architecture-dark.svg){.dark-only}
 
 - **守护进程**常驻，独占手机：配对、挂载开发者镜像、建立隧道，在手机上运行 [WebDriverAgent](https://github.com/appium/WebDriverAgent)（WDA，苹果 XCTest 自动化框架上的代理），用它读界面、点击和输入。
 - **MCP 服务**由 AI 客户端按需拉起，只是把工具调用转给守护进程。

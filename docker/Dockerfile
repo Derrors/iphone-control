@@ -7,11 +7,13 @@ ARG RUST_IMAGE=rust:1-trixie@sha256:09027f873d45b8ecd1dc86f1fa13b7a62b875c961f01
 
 # ---- 编译 ----
 # 依赖下载和编译产物放在构建缓存里：改 README、compose 等不再从头编译约 570 个 crate
+# registry、git 缓存用 sharing=locked：build 和 notices 两个阶段会并行，缓存是空的时候（CI 上每次都是）
+# 两边同时检出 git 依赖（idevice）会互相踩坏文件
 FROM ${RUST_IMAGE} AS build
 WORKDIR /src
 COPY . .
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/usr/local/cargo/git \
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
     --mount=type=cache,target=/src/target \
     cargo build --release --locked -p iphone-control \
  && cp target/release/iphone-control /iphone-control
@@ -19,12 +21,12 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 # ---- 第三方许可证清单（cargo-about，按 Cargo.lock 生成，含 MIT/Apache 等要求随附的许可证全文）----
 FROM ${RUST_IMAGE} AS notices
 ARG CARGO_ABOUT_VERSION=0.9.3
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     cargo install --locked --features cli "cargo-about@${CARGO_ABOUT_VERSION}"
 WORKDIR /src
 COPY . .
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/usr/local/cargo/git \
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
     cargo about generate --locked -m apps/iphone-control/Cargo.toml -c docker/about.toml docker/about.hbs \
       -o /THIRD_PARTY_LICENSES.html
 

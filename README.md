@@ -1,181 +1,162 @@
-# iphone-control
+<a name="readme-top"></a>
 
-**English** | [简体中文](README.zh-CN.md)
+<div align="right">
+  <b>English</b> | <a href="README.zh-CN.md">简体中文</a>
+</div>
 
-[![CI](https://github.com/Derrors/iphone-control/actions/workflows/ci.yml/badge.svg)](https://github.com/Derrors/iphone-control/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+<div align="center">
+  <a href="https://github.com/Derrors/iphone-control">
+    <img src="website/public/logo.svg" alt="Logo" width="120">
+  </a>
 
-**Documentation: [derrors.github.io/iphone-control](https://derrors.github.io/iphone-control/en/)**
+  <h3 align="center">iphone-control</h3>
 
-Control a real, USB-connected iPhone from Linux — no Mac, no paid Apple developer account — and hand it to AI agents as [MCP](https://modelcontextprotocol.io) tools. One Rust binary plus the system `usbmuxd`.
+  <p align="center">
+    Let an AI agent operate a real iPhone plugged into a Linux machine — one Rust binary, no Mac, no paid developer account, no jailbreak.
+  </p>
 
-> **Status: early (0.x).** Everything below works end to end on one device: iPhone 15 Pro Max, iOS 27.0.1. Other models and iOS 17+ should work but are untested — reports are welcome.
->
-> The CLI, `doctor` output and MCP tool results are currently in **Simplified Chinese**. Agents handle this fine; a human reading the logs may need a translator.
+  <p align="center">
+    <a href="https://github.com/Derrors/iphone-control/releases/latest"><img src="https://img.shields.io/github/v/release/Derrors/iphone-control?style=flat-square" alt="Release"></a>
+    <a href="https://github.com/Derrors/iphone-control/pkgs/container/iphone-control"><img src="https://img.shields.io/badge/ghcr.io-derrors%2Fiphone--control-2496ED?style=flat-square&logo=docker&logoColor=white" alt="Docker"></a>
+    <img src="https://img.shields.io/badge/iOS-17%2B-black?style=flat-square&logo=apple" alt="iOS">
+    <img src="https://img.shields.io/badge/MCP-15%20tools-8A2BE2?style=flat-square" alt="MCP">
+    <a href="Cargo.toml"><img src="https://img.shields.io/badge/Rust-1.88%2B-CE422B?style=flat-square&logo=rust&logoColor=white" alt="Rust"></a>
+    <a href="https://github.com/Derrors/iphone-control/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/Derrors/iphone-control/ci.yml?branch=main&style=flat-square&label=CI" alt="CI"></a>
+    <a href="LICENSE"><img src="https://img.shields.io/github/license/Derrors/iphone-control?style=flat-square" alt="License"></a>
+  </p>
 
-## What it does
+  <p align="center">
+    <a href="#quick-start"><strong>🚀 Quick Start</strong></a>
+    &nbsp;·&nbsp;
+    <a href="https://derrors.github.io/iphone-control/en/"><strong>📖 Docs</strong></a>
+    &nbsp;·&nbsp;
+    <a href="https://github.com/Derrors/iphone-control/releases">📦 Releases</a>
+    &nbsp;·&nbsp;
+    <a href="https://github.com/Derrors/iphone-control/issues">🐛 Issues</a>
+  </p>
+</div>
 
-- **Agent tools** — screenshots (with zoom-in regions), on-screen element lists, tap by coordinates or by text, swipe, long press, typing (including Chinese), hardware buttons, launch/terminate apps, open URLs, wait for text to appear, and batches of steps. Any action can also return the resulting screen, saving the agent a round trip. See [docs/tools.md](docs/tools.md).
-- **Keeps itself running** — pairs with the phone, mounts the Developer Disk Image, signs WebDriverAgent with your free Apple ID and re-signs it before the 7-day profile expires, restarts WDA when it dies, and recovers after the phone is unplugged or rebooted.
-- **Fallback path** — when WDA is down, taps, swipes, key presses and screenshots still work through CoreDevice HID.
-- **Tells you when it needs you** — Bark or Telegram notifications for a failed re-sign, an expired Apple ID session, a reboot that needs the passcode, or the phone going offline.
-- **Optional auto-unlock** — off by default; read [SECURITY.md](SECURITY.md) before turning it on.
-- **No open ports** — WDA is reached through usbmuxd; nothing listens on the network.
+> [!NOTE]
+> Early release (0.x), tested on an **iPhone 15 Pro Max (iOS 27.0.1)**. Other models and iOS 17+ should work but are untested — reports are welcome. The CLI, `doctor` output and MCP tool results are currently in Simplified Chinese; agents handle this fine.
 
-```
-AI agent ──stdio──▶ iphone-control mcp ──unix socket──▶ iphone-control daemon ──usbmuxd/USB──▶ iPhone (WebDriverAgent)
-```
+## Overview
 
-One long-running daemon owns the device (tunnel, HID session, WDA session); each agent session gets a thin MCP client. Details: [docs/architecture.md](docs/architecture.md) (Chinese).
+AI agents can drive browsers and desktops, but a real iPhone is harder: Apple's automation tools need a Mac and Xcode, and the open-source alternatives come as separate pieces that each need their own setup, signing and babysitting.
 
-## Requirements
+iphone-control does it all in **one Rust binary** on Linux, built on [idevice](https://github.com/jkcoxson/idevice), [Impactor](https://github.com/claration/impactor) and [WebDriverAgent](https://github.com/appium/WebDriverAgent). A long-running daemon owns the phone — tunnel, HID session, WebDriverAgent session — and exposes it to Claude Code or any MCP client. It succeeds [iphone-control-toolkit](https://github.com/Derrors/iphone-control-toolkit) and keeps its MCP tools compatible.
 
-- A Linux host (x86_64 or arm64) with a USB port.
-- Docker with Compose v2 — or, without Docker, Rust 1.88+, a C compiler and `usbmuxd` ([install from source](#install-from-source-without-docker)).
-- An iPhone on iOS 17 or later with a data cable. Setup walks you through Developer Mode.
-- A free Apple ID. Using a dedicated one is recommended (see [Security](#security-and-privacy)).
-- Internet access to Apple, to the anisette server, and to GitHub (the Developer Disk Image and WebDriverAgent are downloaded on first use).
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="website/public/architecture-dark.svg">
+    <img src="website/public/architecture-light.svg" alt="Architecture: an MCP client talks to iphone-control mcp over stdio, which talks to the daemon over a Unix socket; the daemon drives the iPhone over USB through WebDriverAgent, with CoreDevice HID as fallback" width="900">
+  </picture>
+</p>
 
-## Quick start (Docker)
+## Features
+
+- **See and touch the screen**: screenshots with region zoom, tap, swipe, long-press, text input (including Chinese), hardware buttons
+- **Work with UI elements**: read the element tree, tap by text (on a part not covered by floating bars or the keyboard), launch and close apps, open URLs, wait for text to appear
+- **Fewer round trips**: any action can return the resulting screen once it has settled, flagging pages still loading and blocking alerts; `iphone_batch` runs up to 20 steps in one call
+- **Automatic fallback**: when WebDriverAgent is down, screenshots, taps, swipes and keys switch to Apple's CoreDevice HID service
+- **Runs unattended**: recovers from replugging, phone reboots and WebDriverAgent crashes; re-signs WebDriverAgent with a free Apple ID before the 7-day profile expires
+- **Alerts**: Telegram or Bark notifications when re-signing fails, the Apple ID session expires, the phone goes offline, or a passcode is needed after a reboot
+- **Optional auto-unlock**: every passcode digit is verified, and a wrong passcode disables auto-unlock after one attempt
+- **Diagnostics**: `doctor` checks every layer from USB to WebDriverAgent and tells you how to fix each failure
+
+## Quick Start
+
+You need a Linux host (x86_64 or arm64) with Docker (Compose v2), an iPhone on iOS 17+ connected by a **data** USB cable, and a free Apple ID (use a dedicated one, not your main account).
 
 ```bash
-git clone https://github.com/Derrors/iphone-control && cd iphone-control
-cp .env.example .env              # optional: proxy, notifications, auto-unlock settings
-docker compose up -d --build      # the first build compiles Rust and takes a few minutes
-docker exec -it iphone-control iphone-control setup
-docker exec -it iphone-control iphone-control mcp-config   # prints the command to register the MCP server
-```
-
-Once a release is published you can skip the build: set `IMAGE=ghcr.io/derrors/iphone-control:latest` in `.env`, then run `docker compose pull && docker compose up -d --no-build`.
-
-`setup` can be re-run at any time. It walks through:
-
-1. **Connect** the phone and unlock it.
-2. **Pair** — tap *Trust* on the phone and enter the passcode.
-3. **Developer Mode** — *Settings → Privacy & Security → Developer Mode → On*, restart, then confirm after unlocking.
-4. **Apple ID login** — the password and two-factor code are typed into this terminal only.
-5. **Sign and install WebDriverAgent** — keep the phone unlocked.
-6. **Start WebDriverAgent** — the first time, trust your Apple ID under *Settings → General → VPN & Device Management*. If the phone asks you to *enter the iPhone passcode for "XCTest"* (Enable UI Automation), enter it.
-
-The container is not `privileged`: it only gets USB character devices (`device_cgroup_rules: "c 189:* rmw"`) plus a bind mount of `/dev/bus/usb`. Don't run two copies (or another usbmuxd-based tool) against the same phone.
-
-## Connect an MCP client
-
-Claude Code (this is what `mcp-config` prints for the container):
-
-```bash
+git clone https://github.com/Derrors/iphone-control.git
+cd iphone-control
+cp .env.example .env                                  # optional: proxy, notifications
+docker compose up -d --build                          # the first build compiles Rust, a few minutes
+docker exec -it iphone-control iphone-control setup   # guided setup; safe to re-run
 claude mcp add iphone -s user -- docker exec -i iphone-control iphone-control mcp
 ```
 
-Other clients (Claude Desktop, Cursor, …) take the same command in their JSON config:
+`setup` walks you through pairing, Developer Mode, signing in to your Apple ID, and signing and installing WebDriverAgent. On the phone you tap *Trust*, turn on Developer Mode, and trust your Apple ID under *Settings → General → VPN & Device Management* — see the [step-by-step guide](https://derrors.github.io/iphone-control/en/guide/getting-started).
 
-```json
-{
-  "mcpServers": {
-    "iphone": { "command": "docker", "args": ["exec", "-i", "iphone-control", "iphone-control", "mcp"] }
-  }
-}
-```
+Open a new Claude Code session and ask, for example:
 
-For a source install, use `iphone-control --socket <path> mcp` instead; `iphone-control mcp-config` prints the exact command.
+> Open the Clock app, switch to the stopwatch, and show me a screenshot.
 
-## Install from source (without Docker)
+> [!TIP]
+> Other MCP clients: the server speaks stdio through `docker exec` and opens no network port.
+>
+> ```json
+> { "mcpServers": { "iphone": { "command": "docker", "args": ["exec", "-i", "iphone-control", "iphone-control", "mcp"] } } }
+> ```
 
-Debian/Ubuntu example:
+Once a release is out you can skip the build: set `IMAGE=ghcr.io/derrors/iphone-control:latest` in `.env` and run `docker compose pull && docker compose up -d --no-build`. Without Docker, use a [prebuilt binary or build from source](https://derrors.github.io/iphone-control/en/deploy/source) and run it as a systemd user service.
 
-```bash
-sudo apt install build-essential git usbmuxd     # udev starts usbmuxd when the phone is plugged in
-git clone https://github.com/Derrors/iphone-control && cd iphone-control
-cargo install --path apps/iphone-control --locked  # installs ~/.cargo/bin/iphone-control
-iphone-control daemon      # foreground; see below for a systemd user service
-iphone-control setup       # in a second terminal
-iphone-control mcp-config
-```
+## MCP Tools
 
-To keep it running, use the systemd user service in [deploy/iphone-control.service](deploy/iphone-control.service):
+| Tool | Description |
+| --- | --- |
+| `iphone_status` | Connection, lock state, foreground app, screen size |
+| `iphone_screenshot` | Screenshot scaled to points; pass `x/y/width/height` to zoom into a region |
+| `iphone_list_elements` | Elements with text and their center coordinates; filter by text or type |
+| `iphone_tap` / `iphone_tap_element` | Tap by coordinates or by element text |
+| `iphone_swipe` / `iphone_long_press` | Swipe (returns once the list stops), long-press |
+| `iphone_type_text` | Type into the focused field; reads it back and fixes dropped characters |
+| `iphone_press_button` | `home`, `volume_up`, `volume_down`, `lock` |
+| `iphone_list_apps` / `iphone_launch_app` / `iphone_terminate_app` | Manage apps by name or bundle ID |
+| `iphone_open_url` | Open a URL or URL scheme |
+| `iphone_wait_for` | Wait until some text appears instead of polling with screenshots |
+| `iphone_batch` | Run up to 20 steps in one call, stopping at the first error |
 
-```bash
-mkdir -p ~/.config/systemd/user ~/.config/iphone-control
-cp deploy/iphone-control.service ~/.config/systemd/user/
-cp .env.example ~/.config/iphone-control/env      # CONTAINER_NAME, IMAGE and DATA_DIR are compose-only
-systemctl --user daemon-reload && systemctl --user enable --now iphone-control
-loginctl enable-linger "$USER"                    # start at boot without logging in
-```
+Action tools accept `then: "elements" | "screenshot"` to return the screen after the action. Screenshot pixels are tap coordinates, so the agent can tap what it sees. Games, maps and video players draw their own UI and have no element tree — use screenshots and coordinates there. Full parameters: [docs/tools.md](docs/tools.md).
 
-| | Container | Source install (regular user) |
-|---|---|---|
-| Data directory | `./data` (`/var/lib/iphone-control` inside) | `~/.local/share/iphone-control` |
-| Control socket | `/run/iphone-control/ctl.sock` inside the container | `$XDG_RUNTIME_DIR/iphone-control/ctl.sock` |
-| usbmuxd | started and supervised by the daemon (no udev in the container) | the system service; the daemon does not start it |
-| Pairing records | `lockdown/` in the data directory | the system's `/var/lib/lockdown` |
-| Unsigned WDA | shipped in the image | downloaded (sha256-checked) before the first signing |
-| Configuration | `.env` | environment variables, e.g. the systemd `EnvironmentFile` |
+## Everyday Commands
 
-Run the daemon, the CLI and the MCP server as the same user; for another user, point them at it with `--socket` and `--data-dir` (or `ICTL_SOCKET`, `ICTL_DATA_DIR`). Run as root, the defaults match the container and the daemon starts its own usbmuxd — set `ICTL_MANAGE_USBMUXD=0` if the host already runs the usbmuxd service. With a host `usbmuxd` installed, `sudo systemctl mask usbmuxd` before going back to the container, or the two will fight over the phone.
+Run them as `docker exec -it iphone-control iphone-control <command>`, or directly for a source install.
 
-## Commands
+| Command | What it does |
+| --- | --- |
+| `status` | Daemon state, time left on the signing profile, recent log |
+| `doctor` | Layer-by-layer health check with a fix for each failure |
+| `setup` | Guided setup; re-run any time |
+| `login` | Sign in to the Apple ID again when the session expires |
+| `resign [--force]` | Re-sign WebDriverAgent if it expires soon (or now) |
+| `passcode set\|clear` | Turn auto-unlock on or off |
+| `notify-test [event]` | Send test notifications |
+| `mcp-config` | Print the command that registers the MCP server |
 
-| Command | Purpose |
-|---|---|
-| `daemon` | The long-running daemon (container entry point) |
-| `mcp` | MCP stdio server; talks to the daemon over the control socket |
-| `mcp-config` | Print the command that registers the MCP server with Claude Code |
-| `status` / `doctor` | State snapshot and recent log / layer-by-layer diagnosis with fixes |
-| `setup` | First-run wizard (re-runnable) |
-| `login` | Log in to an Apple ID (no echo; two-factor and SMS supported) |
-| `sign` / `resign [--force]` | Sign and install WDA now / re-sign only if the profile is close to expiring |
-| `passcode set\|clear`, `unlock-reset` | Auto-unlock (off by default) |
-| `wda-bridge --port 8100` | Expose WDA on 127.0.0.1 for other tools — unauthenticated, stop it when done |
-| `notify-test` | Send one test notification per event type |
-
-## Configuration
-
-Everything is configured through environment variables; all of them are optional. See [.env.example](.env.example) for the full list. The common ones:
-
-| Variable | Meaning |
-|---|---|
-| `HTTP_PROXY`, `HTTPS_PROXY` | Proxy for Apple, anisette, Developer Disk Image and notification traffic |
-| `IPHONE_UDID` | Which phone to use when several are connected |
-| `BARK_KEY`, `BARK_SERVER`, `TG_BOT_TOKEN`, `TG_CHAT_ID` | Notifications |
-| `RESIGN_MIN_DAYS`, `RESIGN_CHECK_HOURS` | When to re-sign WebDriverAgent |
-| `ICTL_ANISETTE_URL` | Your own anisette server instead of the default third-party one |
-| `ICTL_DDI_URL`, `ICTL_DDI_DIR` | Where the Developer Disk Image comes from |
-
-## Security and privacy
-
-Read [SECURITY.md](SECURITY.md) before deploying. In short:
-
-- The data directory holds your Apple ID session, the development signing key, pairing records and — only if you enable auto-unlock — the phone passcode in plain text. Back it up, and never commit or share it.
-- The container runs as root, because it needs the USB device nodes and must be able to restart `usbmuxd` after the phone is unplugged.
-- Apple ID logins use an anisette server. The default is a public third-party server; set `ICTL_ANISETTE_URL` to use your own.
-- Anyone who can reach the control socket, or a running `wda-bridge`, can control the phone.
-
-## Disclaimer
-
-This project is not affiliated with, endorsed by, or sponsored by Apple Inc. iPhone, iOS and Xcode are trademarks of Apple Inc.
-
-Use it only with devices and accounts you own or are authorized to control. Automating third-party apps may violate their terms of service, and Apple may limit or suspend developer accounts — consider a dedicated Apple ID. The software is provided "as is", without warranty of any kind (see [LICENSE](LICENSE)).
-
-Nothing here bypasses iOS security: trusting the computer, enabling Developer Mode, trusting the developer certificate and enabling UI automation all require the owner on the phone.
+Upgrade with `git pull && docker compose up -d --build` (or `docker compose pull` for the prebuilt image). Settings live in `.env` — see [configuration](https://derrors.github.io/iphone-control/en/guide/configuration). All state lives in `data/`: pairing records, the Apple ID session and signing key, and the passcode if auto-unlock is on. **Back it up; never commit or share it.**
 
 ## Documentation
 
-| Document | Contents |
-|---|---|
-| [docs/tools.md](docs/tools.md) | MCP tools and their parameters |
-| [docs/troubleshooting.md](docs/troubleshooting.md) | What each state means and how to fix common problems |
-| [SECURITY.md](SECURITY.md) | Threat model, hardening, reporting vulnerabilities |
-| [CONTRIBUTING.md](CONTRIBUTING.md) | Building, testing (with and without a phone), pull requests |
-| [CHANGELOG.md](CHANGELOG.md) | Release notes |
-| [docs/architecture.md](docs/architecture.md) | Architecture, daemon state machine, modules, data layout (Chinese) |
-| [docs/decisions.md](docs/decisions.md) | Key design decisions (Chinese) |
-| [docs/licensing.md](docs/licensing.md), [THIRD_PARTY.md](THIRD_PARTY.md) | License analysis and third-party components (Chinese) |
-| [docs/dev/](docs/dev/) | Development history: spike results, roadmap, regression cases (Chinese) |
+| | |
+| --- | --- |
+| Guide | [What is it](https://derrors.github.io/iphone-control/en/guide/what-is-iphone-control) · [Getting started](https://derrors.github.io/iphone-control/en/guide/getting-started) · [AI clients](https://derrors.github.io/iphone-control/en/guide/mcp-clients) · [Tools](https://derrors.github.io/iphone-control/en/guide/tools) |
+| Usage | [Configuration](https://derrors.github.io/iphone-control/en/guide/configuration) · [Notifications](https://derrors.github.io/iphone-control/en/guide/notifications) · [Auto-unlock](https://derrors.github.io/iphone-control/en/guide/auto-unlock) |
+| Deployment | [Docker](https://derrors.github.io/iphone-control/en/deploy/docker) · [Source / binary](https://derrors.github.io/iphone-control/en/deploy/source) · [Data and backups](https://derrors.github.io/iphone-control/en/deploy/backup) |
+| Problems | [FAQ](https://derrors.github.io/iphone-control/en/troubleshoot/faq) · [Troubleshooting](docs/troubleshooting.md) · [Issues](https://github.com/Derrors/iphone-control/issues) |
+| Security | [SECURITY.md](SECURITY.md): what is stored, who can reach it, reporting vulnerabilities |
+| Development | [Contributing](CONTRIBUTING.md) · [Architecture](docs/architecture.md) · [Decisions](docs/decisions.md) · [Changelog](CHANGELOG.md) |
+| Licensing | [THIRD_PARTY.md](THIRD_PARTY.md): vendored components, versions and licenses |
 
-## Acknowledgements
+The architecture and design documents are in Chinese for now.
 
-Built on [idevice](https://github.com/jkcoxson/idevice) (device protocols), [Impactor](https://github.com/claration/impactor) (Apple ID and signing), [apple-codesign](https://github.com/indygreg/apple-platform-rs), [WebDriverAgent](https://github.com/appium/WebDriverAgent) (on-device automation), [usbmuxd](https://github.com/libimobiledevice/usbmuxd) and the [Rust MCP SDK](https://github.com/modelcontextprotocol/rust-sdk).
+## Limitations
+
+- One phone per host; don't run two instances (or other usbmuxd-based tools) against the same phone
+- Free Apple ID profiles last 7 days. Re-signing is automatic, but an expired Apple ID session needs `login`
+- After the phone reboots, you must unlock it and enter the passcode once to allow UI automation — iOS requires this
+- Apple ID logins use a public third-party anisette server by default; set `ICTL_ANISETTE_URL` to use your own
+- The container runs as root: it needs the USB device nodes and must restart usbmuxd after replugging
+
+> [!WARNING]
+> This tool can fully control your phone. An agent may tap payment, delete or send buttons — keep tool-call confirmation on in your MCP client. Not affiliated with Apple; use it only with devices and accounts you own. Read [SECURITY.md](SECURITY.md) before enabling auto-unlock.
+
+## Contributing
+
+Issues and pull requests are welcome — see the [contributing guide](CONTRIBUTING.md).
 
 ## License
 
-The code in this repository is [MIT](LICENSE). Vendored components keep their own licenses (MPL-2.0 and MIT); see [THIRD_PARTY.md](THIRD_PARTY.md). Apple files such as the Developer Disk Image are downloaded at runtime and never distributed.
+[MIT](LICENSE). Third-party components: [THIRD_PARTY.md](THIRD_PARTY.md).
+
+<p align="right">(<a href="#readme-top">back to top</a>)</p>

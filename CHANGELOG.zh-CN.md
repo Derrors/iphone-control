@@ -16,7 +16,7 @@
 
 ### 修复
 
-- 手机断开几秒又接上（拔插、USB-C 供电重新协商）后，守护进程不再卡在「bad device」：发现 usbmuxd 换了设备编号就重新连接。
+- 手机断开几秒又接上（拔插、USB-C 供电重新协商）后，守护进程不再卡在「bad device」：发现 usbmuxd 换了设备编号就重新连接。受影响的是用系统 usbmuxd 的部署（macOS、Linux 从源码运行）；Docker 镜像自己重启 usbmuxd，原来就能恢复。
 - macOS 上 `doctor` 不再在手机已连接时报「USB 上没有 Apple 设备」，修复提示改用 `launchctl` 而不是 `systemctl`。
 - iPhone 12 mini（iOS 26.4.1）上 `home`、`lock` 报成功但没有效果，自动解锁也点不亮熄灭的屏幕。Home 改为发 IOHID 的 AC Home 事件，没回到主屏再用 XCTest 的按键补一次；锁屏改为经 IOHID 按电源键，没锁上再用 WebDriverAgent 的锁屏。自动解锁轮流用这两种方式唤醒屏幕。
 - 自动解锁调不出密码键盘时，提示里说明待机显示（手机横放充电时出现）会挡住键盘。

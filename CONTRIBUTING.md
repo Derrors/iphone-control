@@ -70,7 +70,7 @@ Notes:
 ## Pull requests
 
 - Keep them focused; describe what changed and how you tested it (offline and/or which device).
-- CI must pass: format, clippy with `-D warnings`, tests, the MSRV check, gitleaks and the image build.
+- CI must pass: format, clippy with `-D warnings`, tests (on Linux and macOS), the MSRV check, gitleaks and the image build.
 - User-visible changes get a line in [CHANGELOG.md](CHANGELOG.md) and [CHANGELOG.zh-CN.md](CHANGELOG.zh-CN.md) under *Unreleased* (a Chinese line is welcome but optional for outside contributors; maintainers add it before release).
 
 ## Documentation site

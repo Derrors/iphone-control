@@ -14,6 +14,8 @@ All notable changes to this project are documented here. The format is based on 
 
 - The daemon no longer gets stuck on "bad device" after the phone disconnects for a few seconds (unplugging, USB-C power renegotiation): it now notices that usbmuxd gave the phone a new device number and reconnects.
 - `doctor` on macOS no longer reports "no Apple device on USB" while the phone is connected, and its fix hints use `launchctl` instead of `systemctl`.
+- `home` and `lock` did nothing on an iPhone 12 mini (iOS 26.4.1) while reporting success, and auto-unlock could not wake a dark screen. Home is now pressed as an IOHID AC Home event, falling back to the XCTest button if the home screen doesn't come up; lock presses the power key over IOHID, falling back to WebDriverAgent's lock. Auto-unlock alternates the two ways of waking the screen.
+- When auto-unlock can't bring up the passcode keypad, the message now mentions StandBy (a phone charging on its side), which hides the keypad.
 
 ## [0.1.0] - 2026-11-02
 

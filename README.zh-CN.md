@@ -12,13 +12,14 @@
   <h3 align="center">iphone-control</h3>
 
   <p align="center">
-    让 AI agent 操作一台接在 Linux 上的真实 iPhone：一个 Rust 二进制，不需要 Mac，不需要付费开发者账号，不越狱。
+    让 AI agent 操作一台接在 Linux 或 Mac 上的真实 iPhone：一个 Rust 二进制，不需要 Xcode，不需要付费开发者账号，不越狱。
   </p>
 
   <p align="center">
     <a href="https://github.com/Derrors/iphone-control/releases/latest"><img src="https://img.shields.io/github/v/release/Derrors/iphone-control?style=flat-square" alt="Release"></a>
     <a href="https://github.com/Derrors/iphone-control/pkgs/container/iphone-control"><img src="https://img.shields.io/badge/ghcr.io-derrors%2Fiphone--control-2496ED?style=flat-square&logo=docker&logoColor=white" alt="Docker"></a>
     <img src="https://img.shields.io/badge/iOS-17%2B-black?style=flat-square&logo=apple" alt="iOS">
+    <img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS-555?style=flat-square" alt="平台：Linux | macOS">
     <img src="https://img.shields.io/badge/MCP-15%20tools-8A2BE2?style=flat-square" alt="MCP">
     <a href="Cargo.toml"><img src="https://img.shields.io/badge/Rust-1.88%2B-CE422B?style=flat-square&logo=rust&logoColor=white" alt="Rust"></a>
     <a href="https://github.com/Derrors/iphone-control/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/Derrors/iphone-control/ci.yml?branch=main&style=flat-square&label=CI" alt="CI"></a>
@@ -37,13 +38,13 @@
 </div>
 
 > [!NOTE]
-> 早期版本（0.x），在 **iPhone 15 Pro Max（iOS 27.0.1）** 上完整测试过。其他机型和 iOS 17 以上应该也能用，但还没测过，欢迎反馈。
+> 早期版本（0.x）。在 Linux 和 macOS（Apple Silicon）上用 **iPhone 15 Pro Max（iOS 27.0.1）** 完整验证过，在 Linux 上用 **iPhone 12 mini（iOS 26.4.1）** 验证过。其他机型和 iOS 17 以上应该也能用，但还没测过，欢迎反馈。
 
 ## 简介
 
 AI agent 已经能操作浏览器和电脑桌面，但真实的 iPhone 难得多：苹果的自动化工具需要 Mac 和 Xcode，开源替代品又是零散的几块，每一块都要单独安装、签名、看护。
 
-iphone-control 在 Linux 上用**一个 Rust 二进制**把这些事都做了，基于 [idevice](https://github.com/jkcoxson/idevice)、[Impactor](https://github.com/claration/impactor) 和 [WebDriverAgent](https://github.com/appium/WebDriverAgent)。一个常驻守护进程独占手机（隧道、HID 会话、WebDriverAgent 会话常驻复用），把它交给 Claude Code 或任何 MCP 客户端。它是 [iphone-control-toolkit](https://github.com/Derrors/iphone-control-toolkit) 的继任者，MCP 工具保持兼容。
+iphone-control 在 Linux 或 macOS 上用**一个 Rust 二进制**把这些事都做了，基于 [idevice](https://github.com/jkcoxson/idevice)、[Impactor](https://github.com/claration/impactor) 和 [WebDriverAgent](https://github.com/appium/WebDriverAgent)。一个常驻守护进程独占手机（隧道、HID 会话、WebDriverAgent 会话常驻复用），把它交给 Claude Code 或任何 MCP 客户端。它是 [iphone-control-toolkit](https://github.com/Derrors/iphone-control-toolkit) 的继任者，MCP 工具保持兼容。
 
 <p align="center">
   <picture>
@@ -57,7 +58,7 @@ iphone-control 在 Linux 上用**一个 Rust 二进制**把这些事都做了，
 - **看屏幕、点屏幕**：截图（可放大某块区域）、点击、滑动、长按、输入文字（支持中文）、硬件按键
 - **按界面元素操作**：读元素树、按文字点击（自动避开悬浮栏、键盘挡住的部分）、启动和结束 App、打开链接、等某段文字出现
 - **省往返**：任何操作都可以等界面稳定后顺带返回操作后的样子，并提示页面是否还在加载、有没有弹窗挡着；`iphone_batch` 一次执行最多 20 步
-- **自动后备**：WebDriverAgent 不可用时，截图、点击、滑动、按键改走苹果的 CoreDevice HID 服务
+- **自动后备**：WebDriverAgent 不可用时，截图、点击、滑动、按键改走苹果的 CoreDevice HID 服务（iOS 27 起）
 - **无人值守**：拔插、手机重启、WebDriverAgent 崩溃后自动恢复；用免费 Apple ID 签名，7 天描述文件过期前自动重签
 - **告警通知**：重签失败、Apple ID 会话失效、手机离线、重启后需要输密码时，经 Telegram 或 Bark 推送
 - **可选的自动解锁**：每输一位都核对，密码错了只试一次就停用
@@ -65,7 +66,7 @@ iphone-control 在 Linux 上用**一个 Rust 二进制**把这些事都做了，
 
 ## 快速开始
 
-需要一台装了 Docker（Compose v2）的 Linux 主机（x86_64 或 arm64）、一部 iOS 17 以上的 iPhone 和能**传数据**的线，以及一个免费 Apple ID（建议专门注册一个，不要用主账号）。
+在 Linux 上，需要一台装了 Docker（Compose v2）的主机（x86_64 或 arm64）、一部 iOS 17 以上的 iPhone 和能**传数据**的线，以及一个免费 Apple ID（建议专门注册一个，不要用主账号）。
 
 ```bash
 git clone https://github.com/Derrors/iphone-control.git
@@ -91,6 +92,21 @@ claude mcp add iphone -s user -- docker exec -i iphone-control iphone-control mc
 
 也可以不克隆仓库、不自己构建：新建一个目录，写一个使用预构建镜像 `ghcr.io/derrors/iphone-control:latest` 的 `compose.yaml`，然后 `docker compose up -d`，完整示例见 [Docker 部署](https://derrors.github.io/iphone-control/deploy/docker#只写一个-compose-文件)。已经克隆了仓库的话，在 `.env` 里设 `IMAGE=ghcr.io/derrors/iphone-control:latest`，然后 `docker compose pull && docker compose up -d --no-build`。不用 Docker 的话，可以用[预编译二进制或从源码编译](https://derrors.github.io/iphone-control/deploy/source)，以 systemd 用户服务运行。
 
+### macOS
+
+Mac 上的 Docker 不能把 USB 设备交给容器，所以在 Mac（Apple Silicon，不需要 Xcode）上要编译出二进制，以普通用户直接运行。需要 Xcode 命令行工具（`xcode-select --install`）和 Rust 1.88+（[rustup](https://rustup.rs)）：
+
+```bash
+git clone https://github.com/Derrors/iphone-control.git
+cd iphone-control
+cargo install --path apps/iphone-control --locked   # 装到 ~/.cargo/bin/iphone-control
+iphone-control daemon                               # 这个终端保持开着
+iphone-control setup                                # 在另一个终端运行
+iphone-control mcp-config                           # 打印 `claude mcp add` 命令，复制运行
+```
+
+把手机的充电上限改成 100%（设置 → 电池 → 充电）：开着「80% 上限」时 USB 大约每分钟断开一次。配置、保持运行和已知差异见 [macOS 指南](https://derrors.github.io/iphone-control/deploy/macos)。
+
 ## MCP 工具
 
 | 工具 | 作用 |
@@ -111,7 +127,7 @@ claude mcp add iphone -s user -- docker exec -i iphone-control iphone-control mc
 
 ## 常用命令
 
-用 `docker exec -it iphone-control iphone-control <命令>` 运行；从源码运行时直接调用。
+用 `docker exec -it iphone-control iphone-control <命令>` 运行；从源码运行和在 macOS 上直接调用。
 
 | 命令 | 作用 |
 | --- | --- |
@@ -132,7 +148,7 @@ claude mcp add iphone -s user -- docker exec -i iphone-control iphone-control mc
 | --- | --- |
 | 入门 | [什么是 iphone-control](https://derrors.github.io/iphone-control/guide/what-is-iphone-control) · [快速开始](https://derrors.github.io/iphone-control/guide/getting-started) · [接入 AI 客户端](https://derrors.github.io/iphone-control/guide/mcp-clients) · [工具一览](https://derrors.github.io/iphone-control/guide/tools) |
 | 使用 | [配置](https://derrors.github.io/iphone-control/guide/configuration) · [通知](https://derrors.github.io/iphone-control/guide/notifications) · [自动解锁](https://derrors.github.io/iphone-control/guide/auto-unlock) |
-| 安装 | [Docker](https://derrors.github.io/iphone-control/deploy/docker) · [从源码 / 二进制](https://derrors.github.io/iphone-control/deploy/source) · [数据与备份](https://derrors.github.io/iphone-control/deploy/backup) |
+| 安装 | [Docker](https://derrors.github.io/iphone-control/deploy/docker) · [从源码 / 二进制](https://derrors.github.io/iphone-control/deploy/source) · [macOS](https://derrors.github.io/iphone-control/deploy/macos) · [数据与备份](https://derrors.github.io/iphone-control/deploy/backup) |
 | 问题 | [常见问题](https://derrors.github.io/iphone-control/troubleshoot/faq) · [排错（英文）](docs/troubleshooting.md) · [Issues](https://github.com/Derrors/iphone-control/issues) |
 | 安全 | [SECURITY.md](SECURITY.md)：存了什么、谁能访问、怎么报告漏洞 |
 | 开发 | [贡献指南](CONTRIBUTING.md) · [架构](docs/architecture.md) · [关键取舍](docs/decisions.md) · [更新日志](CHANGELOG.zh-CN.md) |
@@ -145,6 +161,8 @@ claude mcp add iphone -s user -- docker exec -i iphone-control iphone-control mc
 - 手机重启后，要人工解锁一次，并输一次密码允许 UI 自动化，这是 iOS 的要求
 - 登录 Apple ID 默认用公共的第三方 anisette 服务；可设 `ICTL_ANISETTE_URL` 换成自建服务
 - 容器以 root 运行：要访问 USB 设备节点，拔插后还要能重启 usbmuxd
+- HID 后备路线要 iOS 27 及以上；更早的 iOS 全部经 WebDriverAgent 操作
+- macOS 上：只能从源码编译（还没有预编译二进制），守护进程在终端里前台运行（还没有 launchd 配置），不能用 Docker（没有 USB 直通）；数据在 `~/.local/share/iphone-control`。Intel Mac 还没测过
 
 > [!WARNING]
 > 这个工具能完全控制你的手机，agent 可能点到付款、删除、发送这类按钮，请在 MCP 客户端里保持工具调用确认。本项目与 Apple 无关；只在你自己的设备和账号上使用。开启自动解锁前请先读 [SECURITY.md](SECURITY.md)。

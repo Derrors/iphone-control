@@ -14,7 +14,7 @@ use ictl_daemon::protocol::{self, Request, Response};
 mod debug;
 
 #[derive(Parser)]
-#[command(name = "iphone-control", version, about = "在 Linux 上控制 iPhone，并提供 MCP 工具")]
+#[command(name = "iphone-control", version, about = "在 Linux 或 macOS 上控制 iPhone，并提供 MCP 工具")]
 struct Cli {
     /// 数据根目录（账号、描述文件、日志等）。默认：root 是 /var/lib/iphone-control，普通用户是 ~/.local/share/iphone-control
     #[arg(long, env = "ICTL_DATA_DIR", default_value_os_t = protocol::default_data_dir())]

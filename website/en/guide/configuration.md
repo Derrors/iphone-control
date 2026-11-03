@@ -5,6 +5,7 @@ Everything is configured with environment variables, and all of them are optiona
 - **Docker:** in `.env` in the repository directory (copied from `.env.example`); apply with `docker compose up -d`.
 - **Just a compose file:** under `environment:` in your `compose.yaml` (or a `.env` next to it plus `env_file`); apply with `docker compose up -d` as well.
 - **Source install:** in `~/.config/iphone-control/env` (read by the systemd user service); apply with `systemctl --user restart iphone-control`.
+- **macOS:** also in `~/.config/iphone-control/env`, loaded before starting the daemon; restart the daemon to apply. See [macOS](../deploy/macos#configuration).
 
 ## Common
 

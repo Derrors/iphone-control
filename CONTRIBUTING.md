@@ -42,6 +42,8 @@ python3 -m venv .venv && .venv/bin/pip install -r tests/device/requirements.txt
 .venv/bin/python tests/device/run.py '[["iphone_launch_app", {"app": "设置"}], ["iphone_screenshot", {}]]'
 ```
 
+On macOS, the full checklist (setup, `debug` checks, coexistence with Finder, reconnect) is in [docs/dev/macos-verification.md](docs/dev/macos-verification.md).
+
 It prints every result with its wall time and saves screenshots to `./shots`. Set `MCP_CMD` for a source install (for example `MCP_CMD="iphone-control mcp"`). Please mention in the pull request what you ran on which device and iOS version.
 
 Notes:

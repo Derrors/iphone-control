@@ -13,7 +13,7 @@ The program's messages are in Chinese; here is what they mean.
 
 | `status` shows | Meaning | What to do |
 |---|---|---|
-| 手机未连接 | usbmuxd sees no phone | Check the cable and unlock the phone; with a host usbmuxd, `sudo systemctl mask usbmuxd` |
+| 手机未连接 | usbmuxd sees no phone | Check the cable and unlock the phone; with a usbmuxd on a Linux host, `sudo systemctl mask usbmuxd` |
 | 未配对 | Not paired | Run `setup` and tap *Trust* on the phone |
 | 开发者模式未打开 | Developer Mode is off | Run `setup` and follow the prompts |
 | 手机锁屏，隧道建不起来 | Not unlocked since the last reboot | Unlock it once by hand |
@@ -29,6 +29,8 @@ The program's messages are in Chinese; here is what they mean.
 - **Another tool holds the phone:** go-ios, pymobiledevice3 and similar tools conflict.
 - **Cable:** some cables only charge. If `lsusb` shows no Apple device (`05ac`), try another cable or port.
 - **After re-plugging:** Docker recovers within about a minute.
+- **Drops about once a minute while charging:** with *Settings → Battery → Charging → 80% Limit* on, the phone keeps starting and stopping charging near 80%, and each switch renegotiates USB-C power, which drops USB for 3–5 seconds. Set the limit to 100% on a phone used for automation.
+- **On a Mac:** Docker can't be used (no USB passthrough); see [macOS](../deploy/macos). usbmuxd is part of macOS; if `doctor` can't reach it, run `sudo launchctl kickstart -k system/com.apple.usbmuxd`.
 
 ## WDA won't start
 

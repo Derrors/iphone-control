@@ -10,7 +10,7 @@ iphone-control is a remote control for a phone: whoever can reach it can do anyt
 | Apple ID session, signing key | `account/` in the data directory | Whoever can read the data directory. The Apple ID password is never stored |
 | Pairing records | `lockdown/` in the data directory (Docker) | Whoever can read it; it lets the holder talk to the phone over USB without another *Trust* prompt |
 | Passcode (only with auto-unlock) | `secrets/passcode`, **plain text** | Whoever can read the data directory |
-| Notification keys | `.env` or the systemd environment file | Whoever can read that file |
+| Notification keys | `.env` or `~/.config/iphone-control/env` | Whoever can read that file |
 
 ## Built-in protections
 

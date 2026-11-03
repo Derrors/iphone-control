@@ -1,6 +1,6 @@
 # Getting Started
 
-Deploying with Docker takes about 15 minutes. Without Docker, see [Source / Binary](../deploy/source).
+Deploying with Docker on Linux takes about 15 minutes. Without Docker, see [Source / Binary](../deploy/source); on a Mac, see [macOS](../deploy/macos) — the setup wizard and client steps are the same as here.
 
 ## You need
 
@@ -10,7 +10,7 @@ Deploying with Docker takes about 15 minutes. Without Docker, see [Source / Bina
 - Internet access to Apple and GitHub from the host (set a proxy if needed)
 
 ::: warning One phone, one owner
-Don't run two copies of iphone-control, or other usbmuxd-based tools (go-ios, pymobiledevice3, …), against the same phone. If the host has usbmuxd installed, run `sudo systemctl mask usbmuxd` first.
+Don't run two copies of iphone-control, or other usbmuxd-based tools (go-ios, pymobiledevice3, …), against the same phone. If a Linux host has usbmuxd installed, run `sudo systemctl mask usbmuxd` first.
 :::
 
 ## 1. Start

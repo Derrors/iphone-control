@@ -12,7 +12,7 @@
 | `state.json` | 状态快照、上次重签结果 | 自动重建 |
 | `logs/` | 日志 | — |
 
-位置：Docker 部署是仓库目录下的 `./data`（root 所有，权限 0700）；从源码运行是 `~/.local/share/iphone-control`，配对记录在系统的 `/var/lib/lockdown`。
+位置：Docker 部署是仓库目录下的 `./data`（root 所有，权限 0700）；从源码运行是 `~/.local/share/iphone-control`，配对记录在系统的 `/var/lib/lockdown`；macOS 上数据目录也是 `~/.local/share/iphone-control`，配对记录由系统保存在 `/var/db/lockdown`（和 Finder 共用）。
 
 ::: danger 这些是秘密
 数据目录能用来登录你的 Apple ID 开发者账号、免确认地连接手机，开启自动解锁时还有明文锁屏密码。不要提交到 git，不要发给别人，备份也要加密保存。
@@ -34,6 +34,8 @@ tar czf iphone-control-data.tar.gz -C ~/.local/share iphone-control
 sudo tar czf lockdown.tar.gz /var/lib/lockdown     # 配对记录
 systemctl --user start iphone-control
 ```
+
+macOS：先在守护进程的终端按 Ctrl-C 停掉，再执行上面的第二条 `tar`。配对记录归系统管理，不用备份，换了 Mac 在手机上重新点一次「信任」即可。
 
 ## 迁移到新主机
 

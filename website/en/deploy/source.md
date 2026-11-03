@@ -1,6 +1,6 @@
 # Source / Binary
 
-Run it directly as a regular user, without Docker. You need the system usbmuxd (udev starts it when the phone is plugged in).
+Run it directly as a regular user on Linux, without Docker. You need the system usbmuxd (udev starts it when the phone is plugged in). On a Mac, see [macOS](./macos).
 
 ## Install
 

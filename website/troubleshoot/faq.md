@@ -11,7 +11,7 @@ iphone-control doctor    # 逐层检查，每项失败都给出修复办法
 
 | `status` 显示 | 含义 | 怎么办 |
 |---|---|---|
-| 手机未连接 | usbmuxd 看不到手机 | 检查数据线、解锁手机；宿主机装了 usbmuxd 时 `sudo systemctl mask usbmuxd` |
+| 手机未连接 | usbmuxd 看不到手机 | 检查数据线、解锁手机；Linux 宿主机装了 usbmuxd 时 `sudo systemctl mask usbmuxd` |
 | 未配对 | 没有配对记录 | 运行 `setup`，手机上点「信任」 |
 | 开发者模式未打开 | — | 运行 `setup`，按提示在手机上打开 |
 | 手机锁屏，隧道建不起来 | 重启后还没解锁过 | 手动解锁一次 |
@@ -27,6 +27,8 @@ iphone-control doctor    # 逐层检查，每项失败都给出修复办法
 - **别的工具占着手机：** 同时运行 go-ios、pymobiledevice3 等会冲突。
 - **数据线：** 有的线只能充电。`lsusb` 里看不到 Apple 设备（`05ac`）时换根线或换个口。
 - **拔插后：** Docker 部署大约 1 分钟内自动恢复。
+- **充电时大约每分钟断开一次：** 手机开着「设置 → 电池 → 充电 → 80% 上限」时，在 80% 附近反复开始、停止充电，每次 USB-C 重新协商供电都会让 USB 断开 3～5 秒。用来做自动化的手机把上限改成 100%。
+- **Mac 上：** 不能用 Docker（没有 USB 直通），见 [macOS](../deploy/macos)。usbmuxd 是系统自带的，`doctor` 报连不上时运行 `sudo launchctl kickstart -k system/com.apple.usbmuxd`。
 
 ## WDA 起不来
 

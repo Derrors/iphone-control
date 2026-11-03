@@ -7,7 +7,7 @@ export default defineConfig({
   // 发布到 GitHub Pages：https://derrors.github.io/iphone-control/
   base: '/iphone-control/',
   title: 'iphone-control',
-  description: '在 Linux 上通过 USB 控制真实 iPhone，以 MCP 工具交给 AI agent',
+  description: '在 Linux 或 macOS 上通过 USB 控制真实 iPhone，以 MCP 工具交给 AI agent',
   head: [['link', { rel: 'icon', type: 'image/svg+xml', href: '/iphone-control/logo.svg' }]],
   lastUpdated: true,
   cleanUrls: true,
@@ -46,6 +46,7 @@ export default defineConfig({
             items: [
               { text: 'Docker', link: '/deploy/docker' },
               { text: '从源码 / 二进制', link: '/deploy/source' },
+              { text: 'macOS', link: '/deploy/macos' },
               { text: '数据与备份', link: '/deploy/backup' },
             ],
           },
@@ -77,7 +78,7 @@ export default defineConfig({
     en: {
       label: 'English',
       lang: 'en-US',
-      description: 'Control a real iPhone over USB from Linux and hand it to AI agents as MCP tools',
+      description: 'Control a real iPhone over USB from Linux or macOS and hand it to AI agents as MCP tools',
       themeConfig: {
         nav: [
           { text: 'Home', link: '/en/' },
@@ -108,6 +109,7 @@ export default defineConfig({
             items: [
               { text: 'Docker', link: '/en/deploy/docker' },
               { text: 'Source / Binary', link: '/en/deploy/source' },
+              { text: 'macOS', link: '/en/deploy/macos' },
               { text: 'Data and Backups', link: '/en/deploy/backup' },
             ],
           },

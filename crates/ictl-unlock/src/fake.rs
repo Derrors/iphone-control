@@ -4,6 +4,8 @@
 //! - 只有「按 Home 后上滑」之后键盘才真正显示，显示前按键落空
 //! - 整串输完：对了就解锁，错了算一次输错并清空
 //! - 按 Home 不清空半截输入（iOS 27 真机）；右下角删除键每按一下删一位
+//! - 可选熄屏：熄屏时上滑无效，要先按 Home 点亮；可设成 XCTest 的 home 点不亮（iPhone 12 mini / iOS 26.4.1 真机），
+//!   只有 IOHID 的 AC Home 能点亮
 
 use std::sync::Mutex;
 use std::time::Duration;
@@ -49,6 +51,11 @@ pub struct State {
     stale_wda_lock: bool,
     /// 第 n 次有效按键之后，取元素树和点击都报错（隧道断了）
     broken_after_press: Option<u32>,
+    /// 屏幕熄灭：上滑无效
+    asleep: bool,
+    /// XCTest 的 home 点不亮屏幕
+    xctest_home_dead: bool,
+    pub hid_events: u32,
 }
 
 pub struct FakeLockScreen {
@@ -100,6 +107,13 @@ impl FakeLockScreen {
         self.st.lock().unwrap().stale_wda_lock = true;
     }
 
+    /// 屏幕熄灭；`xctest_home_dead` 时只有 IOHID 的 AC Home 能点亮
+    pub fn asleep(&self, xctest_home_dead: bool) {
+        let mut s = self.st.lock().unwrap();
+        s.asleep = true;
+        s.xctest_home_dead = xctest_home_dead;
+    }
+
     pub fn broken_after_press(&self, n: u32) {
         self.st.lock().unwrap().broken_after_press = Some(n);
     }
@@ -124,7 +138,20 @@ impl FakeLockScreen {
                 Value::Null
             }
             // iOS 27：Home 只唤醒/收起键，半截输入还在，键盘界面也还在（键隐藏但仍能按）
-            ("POST", "/wda/pressButton") => Value::Null,
+            ("POST", "/wda/pressButton") => {
+                if !s.xctest_home_dead {
+                    s.asleep = false;
+                }
+                Value::Null
+            }
+            ("POST", "/wda/performIoHidEvent") => {
+                s.hid_events += 1;
+                let b = body.unwrap();
+                if (b["page"].as_u64(), b["usage"].as_u64()) == (Some(0x0C), Some(0x223)) {
+                    s.asleep = false;
+                }
+                Value::Null
+            }
             ("POST", "/actions") => {
                 s.requests_to_actions += 1;
                 let idle = s.idle;
@@ -139,7 +166,9 @@ impl FakeLockScreen {
                     return (500, json!({"value": {"error": "unknown error", "message": msg}}));
                 }
                 if is_swipe {
-                    if s.swipes_to_ignore > 0 {
+                    if s.asleep {
+                        // 熄屏时上滑什么都不发生
+                    } else if s.swipes_to_ignore > 0 {
                         s.swipes_to_ignore -= 1;
                     } else {
                         s.shown = true;

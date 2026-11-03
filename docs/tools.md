@@ -22,7 +22,7 @@ Coordinates are in **points**, the same unit as the pixels of a full-screen `iph
 | `iphone_long_press` | `x`, `y`, `seconds` (default 1) | Holds one finger still, then lifts: context menus, home-screen quick actions, text selection |
 | `iphone_swipe` | `from_x`, `from_y`, `to_x`, `to_y`, `seconds` (default 0.3) | Returns after the list has stopped scrolling (up to 2.5 s). Swipe up (`from_y` > `to_y`) to see content further down |
 | `iphone_type_text` | `text`, `submit` (default false) | Types into the focused field (Chinese supported); fails if no keyboard is shown. Reads the field back afterwards: dropped trailing characters are typed again; if the field still doesn't match, it reports an error and does not press Return |
-| `iphone_press_button` | `button`: `home`, `volume_up`, `volume_down`, `lock` | `home` refuses to act while a system alert is on screen (it would have no effect) |
+| `iphone_press_button` | `button`: `home`, `volume_up`, `volume_down`, `lock` | `home` refuses to act while a system alert is on screen (it would have no effect). `home` is sent as an IOHID AC Home event and waits until the home screen is in front; `lock` presses the power key over IOHID. Each falls back to the XCTest/WebDriverAgent way if it had no effect |
 | `iphone_launch_app` | `app` (bundle id or display name, e.g. `设置`) | Cold-launches the app, or brings it back to where it was if it is already running. Waits until it is in the foreground; returns early and says so if a system alert is blocking it |
 | `iphone_terminate_app` | `app` | Force-quits, like swiping it away in the app switcher; unsaved input is lost. No error if it wasn't running |
 | `iphone_open_url` | `url` | Web pages open in Safari; URL schemes open their app |

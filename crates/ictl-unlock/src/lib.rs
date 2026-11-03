@@ -25,7 +25,9 @@ pub enum UnlockError {
     NotDigits,
     #[error("手机已锁屏；自动解锁之前失败过已停用，请人工解锁、核对密码后运行 iphone-control unlock-reset")]
     Disabled,
-    #[error("调不出锁屏密码键盘（一位都没输进去），请截图看看锁屏界面")]
+    #[error(
+        "调不出锁屏密码键盘（一位都没输进去），请截图看看锁屏界面；手机横放充电时会进入待机显示，那个界面调不出键盘，可在「设置 → 待机显示」里关掉"
+    )]
     NoKeypad,
     /// 输入不完整，不算输错
     #[error("第 {0} 位没按上，已停止（输入不完整不算输错），稍后再试")]
@@ -202,11 +204,17 @@ async fn unlock<T: Transport>(wda: &mut WdaClient<T>, cfg: &UnlockConfig, code: 
     let len = code.len() as u32;
 
     let mut keys = None;
-    for _ in 0..FIRST_DIGIT_ROUNDS {
+    for round in 0..FIRST_DIGIT_ROUNDS {
         // Home 唤醒（键盘已打开时 iOS 27 只是把键收起，半截输入还在，下面用删除键处理）
-        // 熄屏锁屏刚唤醒时上滑偶尔卡十几秒后报 `point.x != INFINITY`（WDA 还拿不到界面尺寸）：一位没输，算这轮落空重来
+        // 熄屏锁屏刚唤醒时上滑偶尔卡十几秒后报 `point.x != INFINITY`（WDA 还拿不到界面尺寸）：一位没输，算这轮落空重来。
+        // XCTest 的 home 和 IOHID 的 Home 轮流用：iPhone 12 mini（iOS 26.4.1）上 XCTest 的 home 点不亮熄灭的屏幕，
+        // IOHID 的能；iOS 27 上一直用的是 XCTest 的，第一轮还是它
         let woke = async {
-            wda.press_button("home").await?;
+            if round % 2 == 0 {
+                wda.press_button("home").await?;
+            } else {
+                wda.press_home_hid().await?;
+            }
             tokio::time::sleep(t.wake_settle).await;
             let (cx, h) = (screen.width / 2.0, screen.height);
             wda.actions(&swipe_steps((cx, h - 8.0), (cx, h * 0.45), 250)).await
@@ -443,6 +451,29 @@ mod tests {
         let (cfg, dir) = cfg(Some("123456"));
         assert_eq!(ensure_unlocked(&mut WdaClient::new(&fake), &cfg).await.unwrap(), Outcome::Unlocked);
         assert_eq!(fake.state().failed_attempts, 0);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// iPhone 12 mini（iOS 26.4.1）：熄屏锁屏时 XCTest 的 home 点不亮屏幕，第二轮改用 IOHID 的 Home
+    #[tokio::test]
+    async fn dark_screen_is_woken_by_hid_home_when_xctest_home_is_dead() {
+        let fake = FakeLockScreen::new("123456");
+        fake.asleep(true);
+        let (cfg, dir) = cfg(Some("123456"));
+        assert_eq!(ensure_unlocked(&mut WdaClient::new(&fake), &cfg).await.unwrap(), Outcome::Unlocked);
+        let s = fake.state();
+        assert_eq!((s.failed_attempts, s.hid_events), (0, 1));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// XCTest 的 home 能点亮屏幕时（iOS 27）第一轮就解开，不发 IOHID
+    #[tokio::test]
+    async fn dark_screen_woken_by_xctest_home_needs_no_hid() {
+        let fake = FakeLockScreen::new("123456");
+        fake.asleep(false);
+        let (cfg, dir) = cfg(Some("123456"));
+        assert_eq!(ensure_unlocked(&mut WdaClient::new(&fake), &cfg).await.unwrap(), Outcome::Unlocked);
+        assert_eq!(fake.state().hid_events, 0);
         std::fs::remove_dir_all(dir).unwrap();
     }
 

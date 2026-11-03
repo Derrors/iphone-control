@@ -17,7 +17,7 @@ iphone-control is, by design, a remote control for a phone. Anyone who can talk 
 | Apple ID session tokens, development signing key and certificate | `account/` in the data directory (0700, key 0600) | Whoever can read the data directory. The Apple ID password itself is never stored |
 | Pairing records | `lockdown/` in the data directory (container) or the system's `/var/lib/lockdown` | Root on the host. A pairing record lets its holder talk to the phone over USB without another *Trust* prompt |
 | Lock-screen passcode | `secrets/passcode` in the data directory (0600), **plain text**, only if you ran `passcode set` | Whoever can read the data directory |
-| Notification credentials (Bark key, Telegram token) | `.env` or the systemd environment file | Whoever can read that file |
+| Notification credentials (Bark key, Telegram token) | `.env` or `~/.config/iphone-control/env` | Whoever can read that file |
 
 The data directory is `./data` next to `compose.yaml` for the container (root-owned, mode 0700) and `~/.local/share/iphone-control` for a source install.
 

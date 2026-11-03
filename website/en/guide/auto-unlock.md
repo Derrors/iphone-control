@@ -23,6 +23,7 @@ docker exec -it iphone-control iphone-control passcode clear
 - After every digit it checks how many digits the passcode field shows and stops at once if they don't match (an incomplete entry is not a wrong attempt); only a first digit that didn't register is retried, up to 3 rounds.
 - If the phone is still locked after the full passcode, auto-unlock is **disabled immediately** and you are notified. It never tries a second time, so it can't pile up wrong attempts and trigger data erasure.
 - The first unlock after a reboot (BFU) always needs a person.
+- A phone charging on its side goes into **StandBy**, which doesn't bring up the passcode keypad, so auto-unlock fails. Turn it off under *Settings → StandBy* when you use auto-unlock.
 
 ## Re-enable after it was disabled
 

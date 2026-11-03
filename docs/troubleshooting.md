@@ -31,6 +31,7 @@ The program's own messages are in Simplified Chinese; the Chinese text is quoted
 - **Two usbmuxd instances:** a host `usbmuxd` (installed by many distributions, started by udev on plug-in) takes the phone away from the container. Mask it with `sudo systemctl mask usbmuxd`, or, for a source install, use the system one and don't run the container.
 - **Another tool holds the phone:** Xcode-less tools such as go-ios or pymobiledevice3 running at the same time can conflict. Stop them.
 - **Cable:** some cables only charge. If `lsusb` doesn't show an Apple device (vendor `05ac`), try another cable or port.
+- **Drops every minute or so while charging:** with *Settings → Battery → Charging → 80% Limit* on, the phone keeps starting and stopping charging near 80%, and each switch renegotiates USB-C power, which briefly disconnects USB (3–5 s). The daemon reconnects by itself, but in-flight actions fail. Set the limit to 100% while the phone is used for automation.
 
 ## WebDriverAgent won't start
 
@@ -56,10 +57,17 @@ The program's own messages are in Simplified Chinese; the Chinese text is quoted
 
 The HID fallback keeps a screen-mirroring session open while it is in use (the Dynamic Island shows a computer icon) and closes it after 30 seconds of inactivity. If the icon stays, restart the daemon; stopping it closes the session.
 
+## macOS
+
+- **No Docker:** Docker Desktop has no USB passthrough; run the binary directly as your regular user ([macOS guide](https://derrors.github.io/iphone-control/en/deploy/macos)). Don't run it with `sudo`: as root it starts a second usbmuxd and uses Linux system paths.
+- **usbmuxd:** it is part of macOS and always running. If `doctor` can't reach it: `sudo launchctl kickstart -k system/com.apple.usbmuxd`.
+- **Finder** can stay open on the phone; macOS's `remoted` doesn't take the connection away. Xcode's *Devices and Simulators* window is untested.
+
 ## Logs
 
 - Container: `docker logs iphone-control`, and the event log at `/var/lib/iphone-control/logs/daemon.log` inside the container (`./data/logs/` on the host).
 - Source install: `journalctl --user -u iphone-control` and `~/.local/share/iphone-control/logs/`.
+- macOS: the terminal running `iphone-control daemon`, and `~/.local/share/iphone-control/logs/`. For system logs use `/usr/bin/log` (zsh has a built-in `log`).
 - More detail: set `ICTL_LOG=info,ictl_wda::http=debug` to log every WebDriverAgent request with its duration. Remove it afterwards; it is verbose.
 
 ## Reporting a bug

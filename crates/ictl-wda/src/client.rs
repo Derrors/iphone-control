@@ -71,6 +71,12 @@ impl IdleSettings {
 }
 
 const SPRINGBOARD: &str = "com.apple.springboard";
+/// IOHID 消费者页（Consumer）
+const HID_PAGE_CONSUMER: u32 = 0x0C;
+/// 消费者页里的电源键
+const HID_POWER: u32 = 0x30;
+/// 消费者页里的 AC Home
+const HID_AC_HOME: u32 = 0x223;
 /// 启动 App 后至少过这么久才返回：App 切到前台的放大动画约 0.5 秒，期间的点击会被吞
 const LAUNCH_MIN: Duration = Duration::from_millis(800);
 
@@ -375,9 +381,28 @@ impl<T: Transport> WdaClient<T> {
         self.in_session("POST", "/wda/keys", Some(json!({"value": chars})), Duration::from_secs(120)).await.map(drop)
     }
 
-    /// home / volumeUp / volumeDown
+    /// home / volumeUp / volumeDown，走 XCTest 的 `XCUIDevice pressButton`。
+    /// iPhone 12 mini（iOS 26.4.1）上 home 不起作用但照样报成功，见 [`Self::press_home_hid`]
     pub async fn press_button(&mut self, name: &str) -> Result<()> {
         self.post("/wda/pressButton", json!({"name": name})).await.map(drop)
+    }
+
+    /// 直接发一个 IOHID 按键事件（`/wda/performIoHidEvent`），按住 `seconds` 秒
+    pub async fn hid_event(&mut self, page: u32, usage: u32, seconds: f64) -> Result<()> {
+        self.post("/wda/performIoHidEvent", json!({"page": page, "usage": usage, "duration": seconds})).await.map(drop)
+    }
+
+    /// 经 IOHID 按 Home（消费者页 AC Home）。iPhone 12 mini（iOS 26.4.1）实测：XCTest 的 home 无效时
+    /// 它能从 App 回到主屏、关掉 Spotlight、点亮熄灭的屏幕；同页的 Menu（0x40）没反应
+    pub async fn press_home_hid(&mut self) -> Result<()> {
+        self.hid_event(HID_PAGE_CONSUMER, HID_AC_HOME, 0.05).await
+    }
+
+    /// 经 IOHID 按电源键（按住 0.5 秒）。WDA 自己的 `/wda/lock` 在 iOS 27 上也是这么做的，
+    /// iOS 27 以下仍用 XCTest 的 `pressLockButton`，iPhone 12 mini（iOS 26.4.1）上锁不了屏。
+    /// 屏幕已熄灭时按它会把屏幕点亮，调用方要先确认没锁屏
+    pub async fn press_power_hid(&mut self) -> Result<()> {
+        self.hid_event(HID_PAGE_CONSUMER, HID_POWER, 0.5).await
     }
 
     pub async fn lock(&mut self) -> Result<()> {
@@ -518,6 +543,21 @@ mod tests {
         c.press_button("home").await.unwrap();
         let paths: Vec<_> = m.seen.lock().unwrap().iter().map(|s| s.1.clone()).collect();
         assert_eq!(paths, ["/session", "/session/A/wda/pressButton", "/session", "/session/B/wda/pressButton"]);
+    }
+
+    #[tokio::test]
+    async fn hid_buttons_send_consumer_page_events() {
+        let ok = r#"{"value":null}"#;
+        let m = Mock::with(&[(200, r#"{"sessionId":"A"}"#), (200, ok), (200, ok)]);
+        let mut c = WdaClient::new(&m);
+        c.press_home_hid().await.unwrap();
+        c.press_power_hid().await.unwrap();
+        let seen = m.seen.lock().unwrap().clone();
+        assert_eq!(seen[1].1, "/session/A/wda/performIoHidEvent");
+        let body = |i: usize| serde_json::from_str::<Value>(seen[i].2.as_deref().unwrap()).unwrap();
+        assert_eq!((body(1)["page"].as_u64(), body(1)["usage"].as_u64()), (Some(0x0C), Some(0x223)));
+        assert_eq!((body(2)["page"].as_u64(), body(2)["usage"].as_u64()), (Some(0x0C), Some(0x30)));
+        assert_eq!(body(2)["duration"], 0.5);
     }
 
     #[tokio::test]

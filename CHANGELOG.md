@@ -10,6 +10,11 @@ All notable changes to this project are documented here. The format is based on 
 
 - MCP tool descriptions now say when to use each tool instead of its siblings, what it returns and how it behaves (cold launch vs. resume, force-quit, swipe inertia), every parameter has a description, and every tool carries MCP annotations (title, read-only, destructive, idempotent). Tool names, parameters and results are unchanged.
 
+### Fixed
+
+- `home` and `lock` did nothing on an iPhone 12 mini (iOS 26.4.1) while reporting success, and auto-unlock could not wake a dark screen. Home is now pressed as an IOHID AC Home event, falling back to the XCTest button if the home screen doesn't come up; lock presses the power key over IOHID, falling back to WebDriverAgent's lock. Auto-unlock alternates the two ways of waking the screen.
+- When auto-unlock can't bring up the passcode keypad, the message now mentions StandBy (a phone charging on its side), which hides the keypad.
+
 ## [0.1.0] - 2026-11-02
 
 First public release.

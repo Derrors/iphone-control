@@ -27,8 +27,10 @@ const LOCAL_MOTION: f64 = 4.0;
 const STILL_TOLERANCE: i64 = 3;
 /// 滑动后最多等这么久让列表停下（快速滑动的惯性滚动约 2 秒）
 const SCROLL_SETTLE: Duration = Duration::from_millis(2500);
-/// 按 Home 后最多等这么久，确认主屏到了前台
+/// 按 Home 后最多等这么久，确认主屏到了前台（iPhone 12 mini 上 IOHID 的 Home 约 1.3～1.5 秒）
 const HOME_SETTLE: Duration = Duration::from_secs(2);
+/// 按电源键后最多等这么久，等 WDA 报锁屏（iPhone 12 mini 实测约 1 秒）
+const LOCK_WAIT: Duration = Duration::from_secs(3);
 const SPRINGBOARD: &str = "com.apple.springboard";
 
 impl Daemon {
@@ -480,25 +482,13 @@ impl Daemon {
                     "屏幕上有系统弹窗「{text}」挡着,按 Home 不会生效,没有按;先用 iphone_tap_element 点弹窗上的按钮"
                 ));
             }
-            match w.press_button(wda_name).await {
-                // 等主屏真的到前台再说「已按」（紧接着查状态时前台不再是旧 App）
-                Ok(()) if hid_button == Button::Home => {
-                    let deadline = Instant::now() + HOME_SETTLE;
-                    loop {
-                        let app = w.active_app().await.unwrap_or_default();
-                        if app == SPRINGBOARD {
-                            return Ok(format!("已按 {button}"));
-                        }
-                        if Instant::now() >= deadline {
-                            return Ok(format!(
-                                "已按 {button},但 {} 秒后前台还是 {app},先截图看看",
-                                HOME_SETTLE.as_secs()
-                            ));
-                        }
-                        tokio::time::sleep(Duration::from_millis(150)).await;
-                    }
-                }
-                Ok(()) => return Ok(format!("已按 {button}")),
+            let r = if hid_button == Button::Home {
+                press_home(w).await
+            } else {
+                w.press_button(wda_name).await.map(|()| format!("已按 {button}"))
+            };
+            match r {
+                Ok(text) => return Ok(text),
                 Err(WdaError::Unavailable(_)) => {}
                 Err(e) => return Err(e.to_string()),
             }
@@ -509,12 +499,15 @@ impl Daemon {
 
     async fn lock_screen(&self, g: &mut Inner) -> Result<String, String> {
         if let Some(w) = self.wda(g) {
-            // WDA 锁屏偶尔等 5 秒报 500（手机其实已锁）：确认锁了就不退到 HID（HID 会开屏幕媒体流）
-            let locked = match w.lock().await {
-                Ok(()) => true,
-                Err(e) => {
-                    tracing::info!("WDA 锁屏报错：{e}");
-                    w.wda_reports_locked().await.unwrap_or(false)
+            // 已经锁着就不按：熄屏时再按电源键会把屏幕点亮
+            let locked = matches!(w.locked().await, Ok(true)) || lock_by_power_hid(w).await || {
+                // WDA 锁屏偶尔等 5 秒报 500（手机其实已锁）：确认锁了就不退到 HID（HID 会开屏幕媒体流）
+                match w.lock().await {
+                    Ok(()) => true,
+                    Err(e) => {
+                        tracing::info!("WDA 锁屏报错：{e}");
+                        w.wda_reports_locked().await.unwrap_or(false)
+                    }
                 }
             };
             if locked {
@@ -589,6 +582,60 @@ impl Daemon {
 }
 
 /// 屏幕中间（上下各去掉一段，留给导航栏、标签栏）几乎没有元素：加载中、空白页
+/// 按 Home，等主屏真的到前台再说「已按」（紧接着查状态时前台不再是旧 App）。
+/// 先经 IOHID 按（XCTest 的 home 在 iPhone 12 mini / iOS 26.4.1 上不起作用却报成功），
+/// [`HOME_SETTLE`] 内没回到主屏再用 XCTest 的 home 补一次；IOHID 这一下报错也改用 XCTest 的
+async fn press_home(w: &mut WdaClient<DeviceTransport>) -> Result<String, WdaError> {
+    let mut app = String::new();
+    for via_hid in [true, false] {
+        let sent = if via_hid { w.press_home_hid().await } else { w.press_button("home").await };
+        match sent {
+            Ok(()) => {}
+            Err(e @ WdaError::Unavailable(_)) => return Err(e),
+            Err(e) if via_hid => {
+                tracing::info!("经 IOHID 按 Home 报错,改用 XCTest：{e}");
+                continue;
+            }
+            Err(e) => return Err(e),
+        }
+        let deadline = Instant::now() + HOME_SETTLE;
+        loop {
+            app = w.active_app().await.unwrap_or_default();
+            if app == SPRINGBOARD {
+                return Ok("已按 home".into());
+            }
+            if Instant::now() >= deadline {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(150)).await;
+        }
+        if via_hid {
+            tracing::info!("经 IOHID 按 Home 后前台还是 {app},改用 XCTest 再按一次");
+        }
+    }
+    Ok(format!("已按 home,但前台还是 {app},先截图看看"))
+}
+
+/// 经 IOHID 按电源键锁屏，等 WDA 报锁屏，最多 [`LOCK_WAIT`]。锁上了返回 true。
+/// WDA 的 `/wda/lock` 在 iOS 27 以下用 XCTest 的 `pressLockButton`，iPhone 12 mini（iOS 26.4.1）上锁不了屏
+async fn lock_by_power_hid(w: &mut WdaClient<DeviceTransport>) -> bool {
+    if let Err(e) = w.press_power_hid().await {
+        tracing::info!("经 IOHID 按电源键报错：{e}");
+        return false;
+    }
+    let deadline = Instant::now() + LOCK_WAIT;
+    loop {
+        if w.wda_reports_locked().await.unwrap_or(false) {
+            return true;
+        }
+        if Instant::now() >= deadline {
+            tracing::info!("经 IOHID 按电源键后 {} 秒还没锁屏,改用 WDA 的锁屏", LOCK_WAIT.as_secs());
+            return false;
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+}
+
 fn middle_is_empty(tree: &Tree, screen_h: f64) -> bool {
     let (top, bottom) = ((screen_h * 0.25) as i64, (screen_h * 0.85) as i64);
     tree.elements.iter().filter(|e| e.center.1 > top && e.center.1 < bottom).count() <= 1

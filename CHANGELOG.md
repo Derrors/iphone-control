@@ -6,6 +6,10 @@ All notable changes to this project are documented here. The format is based on 
 
 ## [Unreleased]
 
+### Changed
+
+- MCP tool descriptions now say when to use each tool instead of its siblings, what it returns and how it behaves (cold launch vs. resume, force-quit, swipe inertia), every parameter has a description, and every tool carries MCP annotations (title, read-only, destructive, idempotent). Tool names, parameters and results are unchanged.
+
 ## [0.1.0] - 2026-11-02
 
 First public release.

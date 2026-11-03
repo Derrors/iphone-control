@@ -17,18 +17,20 @@ Coordinates are in **points**, the same unit as the pixels of a full-screen `iph
 
 | Tool | Parameters | Notes |
 |---|---|---|
-| `iphone_tap` | `x`, `y` | |
+| `iphone_tap` | `x`, `y` | For targets without text (icons, games, maps); falls back to HID when WDA is down |
 | `iphone_tap_element` | `text`, `index` (default 0) | Exact label or name first, then substring. If the element's center is covered (floating toolbar, keyboard, overlay), taps an uncovered part of it; if it is fully covered, does not tap and says so |
-| `iphone_long_press` | `x`, `y`, `seconds` (default 1) | |
+| `iphone_long_press` | `x`, `y`, `seconds` (default 1) | Holds one finger still, then lifts: context menus, home-screen quick actions, text selection |
 | `iphone_swipe` | `from_x`, `from_y`, `to_x`, `to_y`, `seconds` (default 0.3) | Returns after the list has stopped scrolling (up to 2.5 s). Swipe up (`from_y` > `to_y`) to see content further down |
 | `iphone_type_text` | `text`, `submit` (default false) | Types into the focused field (Chinese supported); fails if no keyboard is shown. Reads the field back afterwards: dropped trailing characters are typed again; if the field still doesn't match, it reports an error and does not press Return |
 | `iphone_press_button` | `button`: `home`, `volume_up`, `volume_down`, `lock` | `home` refuses to act while a system alert is on screen (it would have no effect) |
-| `iphone_launch_app` | `app` (bundle id or display name, e.g. `设置`) | Waits until the app is in the foreground; returns early and says so if a system alert is blocking it |
-| `iphone_terminate_app` | `app` | |
+| `iphone_launch_app` | `app` (bundle id or display name, e.g. `设置`) | Cold-launches the app, or brings it back to where it was if it is already running. Waits until it is in the foreground; returns early and says so if a system alert is blocking it |
+| `iphone_terminate_app` | `app` | Force-quits, like swiping it away in the app switcher; unsaved input is lost. No error if it wasn't running |
 | `iphone_open_url` | `url` | Web pages open in Safari; URL schemes open their app |
 | `iphone_list_apps` | `include_system` (default false) | Name and bundle id of installed apps |
 
 When auto-unlock is configured, action tools unlock the phone first.
+
+Every tool carries MCP annotations: the five that only look at the screen (`iphone_status`, `iphone_screenshot`, `iphone_list_elements`, `iphone_list_apps`, `iphone_wait_for`) are `readOnlyHint: true`; the action tools are not, and taps, long-presses, `iphone_terminate_app` and `iphone_batch` are also marked `destructiveHint: true`, since what they hit on screen can delete or send things.
 
 ### Returning the screen after an action: `then`
 

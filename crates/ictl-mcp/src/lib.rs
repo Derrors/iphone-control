@@ -12,7 +12,7 @@ use rmcp::{
     ErrorData, RoleServer, ServerHandler, ServiceExt,
     model::{
         CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, InitializeResult, ListToolsResult,
-        PaginatedRequestParams, ServerCapabilities, Tool,
+        PaginatedRequestParams, ServerCapabilities, Tool, ToolAnnotations,
     },
     service::RequestContext,
 };
@@ -81,118 +81,286 @@ fn with_then(props: Value) -> Value {
     p
 }
 
-/// 15 个工具的定义（toolkit 的 13 个 + iphone_wait_for、iphone_batch）
+/// 操作类工具描述的共同结尾：返回什么、then 能做什么、自动解锁。
+/// `alert`：不带 then 时会不会查系统弹窗（见 [`wants_alert_check`]）
+fn action_desc(body: &str, example: &str, alert: bool) -> String {
+    let mut s = format!("{body}\n\n返回:一行结果文字,例如「{example}」。");
+    if alert {
+        s += "不带 then 时,如果系统弹窗挡着屏幕,结果里会提醒(这时操作落在了弹窗上)。";
+    }
+    s += "传 then=elements 或 then=screenshot 会等界面稳定后附上操作后的元素列表或截图,省一次单独的调用。\
+配置了锁屏密码时会先自动解锁。";
+    s
+}
+
+/// 只看不改的工具
+fn looking(title: &str) -> ToolAnnotations {
+    ToolAnnotations::with_title(title).read_only(true).open_world(false)
+}
+
+/// 改变手机状态的工具。open_world：点击、输入可能经 App 触达外部（发消息、下单），所以都标 true
+fn acting(title: &str, destructive: bool, idempotent: bool) -> ToolAnnotations {
+    ToolAnnotations::with_title(title).read_only(false).destructive(destructive).idempotent(idempotent).open_world(true)
+}
+
+/// 15 个工具的定义（toolkit 的 13 个 + iphone_wait_for、iphone_batch）。
+/// 描述可以改写，但工具名、参数、默认返回不改（docs/decisions.md D10）
 pub fn tools() -> Vec<Tool> {
-    let t = |name: &'static str, desc: &'static str, s: Map<String, Value>| Tool::new(name, desc, s);
+    let t = |name: &'static str, desc: String, s: Map<String, Value>, a: ToolAnnotations| {
+        Tool::new(name, desc, s).with_annotations(a)
+    };
+    let app = || {
+        json!({"app": {"type": "string",
+            "description": "Bundle ID(如 com.apple.Preferences)或显示名(如「设置」「微信」)"}})
+    };
     vec![
-        t("iphone_status", "查看连接状态:WDA 是否就绪、是否锁屏、当前前台 App、屏幕尺寸。", schema(json!({}), &[])),
+        t(
+            "iphone_status",
+            "查看手机和服务的状态:WDA(WebDriverAgent)是否就绪、是否锁屏、能否自动解锁、当前前台 App 的 Bundle ID、\
+屏幕尺寸(点)、守护进程状态。\n\n何时用:开始操作前确认手机可用;操作报错、怀疑 WDA 掉线或手机锁屏时排查。\
+WDA 不可用时会说明哪些功能受影响(读元素、按名字点击、启动 App、输入中文)。只读,不改变手机状态。"
+                .into(),
+            schema(json!({}), &[]),
+            looking("查看状态"),
+        ),
         t(
             "iphone_screenshot",
-            "截取当前屏幕。图像已缩放到点尺寸,像素坐标可直接用于点击和滑动。\n\n看不清小图标、小字时,传 x/y/width/height(点)放大这块区域:从原始高清截图裁剪,\n小区域再额外放大。返回文字里有放大倍数,图中坐标换算回屏幕点:x + 像素/倍数。",
+            "截取当前屏幕,返回 JPEG 图像和一行说明。图像已缩放到点尺寸,图中像素坐标可直接用于 iphone_tap、iphone_swipe。\n\n\
+看不清小图标、小字时,传 x/y/width/height(点,四个要一起给)放大这块区域:从原始高清截图裁剪,小区域再额外放大。\
+返回文字里有放大倍数,图中坐标换算回屏幕点:x + 像素/倍数。\n\n\
+何时用:游戏、地图、图片等没有元素树的界面,或要确认画面效果时。只想知道有哪些按钮、文字,iphone_list_elements 更快更省上下文。\
+操作后要看结果时,优先给操作工具带 then=screenshot。WDA 不可用时改用 CoreDevice 截图(说明里注明「HID」)。只读。"
+                .into(),
             schema(
                 json!({"x": num("区域左上角 x(点)"), "y": num("区域左上角 y(点)"), "width": num("区域宽(点)"), "height": num("区域高(点)")}),
                 &[],
             ),
+            looking("截图"),
         ),
         t(
             "iphone_list_elements",
-            "列出屏幕上带文字的界面元素:类型、标签、中心点坐标、尺寸。\n\nfilter: 只返回类型/标签/名字/值里包含该文字的元素(不区分大小写),例如 SearchField、Button。\n注意:按坐标判断是否在屏幕内,被弹窗遮住的元素也可能列出来,不确定时截图核对。",
+            "列出屏幕上带文字的界面元素,每行一个:类型、标签、名字、值、中心点坐标、尺寸(点)。\n\n\
+何时用:找按钮、输入框、列表项的文字和位置,比截图快、省上下文;找到后用 iphone_tap_element 按文字点。\
+游戏、地图等没有元素树的界面这里是空的,改用 iphone_screenshot。\n\n\
+注意:按坐标判断是否在屏幕内,被弹窗遮住的元素也可能列出来,不确定时截图核对。需要 WDA。只读。"
+                .into(),
             schema(
-                json!({"filter": {"type": "string", "default": ""}, "limit": {"type": "integer", "default": 150}}),
+                json!({
+                    "filter": {"type": "string", "default": "",
+                        "description": "只返回类型/标签/名字/值里包含这段文字的元素(不区分大小写),例如 SearchField、Button、登录"},
+                    "limit": {"type": "integer", "default": 150, "description": "最多列几个,多出的只报数量"}
+                }),
                 &[],
             ),
+            looking("列出界面元素"),
         ),
         t(
             "iphone_tap",
-            "点击屏幕坐标(点)。",
+            action_desc(
+                "点击屏幕上的一个坐标(单位是点,与 iphone_screenshot 全屏图的像素一致,左上角为原点)。\n\n\
+何时用:目标没有文字(图标、图片)、在游戏或地图里,或 iphone_list_elements 里找不到它时。\
+带文字的按钮、列表项优先用 iphone_tap_element,界面布局变了也点得准。按住用 iphone_long_press,滚动用 iphone_swipe。\n\n\
+行为:单指按下约 0.05 秒后抬起,点一次。不检查坐标上是什么,点之前先截图确认位置。\
+WDA 不可用时改用 CoreDevice HID(结果里注明「经 HID」)。",
+                "已点击 (120,300)",
+                true,
+            ),
             schema(with_then(json!({"x": num("x(点)"), "y": num("y(点)")})), &["x", "y"]),
+            acting("点击坐标", true, false),
         ),
         t(
             "iphone_tap_element",
-            "按文字点击元素:先找标签/名字完全相同的,找不到再找包含该文字的。中心被悬浮栏、键盘等盖住时改点没被盖住的部分,整个被盖住就不点。\n\nindex: 匹配到多个时点第几个(从 0 开始,顺序同 iphone_list_elements)。",
+            action_desc(
+                "按文字点击界面元素:先找标签/名字与 text 完全相同的,找不到再找包含 text 的。\
+中心被悬浮栏、键盘等盖住时改点没被盖住的部分,整个被盖住就不点。\n\n\
+何时用:按钮、列表项、标签页等带文字的元素,优先用它而不是按坐标点。不确定文字怎么写时先 iphone_list_elements。\
+没有文字的图标、游戏、地图用 iphone_tap。\n\n\
+行为:没找到、index 超出匹配个数或整个被盖住时不点,返回原因(不算出错;在 iphone_batch 里会让批量停下)。需要 WDA。",
+                "已点击 Button \"通用\"",
+                true,
+            ),
             schema(
-                with_then(json!({"text": {"type": "string"}, "index": {"type": "integer", "default": 0}})),
+                with_then(json!({
+                    "text": {"type": "string", "description": "元素的文字(标签或名字),先精确匹配再按包含匹配"},
+                    "index": {"type": "integer", "default": 0,
+                        "description": "匹配到多个时点第几个(从 0 开始,顺序同 iphone_list_elements)"}
+                })),
                 &["text"],
             ),
+            acting("按文字点击", true, false),
         ),
         t(
             "iphone_long_press",
-            "长按屏幕坐标(点)。",
+            action_desc(
+                "在屏幕坐标(点)上单指按住 seconds 秒再抬起,手指不移动。\n\n\
+何时用:要长按才出现的操作,例如主屏图标的快捷菜单、消息或图片的上下文菜单、选中文字。\
+普通点击用 iphone_tap 或 iphone_tap_element;要移动手指(滚动、拖滑块)用 iphone_swipe。\n\n\
+行为:只按一次。按得太短(不到约 0.5 秒)系统可能当成普通点击。长按弹出的菜单不会自己消失,\
+下一步先看屏幕(或直接带 then=screenshot)。需要 WDA。",
+                "已长按 (200,400) 1 秒",
+                true,
+            ),
             schema(
-                with_then(json!({"x": num("x(点)"), "y": num("y(点)"), "seconds": {"type": "number", "default": 1.0}})),
+                with_then(json!({
+                    "x": num("x(点)"),
+                    "y": num("y(点)"),
+                    "seconds": {"type": "number", "default": 1.0, "description": "按住几秒,默认 1"}
+                })),
                 &["x", "y"],
             ),
+            acting("长按", true, false),
         ),
         t(
             "iphone_swipe",
-            "从一点滑到另一点(点坐标)。向上滑看下面的内容:from_y 大、to_y 小。",
+            action_desc(
+                "单指从 (from_x, from_y) 按下,用 seconds 秒移到 (to_x, to_y) 后抬起(坐标单位是点)。\n\n\
+何时用:滚动列表或页面、左右翻页、拖动滑块。向上滑看下面的内容:from_y 大、to_y 小(例如 y 从 700 滑到 300);\
+向左滑看右边的内容:from_x 大、to_x 小。点击用 iphone_tap,原地按住用 iphone_long_press。\n\n\
+行为:seconds 越小滑得越快,快滑会带惯性多滚一段;要精确移动(滑块)把 seconds 调到 1 秒左右。\
+滑完会等列表停止滚动(最多 2.5 秒)再返回,还在滚就在结果里说明。WDA 不可用时改用 CoreDevice HID。",
+                "已滑动 (215,700) → (215,300)",
+                true,
+            ),
             schema(
-                with_then(
-                    json!({"from_x": num(""), "from_y": num(""), "to_x": num(""), "to_y": num(""), "seconds": {"type": "number", "default": 0.3}}),
-                ),
+                with_then(json!({
+                    "from_x": num("起点 x(点)"),
+                    "from_y": num("起点 y(点)"),
+                    "to_x": num("终点 x(点)"),
+                    "to_y": num("终点 y(点)"),
+                    "seconds": {"type": "number", "default": 0.3, "description": "滑动用时(秒),默认 0.3;越小越快、惯性越大"}
+                })),
                 &["from_x", "from_y", "to_x", "to_y"],
             ),
+            acting("滑动", false, false),
         ),
         t(
             "iphone_type_text",
-            "在当前获得焦点的输入框里输入文字(支持中文)。需要先点中输入框。submit=True 时末尾按回车。\n输完会读回输入框核对:少了结尾几个字会自动补上;对不上就报错,不按回车。",
+            action_desc(
+                "在当前获得焦点的输入框里输入文字(支持中文),从光标处输入,不会清空原有内容。submit=true 时末尾按回车。\n\n\
+何时用:搜索框、表单、聊天框等。要先点中输入框让键盘弹出;屏幕上没有键盘时报错,什么都不输。\
+回车可能会发送消息或提交表单,发送前先向用户确认。\n\n\
+行为:输完会读回输入框核对,少了结尾几个字会自动补上;对不上就报错,也不按回车。\
+WDA 不可用时改用 HID,只能输入美式键盘上的英文和符号。",
+                "已输入 4 个字符,并按了回车",
+                true,
+            ),
             schema(
-                with_then(json!({"text": {"type": "string"}, "submit": {"type": "boolean", "default": false}})),
+                with_then(json!({
+                    "text": {"type": "string", "description": "要输入的文字"},
+                    "submit": {"type": "boolean", "default": false, "description": "输完后按回车(搜索、发送、提交)"}
+                })),
                 &["text"],
             ),
+            acting("输入文字", false, false),
         ),
         t(
             "iphone_press_button",
-            "按硬件键:home(回主屏幕)、volume_up、volume_down、lock(锁屏;配置了密码时之后的操作会自动解锁)。",
+            action_desc(
+                "按硬件键:home(回主屏幕)、volume_up、volume_down、lock(锁屏)。\n\n\
+何时用:离开当前 App 回主屏幕用 home(App 留在后台,要彻底关掉用 iphone_terminate_app);调音量;锁屏。\
+锁屏后配置了密码的话,下一个操作会先自动解锁。\n\n\
+行为:系统弹窗挡着时按 home 不会生效,这时不按,并提示先点弹窗上的按钮。按 home 会等主屏真的到前台再返回。",
+                "已按 home",
+                false,
+            ),
             schema(
-                with_then(json!({"button": {"type": "string", "enum": ["home", "volume_up", "volume_down", "lock"]}})),
+                with_then(json!({"button": {"type": "string", "enum": ["home", "volume_up", "volume_down", "lock"],
+                    "description": "home、volume_up、volume_down 或 lock"}})),
                 &["button"],
             ),
+            acting("按硬件键", false, false),
         ),
         t(
             "iphone_list_apps",
-            "列出已安装的 App(名字和 Bundle ID)。include_system=True 时列出系统 App。",
-            schema(json!({"include_system": {"type": "boolean", "default": false}}), &[]),
+            "列出已安装的 App,每行一个:显示名和 Bundle ID。\n\n\
+何时用:iphone_launch_app、iphone_terminate_app 报「找不到名为…的 App」时,查准确的名字或 Bundle ID。\
+默认只列用户装的 App;设置、相机等系统 App 要 include_system=true(要多花几秒)。结果有缓存。只读。"
+                .into(),
+            schema(
+                json!({"include_system": {"type": "boolean", "default": false, "description": "同时列出系统 App"}}),
+                &[],
+            ),
+            looking("列出 App"),
         ),
         t(
             "iphone_launch_app",
-            "启动 App 并切到前台。app 可以是 Bundle ID,也可以是显示名(如「设置」「微信」)。",
-            schema(with_then(json!({"app": {"type": "string"}})), &["app"]),
+            action_desc(
+                "启动 App 并切到前台。app 是显示名时按已安装的 App 查找,找不到会报错,提示用 iphone_list_apps 查看。\n\n\
+何时用:打开某个 App。要直接进网页或 App 里的某个页面用 iphone_open_url。\
+想从首页重新开始(而不是回到上次的页面),先用 iphone_terminate_app 结束它再启动。\n\n\
+行为:App 已在后台运行时只切回前台,停在上次的页面;没在运行就冷启动。等 App 真的到前台才返回(最多约 8 秒);\
+被系统弹窗(如权限请求)挡住或启动慢时,结果里会说明。需要 WDA。",
+                "已启动 com.apple.Preferences",
+                true,
+            ),
+            schema(with_then(app()), &["app"]),
+            acting("启动 App", false, true),
         ),
         t(
             "iphone_terminate_app",
-            "结束 App 进程。app 可以是 Bundle ID 或显示名。",
-            schema(with_then(json!({"app": {"type": "string"}})), &["app"]),
+            action_desc(
+                "强制结束 App 进程,相当于在多任务界面里把它划掉。app 是显示名时按已安装的 App 查找,找不到会报错。\n\n\
+何时用:App 卡住或状态不对,或者想让下次 iphone_launch_app 从首页冷启动。只想离开 App 用 iphone_press_button 按 home,App 留在后台。\n\n\
+行为:App 里没保存的输入、正在播放的内容会丢失。App 本来没在运行也不报错。结束的是前台 App 时会回到主屏幕。需要 WDA。",
+                "已结束 com.apple.Preferences",
+                false,
+            ),
+            schema(with_then(app()), &["app"]),
+            acting("结束 App", true, true),
         ),
         t(
             "iphone_open_url",
-            "用系统默认方式打开链接或 URL Scheme(网页会在 Safari 打开)。",
-            schema(with_then(json!({"url": {"type": "string"}})), &["url"]),
+            action_desc(
+                "用系统默认方式打开网址或 URL Scheme:http/https 网页在 Safari 打开,URL Scheme 打开对应的 App。\n\n\
+何时用:直接进入某个网页或 App 里的某个页面,比启动 App 再一级级点快。只想打开 App 用 iphone_launch_app。\n\n\
+行为:有的 URL Scheme 系统会先弹窗问要不要打开,带 then=screenshot 确认。需要 WDA。",
+                "已打开 https://example.com",
+                true,
+            ),
+            schema(
+                with_then(json!({"url": {"type": "string", "description": "完整网址(含 https://)或 URL Scheme"}})),
+                &["url"],
+            ),
+            acting("打开链接", false, false),
         ),
         t(
             "iphone_wait_for",
-            "等包含某段文字的界面元素出现(例如页面加载完、弹窗出现),出现就立即返回;超时报错。代替反复截图轮询。输入框里的字不算。",
+            "等包含某段文字的界面元素出现(例如页面加载完、搜索结果出来、弹窗出现),出现就立即返回找到的元素和用时;超时报错。\n\n\
+何时用:操作后要等加载时代替反复截图轮询,每 0.3 秒查一次,不占上下文。输入框里的字不算(刚输入的搜索词不会被当成结果)。\
+需要 WDA。只读,不改变手机状态。"
+                .into(),
             schema(
-                json!({"text": {"type": "string"}, "timeout": {"type": "number", "default": 5, "description": "最多等几秒(不超过 30)"}}),
+                json!({
+                    "text": {"type": "string", "description": "要等的文字,元素的标签/名字/值包含它就算出现"},
+                    "timeout": {"type": "number", "default": 5, "description": "最多等几秒(不超过 30)"}
+                }),
                 &["text"],
             ),
+            looking("等文字出现"),
         ),
         t(
             "iphone_batch",
-            "按顺序执行几步操作,一次调用完成(最多 20 步),某一步出错就停下并说明是第几步。\n\n\
+            action_desc(
+                "按顺序执行几步操作,一次调用完成(最多 20 步),某一步出错就停下,说明停在第几步、后面几步没执行。\n\n\
 steps 每项是 {\"tool\": 工具名, 其余是该工具的参数},可用:iphone_tap、iphone_tap_element、iphone_long_press、\
 iphone_swipe、iphone_type_text、iphone_press_button、iphone_launch_app、iphone_terminate_app、iphone_open_url、\
-iphone_wait_for,以及 {\"tool\": \"wait\", \"seconds\": 秒数}(不超过 5)。\n\
-适合确定的连续操作;每步的结果不确定(例如点了以后不知道会跳到哪)时,还是一步步来。\n\
-then 同其他操作工具:全部做完后顺带返回界面。",
+iphone_wait_for,以及 {\"tool\": \"wait\", \"seconds\": 秒数}(不超过 5)。iphone_tap_element 没点到也会停下。\
+执行前先检查全部参数,有错一步都不执行。\n\n\
+何时用:结果确定的连续操作(按键、逐级点菜单、填表),每步省一轮往返。每步的结果不确定(点了以后不知道会跳到哪)时,还是一步步来。\
+then 在全部做完(或停下)后返回一次界面。",
+                "1. iphone_launch_app → 已启动 com.apple.Preferences(每步一行)",
+                true,
+            ),
             schema(
                 with_then(json!({
-                    "steps": {"type": "array", "items": {"type": "object"}, "description": "要执行的步骤"},
+                    "steps": {"type": "array", "items": {"type": "object"},
+                        "description": "要执行的步骤,1 到 20 个,例如 [{\"tool\": \"iphone_tap_element\", \"text\": \"通用\"}]"},
                     "reuse_elements": {"type": "boolean", "default": false,
                         "description": "这批操作不改变界面布局时(例如在同一个键盘上连按)设为 true:按名字点击复用最近读到的元素树,每步省 0.3~0.8 秒。会跳转页面的不要用,否则可能点到旧位置"}
                 })),
                 &["steps"],
             ),
+            acting("批量操作", true, false),
         ),
     ]
 }
@@ -578,6 +746,39 @@ mod tests {
         for t in tools().into_iter().filter(|t| t.name != "iphone_batch") {
             let no_required = t.input_schema.get("required").unwrap().as_array().unwrap().is_empty();
             assert_eq!(to_request(&t.name, &Map::new()).is_ok(), no_required, "{}", t.name);
+        }
+    }
+
+    /// 注解与工具实际行为一致：看界面的只读，改界面的不是；每个参数都有说明
+    #[test]
+    fn annotations_and_param_docs() {
+        for t in tools() {
+            let a = t.annotations.as_ref().unwrap_or_else(|| panic!("{} 没有注解", t.name));
+            assert!(a.title.is_some(), "{}", t.name);
+            let probe = || {
+                let props = t.input_schema["properties"].as_object().unwrap();
+                let mut m = Map::new();
+                for k in t.input_schema["required"].as_array().unwrap() {
+                    let k = k.as_str().unwrap();
+                    let v = match props[k]["type"].as_str() {
+                        Some("number") => json!(1),
+                        Some("array") => json!([{"tool": "wait", "seconds": 0}]),
+                        _ if k == "button" => json!("home"),
+                        _ => json!("x"),
+                    };
+                    m.insert(k.to_owned(), v);
+                }
+                m
+            };
+            let read_only = match to_request(&t.name, &probe()) {
+                Ok(r) => !r.is_device_action(),
+                Err(_) => false, // iphone_batch
+            };
+            assert_eq!(a.read_only_hint, Some(read_only), "{}", t.name);
+            for (k, v) in t.input_schema["properties"].as_object().unwrap() {
+                let d = v["description"].as_str().unwrap_or_default();
+                assert!(!d.is_empty(), "{}.{k} 缺少说明", t.name);
+            }
         }
     }
 

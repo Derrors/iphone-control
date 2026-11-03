@@ -4,7 +4,7 @@ layout: home
 hero:
   name: iphone-control
   text: Let AI agents use a real iPhone
-  tagline: Control an iPhone over USB from Linux and hand it to Claude and other AI as MCP tools. No Mac, no paid developer account.
+  tagline: Control an iPhone over USB from Linux or a Mac and hand it to Claude and other AI as MCP tools. No Xcode, no paid developer account.
   image:
     src: /logo.svg
     alt: iphone-control
@@ -23,15 +23,15 @@ features:
   - icon: 🤖
     title: Tools for agents
     details: Screenshots, on-screen elements, tap by text, swipe, typing (Chinese too), apps, waiting for pages, multi-step batches — 15 MCP tools
-  - icon: 🐧
-    title: Just a Linux box
-    details: No Mac or Xcode. WebDriverAgent is signed with a free Apple ID and re-signed before the 7-day profile expires
+  - icon: 💻
+    title: Linux or Mac
+    details: No Mac needed on Linux, no Xcode needed on a Mac. WebDriverAgent is signed with a free Apple ID and re-signed before the 7-day profile expires
   - icon: 🔁
     title: Keeps itself running
     details: Pairs, mounts the Developer Disk Image, starts WDA, and recovers after unplugging, reboots and crashes
   - icon: 🛟
     title: Fallback path
-    details: When WDA is down, taps, swipes, buttons and screenshots still work through CoreDevice HID
+    details: When WDA is down, taps, swipes, buttons and screenshots still work through CoreDevice HID (iOS 27+)
   - icon: 🔔
     title: Tells you when it needs you
     details: Bark or Telegram notifications for failed re-signing, expired sessions, reboots that need the passcode, or going offline
@@ -40,7 +40,7 @@ features:
     details: WDA is reached through usbmuxd; nothing listens on the network. Auto-unlock is off by default
   - icon: 📦
     title: One binary
-    details: Written in Rust. One Docker command to deploy, or run it from source or a prebuilt binary
+    details: Written in Rust. One Docker command to deploy on Linux, or run it from source or a prebuilt binary; build from source on a Mac
   - icon: 🧭
     title: Fewer round trips
     details: Actions can return the resulting screen after waiting for it to settle, and flag loading pages and blocking alerts

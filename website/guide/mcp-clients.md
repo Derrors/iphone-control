@@ -38,6 +38,8 @@ claude mcp add iphone -s user -- docker exec -i iphone-control iphone-control mc
 }
 ```
 
+macOS 上没有 `XDG_RUNTIME_DIR`，socket 在 `~/.local/share/iphone-control/ctl.sock`，同样以 `mcp-config` 打印的为准。Claude Desktop 的配置文件在 `~/Library/Application Support/Claude/claude_desktop_config.json`。
+
 ::: warning 客户端和守护进程要在同一台机器上
 MCP 服务经本机的 Unix socket 找守护进程。客户端在另一台电脑上时，用 SSH 拉起，例如 `"command": "ssh", "args": ["主机", "docker", "exec", "-i", "iphone-control", "iphone-control", "mcp"]`。
 :::

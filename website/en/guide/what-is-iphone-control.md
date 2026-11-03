@@ -1,13 +1,13 @@
 # What is iphone-control?
 
-iphone-control lets an AI agent such as Claude use a real iPhone that is plugged into a Linux machine: look at the screen, tap buttons, type, open apps — like a person holding the phone.
+iphone-control lets an AI agent such as Claude use a real iPhone that is plugged into a Linux machine or a Mac: look at the screen, tap buttons, type, open apps — like a person holding the phone.
 
 It works as a set of [MCP](https://modelcontextprotocol.io) (Model Context Protocol) tools, so any MCP client — Claude Code, Claude Desktop, Cursor and others — can use it directly.
 
 ## What you can do with it
 
 - Let an agent get things done on the phone: look things up, fill in forms, change settings, play games.
-- Test your own app or website on a real device without a Mac.
+- Test your own app or website on a real device; a Linux box will do, no Mac needed.
 - Turn a spare iPhone into a device you can script remotely.
 
 ## How it works
@@ -18,15 +18,15 @@ It works as a set of [MCP](https://modelcontextprotocol.io) (Model Context Proto
 - A **daemon** runs all the time and owns the phone: it pairs, mounts the Developer Disk Image, opens a tunnel, and runs [WebDriverAgent](https://github.com/appium/WebDriverAgent) (WDA, an agent on top of Apple's XCTest automation) on the phone to read the screen, tap and type.
 - The **MCP server** is started by the AI client on demand and simply forwards tool calls to the daemon.
 - WDA is signed with your **free Apple ID**. Free signatures expire after 7 days; the daemon re-signs before that.
-- While WDA is unavailable (for example while it restarts), taps, swipes, buttons and screenshots go through CoreDevice HID instead.
+- While WDA is unavailable (for example while it restarts), taps, swipes, buttons and screenshots go through CoreDevice HID instead (iOS 27 and later).
 
 ## Compatibility
 
 | | |
 |---|---|
-| Host | Linux, x86_64 or arm64; Docker (Compose v2), or Rust 1.88+ to build from source |
-| Phone | iOS 17 or later |
-| Verified on | iPhone 15 Pro Max, iOS 27.0.1 |
+| Host | Linux, x86_64 or arm64: Docker (Compose v2), or Rust 1.88+ to build from source<br>macOS, Apple Silicon: Rust 1.88+ to build from source, see [macOS](../deploy/macos) |
+| Phone | iOS 17 or later; the HID fallback needs iOS 27 or later |
+| Verified on | iPhone 15 Pro Max, iOS 27.0.1 (Linux, macOS)<br>iPhone 12 mini, iOS 26.4.1 (Linux) |
 | Account | A free Apple ID; a dedicated one is recommended |
 
 Other models and iOS versions should work but are untested — [reports](https://github.com/Derrors/iphone-control/issues) are welcome.

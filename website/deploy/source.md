@@ -1,6 +1,6 @@
 # 从源码 / 二进制运行
 
-不用 Docker，以普通用户直接运行。需要系统的 usbmuxd（它由 udev 在插上手机时拉起）。
+在 Linux 上不用 Docker，以普通用户直接运行。需要系统的 usbmuxd（它由 udev 在插上手机时拉起）。在 Mac 上见 [macOS](./macos)。
 
 ## 安装
 

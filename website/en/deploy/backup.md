@@ -12,7 +12,7 @@
 | `state.json` | State snapshot, last signing result | Rebuilt automatically |
 | `logs/` | Logs | — |
 
-Location: `./data` in the repository directory for Docker (owned by root, mode 0700); `~/.local/share/iphone-control` for a source install, with pairing records in the system's `/var/lib/lockdown`.
+Location: `./data` in the repository directory for Docker (owned by root, mode 0700); `~/.local/share/iphone-control` for a source install, with pairing records in the system's `/var/lib/lockdown`. On macOS the data directory is also `~/.local/share/iphone-control`, and the system keeps pairing records in `/var/db/lockdown` (shared with Finder).
 
 ::: danger These are secrets
 The data directory can log in to your Apple ID developer account, connect to the phone without confirmation, and — with auto-unlock — contains the passcode in plain text. Never commit or share it, and keep backups encrypted.
@@ -34,6 +34,8 @@ tar czf iphone-control-data.tar.gz -C ~/.local/share iphone-control
 sudo tar czf lockdown.tar.gz /var/lib/lockdown     # pairing records
 systemctl --user start iphone-control
 ```
+
+macOS: stop the daemon with Ctrl-C in its terminal, then run the second `tar` above. Pairing records belong to the system and don't need a backup; on a new Mac, tap *Trust* on the phone once more.
 
 ## Move to a new host
 

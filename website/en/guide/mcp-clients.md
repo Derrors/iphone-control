@@ -38,6 +38,8 @@ For a source install, use the command that `mcp-config` prints, for example:
 }
 ```
 
+macOS has no `XDG_RUNTIME_DIR`, so the socket is `~/.local/share/iphone-control/ctl.sock`; again, use what `mcp-config` prints. Claude Desktop's configuration file is `~/Library/Application Support/Claude/claude_desktop_config.json`.
+
 ::: warning Client and daemon on the same machine
 The MCP server reaches the daemon through a local Unix socket. If the client runs on another computer, start it over SSH, e.g. `"command": "ssh", "args": ["host", "docker", "exec", "-i", "iphone-control", "iphone-control", "mcp"]`.
 :::

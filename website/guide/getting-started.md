@@ -1,6 +1,6 @@
 # 快速开始
 
-用 Docker 部署，大约 15 分钟。不用 Docker 见[从源码 / 二进制](../deploy/source)。
+在 Linux 上用 Docker 部署，大约 15 分钟。不用 Docker 见[从源码 / 二进制](../deploy/source)；用 Mac 的话见 [macOS](../deploy/macos)，安装向导和接入客户端的步骤与这里相同。
 
 ## 准备
 
@@ -10,7 +10,7 @@
 - 主机能访问苹果服务器和 GitHub；国内网络一般要配代理
 
 ::: warning 一部手机只接一份
-不要同时运行两份 iphone-control，或其他基于 usbmuxd 的工具（go-ios、pymobiledevice3 等）连同一部手机。宿主机装了 usbmuxd 的，先 `sudo systemctl mask usbmuxd`。
+不要同时运行两份 iphone-control，或其他基于 usbmuxd 的工具（go-ios、pymobiledevice3 等）连同一部手机。Linux 宿主机装了 usbmuxd 的，先 `sudo systemctl mask usbmuxd`。
 :::
 
 ## 1. 启动

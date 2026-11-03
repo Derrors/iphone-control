@@ -5,6 +5,7 @@
 - **Docker**：写在仓库目录的 `.env`（从 `.env.example` 复制），改完 `docker compose up -d` 重建容器。
 - **只写 compose 文件**：写在 `compose.yaml` 的 `environment:` 里（或同目录的 `.env` 加 `env_file`），改完同样 `docker compose up -d`。
 - **从源码运行**：写在 `~/.config/iphone-control/env`（systemd 用户服务会读），改完 `systemctl --user restart iphone-control`。
+- **macOS**：同样写在 `~/.config/iphone-control/env`，启动守护进程前加载，改完重启守护进程，见 [macOS](../deploy/macos#配置)。
 
 ## 常用
 

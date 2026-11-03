@@ -31,6 +31,7 @@ The program's own messages are in Simplified Chinese; the Chinese text is quoted
 - **Two usbmuxd instances:** a host `usbmuxd` (installed by many distributions, started by udev on plug-in) takes the phone away from the container. Mask it with `sudo systemctl mask usbmuxd`, or, for a source install, use the system one and don't run the container.
 - **Another tool holds the phone:** Xcode-less tools such as go-ios or pymobiledevice3 running at the same time can conflict. Stop them.
 - **Cable:** some cables only charge. If `lsusb` doesn't show an Apple device (vendor `05ac`), try another cable or port.
+- **Drops every minute or so while charging:** with *Settings → Battery → Charging → 80% Limit* on, the phone keeps starting and stopping charging near 80%, and each switch renegotiates USB-C power, which briefly disconnects USB (3–5 s). The daemon reconnects by itself, but in-flight actions fail. Set the limit to 100% while the phone is used for automation.
 
 ## WebDriverAgent won't start
 

@@ -4,7 +4,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
-use ictl_device::{Device, DeviceError, Tunnel};
+use ictl_device::{Device, DeviceError, SYSFS_USB, Tunnel, UsbDevice};
 use ictl_wda::{WdaClient, WdaError, WdaRunner, http::DeviceTransport};
 
 use crate::core::{Daemon, Inner, close_hid};
@@ -17,7 +17,6 @@ const WDA_START_TIMEOUT: Duration = Duration::from_secs(120);
 /// HID 会话空闲这么久就关掉。它持有屏幕媒体流，开着时 iOS 当作屏幕被远程查看：不会自动锁屏，
 /// 还会弹「viewed remotely」通知。重开约 0.5 秒
 pub(crate) const HID_IDLE: Duration = Duration::from_secs(30);
-pub(crate) const SYSFS_USB: &str = "/sys/bus/usb/devices";
 /// usbmuxd 起来后这么久内就退出，算「起不来」，按退避重试
 const USBMUXD_QUICK_EXIT: Duration = Duration::from_secs(30);
 const USBMUXD_MAX_DELAY: Duration = Duration::from_secs(300);
@@ -137,7 +136,7 @@ impl Daemon {
 
         match target {
             None => self.offline(g).await,
-            Some(d) => self.online(g, &d.udid).await,
+            Some(d) => self.online(g, &d).await,
         }
 
         let now = Instant::now();
@@ -176,25 +175,26 @@ impl Daemon {
         }
     }
 
-    async fn online(&self, g: &mut Inner, udid: &str) {
-        if g.device.as_ref().map(|d| d.udid.as_str()) != Some(udid) {
-            self.drop_session(g).await;
-            match Device::find(Some(udid)).await {
-                Ok(d) => {
-                    g.info = d.info().await.ok();
-                    let model = g
-                        .info
-                        .as_ref()
-                        .map(|i| format!(" {} iOS {}", i.product_type, i.product_version))
-                        .unwrap_or_default();
-                    self.log.log(&format!("手机在线{model}"));
-                    g.device = Some(d);
-                }
-                Err(e) => {
-                    self.log.log(&format!("打开设备失败：{e}"));
-                    return;
-                }
+    async fn online(&self, g: &mut Inner, seen: &UsbDevice) {
+        // 只比 UDID 不够：断开几秒又接上（短于离线判定、落在两轮巡检之间）时 UDID 不变，
+        // usbmuxd 却换了编号，旧句柄的每个连接都报 bad device，永远恢复不了
+        if !g.device.as_ref().is_some_and(|d| d.is_connection(seen)) {
+            if let Some(old) = g.device.take()
+                && old.udid == seen.udid
+            {
+                self.log.log(&format!(
+                    "手机重新接入（usbmuxd 编号 {} → {}），重建连接",
+                    old.device_id(),
+                    seen.device_id
+                ));
             }
+            self.drop_session(g).await;
+            let d = Device::from_usb(seen);
+            g.info = d.info().await.ok();
+            let model =
+                g.info.as_ref().map(|i| format!(" {} iOS {}", i.product_type, i.product_version)).unwrap_or_default();
+            self.log.log(&format!("手机在线{model}"));
+            g.device = Some(d);
             g.backoff.reset();
             if let Some(since) = g.offline_since.take()
                 && g.dedup.was_sent("offline")

@@ -1,10 +1,8 @@
 //! `iphone-control doctor`：逐层诊断，每项失败都给出修复办法。
 
-use std::path::Path;
 use std::time::Duration;
 
 use crate::core::{Daemon, Inner};
-use crate::supervise::SYSFS_USB;
 
 impl Daemon {
     pub(crate) async fn doctor(&self, g: &mut Inner) -> String {
@@ -19,6 +17,8 @@ impl Daemon {
                     "❌ 连不上 usbmuxd：{e}\n     → {}",
                     if self.cfg.manage_usbmuxd {
                         "由守护进程自动拉起，看数据目录 logs/usbmuxd.log；宿主机已有 usbmuxd 服务时设 ICTL_MANAGE_USBMUXD=0"
+                    } else if cfg!(target_os = "macos") {
+                        "macOS 自带 usbmuxd，应一直在运行：sudo launchctl kickstart -k system/com.apple.usbmuxd"
                     } else {
                         "用的是系统的 usbmuxd 服务（插上手机时由 udev 拉起）：确认已安装 usbmuxd、手机已插好"
                     }
@@ -26,11 +26,14 @@ impl Daemon {
                 fails += 1;
             }
         }
-        if ictl_device::apple_usb_present(Path::new(SYSFS_USB)) {
-            out.push("✅ USB 上有 Apple 设备".into());
-        } else {
-            out.push("❌ USB 上没有 Apple 设备\n     → 插好数据线;用 USB-C 转接头的话换一根试试".into());
-            fails += 1;
+        // 判断不了（不是 Linux/macOS）就不报，免得误报「没有设备」
+        match ictl_device::host_apple_usb_present().await {
+            Some(true) => out.push("✅ USB 上有 Apple 设备".into()),
+            Some(false) => {
+                out.push("❌ USB 上没有 Apple 设备\n     → 插好数据线;用 USB-C 转接头的话换一根试试".into());
+                fails += 1;
+            }
+            None => {}
         }
         match (&g.device, &g.info) {
             (Some(d), info) => {
@@ -47,6 +50,8 @@ impl Daemon {
                 out.push(
                     if self.cfg.manage_usbmuxd {
                         "❌ 守护进程看不到手机\n     → 等 30 秒,会自动重启 usbmuxd;仍不行就重启容器(或守护进程)"
+                    } else if cfg!(target_os = "macos") {
+                        "❌ 守护进程看不到手机\n     → 重新插拔数据线;仍不行就 sudo launchctl kickstart -k system/com.apple.usbmuxd"
                     } else {
                         "❌ 守护进程看不到手机\n     → 重新插拔数据线;仍不行就 sudo systemctl restart usbmuxd"
                     }

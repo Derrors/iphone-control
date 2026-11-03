@@ -134,6 +134,32 @@ pub fn apple_usb_present(root: &Path) -> bool {
         .any(|e| std::fs::read_to_string(e.path().join("idVendor")).map(|v| v.trim() == "05ac").unwrap_or(false))
 }
 
+/// Linux 上 USB 设备在 sysfs 里的目录
+pub const SYSFS_USB: &str = "/sys/bus/usb/devices";
+
+/// 宿主机 USB 上有没有 iPhone/iPad：Linux 读 sysfs（[`apple_usb_present`]），macOS 查 IORegistry。
+/// 判断不了（其他系统、`ioreg` 运行失败）返回 `None`，调用方应跳过这项检查而不是当成「没有」。
+pub async fn host_apple_usb_present() -> Option<bool> {
+    if cfg!(target_os = "linux") {
+        return Some(apple_usb_present(Path::new(SYSFS_USB)));
+    }
+    if !cfg!(target_os = "macos") {
+        return None;
+    }
+    // Mac 上没有 sysfs；Apple Silicon 自带的 Apple 设备（键盘、触控板）也不在 IOUSB 平面上，但外接的 Apple 配件会在，
+    // 所以按节点名认手机而不是只看厂商号
+    let out = tokio::process::Command::new("/usr/sbin/ioreg").args(["-p", "IOUSB", "-w0"]).output().await.ok()?;
+    out.status.success().then(|| ioreg_has_ios_device(&String::from_utf8_lossy(&out.stdout)))
+}
+
+/// `ioreg -p IOUSB` 的输出里有没有 iPhone/iPad/iPod 节点（形如 `+-o iPhone@00100000  <class IOUSBHostDevice, …>`）
+fn ioreg_has_ios_device(out: &str) -> bool {
+    out.lines().filter_map(|l| l.split("+-o ").nth(1)).any(|node| {
+        let name = node.split('@').next().unwrap_or("");
+        ["iPhone", "iPad", "iPod"].contains(&name)
+    })
+}
+
 /// usbmuxd 看到的 USB 设备（不含网络设备）。usbmuxd 没在运行时返回错误。
 pub async fn list_devices() -> Result<Vec<UsbDevice>> {
     // 不用 UsbmuxdConnection::default()：它固定连 /var/run/usbmuxd，不看 USBMUXD_SOCKET_ADDRESS
@@ -163,6 +189,11 @@ impl Device {
             None => devices.into_iter().next(),
         }
         .ok_or(DeviceError::NotConnected)?;
+        Ok(Self::from_usb(&dev))
+    }
+
+    /// 用 [`list_devices`] 列出的一项建句柄（不连 usbmuxd）
+    pub fn from_usb(dev: &UsbDevice) -> Self {
         let provider = UsbmuxdProvider {
             addr: usbmuxd_addr(),
             tag: dev.device_id,
@@ -170,7 +201,17 @@ impl Device {
             device_id: dev.device_id,
             label: LABEL.into(),
         };
-        Ok(Self { udid: dev.udid, provider: Arc::new(provider) })
+        Self { udid: dev.udid.clone(), provider: Arc::new(provider) }
+    }
+
+    /// usbmuxd 给这次连接分的编号。拔插、USB 重新枚举后会变（UDID 不变），旧编号的连接全部失效
+    pub fn device_id(&self) -> u32 {
+        self.provider.device_id
+    }
+
+    /// 是不是 `dev` 这一次连接：UDID 和 usbmuxd 编号都要相同
+    pub fn is_connection(&self, dev: &UsbDevice) -> bool {
+        self.udid == dev.udid && self.device_id() == dev.device_id
     }
 
     /// 给 XCTest、WDA 等需要自己建连接的组件用
@@ -334,5 +375,34 @@ impl Tunnel {
     /// 关掉隧道：先停 HID 的屏幕媒体流
     pub async fn close(mut self) {
         self.close_hid().await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn same_udid_new_mux_id_is_new_connection() {
+        let first = UsbDevice { udid: "00008130-0019295E012B803A".into(), device_id: 2 };
+        let d = Device::from_usb(&first);
+        assert_eq!(d.device_id(), 2);
+        assert!(d.is_connection(&first));
+        // 拔插后 usbmuxd 重新编号：UDID 相同也要当成新连接
+        assert!(!d.is_connection(&UsbDevice { device_id: 3, ..first.clone() }));
+        assert!(!d.is_connection(&UsbDevice { udid: "other".into(), ..first }));
+    }
+
+    #[test]
+    fn ioreg_finds_phone_node() {
+        let with = "+-o Root  <class IORegistryEntry, id 0x100000100, retain 35>
+  +-o AppleT8122USBXHCI@00000000  <class AppleT8122USBXHCI, id 0x1000003f8, registered>
+  | +-o iPhone@00100000  <class IOUSBHostDevice, id 0x10009fe32, registered, matched>
+  +-o AppleT8122USBXHCI@02000000  <class AppleT8122USBXHCI, id 0x100000424, registered>";
+        assert!(ioreg_has_ios_device(with));
+        let without = "+-o Root  <class IORegistryEntry>
+  +-o AppleT8122USBXHCI@00000000  <class AppleT8122USBXHCI>
+  | +-o Magic Keyboard@00100000  <class IOUSBHostDevice>";
+        assert!(!ioreg_has_ios_device(without));
     }
 }

@@ -10,6 +10,11 @@ All notable changes to this project are documented here. The format is based on 
 
 - MCP tool descriptions now say when to use each tool instead of its siblings, what it returns and how it behaves (cold launch vs. resume, force-quit, swipe inertia), every parameter has a description, and every tool carries MCP annotations (title, read-only, destructive, idempotent). Tool names, parameters and results are unchanged.
 
+### Fixed
+
+- The daemon no longer gets stuck on "bad device" after the phone disconnects for a few seconds (unplugging, USB-C power renegotiation): it now notices that usbmuxd gave the phone a new device number and reconnects.
+- `doctor` on macOS no longer reports "no Apple device on USB" while the phone is connected, and its fix hints use `launchctl` instead of `systemctl`.
+
 ## [0.1.0] - 2026-11-02
 
 First public release.

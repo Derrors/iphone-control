@@ -6,20 +6,23 @@ All notable changes to this project are documented here. The format is based on 
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-11-04
+
 ### Added
 
-- macOS (Apple Silicon) support: build from source and run as a regular user with the system usbmuxd, no Xcode needed. Verified on macOS 26.6.2 with an iPhone 15 Pro Max (iOS 27.0.1), including alongside Finder. CI builds and tests on macOS. See the new macOS guide.
+- macOS (Apple Silicon) support: build from source and run as a regular user with the system usbmuxd; no Xcode needed. See the new macOS guide.
 
 ### Changed
 
-- MCP tool descriptions now say when to use each tool instead of its siblings, what it returns and how it behaves (cold launch vs. resume, force-quit, swipe inertia), every parameter has a description, and every tool carries MCP annotations (title, read-only, destructive, idempotent). Tool names, parameters and results are unchanged.
+- MCP tool descriptions now explain when to use each tool, what it returns and how it behaves; every parameter is documented and every tool carries MCP annotations. Tool names, parameters and results are unchanged.
+- Release binaries are named `iphone-control-vX.Y.Z-linux-<arch>.tar.gz`.
 
 ### Fixed
 
-- The daemon no longer gets stuck on "bad device" after the phone disconnects for a few seconds (unplugging, USB-C power renegotiation): it now notices that usbmuxd gave the phone a new device number and reconnects. This affected setups using the system usbmuxd (macOS, Linux source installs); the Docker image restarts its own usbmuxd and already recovered.
-- `doctor` on macOS no longer reports "no Apple device on USB" while the phone is connected, and its fix hints use `launchctl` instead of `systemctl`.
-- `home` and `lock` did nothing on an iPhone 12 mini (iOS 26.4.1) while reporting success, and auto-unlock could not wake a dark screen. Home is now pressed as an IOHID AC Home event, falling back to the XCTest button if the home screen doesn't come up; lock presses the power key over IOHID, falling back to WebDriverAgent's lock. Auto-unlock alternates the two ways of waking the screen.
-- When auto-unlock can't bring up the passcode keypad, the message now mentions StandBy (a phone charging on its side), which hides the keypad.
+- `home` and `lock` had no effect on some phones (seen on an iPhone 12 mini, iOS 26.4.1), and auto-unlock couldn't wake a dark screen there.
+- After a disconnect of a few seconds, setups using the system usbmuxd (macOS, Linux source installs) got stuck on "bad device"; they now reconnect by themselves.
+- `doctor` on macOS no longer reports "no Apple device on USB", and its hints use macOS commands.
+- When auto-unlock can't bring up the passcode keypad, the message mentions StandBy, which hides the keypad.
 
 ## [0.1.0] - 2026-11-02
 
@@ -37,5 +40,6 @@ First public release.
 - Docker image (single binary plus Debian's usbmuxd, not privileged) with a generated third-party license list, published to `ghcr.io/derrors/iphone-control` for linux/amd64 and linux/arm64.
 - Running without Docker, from source or from the prebuilt Linux binaries (x86_64, aarch64): as a regular user with the system usbmuxd, XDG data and socket paths, the unsigned WebDriverAgent downloaded and checksum-verified before the first signing, `mcp-config` printing a direct command, and a systemd user service.
 
-[Unreleased]: https://github.com/Derrors/iphone-control/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/Derrors/iphone-control/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/Derrors/iphone-control/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/Derrors/iphone-control/releases/tag/v0.1.0

@@ -1967,7 +1967,7 @@ dependencies = [
 
 [[package]]
 name = "ictl-daemon"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
@@ -1987,7 +1987,7 @@ dependencies = [
 
 [[package]]
 name = "ictl-device"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "idevice",
  "plist",
@@ -2001,7 +2001,7 @@ dependencies = [
 
 [[package]]
 name = "ictl-mcp"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "ictl-protocol",
@@ -2012,7 +2012,7 @@ dependencies = [
 
 [[package]]
 name = "ictl-protocol"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "libc",
  "serde",
@@ -2022,7 +2022,7 @@ dependencies = [
 
 [[package]]
 name = "ictl-sign"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "plist",
  "plume_core",
@@ -2035,7 +2035,7 @@ dependencies = [
 
 [[package]]
 name = "ictl-unlock"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "ictl-wda",
  "serde_json",
@@ -2047,7 +2047,7 @@ dependencies = [
 
 [[package]]
 name = "ictl-wda"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "base64 0.23.1",
  "ictl-device",
@@ -2258,7 +2258,7 @@ dependencies = [
 
 [[package]]
 name = "iphone-control"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "clap",

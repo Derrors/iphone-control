@@ -11,9 +11,8 @@
 
   <p align="center">
     <a href="https://github.com/Derrors/iphone-control/releases/latest"><img src="https://img.shields.io/github/v/release/Derrors/iphone-control?style=flat-square" alt="Release"></a>
-    <a href="https://github.com/Derrors/iphone-control/pkgs/container/iphone-control"><img src="https://img.shields.io/badge/ghcr.io-derrors%2Fiphone--control-2496ED?style=flat-square&logo=docker&logoColor=white" alt="Docker"></a>
     <img src="https://img.shields.io/badge/iOS-17%2B-black?style=flat-square&logo=apple" alt="iOS">
-    <img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS-555?style=flat-square" alt="平台：Linux | macOS">
+    <img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS-0E7490?style=flat-square" alt="平台：Linux | macOS">
     <img src="https://img.shields.io/badge/MCP-15%20tools-8A2BE2?style=flat-square" alt="MCP">
     <a href="Cargo.toml"><img src="https://img.shields.io/badge/Rust-1.88%2B-CE422B?style=flat-square&logo=rust&logoColor=white" alt="Rust"></a>
     <a href="LICENSE"><img src="https://img.shields.io/github/license/Derrors/iphone-control?style=flat-square" alt="License"></a>

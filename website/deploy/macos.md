@@ -9,8 +9,7 @@ iphone-control 也能直接跑在 Mac 上：用 macOS 自带的 usbmuxd，不需
 ## 需要
 
 - Apple Silicon 的 Mac
-- Xcode 命令行工具（提供 C 编译器和 git），**不需要**完整的 Xcode
-- Rust 1.88 以上
+- 用预编译二进制什么都不用装；从源码编译要 Xcode 命令行工具和 Rust 1.88 以上。都**不需要**完整的 Xcode
 - 一部 iOS 17 以上的 iPhone，用能**传数据**的线连接
 - 一个免费 Apple ID（建议专门注册一个）
 
@@ -20,7 +19,34 @@ Docker Desktop 在 Mac 上把容器跑在 Linux 虚拟机里，不支持 USB 直
 
 ## 安装
 
-目前 Releases 里没有 macOS 的预编译二进制，要从源码编译（M3 Pro 上约 2 分半）：
+### 预编译二进制
+
+从 0.1.2 起，[Releases](https://github.com/Derrors/iphone-control/releases) 里有 macOS（Apple Silicon，macOS 11 以上）的压缩包 `iphone-control-<版本>-macos-arm64.tar.gz`。在终端里下载安装（把 `V` 换成最新版本号）：
+
+```bash
+V=v0.1.2
+curl -fsSLO https://github.com/Derrors/iphone-control/releases/download/$V/iphone-control-$V-macos-arm64.tar.gz
+curl -fsSLO https://github.com/Derrors/iphone-control/releases/download/$V/iphone-control-$V-macos-arm64.tar.gz.sha256
+shasum -a 256 -c iphone-control-$V-macos-arm64.tar.gz.sha256   # 应显示 OK
+tar xzf iphone-control-$V-macos-arm64.tar.gz
+mkdir -p ~/.local/bin && install -m 755 iphone-control-$V-macos-arm64/iphone-control ~/.local/bin/
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zprofile && source ~/.zprofile   # 只需做一次
+iphone-control --version
+```
+
+::: tip 被系统拦下「无法验证开发者」
+二进制没有经过苹果公证（那要付费开发者账号）。像上面这样用 `curl` 下载的不会被拦；用浏览器下载的会带上隔离标记，第一次运行时被 Gatekeeper 拦下。去掉标记即可：
+
+```bash
+xattr -d com.apple.quarantine ~/.local/bin/iphone-control
+```
+
+也可以在「系统设置 → 隐私与安全性」里点「仍要打开」。
+:::
+
+### 从源码编译
+
+需要 Xcode 命令行工具和 Rust 1.88 以上，M3 Pro 上约 2 分半：
 
 ```bash
 xcode-select --install                                         # 已经装过会提示
@@ -62,7 +88,7 @@ iphone-control mcp-config    # 打印注册命令，复制运行即可
 
 ```bash
 mkdir -p ~/.config/iphone-control
-cp .env.example ~/.config/iphone-control/env    # 按需填代理、通知
+cp .env.example ~/.config/iphone-control/env    # 按需填代理、通知（预编译包里叫 env.example）
 set -a; . ~/.config/iphone-control/env; set +a
 iphone-control daemon
 ```
@@ -102,6 +128,8 @@ sudo launchctl kickstart -k system/com.apple.usbmuxd
 
 ## 升级
 
+预编译二进制：按「安装」一节下载新版本，覆盖 `~/.local/bin/iphone-control`。从源码编译：
+
 ```bash
 cd iphone-control && git pull
 cargo install --path apps/iphone-control --locked
@@ -114,7 +142,7 @@ cargo install --path apps/iphone-control --locked
 先在守护进程的终端按 Ctrl-C 停掉，然后：
 
 ```bash
-cargo uninstall iphone-control
+rm -f ~/.local/bin/iphone-control      # 预编译二进制；从源码编译的用 cargo uninstall iphone-control
 rm -rf ~/.local/share/iphone-control ~/.config/iphone-control   # 会删掉 Apple ID 会话和签好的 WDA
 ```
 
@@ -124,7 +152,7 @@ rm -rf ~/.local/share/iphone-control ~/.config/iphone-control   # 会删掉 Appl
 
 | | Linux（从源码运行） | macOS |
 |---|---|---|
-| 安装 | 预编译二进制或从源码编译 | 只能从源码编译 |
+| 安装 | 预编译二进制或从源码编译 | 同左（只有 Apple Silicon 的包） |
 | 常驻 | systemd 用户服务 | 还没有 launchd 配置，在终端里前台运行 |
 | usbmuxd | 系统包，插上手机时由 udev 拉起 | macOS 自带，一直在运行 |
 | 数据目录 | `~/.local/share/iphone-control` | 同左（不是 Mac 习惯的 `~/Library/Application Support`） |

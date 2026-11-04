@@ -9,8 +9,7 @@ Fully verified on a MacBook Pro (Apple M3 Pro) / macOS 26.6.2 with an iPhone 15 
 ## You need
 
 - An Apple Silicon Mac
-- The Xcode Command Line Tools (C compiler and git). Full Xcode is **not** needed
-- Rust 1.88 or later
+- Nothing else for the prebuilt binary; to build from source, the Xcode Command Line Tools and Rust 1.88+. Full Xcode is **not** needed
 - An iPhone on iOS 17+, connected with a cable that carries **data**
 - A free Apple ID (a dedicated one is recommended)
 
@@ -20,7 +19,34 @@ Docker Desktop on a Mac runs containers in a Linux VM without USB passthrough, s
 
 ## Install
 
-There is no prebuilt macOS binary in Releases yet; build from source (about 2½ minutes on an M3 Pro):
+### Prebuilt binary
+
+Since 0.1.2, [Releases](https://github.com/Derrors/iphone-control/releases) has a macOS archive (Apple Silicon, macOS 11+): `iphone-control-<version>-macos-arm64.tar.gz`. Download and install it from a terminal (set `V` to the latest version):
+
+```bash
+V=v0.1.2
+curl -fsSLO https://github.com/Derrors/iphone-control/releases/download/$V/iphone-control-$V-macos-arm64.tar.gz
+curl -fsSLO https://github.com/Derrors/iphone-control/releases/download/$V/iphone-control-$V-macos-arm64.tar.gz.sha256
+shasum -a 256 -c iphone-control-$V-macos-arm64.tar.gz.sha256   # should print OK
+tar xzf iphone-control-$V-macos-arm64.tar.gz
+mkdir -p ~/.local/bin && install -m 755 iphone-control-$V-macos-arm64/iphone-control ~/.local/bin/
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zprofile && source ~/.zprofile   # once
+iphone-control --version
+```
+
+::: tip "Developer cannot be verified"
+The binary isn't notarized by Apple (that needs a paid developer account). Downloaded with `curl` as above it runs as is; downloaded with a browser it carries a quarantine flag and Gatekeeper blocks the first run. Remove the flag:
+
+```bash
+xattr -d com.apple.quarantine ~/.local/bin/iphone-control
+```
+
+or click *Open Anyway* under *System Settings → Privacy & Security*.
+:::
+
+### Build from source
+
+You need the Xcode Command Line Tools and Rust 1.88+; about 2½ minutes on an M3 Pro:
 
 ```bash
 xcode-select --install                                         # says so if already installed
@@ -62,7 +88,7 @@ Settings go in `~/.config/iphone-control/env` (same format as `.env.example` in 
 
 ```bash
 mkdir -p ~/.config/iphone-control
-cp .env.example ~/.config/iphone-control/env    # proxy, notifications, …
+cp .env.example ~/.config/iphone-control/env    # proxy, notifications, … (env.example in the prebuilt archive)
 set -a; . ~/.config/iphone-control/env; set +a
 iphone-control daemon
 ```
@@ -102,6 +128,8 @@ sudo launchctl kickstart -k system/com.apple.usbmuxd
 
 ## Upgrade
 
+Prebuilt binary: download the new version as under *Install* and replace `~/.local/bin/iphone-control`. From source:
+
 ```bash
 cd iphone-control && git pull
 cargo install --path apps/iphone-control --locked
@@ -114,7 +142,7 @@ Then restart the daemon.
 Stop the daemon with Ctrl-C in its terminal, then:
 
 ```bash
-cargo uninstall iphone-control
+rm -f ~/.local/bin/iphone-control      # prebuilt binary; for a source build: cargo uninstall iphone-control
 rm -rf ~/.local/share/iphone-control ~/.config/iphone-control   # deletes the Apple ID session and signed WDA
 ```
 
@@ -124,7 +152,7 @@ On the phone, delete the WebDriverAgent app; its profile under *VPN & Device Man
 
 | | Linux (source install) | macOS |
 |---|---|---|
-| Install | Prebuilt binary or build from source | Build from source only |
+| Install | Prebuilt binary or build from source | Same (Apple Silicon archive only) |
 | Keep running | systemd user service | No launchd configuration yet; run in a terminal |
 | usbmuxd | System package, started by udev on plug-in | Built into macOS, always running |
 | Data directory | `~/.local/share/iphone-control` | Same (not the usual `~/Library/Application Support`) |

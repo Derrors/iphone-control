@@ -94,16 +94,19 @@ claude mcp add iphone -s user -- docker exec -i iphone-control iphone-control mc
 
 ### macOS
 
-Mac 上的 Docker 不能把 USB 设备交给容器，所以在 Mac（Apple Silicon，不需要 Xcode）上要编译出二进制，以普通用户直接运行。需要 Xcode 命令行工具（`xcode-select --install`）和 Rust 1.88+（[rustup](https://rustup.rs)）：
+Mac 上的 Docker 不能把 USB 设备交给容器，所以在 Mac（Apple Silicon，不需要 Xcode）上以普通用户直接运行二进制。从 [Releases](https://github.com/Derrors/iphone-control/releases) 下载（`…-macos-arm64.tar.gz`）：
 
 ```bash
-git clone https://github.com/Derrors/iphone-control.git
-cd iphone-control
-cargo install --path apps/iphone-control --locked   # 装到 ~/.cargo/bin/iphone-control
+V=v0.1.2   # 最新版本号
+curl -fsSL https://github.com/Derrors/iphone-control/releases/download/$V/iphone-control-$V-macos-arm64.tar.gz | tar xz
+mkdir -p ~/.local/bin && install -m 755 iphone-control-$V-macos-arm64/iphone-control ~/.local/bin/
+export PATH="$HOME/.local/bin:$PATH"                # 这一行也加到 ~/.zprofile
 iphone-control daemon                               # 这个终端保持开着
 iphone-control setup                                # 在另一个终端运行
 iphone-control mcp-config                           # 打印 `claude mcp add` 命令，复制运行
 ```
+
+用浏览器而不是 `curl` 下载的，Gatekeeper 会拦下没有公证的二进制，运行 `xattr -d com.apple.quarantine ~/.local/bin/iphone-control` 即可。也可以从源码编译：在克隆的仓库里 `cargo install --path apps/iphone-control --locked`（需要 Xcode 命令行工具和 Rust 1.88+）。
 
 把手机的充电上限改成 100%（设置 → 电池 → 充电）：开着「80% 上限」时 USB 大约每分钟断开一次。配置、保持运行和已知差异见 [macOS 指南](https://derrors.github.io/iphone-control/deploy/macos)。
 
@@ -162,7 +165,7 @@ iphone-control mcp-config                           # 打印 `claude mcp add` �
 - 登录 Apple ID 默认用公共的第三方 anisette 服务；可设 `ICTL_ANISETTE_URL` 换成自建服务
 - 容器以 root 运行：要访问 USB 设备节点，拔插后还要能重启 usbmuxd
 - HID 后备路线要 iOS 27 及以上；更早的 iOS 全部经 WebDriverAgent 操作
-- macOS 上：只能从源码编译（还没有预编译二进制），守护进程在终端里前台运行（还没有 launchd 配置），不能用 Docker（没有 USB 直通）；数据在 `~/.local/share/iphone-control`。Intel Mac 还没测过
+- macOS 上：只支持 Apple Silicon（Intel Mac 没测过，也没有预编译包），二进制没有经过苹果公证，守护进程在终端里前台运行（还没有 launchd 配置），不能用 Docker（没有 USB 直通）；数据在 `~/.local/share/iphone-control`
 
 > [!WARNING]
 > 这个工具能完全控制你的手机，agent 可能点到付款、删除、发送这类按钮，请在 MCP 客户端里保持工具调用确认。本项目与 Apple 无关；只在你自己的设备和账号上使用。开启自动解锁前请先读 [SECURITY.md](SECURITY.md)。

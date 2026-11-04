@@ -24,7 +24,7 @@ It works as a set of [MCP](https://modelcontextprotocol.io) (Model Context Proto
 
 | | |
 |---|---|
-| Host | Linux, x86_64 or arm64: Docker (Compose v2), or Rust 1.88+ to build from source<br>macOS, Apple Silicon: Rust 1.88+ to build from source, see [macOS](../deploy/macos) |
+| Host | Linux, x86_64 or arm64: Docker (Compose v2), or Rust 1.88+ to build from source<br>macOS, Apple Silicon: prebuilt binary, or Rust 1.88+ to build from source, see [macOS](../deploy/macos) |
 | Phone | iOS 17 or later; the HID fallback needs iOS 27 or later |
 | Verified on | iPhone 15 Pro Max, iOS 27.0.1 (Linux, macOS)<br>iPhone 12 mini, iOS 26.4.1 (Linux) |
 | Account | A free Apple ID; a dedicated one is recommended |

@@ -94,16 +94,19 @@ You can also skip both the clone and the build: in a new directory, write a `com
 
 ### macOS
 
-Docker on a Mac can't pass USB devices through to containers, so on a Mac (Apple Silicon; Xcode not needed) build the binary and run it directly, as your regular user. You need the Xcode Command Line Tools (`xcode-select --install`) and Rust 1.88+ ([rustup](https://rustup.rs)):
+Docker on a Mac can't pass USB devices through to containers, so on a Mac (Apple Silicon; no Xcode needed) run the binary directly, as your regular user. Download it from [Releases](https://github.com/Derrors/iphone-control/releases) (`…-macos-arm64.tar.gz`):
 
 ```bash
-git clone https://github.com/Derrors/iphone-control.git
-cd iphone-control
-cargo install --path apps/iphone-control --locked   # installs ~/.cargo/bin/iphone-control
+V=v0.1.2   # latest version
+curl -fsSL https://github.com/Derrors/iphone-control/releases/download/$V/iphone-control-$V-macos-arm64.tar.gz | tar xz
+mkdir -p ~/.local/bin && install -m 755 iphone-control-$V-macos-arm64/iphone-control ~/.local/bin/
+export PATH="$HOME/.local/bin:$PATH"                # add this line to ~/.zprofile too
 iphone-control daemon                               # keep this terminal open
 iphone-control setup                                # in a second terminal
 iphone-control mcp-config                           # prints the `claude mcp add` command to run
 ```
+
+Downloaded with a browser instead of `curl`? Gatekeeper blocks the unnotarized binary; run `xattr -d com.apple.quarantine ~/.local/bin/iphone-control`. To build from source instead: `cargo install --path apps/iphone-control --locked` in a clone (needs the Xcode Command Line Tools and Rust 1.88+).
 
 Set the phone's charging limit to 100% (*Settings → Battery → Charging*): with the 80% limit, USB drops about once a minute. Configuration, keeping it running and the known differences are in the [macOS guide](https://derrors.github.io/iphone-control/en/deploy/macos).
 
@@ -164,7 +167,7 @@ The architecture and design documents are in Chinese for now.
 - Apple ID logins use a public third-party anisette server by default; set `ICTL_ANISETTE_URL` to use your own
 - The container runs as root: it needs the USB device nodes and must restart usbmuxd after replugging
 - The HID fallback needs iOS 27 or later; on older iOS everything goes through WebDriverAgent
-- On macOS: build from source (no prebuilt binary yet), run the daemon in a terminal (no launchd service yet), no Docker (no USB passthrough); data lives in `~/.local/share/iphone-control`. Intel Macs are untested
+- On macOS: Apple Silicon only (Intel Macs untested, no prebuilt binary), the binary isn't notarized, run the daemon in a terminal (no launchd service yet), no Docker (no USB passthrough); data lives in `~/.local/share/iphone-control`
 
 > [!WARNING]
 > This tool can fully control your phone. An agent may tap payment, delete or send buttons — keep tool-call confirmation on in your MCP client. Not affiliated with Apple; use it only with devices and accounts you own. Read [SECURITY.md](SECURITY.md) before enabling auto-unlock.

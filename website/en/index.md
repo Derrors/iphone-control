@@ -40,7 +40,7 @@ features:
     details: WDA is reached through usbmuxd; nothing listens on the network. Auto-unlock is off by default
   - icon: 📦
     title: One binary
-    details: Written in Rust. One Docker command to deploy on Linux, or run it from source or a prebuilt binary; build from source on a Mac
+    details: Written in Rust. One Docker command to deploy on Linux, or run it from source or a prebuilt binary; on a Mac, run the prebuilt binary
   - icon: 🧭
     title: Fewer round trips
     details: Actions can return the resulting screen after waiting for it to settle, and flag loading pages and blocking alerts

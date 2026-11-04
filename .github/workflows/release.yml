@@ -1,7 +1,7 @@
 name: Release
 
 # 推送 v* tag 时：多架构镜像推到 ghcr（各架构在原生 runner 上构建，不用 QEMU 模拟），
-# 附 SBOM 和构建来源证明；Linux 二进制和 sha256 附在 GitHub Release 上，发布说明取自 CHANGELOG.md 和 CHANGELOG.zh-CN.md。
+# 附 SBOM 和构建来源证明；Linux 和 macOS 二进制及 sha256 附在 GitHub Release 上，发布说明取自 CHANGELOG.md 和 CHANGELOG.zh-CN.md。
 on:
   push:
     tags: ["v*"]
@@ -176,12 +176,47 @@ jobs:
             echo "## 中文"; echo; echo "$zh"; echo
             echo "---"; echo
             echo "**Docker:** \`${IMAGE}:${version}\` (linux/amd64, linux/arm64)"; echo
-            echo "**Binaries / 二进制:** \`linux-x86_64\`, \`linux-aarch64\` (glibc 2.34+)"
+            echo "**Binaries / 二进制:** \`linux-x86_64\`, \`linux-aarch64\` (glibc 2.34+), \`macos-arm64\` (macOS 11+, Apple Silicon)"
           } > notes.md
       - name: Create release
         run: |
           flags=()
           case "$GITHUB_REF_NAME" in *-*) flags+=(--prerelease) ;; esac
           gh release create "$GITHUB_REF_NAME" dist/* --title "$GITHUB_REF_NAME" --notes-file notes.md "${flags[@]}"
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+  # macOS（Apple Silicon）二进制，Release 建好后再传上去：GitHub 的 macOS runner 经常排队，
+  # 排不上时（15 分钟后被取消）不拖住镜像和 Linux 二进制，重跑这个任务就能补上。
+  # 文件名里的 arm64 与 Mac 上 uname -m 一致。没有公证（要付费开发者账号）：链接器自带 ad-hoc 签名能直接运行，
+  # 用终端 curl 下载不带隔离标记；浏览器下载的要去掉 com.apple.quarantine（见 macOS 指南）
+  macos-binary:
+    needs: release
+    runs-on: macos-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.99.1
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release-aarch64-apple-darwin
+      - run: cargo build --release --locked -p iphone-control
+      - name: Check
+        run: |
+          file target/release/iphone-control
+          codesign --verify --verbose target/release/iphone-control
+          target/release/iphone-control --version
+      # 不带 deploy/（systemd 服务文件，Mac 上用不到）
+      - name: Package
+        run: |
+          name="iphone-control-${GITHUB_REF_NAME}-macos-arm64"
+          mkdir -p "dist/$name"
+          cp target/release/iphone-control LICENSE THIRD_PARTY.md README.md README.zh-CN.md CHANGELOG.md CHANGELOG.zh-CN.md "dist/$name/"
+          cp .env.example "dist/$name/env.example"
+          tar -C dist -czf "dist/$name.tar.gz" "$name"
+          (cd dist && shasum -a 256 "$name.tar.gz" > "$name.tar.gz.sha256")
+      - name: Upload to the release
+        run: gh release upload "$GITHUB_REF_NAME" dist/*.tar.gz dist/*.tar.gz.sha256 --clobber
         env:
           GH_TOKEN: ${{ github.token }}

@@ -6,6 +6,12 @@ All notable changes to this project are documented here. The format is based on 
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-11-04
+
+### Added
+
+- Prebuilt macOS binary (Apple Silicon, macOS 11+) in Releases: `iphone-control-vX.Y.Z-macos-arm64.tar.gz`. It isn't notarized; see the macOS guide if Gatekeeper blocks it.
+
 ## [0.1.1] - 2026-11-04
 
 ### Added
@@ -40,6 +46,7 @@ First public release.
 - Docker image (single binary plus Debian's usbmuxd, not privileged) with a generated third-party license list, published to `ghcr.io/derrors/iphone-control` for linux/amd64 and linux/arm64.
 - Running without Docker, from source or from the prebuilt Linux binaries (x86_64, aarch64): as a regular user with the system usbmuxd, XDG data and socket paths, the unsigned WebDriverAgent downloaded and checksum-verified before the first signing, `mcp-config` printing a direct command, and a systemd user service.
 
-[Unreleased]: https://github.com/Derrors/iphone-control/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/Derrors/iphone-control/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/Derrors/iphone-control/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/Derrors/iphone-control/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/Derrors/iphone-control/releases/tag/v0.1.0

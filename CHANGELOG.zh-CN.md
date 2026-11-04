@@ -6,6 +6,12 @@
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-11-04
+
+### 新增
+
+- Releases 里提供 macOS 预编译二进制（Apple Silicon，macOS 11 以上）：`iphone-control-vX.Y.Z-macos-arm64.tar.gz`。没有经过苹果公证，被 Gatekeeper 拦下时见 macOS 指南。
+
 ## [0.1.1] - 2026-11-04
 
 ### 新增
@@ -38,6 +44,7 @@
 - `setup`、`doctor`、`status`、`mcp-config`、`wda-bridge`、`notify-test` 命令。
 - Docker 镜像（非 privileged，linux/amd64、linux/arm64）；也可不用 Docker，从源码或预编译二进制以普通用户运行，附 systemd 用户服务。
 
-[Unreleased]: https://github.com/Derrors/iphone-control/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/Derrors/iphone-control/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/Derrors/iphone-control/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/Derrors/iphone-control/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/Derrors/iphone-control/releases/tag/v0.1.0

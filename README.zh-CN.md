@@ -134,23 +134,13 @@ iphone-control mcp-config   # 打印 `claude mcp add` 命令，复制运行
 
 | | |
 | --- | --- |
-| 入门 | [什么是 iphone-control](https://derrors.github.io/iphone-control/guide/what-is-iphone-control) · [快速开始](https://derrors.github.io/iphone-control/guide/getting-started) · [接入 AI 客户端](https://derrors.github.io/iphone-control/guide/mcp-clients) · [工具一览](https://derrors.github.io/iphone-control/guide/tools) |
+| 入门 | [什么是 iphone-control](https://derrors.github.io/iphone-control/guide/what-is-iphone-control) · [限制](https://derrors.github.io/iphone-control/guide/what-is-iphone-control#限制) · [快速开始](https://derrors.github.io/iphone-control/guide/getting-started) · [接入 AI 客户端](https://derrors.github.io/iphone-control/guide/mcp-clients) · [工具一览](https://derrors.github.io/iphone-control/guide/tools) |
 | 使用 | [配置](https://derrors.github.io/iphone-control/guide/configuration) · [通知](https://derrors.github.io/iphone-control/guide/notifications) · [自动解锁](https://derrors.github.io/iphone-control/guide/auto-unlock) |
 | 安装 | [Docker](https://derrors.github.io/iphone-control/deploy/docker) · [从源码 / 二进制](https://derrors.github.io/iphone-control/deploy/source) · [macOS](https://derrors.github.io/iphone-control/deploy/macos) · [数据与备份](https://derrors.github.io/iphone-control/deploy/backup) |
 | 问题 | [常见问题](https://derrors.github.io/iphone-control/troubleshoot/faq) · [排错（英文）](docs/troubleshooting.md) · [Issues](https://github.com/Derrors/iphone-control/issues) |
 | 安全 | [SECURITY.md](SECURITY.md)：存了什么、谁能访问、怎么报告漏洞 |
 | 开发 | [贡献指南](CONTRIBUTING.md) · [架构](docs/architecture.md) · [关键取舍](docs/decisions.md) · [更新日志](CHANGELOG.zh-CN.md) |
 | 许可证 | [THIRD_PARTY.md](THIRD_PARTY.md)：vendor 组件、版本和许可证 |
-
-## 限制
-
-- 一台主机接一部手机；不要同时运行两份（或其他基于 usbmuxd 的工具）连同一部手机
-- 免费 Apple ID 的描述文件 7 天有效。重签是自动的，但 Apple ID 会话失效后要运行 `login`
-- 手机重启后，要人工解锁一次，并输一次密码允许 UI 自动化，这是 iOS 的要求
-- 登录 Apple ID 默认用公共的第三方 anisette 服务；可设 `ICTL_ANISETTE_URL` 换成自建服务
-- 容器以 root 运行：要访问 USB 设备节点，拔插后还要能重启 usbmuxd
-- HID 后备路线要 iOS 27 及以上；更早的 iOS 全部经 WebDriverAgent 操作
-- macOS 上：只支持 Apple Silicon（Intel Mac 没测过，也没有预编译包），二进制没有经过苹果公证，守护进程在终端里前台运行（还没有 launchd 配置），不能用 Docker（没有 USB 直通）；数据在 `~/.local/share/iphone-control`
 
 > [!WARNING]
 > 这个工具能完全控制你的手机，agent 可能点到付款、删除、发送这类按钮，请在 MCP 客户端里保持工具调用确认。本项目与 Apple 无关；只在你自己的设备和账号上使用。开启自动解锁前请先读 [SECURITY.md](SECURITY.md)。

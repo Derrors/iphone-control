@@ -134,7 +134,7 @@ Upgrade with `git pull && docker compose up -d --build` (or `docker compose pull
 
 | | |
 | --- | --- |
-| Guide | [What is it](https://derrors.github.io/iphone-control/en/guide/what-is-iphone-control) · [Getting started](https://derrors.github.io/iphone-control/en/guide/getting-started) · [AI clients](https://derrors.github.io/iphone-control/en/guide/mcp-clients) · [Tools](https://derrors.github.io/iphone-control/en/guide/tools) |
+| Guide | [What is it](https://derrors.github.io/iphone-control/en/guide/what-is-iphone-control) · [Limitations](https://derrors.github.io/iphone-control/en/guide/what-is-iphone-control#limitations) · [Getting started](https://derrors.github.io/iphone-control/en/guide/getting-started) · [AI clients](https://derrors.github.io/iphone-control/en/guide/mcp-clients) · [Tools](https://derrors.github.io/iphone-control/en/guide/tools) |
 | Usage | [Configuration](https://derrors.github.io/iphone-control/en/guide/configuration) · [Notifications](https://derrors.github.io/iphone-control/en/guide/notifications) · [Auto-unlock](https://derrors.github.io/iphone-control/en/guide/auto-unlock) |
 | Deployment | [Docker](https://derrors.github.io/iphone-control/en/deploy/docker) · [Source / binary](https://derrors.github.io/iphone-control/en/deploy/source) · [macOS](https://derrors.github.io/iphone-control/en/deploy/macos) · [Data and backups](https://derrors.github.io/iphone-control/en/deploy/backup) |
 | Problems | [FAQ](https://derrors.github.io/iphone-control/en/troubleshoot/faq) · [Troubleshooting](docs/troubleshooting.md) · [Issues](https://github.com/Derrors/iphone-control/issues) |
@@ -143,16 +143,6 @@ Upgrade with `git pull && docker compose up -d --build` (or `docker compose pull
 | Licensing | [THIRD_PARTY.md](THIRD_PARTY.md): vendored components, versions and licenses |
 
 The architecture and design documents are in Chinese for now.
-
-## Limitations
-
-- One phone per host; don't run two instances (or other usbmuxd-based tools) against the same phone
-- Free Apple ID profiles last 7 days. Re-signing is automatic, but an expired Apple ID session needs `login`
-- After the phone reboots, you must unlock it and enter the passcode once to allow UI automation — iOS requires this
-- Apple ID logins use a public third-party anisette server by default; set `ICTL_ANISETTE_URL` to use your own
-- The container runs as root: it needs the USB device nodes and must restart usbmuxd after replugging
-- The HID fallback needs iOS 27 or later; on older iOS everything goes through WebDriverAgent
-- On macOS: Apple Silicon only (Intel Macs untested, no prebuilt binary), the binary isn't notarized, run the daemon in a terminal (no launchd service yet), no Docker (no USB passthrough); data lives in `~/.local/share/iphone-control`
 
 > [!WARNING]
 > This tool can fully control your phone. An agent may tap payment, delete or send buttons — keep tool-call confirmation on in your MCP client. Not affiliated with Apple; use it only with devices and accounts you own. Read [SECURITY.md](SECURITY.md) before enabling auto-unlock.

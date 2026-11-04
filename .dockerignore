@@ -8,5 +8,5 @@ secrets
 .env.*
 docs
 **/*.rs.bk
-README.md
+README*.md
 website

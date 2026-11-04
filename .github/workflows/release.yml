@@ -38,7 +38,7 @@ jobs:
         run: |
           name="iphone-control-${GITHUB_REF_NAME}-linux-${{ matrix.arch }}"
           mkdir -p "dist/$name"
-          cp target/release/iphone-control LICENSE THIRD_PARTY.md README.md README.zh-CN.md CHANGELOG.md CHANGELOG.zh-CN.md "dist/$name/"
+          cp target/release/iphone-control LICENSE THIRD_PARTY.md README.md README.en.md CHANGELOG.md CHANGELOG.zh-CN.md "dist/$name/"
           cp -r deploy "dist/$name/"
           cp .env.example "dist/$name/env.example"
           tar -C dist -czf "dist/$name.tar.gz" "$name"
@@ -212,7 +212,7 @@ jobs:
         run: |
           name="iphone-control-${GITHUB_REF_NAME}-macos-arm64"
           mkdir -p "dist/$name"
-          cp target/release/iphone-control LICENSE THIRD_PARTY.md README.md README.zh-CN.md CHANGELOG.md CHANGELOG.zh-CN.md "dist/$name/"
+          cp target/release/iphone-control LICENSE THIRD_PARTY.md README.md README.en.md CHANGELOG.md CHANGELOG.zh-CN.md "dist/$name/"
           cp .env.example "dist/$name/env.example"
           tar -C dist -czf "dist/$name.tar.gz" "$name"
           (cd dist && shasum -a 256 "$name.tar.gz" > "$name.tar.gz.sha256")

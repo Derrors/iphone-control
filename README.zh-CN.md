@@ -1,9 +1,5 @@
 <a name="readme-top"></a>
 
-<div align="right">
-  <a href="README.md">English</a> | <b>简体中文</b>
-</div>
-
 <div align="center">
   <a href="https://github.com/Derrors/iphone-control">
     <img src="docs/images/banner.zh-CN.svg" alt="iphone-control：让 AI agent 操作一台真实的 iPhone" width="100%">
@@ -32,15 +28,14 @@
     <a href="https://github.com/Derrors/iphone-control/releases">📦 版本发布</a>
     &nbsp;·&nbsp;
     <a href="https://github.com/Derrors/iphone-control/issues">🐛 问题反馈</a>
+    &nbsp;·&nbsp;
+    <a href="README.md">🌐 English</a>
   </p>
 
   <br>
   <img src="docs/images/demo.webp" alt="左边 Claude Code 调用 iphone_launch_app 和 iphone_tap_element，右边 iPhone 上时钟的秒表正在计时" width="900">
   <p><sub>让 Claude Code「打开时钟，切到秒表并启动」。左边是 Claude Code 的工具调用（只截了前半段），右边是完成后的手机。</sub></p>
 </div>
-
-> [!NOTE]
-> 早期版本（0.x）。在 Linux 和 macOS（Apple Silicon）上用 **iPhone 15 Pro Max（iOS 27.0.1）** 完整验证过，在 Linux 上用 **iPhone 12 mini（iOS 26.4.1）** 验证过。其他机型和 iOS 17 以上应该也能用，但还没测过，欢迎反馈。
 
 ## 简介
 
@@ -72,49 +67,33 @@ iphone-control 在 Linux 或 macOS 上用**一个 Rust 二进制**把这些事�
 
 ## 快速开始
 
-在 Linux 上，需要一台装了 Docker（Compose v2）的主机（x86_64 或 arm64）、一部 iOS 17 以上的 iPhone 和能**传数据**的线，以及一个免费 Apple ID（建议专门注册一个，不要用主账号）。
+需要一部 iOS 17 以上的 iPhone 和能**传数据**的线、一个免费 Apple ID（建议专门注册一个），以及一台装了 Docker 的 Linux 主机或一台 Apple Silicon 的 Mac。
+
+**Linux（Docker）**
 
 ```bash
-git clone https://github.com/Derrors/iphone-control.git
-cd iphone-control
+git clone https://github.com/Derrors/iphone-control.git && cd iphone-control
 cp .env.example .env                                  # 可选：代理、通知；国内网络一般要配代理
-docker compose up -d --build                          # 首次构建要编译 Rust，需要几分钟
+docker compose up -d --build                          # 首次构建需要几分钟
 docker exec -it iphone-control iphone-control setup   # 安装向导，可重复运行
 claude mcp add iphone -s user -- docker exec -i iphone-control iphone-control mcp
 ```
 
-`setup` 会引导完成配对、打开开发者模式、登录 Apple ID、签名并安装 WebDriverAgent。手机上要做的是点「信任」、打开开发者模式，以及在 设置 → 通用 → VPN 与设备管理 里信任你的 Apple ID，详见[分步指南](https://derrors.github.io/iphone-control/guide/getting-started)。
-
-打开一个新的 Claude Code 会话，试着说：
-
-> 打开时钟，切到秒表，给我看一下截图。
-
-> [!TIP]
-> 其他 MCP 客户端：服务经 `docker exec` 走 stdio，不开任何网络端口。
->
-> ```json
-> { "mcpServers": { "iphone": { "command": "docker", "args": ["exec", "-i", "iphone-control", "iphone-control", "mcp"] } } }
-> ```
-
-也可以不克隆仓库、不自己构建：新建一个目录，写一个使用预构建镜像 `ghcr.io/derrors/iphone-control:latest` 的 `compose.yaml`，然后 `docker compose up -d`，完整示例见 [Docker 部署](https://derrors.github.io/iphone-control/deploy/docker#只写一个-compose-文件)。已经克隆了仓库的话，在 `.env` 里设 `IMAGE=ghcr.io/derrors/iphone-control:latest`，然后 `docker compose pull && docker compose up -d --no-build`。不用 Docker 的话，可以用[预编译二进制或从源码编译](https://derrors.github.io/iphone-control/deploy/source)，以 systemd 用户服务运行。
-
-### macOS
-
-Mac 上的 Docker 不能把 USB 设备交给容器，所以在 Mac（Apple Silicon，不需要 Xcode）上以普通用户直接运行二进制。从 [Releases](https://github.com/Derrors/iphone-control/releases) 下载（`…-macos-arm64.tar.gz`）：
+**macOS**（Mac 上的 Docker 不能直通 USB，直接运行二进制）
 
 ```bash
 V=v0.1.2   # 最新版本号
 curl -fsSL https://github.com/Derrors/iphone-control/releases/download/$V/iphone-control-$V-macos-arm64.tar.gz | tar xz
 mkdir -p ~/.local/bin && install -m 755 iphone-control-$V-macos-arm64/iphone-control ~/.local/bin/
-export PATH="$HOME/.local/bin:$PATH"                # 这一行也加到 ~/.zprofile
-iphone-control daemon                               # 这个终端保持开着
-iphone-control setup                                # 在另一个终端运行
-iphone-control mcp-config                           # 打印 `claude mcp add` 命令，复制运行
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zprofile && source ~/.zprofile
+iphone-control daemon       # 这个终端保持开着
+iphone-control setup        # 在另一个终端运行
+iphone-control mcp-config   # 打印 `claude mcp add` 命令，复制运行
 ```
 
-用浏览器而不是 `curl` 下载的，Gatekeeper 会拦下没有公证的二进制，运行 `xattr -d com.apple.quarantine ~/.local/bin/iphone-control` 即可。也可以从源码编译：在克隆的仓库里 `cargo install --path apps/iphone-control --locked`（需要 Xcode 命令行工具和 Rust 1.88+）。
+`setup` 会引导完成配对、开发者模式、登录 Apple ID、安装 WebDriverAgent，按提示在手机上操作即可。然后打开一个新的 Claude Code 会话，试着说：「打开时钟，切到秒表并启动」。
 
-把手机的充电上限改成 100%（设置 → 电池 → 充电）：开着「80% 上限」时 USB 大约每分钟断开一次。配置、保持运行和已知差异见 [macOS 指南](https://derrors.github.io/iphone-control/deploy/macos)。
+更多：[分步指南](https://derrors.github.io/iphone-control/guide/getting-started) · [预构建镜像](https://derrors.github.io/iphone-control/deploy/docker) · [二进制 / 源码](https://derrors.github.io/iphone-control/deploy/source) · [macOS 指南](https://derrors.github.io/iphone-control/deploy/macos) · [其他 MCP 客户端](https://derrors.github.io/iphone-control/guide/mcp-clients)
 
 ## MCP 工具
 

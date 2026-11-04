@@ -1,9 +1,5 @@
 <a name="readme-top"></a>
 
-<div align="right">
-  <b>English</b> | <a href="README.zh-CN.md">简体中文</a>
-</div>
-
 <div align="center">
   <a href="https://github.com/Derrors/iphone-control">
     <img src="docs/images/banner.svg" alt="iphone-control: Let AI agents operate a real iPhone" width="100%">
@@ -32,15 +28,14 @@
     <a href="https://github.com/Derrors/iphone-control/releases">📦 Releases</a>
     &nbsp;·&nbsp;
     <a href="https://github.com/Derrors/iphone-control/issues">🐛 Issues</a>
+    &nbsp;·&nbsp;
+    <a href="README.zh-CN.md">🌐 简体中文</a>
   </p>
 
   <br>
   <img src="docs/images/demo.webp" alt="Claude Code on the left calls iphone_launch_app and iphone_tap_element; on the right, the iPhone shows the Clock stopwatch running" width="900">
   <p><sub>Asking Claude Code to “open Clock, switch to the stopwatch and start it”. Left: Claude Code’s tool calls (first part only). Right: the phone afterwards.</sub></p>
 </div>
-
-> [!NOTE]
-> Early release (0.x). Verified with an **iPhone 15 Pro Max (iOS 27.0.1)** on Linux and macOS (Apple Silicon), and an **iPhone 12 mini (iOS 26.4.1)** on Linux. Other models and iOS 17+ should work but are untested — reports are welcome. The CLI, `doctor` output and MCP tool results are currently in Simplified Chinese; agents handle this fine.
 
 ## Overview
 
@@ -72,49 +67,33 @@ iphone-control does it all in **one Rust binary** on Linux or macOS, built on [i
 
 ## Quick Start
 
-On Linux you need a host (x86_64 or arm64) with Docker (Compose v2), an iPhone on iOS 17+ connected by a **data** USB cable, and a free Apple ID (use a dedicated one, not your main account).
+You need an iPhone on iOS 17+ connected by a **data** cable, a free Apple ID (use a dedicated one), and a Linux host with Docker or an Apple Silicon Mac.
+
+**Linux (Docker)**
 
 ```bash
-git clone https://github.com/Derrors/iphone-control.git
-cd iphone-control
+git clone https://github.com/Derrors/iphone-control.git && cd iphone-control
 cp .env.example .env                                  # optional: proxy, notifications
-docker compose up -d --build                          # the first build compiles Rust, a few minutes
+docker compose up -d --build                          # the first build takes a few minutes
 docker exec -it iphone-control iphone-control setup   # guided setup; safe to re-run
 claude mcp add iphone -s user -- docker exec -i iphone-control iphone-control mcp
 ```
 
-`setup` walks you through pairing, Developer Mode, signing in to your Apple ID, and signing and installing WebDriverAgent. On the phone you tap *Trust*, turn on Developer Mode, and trust your Apple ID under *Settings → General → VPN & Device Management* — see the [step-by-step guide](https://derrors.github.io/iphone-control/en/guide/getting-started).
-
-Open a new Claude Code session and ask, for example:
-
-> Open the Clock app, switch to the stopwatch, and show me a screenshot.
-
-> [!TIP]
-> Other MCP clients: the server speaks stdio through `docker exec` and opens no network port.
->
-> ```json
-> { "mcpServers": { "iphone": { "command": "docker", "args": ["exec", "-i", "iphone-control", "iphone-control", "mcp"] } } }
-> ```
-
-You can also skip both the clone and the build: in a new directory, write a `compose.yaml` that uses the prebuilt image `ghcr.io/derrors/iphone-control:latest` and run `docker compose up -d` — see [Docker](https://derrors.github.io/iphone-control/en/deploy/docker#just-a-compose-file) for the full example. If you already cloned the repository, set `IMAGE=ghcr.io/derrors/iphone-control:latest` in `.env` and run `docker compose pull && docker compose up -d --no-build`. Without Docker, use a [prebuilt binary or build from source](https://derrors.github.io/iphone-control/en/deploy/source) and run it as a systemd user service.
-
-### macOS
-
-Docker on a Mac can't pass USB devices through to containers, so on a Mac (Apple Silicon; no Xcode needed) run the binary directly, as your regular user. Download it from [Releases](https://github.com/Derrors/iphone-control/releases) (`…-macos-arm64.tar.gz`):
+**macOS** (Docker can't pass USB through on a Mac, so run the binary directly)
 
 ```bash
-V=v0.1.2   # latest version
+V=v0.1.2   # latest release
 curl -fsSL https://github.com/Derrors/iphone-control/releases/download/$V/iphone-control-$V-macos-arm64.tar.gz | tar xz
 mkdir -p ~/.local/bin && install -m 755 iphone-control-$V-macos-arm64/iphone-control ~/.local/bin/
-export PATH="$HOME/.local/bin:$PATH"                # add this line to ~/.zprofile too
-iphone-control daemon                               # keep this terminal open
-iphone-control setup                                # in a second terminal
-iphone-control mcp-config                           # prints the `claude mcp add` command to run
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zprofile && source ~/.zprofile
+iphone-control daemon       # keep this terminal open
+iphone-control setup        # in a second terminal
+iphone-control mcp-config   # prints the `claude mcp add` command to run
 ```
 
-Downloaded with a browser instead of `curl`? Gatekeeper blocks the unnotarized binary; run `xattr -d com.apple.quarantine ~/.local/bin/iphone-control`. To build from source instead: `cargo install --path apps/iphone-control --locked` in a clone (needs the Xcode Command Line Tools and Rust 1.88+).
+`setup` walks you through pairing, Developer Mode, Apple ID sign-in and installing WebDriverAgent; do what it asks on the phone. Then open a new Claude Code session and ask, for example, *“Open Clock, switch to the stopwatch and start it.”*
 
-Set the phone's charging limit to 100% (*Settings → Battery → Charging*): with the 80% limit, USB drops about once a minute. Configuration, keeping it running and the known differences are in the [macOS guide](https://derrors.github.io/iphone-control/en/deploy/macos).
+More: [step-by-step guide](https://derrors.github.io/iphone-control/en/guide/getting-started) · [prebuilt image](https://derrors.github.io/iphone-control/en/deploy/docker) · [binary / source](https://derrors.github.io/iphone-control/en/deploy/source) · [macOS guide](https://derrors.github.io/iphone-control/en/deploy/macos) · [other MCP clients](https://derrors.github.io/iphone-control/en/guide/mcp-clients).
 
 ## MCP Tools
 

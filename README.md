@@ -1,29 +1,19 @@
-<a name="readme-top"></a>
-
-<div align="right">
-  <b>English</b> | <a href="README.zh-CN.md">简体中文</a>
-</div>
-
 <div align="center">
   <a href="https://github.com/Derrors/iphone-control">
-    <img src="website/public/logo.svg" alt="Logo" width="120">
+    <img src="docs/images/banner.svg" alt="iphone-control: Let AI agents operate a real iPhone" width="100%">
   </a>
-
-  <h3 align="center">iphone-control</h3>
 
   <p align="center">
     Let an AI agent operate a real iPhone plugged into a Linux machine or a Mac — one Rust binary, no Xcode, no paid developer account, no jailbreak.
   </p>
 
   <p align="center">
-    <a href="https://github.com/Derrors/iphone-control/releases/latest"><img src="https://img.shields.io/github/v/release/Derrors/iphone-control?style=flat-square" alt="Release"></a>
-    <a href="https://github.com/Derrors/iphone-control/pkgs/container/iphone-control"><img src="https://img.shields.io/badge/ghcr.io-derrors%2Fiphone--control-2496ED?style=flat-square&logo=docker&logoColor=white" alt="Docker"></a>
-    <img src="https://img.shields.io/badge/iOS-17%2B-black?style=flat-square&logo=apple" alt="iOS">
-    <img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS-555?style=flat-square" alt="Platform: Linux | macOS">
-    <img src="https://img.shields.io/badge/MCP-15%20tools-8A2BE2?style=flat-square" alt="MCP">
-    <a href="Cargo.toml"><img src="https://img.shields.io/badge/Rust-1.88%2B-CE422B?style=flat-square&logo=rust&logoColor=white" alt="Rust"></a>
-    <a href="https://github.com/Derrors/iphone-control/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/Derrors/iphone-control/ci.yml?branch=main&style=flat-square&label=CI" alt="CI"></a>
-    <a href="LICENSE"><img src="https://img.shields.io/github/license/Derrors/iphone-control?style=flat-square" alt="License"></a>
+    <a href="https://github.com/Derrors/iphone-control/releases/latest"><img src="https://img.shields.io/github/v/release/Derrors/iphone-control?style=flat" alt="Release"></a>
+    <img src="https://img.shields.io/badge/iOS-17%2B-black?style=flat&logo=apple" alt="iOS">
+    <img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS-0E7490?style=flat" alt="Platform: Linux | macOS">
+    <img src="https://img.shields.io/badge/MCP-15%20tools-8A2BE2?style=flat" alt="MCP">
+    <a href="Cargo.toml"><img src="https://img.shields.io/badge/Rust-1.88%2B-CE422B?style=flat&logo=rust&logoColor=white" alt="Rust"></a>
+    <a href="LICENSE"><img src="https://img.shields.io/github/license/Derrors/iphone-control?style=flat" alt="License"></a>
   </p>
 
   <p align="center">
@@ -34,11 +24,14 @@
     <a href="https://github.com/Derrors/iphone-control/releases">📦 Releases</a>
     &nbsp;·&nbsp;
     <a href="https://github.com/Derrors/iphone-control/issues">🐛 Issues</a>
+    &nbsp;·&nbsp;
+    <a href="README.zh-CN.md">🌐 简体中文</a>
   </p>
-</div>
 
-> [!NOTE]
-> Early release (0.x). Verified with an **iPhone 15 Pro Max (iOS 27.0.1)** on Linux and macOS (Apple Silicon), and an **iPhone 12 mini (iOS 26.4.1)** on Linux. Other models and iOS 17+ should work but are untested — reports are welcome. The CLI, `doctor` output and MCP tool results are currently in Simplified Chinese; agents handle this fine.
+  <br>
+  <img src="docs/images/demo-stopwatch.webp" alt="Claude Code on the left calls iphone_launch_app and iphone_tap_element; on the right, the iPhone shows the Clock stopwatch running" width="900">
+  <p><sub>Asking Claude Code to “open Clock, switch to the stopwatch and start it”. Left: Claude Code’s tool calls (first part only). Right: the phone afterwards.</sub></p>
+</div>
 
 ## Overview
 
@@ -55,6 +48,10 @@ iphone-control does it all in **one Rust binary** on Linux or macOS, built on [i
 
 ## Features
 
+<p align="center">
+  <img src="docs/images/features.svg" alt="One binary, 15 MCP tools, fewer round trips, runs unattended, HID fallback, doctor and alerts" width="900">
+</p>
+
 - **See and touch the screen**: screenshots with region zoom, tap, swipe, long-press, text input (including Chinese), hardware buttons
 - **Work with UI elements**: read the element tree, tap by text (on a part not covered by floating bars or the keyboard), launch and close apps, open URLs, wait for text to appear
 - **Fewer round trips**: any action can return the resulting screen once it has settled, flagging pages still loading and blocking alerts; `iphone_batch` runs up to 20 steps in one call
@@ -66,49 +63,33 @@ iphone-control does it all in **one Rust binary** on Linux or macOS, built on [i
 
 ## Quick Start
 
-On Linux you need a host (x86_64 or arm64) with Docker (Compose v2), an iPhone on iOS 17+ connected by a **data** USB cable, and a free Apple ID (use a dedicated one, not your main account).
+You need an iPhone on iOS 17+ connected by a **data** cable, a free Apple ID (use a dedicated one), and a Linux host with Docker or an Apple Silicon Mac.
+
+**Linux (Docker)**
 
 ```bash
-git clone https://github.com/Derrors/iphone-control.git
-cd iphone-control
+git clone https://github.com/Derrors/iphone-control.git && cd iphone-control
 cp .env.example .env                                  # optional: proxy, notifications
-docker compose up -d --build                          # the first build compiles Rust, a few minutes
+docker compose up -d --build                          # the first build takes a few minutes
 docker exec -it iphone-control iphone-control setup   # guided setup; safe to re-run
 claude mcp add iphone -s user -- docker exec -i iphone-control iphone-control mcp
 ```
 
-`setup` walks you through pairing, Developer Mode, signing in to your Apple ID, and signing and installing WebDriverAgent. On the phone you tap *Trust*, turn on Developer Mode, and trust your Apple ID under *Settings → General → VPN & Device Management* — see the [step-by-step guide](https://derrors.github.io/iphone-control/en/guide/getting-started).
-
-Open a new Claude Code session and ask, for example:
-
-> Open the Clock app, switch to the stopwatch, and show me a screenshot.
-
-> [!TIP]
-> Other MCP clients: the server speaks stdio through `docker exec` and opens no network port.
->
-> ```json
-> { "mcpServers": { "iphone": { "command": "docker", "args": ["exec", "-i", "iphone-control", "iphone-control", "mcp"] } } }
-> ```
-
-You can also skip both the clone and the build: in a new directory, write a `compose.yaml` that uses the prebuilt image `ghcr.io/derrors/iphone-control:latest` and run `docker compose up -d` — see [Docker](https://derrors.github.io/iphone-control/en/deploy/docker#just-a-compose-file) for the full example. If you already cloned the repository, set `IMAGE=ghcr.io/derrors/iphone-control:latest` in `.env` and run `docker compose pull && docker compose up -d --no-build`. Without Docker, use a [prebuilt binary or build from source](https://derrors.github.io/iphone-control/en/deploy/source) and run it as a systemd user service.
-
-### macOS
-
-Docker on a Mac can't pass USB devices through to containers, so on a Mac (Apple Silicon; no Xcode needed) run the binary directly, as your regular user. Download it from [Releases](https://github.com/Derrors/iphone-control/releases) (`…-macos-arm64.tar.gz`):
+**macOS** (Docker can't pass USB through on a Mac, so run the binary directly)
 
 ```bash
-V=v0.1.2   # latest version
+V=v0.1.2   # latest release
 curl -fsSL https://github.com/Derrors/iphone-control/releases/download/$V/iphone-control-$V-macos-arm64.tar.gz | tar xz
 mkdir -p ~/.local/bin && install -m 755 iphone-control-$V-macos-arm64/iphone-control ~/.local/bin/
-export PATH="$HOME/.local/bin:$PATH"                # add this line to ~/.zprofile too
-iphone-control daemon                               # keep this terminal open
-iphone-control setup                                # in a second terminal
-iphone-control mcp-config                           # prints the `claude mcp add` command to run
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zprofile && source ~/.zprofile
+iphone-control daemon       # keep this terminal open
+iphone-control setup        # in a second terminal
+iphone-control mcp-config   # prints the `claude mcp add` command to run
 ```
 
-Downloaded with a browser instead of `curl`? Gatekeeper blocks the unnotarized binary; run `xattr -d com.apple.quarantine ~/.local/bin/iphone-control`. To build from source instead: `cargo install --path apps/iphone-control --locked` in a clone (needs the Xcode Command Line Tools and Rust 1.88+).
+`setup` walks you through pairing, Developer Mode, Apple ID sign-in and installing WebDriverAgent; do what it asks on the phone. Then open a new Claude Code session and ask, for example, *“Open Clock, switch to the stopwatch and start it.”*
 
-Set the phone's charging limit to 100% (*Settings → Battery → Charging*): with the 80% limit, USB drops about once a minute. Configuration, keeping it running and the known differences are in the [macOS guide](https://derrors.github.io/iphone-control/en/deploy/macos).
+More: [step-by-step guide](https://derrors.github.io/iphone-control/en/guide/getting-started) · [prebuilt image](https://derrors.github.io/iphone-control/en/deploy/docker) · [binary / source](https://derrors.github.io/iphone-control/en/deploy/source) · [macOS guide](https://derrors.github.io/iphone-control/en/deploy/macos) · [other MCP clients](https://derrors.github.io/iphone-control/en/guide/mcp-clients).
 
 ## MCP Tools
 
@@ -149,7 +130,7 @@ Upgrade with `git pull && docker compose up -d --build` (or `docker compose pull
 
 | | |
 | --- | --- |
-| Guide | [What is it](https://derrors.github.io/iphone-control/en/guide/what-is-iphone-control) · [Getting started](https://derrors.github.io/iphone-control/en/guide/getting-started) · [AI clients](https://derrors.github.io/iphone-control/en/guide/mcp-clients) · [Tools](https://derrors.github.io/iphone-control/en/guide/tools) |
+| Guide | [What is it](https://derrors.github.io/iphone-control/en/guide/what-is-iphone-control) · [Limitations](https://derrors.github.io/iphone-control/en/guide/what-is-iphone-control#limitations) · [Getting started](https://derrors.github.io/iphone-control/en/guide/getting-started) · [AI clients](https://derrors.github.io/iphone-control/en/guide/mcp-clients) · [Tools](https://derrors.github.io/iphone-control/en/guide/tools) |
 | Usage | [Configuration](https://derrors.github.io/iphone-control/en/guide/configuration) · [Notifications](https://derrors.github.io/iphone-control/en/guide/notifications) · [Auto-unlock](https://derrors.github.io/iphone-control/en/guide/auto-unlock) |
 | Deployment | [Docker](https://derrors.github.io/iphone-control/en/deploy/docker) · [Source / binary](https://derrors.github.io/iphone-control/en/deploy/source) · [macOS](https://derrors.github.io/iphone-control/en/deploy/macos) · [Data and backups](https://derrors.github.io/iphone-control/en/deploy/backup) |
 | Problems | [FAQ](https://derrors.github.io/iphone-control/en/troubleshoot/faq) · [Troubleshooting](docs/troubleshooting.md) · [Issues](https://github.com/Derrors/iphone-control/issues) |
@@ -158,16 +139,6 @@ Upgrade with `git pull && docker compose up -d --build` (or `docker compose pull
 | Licensing | [THIRD_PARTY.md](THIRD_PARTY.md): vendored components, versions and licenses |
 
 The architecture and design documents are in Chinese for now.
-
-## Limitations
-
-- One phone per host; don't run two instances (or other usbmuxd-based tools) against the same phone
-- Free Apple ID profiles last 7 days. Re-signing is automatic, but an expired Apple ID session needs `login`
-- After the phone reboots, you must unlock it and enter the passcode once to allow UI automation — iOS requires this
-- Apple ID logins use a public third-party anisette server by default; set `ICTL_ANISETTE_URL` to use your own
-- The container runs as root: it needs the USB device nodes and must restart usbmuxd after replugging
-- The HID fallback needs iOS 27 or later; on older iOS everything goes through WebDriverAgent
-- On macOS: Apple Silicon only (Intel Macs untested, no prebuilt binary), the binary isn't notarized, run the daemon in a terminal (no launchd service yet), no Docker (no USB passthrough); data lives in `~/.local/share/iphone-control`
 
 > [!WARNING]
 > This tool can fully control your phone. An agent may tap payment, delete or send buttons — keep tool-call confirmation on in your MCP client. Not affiliated with Apple; use it only with devices and accounts you own. Read [SECURITY.md](SECURITY.md) before enabling auto-unlock.
@@ -179,5 +150,3 @@ Issues and pull requests are welcome — see the [contributing guide](CONTRIBUTI
 ## License
 
 [MIT](LICENSE). Third-party components: [THIRD_PARTY.md](THIRD_PARTY.md).
-
-<p align="right">(<a href="#readme-top">back to top</a>)</p>

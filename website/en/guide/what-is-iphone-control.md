@@ -35,10 +35,29 @@ Other models and iOS versions should work but are untested — [reports](https:/
 The CLI, `doctor` output and MCP tool results are currently in Simplified Chinese. Agents handle this fine.
 :::
 
-## What it does not do
+## Limitations
+
+**Things you do on the phone**
 
 - It does not bypass any iOS security: trusting the computer, enabling Developer Mode, trusting the developer certificate and enabling UI automation each need you on the phone once.
-- The first unlock after a reboot (BFU) always needs a person.
+- After the phone reboots, the first unlock (BFU) always needs a person, who also enters the passcode once more to allow UI automation. iOS requires this.
+
+**Usage**
+
+- One phone per host. Don't run two copies of iphone-control, or other usbmuxd-based tools, against the same phone.
 - Games, maps and video have no element tree; agents work from screenshots and coordinates there.
+- The HID fallback needs iOS 27 or later. On older iOS everything goes through WebDriverAgent, and actions fail while it restarts.
+- Free Apple ID profiles last 7 days. Re-signing is automatic, but an expired Apple ID session needs `login`.
+- Apple ID logins use a public third-party anisette server by default; set `ICTL_ANISETTE_URL` to use your own, see [Configuration](./configuration).
+- The Docker container runs as root: it needs the USB device nodes and restarts its own usbmuxd after replugging.
+
+**macOS**
+
+- Apple Silicon only; Intel Macs are untested.
+- The prebuilt binary isn't notarized; a copy downloaded with a browser needs its quarantine flag removed first.
+- The daemon runs in a terminal (no launchd configuration yet); no Docker (no USB passthrough).
+- Set the phone's charging limit to 100%: with the 80% limit, USB drops about once a minute.
+
+Other differences from Linux: [macOS known differences](../deploy/macos#known-differences).
 
 Next: [Getting Started](./getting-started).

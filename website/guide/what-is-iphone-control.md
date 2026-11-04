@@ -35,10 +35,29 @@ iphone-control 让 AI agent（例如 Claude）操作一台用数据线接在 Lin
 命令行、`doctor` 的输出和 MCP 工具返回的文字目前都是简体中文。
 :::
 
-## 不能做什么
+## 限制
+
+**需要你在手机上操作**
 
 - 不绕过任何 iOS 安全机制：信任电脑、打开开发者模式、信任开发者证书、启用 UI 自动化，都需要你在手机上亲自操作一次。
-- 手机重启后第一次解锁（BFU）必须人工完成。
+- 手机重启后，第一次解锁（BFU）必须人工完成，还要再输一次密码允许 UI 自动化，这是 iOS 的要求。
+
+**使用**
+
+- 一台主机接一部手机。不要对同一部手机同时运行两份 iphone-control，也不要同时用其他基于 usbmuxd 的工具。
 - 游戏、地图、视频这类界面没有元素树，agent 只能看截图按坐标操作。
+- HID 后备路线要 iOS 27 及以上；更早的 iOS 全部经 WebDriverAgent 操作，WDA 重启期间操作会失败。
+- 免费 Apple ID 的描述文件 7 天有效。重签是自动的，但 Apple ID 会话失效后要运行 `login` 重新登录。
+- 登录 Apple ID 默认用公共的第三方 anisette 服务，可以设 `ICTL_ANISETTE_URL` 换成自建服务，见[配置](./configuration)。
+- Docker 容器以 root 运行：要访问 USB 设备节点，拔插后还要重启容器里的 usbmuxd。
+
+**macOS**
+
+- 只支持 Apple Silicon，Intel Mac 没测过。
+- 预编译二进制没有经过苹果公证，用浏览器下载的要先去掉隔离标记。
+- 守护进程要在终端里前台运行，还没有 launchd 配置；不能用 Docker（没有 USB 直通）。
+- 手机的充电上限要改成 100%，开着「80% 上限」时 USB 大约每分钟断开一次。
+
+和 Linux 的其他区别见 [macOS 已知差异](../deploy/macos#已知差异)。
 
 下一步：[快速开始](./getting-started)。

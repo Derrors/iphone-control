@@ -6,10 +6,8 @@
 
 <div align="center">
   <a href="https://github.com/Derrors/iphone-control">
-    <img src="website/public/logo.svg" alt="Logo" width="120">
+    <img src="docs/images/banner.zh-CN.svg" alt="iphone-control：让 AI agent 操作一台真实的 iPhone" width="100%">
   </a>
-
-  <h3 align="center">iphone-control</h3>
 
   <p align="center">
     让 AI agent 操作一台接在 Linux 或 Mac 上的真实 iPhone：一个 Rust 二进制，不需要 Xcode，不需要付费开发者账号，不越狱。
@@ -35,6 +33,10 @@
     &nbsp;·&nbsp;
     <a href="https://github.com/Derrors/iphone-control/issues">🐛 问题反馈</a>
   </p>
+
+  <br>
+  <img src="docs/images/demo.webp" alt="左边 Claude Code 调用 iphone_launch_app 和 iphone_tap_element，右边 iPhone 上时钟的秒表正在计时" width="900">
+  <p><sub>让 Claude Code「打开时钟，切到秒表并启动」。左边是 Claude Code 的工具调用（只截了前半段），右边是完成后的手机。</sub></p>
 </div>
 
 > [!NOTE]
@@ -54,6 +56,10 @@ iphone-control 在 Linux 或 macOS 上用**一个 Rust 二进制**把这些事�
 </p>
 
 ## 功能特性
+
+<p align="center">
+  <img src="docs/images/features.zh-CN.svg" alt="一个二进制、15 个 MCP 工具、少走往返、无人值守、HID 后备、诊断与通知" width="900">
+</p>
 
 - **看屏幕、点屏幕**：截图（可放大某块区域）、点击、滑动、长按、输入文字（支持中文）、硬件按键
 - **按界面元素操作**：读元素树、按文字点击（自动避开悬浮栏、键盘挡住的部分）、启动和结束 App、打开链接、等某段文字出现

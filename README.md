@@ -6,10 +6,8 @@
 
 <div align="center">
   <a href="https://github.com/Derrors/iphone-control">
-    <img src="website/public/logo.svg" alt="Logo" width="120">
+    <img src="docs/images/banner.svg" alt="iphone-control: Let AI agents operate a real iPhone" width="100%">
   </a>
-
-  <h3 align="center">iphone-control</h3>
 
   <p align="center">
     Let an AI agent operate a real iPhone plugged into a Linux machine or a Mac — one Rust binary, no Xcode, no paid developer account, no jailbreak.
@@ -35,6 +33,10 @@
     &nbsp;·&nbsp;
     <a href="https://github.com/Derrors/iphone-control/issues">🐛 Issues</a>
   </p>
+
+  <br>
+  <img src="docs/images/demo.webp" alt="Claude Code on the left calls iphone_launch_app and iphone_tap_element; on the right, the iPhone shows the Clock stopwatch running" width="900">
+  <p><sub>Asking Claude Code to “open Clock, switch to the stopwatch and start it”. Left: Claude Code’s tool calls (first part only). Right: the phone afterwards.</sub></p>
 </div>
 
 > [!NOTE]
@@ -54,6 +56,10 @@ iphone-control does it all in **one Rust binary** on Linux or macOS, built on [i
 </p>
 
 ## Features
+
+<p align="center">
+  <img src="docs/images/features.svg" alt="One binary, 15 MCP tools, fewer round trips, runs unattended, HID fallback, doctor and alerts" width="900">
+</p>
 
 - **See and touch the screen**: screenshots with region zoom, tap, swipe, long-press, text input (including Chinese), hardware buttons
 - **Work with UI elements**: read the element tree, tap by text (on a part not covered by floating bars or the keyboard), launch and close apps, open URLs, wait for text to appear

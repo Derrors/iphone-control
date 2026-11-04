@@ -1,0 +1,62 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 388" width="1200" height="388" role="img" aria-label="One binary: Linux or macOS. No Xcode, no paid developer account, no jailbreak.; 15 MCP tools: Screenshots, taps, swipes, text input, buttons, apps, URLs, element tree.; Fewer round trips: Actions return the settled screen; iphone_batch runs 20 steps per call.; Runs unattended: Recovers from replugs and reboots; re-signs WDA before it expires.; HID fallback: Screenshots, taps and keys keep working via CoreDevice (iOS 27+).; doctor and alerts: Checks every layer from USB to WDA; Telegram or Bark when it needs you.">
+  <defs>
+    <linearGradient id="cd-bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0f1b2d"/>
+      <stop offset="1" stop-color="#0b1220"/>
+    </linearGradient>
+    <linearGradient id="cd-icon" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#22d3ee"/>
+      <stop offset="1" stop-color="#0e7490"/>
+    </linearGradient>
+  </defs>
+  <g font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans CJK SC', 'Source Han Sans SC', 'WenQuanYi Zen Hei', Helvetica, Arial, sans-serif">
+  <g transform="translate(0 0)">
+    <rect x="0.5" y="0.5" width="375" height="175" rx="18" fill="url(#cd-bg)" stroke="#155e75" stroke-opacity="0.7"/>
+    <rect x="24" y="24" width="48" height="48" rx="12" fill="url(#cd-icon)"/>
+    <g transform="translate(24 24)"><polyline points="14,17 22,24 14,31" fill="none" stroke="#fff" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/><line x1="25" y1="32" x2="35" y2="32" stroke="#fff" stroke-width="3.5" stroke-linecap="round"/></g>
+    <text x="24" y="104" font-size="22" font-weight="700" fill="#f0f9ff">One binary</text>
+    <text x="24" y="132" font-size="15" fill="#94a3b8">Linux or macOS. No Xcode, no paid</text>
+    <text x="24" y="155" font-size="15" fill="#94a3b8">developer account, no jailbreak.</text>
+  </g>
+  <g transform="translate(412 0)">
+    <rect x="0.5" y="0.5" width="375" height="175" rx="18" fill="url(#cd-bg)" stroke="#155e75" stroke-opacity="0.7"/>
+    <rect x="24" y="24" width="48" height="48" rx="12" fill="url(#cd-icon)"/>
+    <g transform="translate(24 24)"><g fill="#fff"><rect x="13" y="13" width="10" height="10" rx="2.5"/><rect x="25" y="13" width="10" height="10" rx="2.5"/><rect x="13" y="25" width="10" height="10" rx="2.5"/><rect x="25" y="25" width="10" height="10" rx="2.5" fill-opacity="0.6"/></g></g>
+    <text x="24" y="104" font-size="22" font-weight="700" fill="#f0f9ff">15 MCP tools</text>
+    <text x="24" y="132" font-size="15" fill="#94a3b8">Screenshots, taps, swipes, text input,</text>
+    <text x="24" y="155" font-size="15" fill="#94a3b8">buttons, apps, URLs, element tree.</text>
+  </g>
+  <g transform="translate(824 0)">
+    <rect x="0.5" y="0.5" width="375" height="175" rx="18" fill="url(#cd-bg)" stroke="#155e75" stroke-opacity="0.7"/>
+    <rect x="24" y="24" width="48" height="48" rx="12" fill="url(#cd-icon)"/>
+    <g transform="translate(24 24)"><g fill="#fff"><path d="M11 15 L23 24 L11 33 Z"/><path d="M24 15 L36 24 L24 33 Z"/></g></g>
+    <text x="24" y="104" font-size="22" font-weight="700" fill="#f0f9ff">Fewer round trips</text>
+    <text x="24" y="132" font-size="15" fill="#94a3b8">Actions return the settled screen;</text>
+    <text x="24" y="155" font-size="15" fill="#94a3b8">iphone_batch runs 20 steps per call.</text>
+  </g>
+  <g transform="translate(0 212)">
+    <rect x="0.5" y="0.5" width="375" height="175" rx="18" fill="url(#cd-bg)" stroke="#155e75" stroke-opacity="0.7"/>
+    <rect x="24" y="24" width="48" height="48" rx="12" fill="url(#cd-icon)"/>
+    <g transform="translate(24 24)"><path d="M35 24 A11 11 0 1 1 31.8 16.2" fill="none" stroke="#fff" stroke-width="3.5" stroke-linecap="round"/><polyline points="33,9 33,17 25,17" fill="none" stroke="#fff" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/></g>
+    <text x="24" y="104" font-size="22" font-weight="700" fill="#f0f9ff">Runs unattended</text>
+    <text x="24" y="132" font-size="15" fill="#94a3b8">Recovers from replugs and reboots;</text>
+    <text x="24" y="155" font-size="15" fill="#94a3b8">re-signs WDA before it expires.</text>
+  </g>
+  <g transform="translate(412 212)">
+    <rect x="0.5" y="0.5" width="375" height="175" rx="18" fill="url(#cd-bg)" stroke="#155e75" stroke-opacity="0.7"/>
+    <rect x="24" y="24" width="48" height="48" rx="12" fill="url(#cd-icon)"/>
+    <g transform="translate(24 24)"><path d="M24 11 L37 18 L24 25 L11 18 Z" fill="#fff"/><polyline points="11,24 24,31 37,24" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/><polyline points="11,30 24,37 37,30" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" stroke-opacity="0.6"/></g>
+    <text x="24" y="104" font-size="22" font-weight="700" fill="#f0f9ff">HID fallback</text>
+    <text x="24" y="132" font-size="15" fill="#94a3b8">Screenshots, taps and keys keep</text>
+    <text x="24" y="155" font-size="15" fill="#94a3b8">working via CoreDevice (iOS 27+).</text>
+  </g>
+  <g transform="translate(824 212)">
+    <rect x="0.5" y="0.5" width="375" height="175" rx="18" fill="url(#cd-bg)" stroke="#155e75" stroke-opacity="0.7"/>
+    <rect x="24" y="24" width="48" height="48" rx="12" fill="url(#cd-icon)"/>
+    <g transform="translate(24 24)"><polyline points="9,25 17,25 21,14 27,34 31,25 39,25" fill="none" stroke="#fff" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/></g>
+    <text x="24" y="104" font-size="22" font-weight="700" fill="#f0f9ff">doctor and alerts</text>
+    <text x="24" y="132" font-size="15" fill="#94a3b8">Checks every layer from USB to WDA;</text>
+    <text x="24" y="155" font-size="15" fill="#94a3b8">Telegram or Bark when it needs you.</text>
+  </g>
+  </g>
+</svg>

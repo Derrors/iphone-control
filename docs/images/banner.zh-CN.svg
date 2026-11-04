@@ -1,0 +1,68 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 320" width="1280" height="320" role="img" aria-label="iphone-control: 让 AI agent 操作一台真实的 iPhone">
+  <title>iphone-control</title>
+  <defs>
+    <linearGradient id="bn-bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0b1220"/>
+      <stop offset="1" stop-color="#082f49"/>
+    </linearGradient>
+    <radialGradient id="bn-glow" cx="0.86" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#22d3ee" stop-opacity="0.28"/>
+      <stop offset="1" stop-color="#22d3ee" stop-opacity="0"/>
+    </radialGradient>
+    <pattern id="bn-dots" width="24" height="24" patternUnits="userSpaceOnUse">
+      <circle cx="2" cy="2" r="1.2" fill="#67e8f9" fill-opacity="0.12"/>
+    </pattern>
+    <linearGradient id="bn-title" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#a5f3fc"/>
+    </linearGradient>
+    <linearGradient id="logo-bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#22d3ee"/>
+      <stop offset="1" stop-color="#0e7490"/>
+    </linearGradient>
+    <linearGradient id="logo-screen" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#164e63"/>
+      <stop offset="1" stop-color="#082f49"/>
+    </linearGradient>
+    <filter id="logo-shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="10" stdDeviation="14" flood-color="#083344" flood-opacity="0.35"/>
+    </filter>
+  </defs>
+  <rect width="1280" height="320" rx="24" fill="url(#bn-bg)"/>
+  <rect width="1280" height="320" rx="24" fill="url(#bn-dots)"/>
+  <rect width="1280" height="320" rx="24" fill="url(#bn-glow)"/>
+  <!-- 右侧：点击波纹 -->
+  <g fill="none" stroke="#22d3ee">
+    <circle cx="1104" cy="160" r="40" stroke-opacity="0.55" stroke-width="3"/>
+    <circle cx="1104" cy="160" r="76" stroke-opacity="0.32" stroke-width="2"/>
+    <circle cx="1104" cy="160" r="112" stroke-opacity="0.16" stroke-width="2"/>
+  </g>
+  <circle cx="1104" cy="160" r="14" fill="#fbbf24"/>
+  <g transform="translate(72 64) scale(0.375)">
+    <!-- app-icon tile -->
+  <rect width="512" height="512" rx="116" fill="url(#logo-bg)"/>
+
+  <!-- phone -->
+  <g filter="url(#logo-shadow)">
+    <rect x="148" y="64" width="216" height="384" rx="48" fill="#ffffff"/>
+  </g>
+  <rect x="166" y="82" width="180" height="348" rx="32" fill="url(#logo-screen)"/>
+  <rect x="226" y="98" width="60" height="18" rx="9" fill="#0b1220"/>
+
+  <!-- AI sparkle on the screen -->
+  <path d="M256 168 C263 214 278 229 324 236 C278 243 263 258 256 304 C249 258 234 243 188 236 C234 229 249 214 256 168 Z" fill="#ffffff"/>
+  <path d="M310 150 C312 164 316 168 330 170 C316 172 312 176 310 190 C308 176 304 172 290 170 C304 168 308 164 310 150 Z" fill="#67e8f9"/>
+
+  <!-- home indicator -->
+  <rect x="226" y="404" width="60" height="8" rx="4" fill="#ffffff" fill-opacity="0.55"/>
+
+  <!-- tap: amber ripple with a pointer -->
+  <circle cx="366" cy="372" r="74" fill="#fbbf24" stroke="#ffffff" stroke-width="14"/>
+  <path d="M346 330 L346 410 L366 390 L382 424 L398 416 L382 384 L410 382 Z" fill="#0b1220" stroke="#0b1220" stroke-width="6" stroke-linejoin="round"/>
+  </g>
+  <g font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans CJK SC', 'Source Han Sans SC', 'WenQuanYi Zen Hei', Helvetica, Arial, sans-serif">
+    <text x="300" y="138" font-size="64" font-weight="700" fill="url(#bn-title)">iphone-control</text>
+    <text x="302" y="194" font-size="28" font-weight="600" fill="#e0f2fe">让 AI agent 操作一台真实的 iPhone</text>
+    <text x="302" y="238" font-size="20" fill="#94a3b8">一个 Rust 二进制 · Linux 和 macOS · 不需要 Xcode · 不越狱</text>
+  </g>
+</svg>

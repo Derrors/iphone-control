@@ -33,7 +33,7 @@
   </p>
 
   <br>
-  <img src="docs/images/demo.webp" alt="左边 Claude Code 调用 iphone_launch_app 和 iphone_tap_element，右边 iPhone 上时钟的秒表正在计时" width="900">
+  <img src="docs/images/demo-stopwatch.webp" alt="左边 Claude Code 调用 iphone_launch_app 和 iphone_tap_element，右边 iPhone 上时钟的秒表正在计时" width="900">
   <p><sub>让 Claude Code「打开时钟，切到秒表并启动」。左边是 Claude Code 的工具调用（只截了前半段），右边是完成后的手机。</sub></p>
 </div>
 

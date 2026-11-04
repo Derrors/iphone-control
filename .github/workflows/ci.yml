@@ -8,7 +8,33 @@ on:
 permissions:
   contents: read
 
+# 同一个 PR 推了新提交，就取消旧提交还没跑完的那次：macOS runner 少，旧运行会占着队列，
+# 后面的排到超时被取消。main 上的每次推送都跑完
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
+  # PR 只改了文档（Markdown、docs/、website/）时不跑 macOS 编译
+  changes:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+    steps:
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          predicate-quantifier: every
+          filters: |
+            code:
+              - '**'
+              - '!**/*.md'
+              - '!docs/**'
+              - '!website/**'
+
   rust:
     runs-on: ubuntu-latest
     steps:
@@ -24,9 +50,11 @@ jobs:
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - run: cargo test --workspace --locked
 
-  # macOS（Apple Silicon）上能编译、测试通过。还没正式支持 macOS，先防止平台相关的代码混进来；
-  # 格式只和平台无关，上面已经查过
+  # macOS（Apple Silicon）上能编译、测试通过；格式和平台无关，上面已经查过
   macos:
+    needs: [changes]
+    # changes 在 main 的推送上会跳过，这时照样跑
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.changes.outputs.code == 'true') }}
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4

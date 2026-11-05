@@ -14,7 +14,7 @@
     <img src="https://img.shields.io/badge/MCP-15%20tools-8A2BE2?style=flat" alt="MCP">
     <a href="Cargo.toml"><img src="https://img.shields.io/badge/Rust-1.88%2B-CE422B?style=flat&logo=rust&logoColor=white" alt="Rust"></a>
     <a href="LICENSE"><img src="https://img.shields.io/github/license/Derrors/iphone-control?style=flat" alt="License"></a>
-    <a href="https://m8ven.ai/mcp/derrors-iphone-control-1pcmse?s=readme"><img src="https://m8ven.ai/badge/mcp/derrors-iphone-control-1pcmse" alt="M8ven score"></a>
+    <a href="https://m8ven.ai/mcp/derrors-iphone-control-1pcmse?s=readme"><img src="https://m8ven.ai/badge/mcp/derrors-iphone-control-1pcmse?variant=verified" alt="M8ven verified"></a>
   </p>
 
   <p align="center">

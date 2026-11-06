@@ -6,6 +6,14 @@ All notable changes to this project are documented here. The format is based on 
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-11-07
+
+### Upgrade notes
+
+- Auto-unlock passcodes now belong to individual devices. Before upgrading, ensure the only connected device is the one whose passcode was saved by the old version; that legacy passcode is automatically assigned when exactly one device is connected. If its owner is uncertain, clear it with the old version's `passcode clear` before upgrading, then use `passcode set --device <UDID>` for each device. Back up the data directory first.
+- Device selection is shared by all clients. Explicit `select` choices survive daemon restarts; automatic selection keeps the current device only while the daemon runs and it remains connected.
+- Landscape HID fallback needs a matching WDA rotation sample no older than 30 seconds. Do not flip the device between landscape sides while WDA is unavailable; wait for WDA to recover before doing so.
+
 ### Added
 
 - Choose which device to control when several iPhones/iPads are connected: new MCP tools `iphone_list_devices` and `iphone_select_device`, commands `devices` and `select`. The choice is saved in state.json and survives restarts; `select auto` goes back to automatic choice. `IPHONE_UDID`, when set, wins and switching is refused.
@@ -64,7 +72,8 @@ First public release.
 - Docker image (single binary plus Debian's usbmuxd, not privileged) with a generated third-party license list, published to `ghcr.io/derrors/iphone-control` for linux/amd64 and linux/arm64.
 - Running without Docker, from source or from the prebuilt Linux binaries (x86_64, aarch64): as a regular user with the system usbmuxd, XDG data and socket paths, the unsigned WebDriverAgent downloaded and checksum-verified before the first signing, `mcp-config` printing a direct command, and a systemd user service.
 
-[Unreleased]: https://github.com/Derrors/iphone-control/compare/v0.1.2...HEAD
+[Unreleased]: https://github.com/Derrors/iphone-control/compare/v0.1.3...HEAD
+[0.1.3]: https://github.com/Derrors/iphone-control/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/Derrors/iphone-control/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/Derrors/iphone-control/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/Derrors/iphone-control/releases/tag/v0.1.0

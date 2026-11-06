@@ -6,6 +6,14 @@
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-11-07
+
+### 升级注意事项
+
+- 自动解锁密码改为按设备保存。升级前只连接旧版保存密码所对应的那台设备：仅连接一台时，旧密码会自动归到它名下。若不确定旧密码属于哪台，请先用旧版 `passcode clear` 清除，再升级并分别运行 `passcode set --device <UDID>` 设置。操作前先备份数据目录。
+- 所有客户端共享同一台被控设备。显式 `select` 选择会跨守护进程重启保留；自动模式只在进程运行期间、当前设备不断开的情况下保持选择。
+- 横屏 HID 后备触摸需要 30 秒内且匹配的 WDA 旋转角。WDA 不可用期间不要从一个横屏方向翻到另一侧；请等 WDA 恢复后再翻转。
+
 ### 新增
 
 - 接着多台 iPhone/iPad 时可以选择控制哪一台：新增 MCP 工具 `iphone_list_devices`、`iphone_select_device`，命令 `devices`、`select`。选定的设备写进 state.json，重启后还记得；`select auto` 改回自动选。设了 `IPHONE_UDID` 时以它为准、不能切换。
@@ -62,7 +70,8 @@
 - `setup`、`doctor`、`status`、`mcp-config`、`wda-bridge`、`notify-test` 命令。
 - Docker 镜像（非 privileged，linux/amd64、linux/arm64）；也可不用 Docker，从源码或预编译二进制以普通用户运行，附 systemd 用户服务。
 
-[Unreleased]: https://github.com/Derrors/iphone-control/compare/v0.1.2...HEAD
+[Unreleased]: https://github.com/Derrors/iphone-control/compare/v0.1.3...HEAD
+[0.1.3]: https://github.com/Derrors/iphone-control/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/Derrors/iphone-control/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/Derrors/iphone-control/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/Derrors/iphone-control/releases/tag/v0.1.0

@@ -1,6 +1,6 @@
 # Tools
 
-The MCP server provides 15 tools. Coordinates are in **points**, matching the pixels of a full-screen screenshot (430×932 on an iPhone 15 Pro Max), so the agent can tap what it reads off a screenshot.
+The MCP server provides 17 tools. Coordinates are in **points**, matching the pixels of a full-screen screenshot (430×932 on an iPhone 15 Pro Max), so the agent can tap what it reads off a screenshot.
 
 ## Looking at the screen
 
@@ -25,6 +25,15 @@ The MCP server provides 15 tools. Coordinates are in **points**, matching the pi
 | `iphone_open_url` | Open a link or URL scheme |
 | `iphone_list_apps` | Installed apps |
 | `iphone_batch` | Run up to 20 steps in one call, stopping at the first error |
+
+## Several devices
+
+Only one device is controlled at a time; every other tool acts on it. With one device connected you can ignore these.
+
+| Tool | What it does |
+|---|---|
+| `iphone_list_devices` | Every iPhone/iPad on USB: name, model, iOS version, UDID; marks the one being controlled and whether it has an auto-unlock passcode |
+| `iphone_select_device` | Switch to another device (UDID or name), remembered across restarts; `auto` goes back to automatic choice. WDA takes 10–60 s to start on the new device. Not possible when `IPHONE_UDID` is set |
 
 ## See the screen after an action: `then`
 

@@ -7,7 +7,7 @@ use std::time::{Duration, Instant, UNIX_EPOCH};
 use ictl_device::{Device, DeviceError, SYSFS_USB, Tunnel, UsbDevice};
 use ictl_wda::{WdaClient, WdaError, WdaRunner, http::DeviceTransport};
 
-use crate::core::{Daemon, Inner, close_hid};
+use crate::core::{Daemon, DeviceProfile, Inner, close_hid};
 use crate::machine::DeviceState;
 use crate::notify::Event;
 
@@ -123,20 +123,25 @@ impl Daemon {
                 Vec::new()
             }
         };
-        let target = match &self.cfg.udid {
-            Some(u) => devices.into_iter().find(|d| &d.udid == u),
-            None => devices.into_iter().next(),
-        };
+        self.note_connected(g, devices).await;
+        let pinned = self.pinned(g);
+        let udids: Vec<&str> = g.connected.iter().map(|d| d.udid.as_str()).collect();
+        let current = g.device.as_ref().map(|d| d.udid.as_str());
+        let target = crate::machine::pick_device(&udids, pinned.as_deref(), current).map(|i| g.connected[i].clone());
         // 只在容器里（自己看护 usbmuxd、没有 udev）需要；用系统的 usbmuxd 服务时插拔由 udev 处理，也重启不了它
-        let usb_present = ictl_device::apple_usb_present(Path::new(SYSFS_USB));
-        if self.cfg.manage_usbmuxd && g.mux.observe(usb_present, target.is_some()) {
-            self.log.log("USB 上有 Apple 设备但 usbmuxd 看不到,重启 usbmuxd");
+        let on_usb = ictl_device::ios_usb_count(Path::new(SYSFS_USB));
+        if self.cfg.manage_usbmuxd && g.mux.observe(on_usb, g.connected.len()) {
+            self.log
+                .log(&format!("USB 上有 {on_usb} 台 iPhone/iPad,usbmuxd 只认到 {} 台,重启 usbmuxd", g.connected.len()));
             self.ensure_usbmuxd(g, true).await;
         }
 
         match target {
             None => self.offline(g).await,
-            Some(d) => self.online(g, &d).await,
+            Some(d) => {
+                self.online(g, &d).await;
+                self.adopt_legacy_passcode(g);
+            }
         }
 
         let now = Instant::now();
@@ -161,8 +166,12 @@ impl Daemon {
 
     async fn offline(&self, g: &mut Inner) {
         let now = Instant::now();
+        g.device_profile = DeviceProfile::NotChecked;
+        g.wda_rotation = None;
         if g.device.take().is_some() {
             self.log.log("手机离线");
+            // 名字、型号、iOS 版本是这台的：留着的话状态、提示文字会把它当成还在控制的设备
+            g.info = None;
             self.drop_session(g).await;
             g.offline_since = Some(now);
             g.apps.clear();
@@ -175,22 +184,29 @@ impl Daemon {
         }
     }
 
-    async fn online(&self, g: &mut Inner, seen: &UsbDevice) {
+    pub(crate) async fn online(&self, g: &mut Inner, seen: &UsbDevice) {
         // 只比 UDID 不够：断开几秒又接上（短于离线判定、落在两轮巡检之间）时 UDID 不变，
         // usbmuxd 却换了编号，旧句柄的每个连接都报 bad device，永远恢复不了
         if !g.device.as_ref().is_some_and(|d| d.is_connection(seen)) {
-            if let Some(old) = g.device.take()
-                && old.udid == seen.udid
-            {
-                self.log.log(&format!(
+            match g.device.take() {
+                Some(old) if old.udid == seen.udid => self.log.log(&format!(
                     "手机重新接入（usbmuxd 编号 {} → {}），重建连接",
                     old.device_id(),
                     seen.device_id
-                ));
+                )),
+                Some(old) => self.log.log(&format!("改为控制 {}（原来是 {}）", seen.udid, old.udid)),
+                None => {}
             }
             self.drop_session(g).await;
+            g.device_profile = DeviceProfile::NotChecked;
+            // App 列表是上一台的（同一台重新接入也重读，便宜）
+            g.apps.clear();
+            g.wda_rotation = None;
             let d = Device::from_usb(seen);
             g.info = d.info().await.ok();
+            if let Some(i) = &g.info {
+                g.infos.insert(seen.udid.clone(), i.clone());
+            }
             let model =
                 g.info.as_ref().map(|i| format!(" {} iOS {}", i.product_type, i.product_version)).unwrap_or_default();
             self.log.log(&format!("手机在线{model}"));
@@ -206,7 +222,11 @@ impl Daemon {
         let device = g.device.clone().expect("刚设置过");
 
         match device.paired().await {
-            Ok(true) => {}
+            Ok(true) => {
+                if g.device_profile == DeviceProfile::NotChecked {
+                    self.refresh_device_profile(g).await;
+                }
+            }
             Ok(false) => return self.set_state(g, DeviceState::NeedsTrust),
             // usbmuxd 出错：这一轮不下结论
             Err(e) => return tracing::debug!("查配对记录失败：{e}"),
@@ -226,6 +246,12 @@ impl Daemon {
         };
         if ready {
             g.wda_misses.reset();
+            // 记下界面往哪边转：WDA 挂了以后 HID 点击要靠它换算横屏坐标（约 20 毫秒）
+            if let Some(w) = g.wda.as_mut()
+                && let Ok(r) = w.rotation().await
+            {
+                g.wda_rotation = Some((Instant::now(), r));
+            }
             if g.state != DeviceState::Ready {
                 if g.state == DeviceState::NeedsAutomationPin || g.dedup.was_sent("pin") {
                     g.dedup.clear("pin");
@@ -236,7 +262,9 @@ impl Daemon {
                 if let Some(w) = g.wda.as_mut()
                     && let Ok(s) = w.screen_size().await
                 {
-                    g.persisted.screen = Some(s);
+                    // 存竖放尺寸：WDA 在横屏时就绪的话这里拿到的是横的
+                    g.persisted.screen = Some(s.portrait());
+                    g.persisted.screen_udid = g.device.as_ref().map(|d| d.udid.clone());
                     g.persisted.save(&self.cfg.state_file());
                 }
             }
@@ -368,12 +396,21 @@ impl Daemon {
     pub(crate) async fn resign_now(self: &Arc<Self>, force: bool) -> Result<String, String> {
         let (device, name) = {
             let mut g = self.inner.lock().await;
-            if !force
-                && g.persisted.wda_bundle.is_some()
-                && let Some(left) = g.persisted.profile_left()
-                && left > self.cfg.resign_min
-            {
-                return Ok(format!("描述文件还剩 {} 小时,无需重签", left.as_secs() / 3600));
+            let g = &mut *g;
+            // 看这台手机上装的那份，不看最近一次签名：给别的手机签过之后，这台装的还是更早签的、更早到期
+            if !force && g.persisted.wda_bundle.is_some() {
+                self.refresh_device_profile(g).await;
+                if g.device_profile == DeviceProfile::Missing {
+                    // 自动重签不替没装过的手机注册设备（占 Apple ID 的设备名额），交给用户决定
+                    return Ok(
+                        "这台手机上没有装当前 Apple ID 签的 WDA,不自动重签;要装就运行 iphone-control setup".into()
+                    );
+                }
+                if let Some(left) = g.device_profile.left(&g.persisted)
+                    && left > self.cfg.resign_min
+                {
+                    return Ok(format!("描述文件还剩 {} 小时,无需重签", left.as_secs() / 3600));
+                }
             }
             if g.resigning {
                 return Ok("正在重签,稍后用 iphone-control status 查看结果".into());
@@ -428,6 +465,7 @@ impl Daemon {
                 g.persisted.save(&self.cfg.state_file());
                 // 新包装上后旧的 runner 会失效，下一轮巡检重新拉起
                 self.drop_session(g).await;
+                self.refresh_device_profile(g).await;
                 g.backoff.reset();
                 g.dedup.clear("resign");
                 let msg = format!("重签完成,新描述文件到期 {} UTC", crate::eventlog::format_utc(exp));

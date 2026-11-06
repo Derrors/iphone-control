@@ -50,7 +50,7 @@ iphone-control 在 Linux 或 macOS 上用**一个 Rust 二进制**把这些事�
 ## 功能特性
 
 <p align="center">
-  <img src="docs/images/features.zh-CN.svg" alt="一个二进制、15 个 MCP 工具、少走往返、无人值守、HID 后备、诊断与通知" width="900">
+  <img src="docs/images/features.zh-CN.svg" alt="一个二进制、17 个 MCP 工具、少走往返、无人值守、HID 后备、诊断与通知" width="900">
 </p>
 
 - **看屏幕、点屏幕**：截图（可放大某块区域）、点击、滑动、长按、输入文字（支持中文）、硬件按键
@@ -121,7 +121,8 @@ iphone-control mcp-config   # 打印 `claude mcp add` 命令，复制运行
 | `setup` | 安装向导，随时可以重新运行 |
 | `login` | Apple ID 会话失效时重新登录 |
 | `resign [--force]` | 快过期才重签 WebDriverAgent（或立即重签） |
-| `passcode set\|clear` | 开启或关闭自动解锁 |
+| `passcode set\|clear` | 开启或关闭一台设备的自动解锁（密码按设备分开存） |
+| `devices` / `select <UDID\|设备名\|auto>` | 列出接着的设备 / 切换控制哪一台 |
 | `notify-test [事件]` | 发送测试通知 |
 | `mcp-config` | 打印注册 MCP 的命令 |
 

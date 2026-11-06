@@ -1,6 +1,6 @@
 # MCP tools
 
-The MCP server (`iphone-control mcp`) exposes 15 tools. The tool descriptions the agent sees, and every result text, are in Simplified Chinese; this page is the English reference. The definitions live in [`crates/ictl-mcp/src/lib.rs`](../crates/ictl-mcp/src/lib.rs).
+The MCP server (`iphone-control mcp`) exposes 17 tools. The tool descriptions the agent sees, and every result text, are in Simplified Chinese; this page is the English reference. The definitions live in [`crates/ictl-mcp/src/lib.rs`](../crates/ictl-mcp/src/lib.rs).
 
 Coordinates are in **points**, the same unit as the pixels of a full-screen `iphone_screenshot` (for example 430×932 on an iPhone 15 Pro Max), so an agent can read a position off a screenshot and tap it directly.
 
@@ -28,13 +28,22 @@ Coordinates are in **points**, the same unit as the pixels of a full-screen `iph
 | `iphone_open_url` | `url` | Web pages open in Safari; URL schemes open their app |
 | `iphone_list_apps` | `include_system` (default false) | Name and bundle id of installed apps |
 
+## Several devices
+
+Only one device is controlled at a time; every other tool acts on it. With one device connected nothing changes.
+
+| Tool | Parameters | Notes |
+|---|---|---|
+| `iphone_list_devices` | — | Every iPhone/iPad on USB: name, model, iOS version, UDID; marks the one being controlled and whether it has an auto-unlock passcode |
+| `iphone_select_device` | `device`: UDID, device name, or `auto` | Switches to that device and keeps controlling it, also after a restart. A unique substring of the name works too. `auto` goes back to automatic choice: the controlled device is kept until it disconnects. WDA has to start on the new device (10–60 s). Refused when `IPHONE_UDID` is set |
+
 When auto-unlock is configured, action tools unlock the phone first.
 
-Every tool carries MCP annotations: the five that only look at the screen (`iphone_status`, `iphone_screenshot`, `iphone_list_elements`, `iphone_list_apps`, `iphone_wait_for`) are `readOnlyHint: true`; the action tools are not, and taps, long-presses, `iphone_terminate_app` and `iphone_batch` are also marked `destructiveHint: true`, since what they hit on screen can delete or send things.
+Every tool carries MCP annotations: the six read-only tools (`iphone_status`, `iphone_screenshot`, `iphone_list_elements`, `iphone_list_apps`, `iphone_wait_for`, `iphone_list_devices`) are `readOnlyHint: true`; the action tools are not, and taps, long-presses, `iphone_terminate_app` and `iphone_batch` are also marked `destructiveHint: true`, since what they hit on screen can delete or send things.
 
 ### Returning the screen after an action: `then`
 
-Every action tool accepts:
+Screen-action tools accept the following options. `iphone_select_device` does not: use `iphone_status` after switching to check that WDA is ready.
 
 | Parameter | Meaning |
 |---|---|
@@ -63,6 +72,12 @@ Steps run in order. The batch stops at the first error or the first `iphone_tap_
   "then": "screenshot"
 }
 ```
+
+## HID fallback in landscape
+
+On iOS 27+, HID taps and swipes convert screen coordinates back to native portrait coordinates. Before each touch, the daemon captures a fresh screenshot and checks its orientation. Landscape touches additionally require a matching WDA rotation sample from the last 30 seconds. Without one — notably after restarting the daemon — the touch is refused rather than guessed. Screenshots and hardware keys remain available.
+
+During a WDA outage, keep the device in the same landscape direction: both sides produce the same screenshot dimensions, so a 180° flip cannot be detected without WDA. Wait for WDA to recover before changing sides and touching again.
 
 ## Tips for agents
 

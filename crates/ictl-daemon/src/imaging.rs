@@ -23,10 +23,10 @@ pub fn fmt_3g(v: f64) -> String {
     if s.contains('.') { s.trim_end_matches('0').trim_end_matches('.').to_owned() } else { s }
 }
 
-/// 截图是横的而屏幕尺寸是竖的（横屏 App），就把宽高互换
+/// 截图和屏幕尺寸横竖不一致（HID 截图、取尺寸和截图之间刚好转了屏）就把宽高互换，按截图的方向来
 pub fn oriented(img_w: u32, img_h: u32, screen: ScreenSize) -> (u32, u32) {
     let (w, h) = (screen.width.round() as u32, screen.height.round() as u32);
-    if img_w > img_h && w < h { (h, w) } else { (w, h) }
+    if img_w != img_h && w != h && (img_w > img_h) != (w > h) { (h, w) } else { (w, h) }
 }
 
 /// 解码后马上转成 8 位 RGB：设备截图是 16 位 RGBA（1290×2796 解出来约 29MB），后面缩放、编码都按 RGB8 做，
@@ -179,8 +179,7 @@ pub fn region(
     Ok((jpeg(&crop, 90)?, caption))
 }
 
-/// 读取 PNG 尺寸（不解码像素）
-#[cfg(test)]
+/// 读取 PNG 尺寸（只读文件头，不解码像素）
 pub fn png_size(png: &[u8]) -> Option<(u32, u32)> {
     image::ImageReader::with_format(Cursor::new(png), image::ImageFormat::Png).into_dimensions().ok()
 }
@@ -239,6 +238,17 @@ mod tests {
     fn landscape_screenshot_swaps_dimensions() {
         let (j, _) = full_screen(&png(2796, 1290), SCREEN, "HID").unwrap();
         assert_eq!(jpeg_size(&j), (932, 430));
+    }
+
+    /// iPad：屏幕尺寸还是横屏的 1024x768，截图已经是竖的，要按竖屏 768x1024 出图，不能压扁
+    #[test]
+    fn portrait_screenshot_with_landscape_size_is_not_squashed() {
+        let land = ScreenSize { width: 1024.0, height: 768.0 };
+        let (j, cap) = full_screen(&png(1536, 2048), land, "WDA").unwrap();
+        assert_eq!(jpeg_size(&j), (768, 1024));
+        assert_eq!(cap, "768x1024 点,图像像素即点坐标(经 WDA)");
+        let (j, _) = full_screen(&png(2048, 1536), land, "WDA").unwrap();
+        assert_eq!(jpeg_size(&j), (1024, 768));
     }
 
     #[test]

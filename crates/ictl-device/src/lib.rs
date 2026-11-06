@@ -28,6 +28,7 @@ use idevice::{
     cryptexd::{Cryptex1Assets, install_ddi, installed_ddi},
     installation_proxy::InstallationProxyClient,
     lockdown::LockdownClient,
+    misagent::MisagentClient,
     provider::{IdeviceProvider, UsbmuxdProvider},
     rsd::RsdHandshake,
     tcp::handle::AdapterHandle,
@@ -97,6 +98,58 @@ pub struct ScreenSize {
     pub height: f64,
 }
 
+impl ScreenSize {
+    /// 设备竖放时的尺寸（短边是宽）
+    pub fn portrait(self) -> Self {
+        Self { width: self.width.min(self.height), height: self.width.max(self.height) }
+    }
+}
+
+/// 界面相对设备竖放转了多少（WDA `GET /rotation` 的 z）。HID 触摸始终按设备竖放的坐标解释，
+/// 横屏时要把界面上的点换算回去。真机：iPhone 15 Pro Max 摄像头在左 z=270、在右 z=90；
+/// iPad mini 5 Home 键在左 z=90。两个横屏方向 WDA 的 `/orientation` 都报 `LANDSCAPE`，分不出来
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Rotation {
+    #[default]
+    Portrait,
+    /// z=90：竖放的顶边转到了屏幕右边
+    TopToRight,
+    /// z=180
+    UpsideDown,
+    /// z=270：竖放的顶边转到了屏幕左边
+    TopToLeft,
+}
+
+impl Rotation {
+    pub fn from_degrees(z: f64) -> Option<Self> {
+        if !z.is_finite() || z.fract() != 0.0 {
+            return None;
+        }
+        Some(match z.rem_euclid(360.0) as u16 {
+            0 => Self::Portrait,
+            90 => Self::TopToRight,
+            180 => Self::UpsideDown,
+            270 => Self::TopToLeft,
+            _ => return None,
+        })
+    }
+
+    pub fn is_landscape(self) -> bool {
+        matches!(self, Self::TopToRight | Self::TopToLeft)
+    }
+
+    /// 界面上的点 → 设备竖放时的点。`portrait`：竖放时的屏幕尺寸
+    pub fn to_portrait(self, (x, y): (f64, f64), portrait: ScreenSize) -> (f64, f64) {
+        let (w, h) = (portrait.width, portrait.height);
+        match self {
+            Self::Portrait => (x, y),
+            Self::UpsideDown => (w - x, h - y),
+            Self::TopToLeft => (w - y, x),
+            Self::TopToRight => (y, h - x),
+        }
+    }
+}
+
 /// usbmuxd 报告的一台 USB 设备
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UsbDevice {
@@ -132,6 +185,21 @@ pub fn apple_usb_present(root: &Path) -> bool {
     entries
         .flatten()
         .any(|e| std::fs::read_to_string(e.path().join("idVendor")).map(|v| v.trim() == "05ac").unwrap_or(false))
+}
+
+/// sysfs 里 iPhone/iPad/iPod 的台数：厂商号 05ac、产品名以 iPhone/iPad/iPod 开头（Apple 键盘之类的配件不算）。
+/// 接着几台时和 usbmuxd 认到的台数比，才看得出「新插的那台没被认出来」
+pub fn ios_usb_count(root: &Path) -> usize {
+    let Ok(entries) = std::fs::read_dir(root) else { return 0 };
+    let read = |p: &Path, f: &str| std::fs::read_to_string(p.join(f)).map(|v| v.trim().to_owned()).unwrap_or_default();
+    entries
+        .flatten()
+        .filter(|e| {
+            let p = e.path();
+            read(&p, "idVendor") == "05ac"
+                && ["iPhone", "iPad", "iPod"].iter().any(|n| read(&p, "product").starts_with(n))
+        })
+        .count()
 }
 
 /// Linux 上 USB 设备在 sysfs 里的目录
@@ -264,6 +332,12 @@ impl Device {
         })
     }
 
+    /// 手机上装着的全部描述文件（.mobileprovision 原始内容，经 misagent 读）。装 App 时随包带的描述文件会留在这里，
+    /// 用它判断「这台手机上的 WDA 还能用多久」：同一个 Apple ID 给几台手机先后签过，每台装的是各自那一次签的
+    pub async fn installed_profiles(&self) -> Result<Vec<Vec<u8>>> {
+        Ok(MisagentClient::connect(&*self.provider).await?.copy_all().await?)
+    }
+
     pub async fn developer_mode_enabled(&self) -> Result<bool> {
         Ok(AmfiClient::connect(&*self.provider).await?.get_developer_mode_status().await?)
     }
@@ -358,7 +432,9 @@ impl Tunnel {
             .await?;
             self.hid = Some(h);
         }
-        Ok(self.hid.as_mut().expect("刚建好"))
+        let h = self.hid.as_mut().expect("刚建好");
+        h.screen = screen.portrait();
+        Ok(h)
     }
 
     pub fn hid_open(&self) -> bool {
@@ -381,6 +457,48 @@ impl Tunnel {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 真机：摄像头在左（z=270）时，HID 按竖放发 (265,314) 落在了界面的 (314,165)，反过来要换算回 (265,314)
+    #[test]
+    fn rotation_maps_screen_points_back_to_portrait() {
+        let p = ScreenSize { width: 932.0, height: 430.0 }.portrait();
+        assert_eq!(p, ScreenSize { width: 430.0, height: 932.0 });
+        assert_eq!(Rotation::from_degrees(270.0), Some(Rotation::TopToLeft));
+        assert_eq!(Rotation::from_degrees(90.0), Some(Rotation::TopToRight));
+        assert_eq!(Rotation::from_degrees(-90.0), Some(Rotation::TopToLeft));
+        assert_eq!(Rotation::from_degrees(0.0), Some(Rotation::Portrait));
+        assert_eq!(Rotation::from_degrees(45.0), None);
+        for z in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, 0.4, 90.1] {
+            assert_eq!(Rotation::from_degrees(z), None);
+        }
+        assert_eq!(Rotation::TopToLeft.to_portrait((314.0, 165.0), p), (265.0, 314.0));
+        // 顶边在右：界面左上角是竖放时的左下角
+        assert_eq!(Rotation::TopToRight.to_portrait((0.0, 0.0), p), (0.0, 932.0));
+        assert_eq!(Rotation::TopToRight.to_portrait((226.0, 97.0), p), (97.0, 706.0));
+        assert_eq!(Rotation::UpsideDown.to_portrait((0.0, 0.0), p), (430.0, 932.0));
+        assert_eq!(Rotation::Portrait.to_portrait((12.0, 34.0), p), (12.0, 34.0));
+    }
+
+    #[test]
+    fn ios_usb_count_counts_iphones_and_ipads_only() {
+        let root = std::env::temp_dir().join(format!("ictl-sysfs-{}", std::process::id()));
+        let dev = |name: &str, vendor: &str, product: &str| {
+            let d = root.join(name);
+            std::fs::create_dir_all(&d).unwrap();
+            std::fs::write(d.join("idVendor"), format!("{vendor}\n")).unwrap();
+            std::fs::write(d.join("product"), format!("{product}\n")).unwrap();
+        };
+        dev("5-1", "05ac", "iPhone");
+        dev("7-1", "05ac", "iPad");
+        dev("3-1", "05ac", "Magic Keyboard");
+        dev("1-1", "2109", "USB2.0 Hub");
+        // 接口目录没有 idVendor
+        std::fs::create_dir_all(root.join("5-1:1.0")).unwrap();
+        assert_eq!(ios_usb_count(&root), 2);
+        assert!(apple_usb_present(&root));
+        std::fs::remove_dir_all(&root).unwrap();
+        assert_eq!(ios_usb_count(&root), 0);
+    }
 
     #[test]
     fn same_udid_new_mux_id_is_new_connection() {

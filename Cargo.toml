@@ -41,6 +41,7 @@ idevice = { version = "=0.1.68", default-features = false, features = [
     "cryptexd",
     "tss",
     "installation_proxy",
+    "misagent",
     "xctest",
 ] }
 rmcp = { version = "=3.8.0", features = ["server", "transport-io"] }

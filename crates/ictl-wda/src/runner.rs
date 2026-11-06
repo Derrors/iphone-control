@@ -48,6 +48,19 @@ fn automation_signal(msg: &str) -> Option<AutomationSignal> {
     }
 }
 
+/// 手机拒绝启动 runner 时回的是 NSError，但 idevice 收到的是没解开的归档（字段都是 `Uid(n)` 引用），读不出文字，
+/// 只报 `unexpected response`。首次安装后最常见的原因是还没信任开发者（iPad mini 5 / iPadOS 26.6.1 真机：
+/// 点「信任」之前这样报，之后下一次就能启动），在报错里提示一句
+fn launch_hint(msg: String) -> String {
+    if msg.contains("unexpected response") {
+        format!(
+            "{msg}(如果是第一次在这台手机上装 WDA:到 设置 → 通用 → VPN 与设备管理 里信任你的 Apple ID 开发者,需要联网)"
+        )
+    } else {
+        msg
+    }
+}
+
 /// XCTest 过程中收集的信息：报错文字（识别密码框超时用），以及 runner 是否正在等 automation mode
 #[derive(Default)]
 struct Progress {
@@ -154,7 +167,7 @@ impl WdaRunner {
             if is_automation_pin_error(&joined) || p.automation_wait.is_some() {
                 WdaError::NeedsAutomationPin
             } else {
-                WdaError::StartFailed(joined)
+                WdaError::StartFailed(launch_hint(joined))
             }
         };
 
@@ -208,6 +221,13 @@ impl Drop for WdaRunner {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn untrusted_developer_hint_only_for_unexpected_response() {
+        let m = launch_hint("unexpected response from device: unexpected response".into());
+        assert!(m.contains("VPN 与设备管理"), "{m}");
+        assert_eq!(launch_hint("WDA 在限定时间内没有就绪".into()), "WDA 在限定时间内没有就绪");
+    }
 
     #[test]
     fn automation_signals_from_runner_debug_log() {

@@ -25,7 +25,8 @@ pub const INSTRUCTIONS: &str = "控制一台通过 USB 连接的真实 iPhone。
 配置了锁屏密码时,各操作工具会先自动解锁。每次操作后再截图确认结果。\
 涉及付款、删除、发送消息、修改账号或隐私设置的操作,先向用户确认。\
 省时间:操作类工具可带 then=elements 或 then=screenshot,等界面稳定后顺带返回操作后的界面,不用再单独调一次;\
-几步确定的连续操作(按键、逐级点菜单、填表)用 iphone_batch 一次发完;等页面加载用 iphone_wait_for,不要反复截图。";
+几步确定的连续操作(按键、逐级点菜单、填表)用 iphone_batch 一次发完;等页面加载用 iphone_wait_for,不要反复截图。\
+接着多台 iPhone/iPad 时同一时间只控制一台:用 iphone_list_devices 查看,iphone_select_device 切换。";
 
 fn num(desc: &str) -> Value {
     json!({"type": "number", "description": desc})
@@ -103,7 +104,7 @@ fn acting(title: &str, destructive: bool, idempotent: bool) -> ToolAnnotations {
     ToolAnnotations::with_title(title).read_only(false).destructive(destructive).idempotent(idempotent).open_world(true)
 }
 
-/// 15 个工具的定义（toolkit 的 13 个 + iphone_wait_for、iphone_batch）。
+/// 17 个工具的定义（toolkit 的 13 个 + iphone_wait_for、iphone_batch、iphone_list_devices、iphone_select_device）。
 /// 描述可以改写，但工具名、参数、默认返回不改（docs/decisions.md D10）
 pub fn tools() -> Vec<Tool> {
     let t = |name: &'static str, desc: String, s: Map<String, Value>, a: ToolAnnotations| {
@@ -339,6 +340,29 @@ WDA 不可用时改用 HID,只能输入美式键盘上的英文和符号。",
             looking("等文字出现"),
         ),
         t(
+            "iphone_list_devices",
+            "列出 USB 上接着的全部 iPhone/iPad,每行一台:设备名、型号、iOS 版本、UDID,标出正在控制哪台、有没有设自动解锁密码。\n\n\
+何时用:接着多台设备、要确认操作落在哪台,或切换前查设备名和 UDID。同一时间只控制一台,其他工具都作用在正在控制的那台上。只读。"
+                .into(),
+            schema(json!({}), &[]),
+            looking("列出设备"),
+        ),
+        t(
+            "iphone_select_device",
+            "改为控制另一台设备,之后所有工具都作用在它上面,守护进程重启后还记得。device 是 UDID 或设备名(设备名包含这段文字且只有一台也行),\
+auto 表示取消选定、改回自动选(正在控制的那台断开才换)。\n\n\
+何时用:接着多台设备、要操作的不是正在控制的那台。先用 iphone_list_devices 看有哪几台。\n\n\
+行为:切换后要在新设备上拉起 WDA(10~60 秒),期间读界面、按名字点击等用不了,先用 iphone_status 确认就绪。\
+自动解锁按设备分开存密码,新设备没设就不会自动解锁。设了 IPHONE_UDID 时不能切换。\n\n\
+返回:一行结果文字,例如「已切换到 Derrors 的 iPad(iPad11,1 iOS 26.6.1,00008020-…)」。"
+                .into(),
+            schema(
+                json!({"device": {"type": "string", "description": "UDID、设备名,或 auto(改回自动选)"}}),
+                &["device"],
+            ),
+            ToolAnnotations::with_title("切换设备").read_only(false).destructive(false).idempotent(true).open_world(false),
+        ),
+        t(
             "iphone_batch",
             action_desc(
                 "按顺序执行几步操作,一次调用完成(最多 20 步),某一步出错就停下,说明停在第几步、后面几步没执行。\n\n\
@@ -446,6 +470,8 @@ pub fn to_request(name: &str, args: &Map<String, Value>) -> Result<Request, Stri
         "iphone_launch_app" => Request::LaunchApp { app: a.s("app")? },
         "iphone_terminate_app" => Request::TerminateApp { app: a.s("app")? },
         "iphone_open_url" => Request::OpenUrl { url: a.s("url")? },
+        "iphone_list_devices" => Request::ListDevices,
+        "iphone_select_device" => Request::SelectDevice { device: a.s("device")? },
         "iphone_wait_for" => {
             let secs = a.f_or("timeout", 5.0)?;
             if !(0.0..=30.0).contains(&secs) {
@@ -549,7 +575,9 @@ pub fn tap_missed(text: &str) -> bool {
 /// 不带 then 的操作做完后要不要查系统弹窗（弹窗挡着时操作都落在弹窗上，WDA 照样报成功）。
 /// 按键自己处理（Home 先查弹窗；锁屏后不用查），结束 App 后前台是主屏，不会冒出新弹窗
 pub fn wants_alert_check(req: &Request) -> bool {
-    req.is_device_action() && !matches!(req, Request::PressButton { .. } | Request::TerminateApp { .. })
+    // 切换设备后新设备的 WDA 还没起来，查不了弹窗
+    req.is_device_action()
+        && !matches!(req, Request::PressButton { .. } | Request::TerminateApp { .. } | Request::SelectDevice { .. })
 }
 
 /// 守护进程响应 → MCP 结果。错误走工具错误（is_error），文字原样给客户端
@@ -737,10 +765,17 @@ mod tests {
     }
 
     #[test]
-    fn toolkit_tools_plus_wait_for_and_batch() {
+    fn toolkit_tools_plus_wait_for_batch_and_devices() {
         let names: Vec<_> = tools().iter().map(|t| t.name.to_string()).collect();
-        assert_eq!(names.len(), 15);
-        for n in ["iphone_status", "iphone_screenshot", "iphone_tap_element", "iphone_open_url"] {
+        assert_eq!(names.len(), 17);
+        for n in [
+            "iphone_status",
+            "iphone_screenshot",
+            "iphone_tap_element",
+            "iphone_open_url",
+            "iphone_list_devices",
+            "iphone_select_device",
+        ] {
             assert!(names.contains(&n.to_owned()), "{n}");
         }
         for t in tools().into_iter().filter(|t| t.name != "iphone_batch") {

@@ -12,7 +12,7 @@ Everything is configured with environment variables, and all of them are optiona
 | Variable | Default | Meaning |
 |---|---|---|
 | `HTTP_PROXY` / `HTTPS_PROXY` | direct | Proxy for Apple, anisette, Developer Disk Image and notification traffic |
-| `IPHONE_UDID` | first phone | Which phone to use when several are connected |
+| `IPHONE_UDID` | automatic | Pin the device to control. Unset: the controlled device is kept until it disconnects, and you can switch with the `select` command or the `iphone_select_device` tool. When set, switching is refused |
 | `RESIGN_MIN_DAYS` | `2` | Re-sign when fewer days than this remain |
 | `RESIGN_CHECK_HOURS` | `6` | How often to check |
 | `OFFLINE_ALERT_MIN` | `10` | Notify after the phone has been offline this many minutes; `0` disables |

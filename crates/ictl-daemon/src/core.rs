@@ -13,7 +13,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use ictl_device::{AppInfo, Device, DeviceError, DeviceInfo, ScreenSize, Tunnel};
+use ictl_device::{AppInfo, Device, DeviceError, DeviceInfo, Rotation, ScreenSize, Tunnel, UsbDevice};
 use ictl_unlock::UnlockConfig;
 use ictl_wda::{WdaClient, WdaRunner, http::DeviceTransport};
 use serde::{Deserialize, Serialize};
@@ -42,8 +42,14 @@ pub struct Persisted {
     pub wda_bundle: Option<String>,
     /// 描述文件到期时间（Unix 秒）
     pub profile_expires: Option<u64>,
+    /// 设备竖放时的屏幕尺寸（WDA 不可用时 HID 换算坐标用；旧版本可能存的是横屏尺寸，用的时候都先转成竖放）
     pub screen: Option<ScreenSize>,
+    /// `screen` 是哪台设备的；换了设备就不能拿来给 HID 换算坐标
+    pub screen_udid: Option<String>,
     pub last_resign: Option<String>,
+    /// 运行中选定要控制的设备（`iphone-control select`、`iphone_select_device`）；None 是自动选。
+    /// 设了 `IPHONE_UDID` 时以它为准，这个不起作用
+    pub selected_udid: Option<String>,
 }
 
 impl Persisted {
@@ -72,12 +78,68 @@ impl Persisted {
     }
 }
 
+/// 这台手机上装着的 WDA 描述文件（经 misagent 读）。[`Persisted`] 只记最近一次签名：给别的手机签过之后，
+/// 它的到期时间不是这台手机上那份的（这台装的还是更早签的），按它判断会该重签时不重签
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub enum DeviceProfile {
+    /// 还没读（手机没接、刚接上还没配对）
+    #[default]
+    NotChecked,
+    /// 读不出来：按签名记录算
+    Unknown(String),
+    /// 手机上没有当前 Apple ID 给 WDA 签的、包含这台手机的描述文件：没装过 WDA，或装的是别的账号签的
+    Missing,
+    /// 到期时间（Unix 秒）
+    Expires(u64),
+}
+
+impl DeviceProfile {
+    /// 还剩多久：读到了用手机上的；还没读、读不出来按签名记录；手机上没有返回 None
+    pub fn left(&self, persisted: &Persisted) -> Option<Duration> {
+        match self {
+            Self::Expires(e) => {
+                let now = SystemTime::now().duration_since(UNIX_EPOCH).ok()?.as_secs();
+                Some(Duration::from_secs(e.saturating_sub(now)))
+            }
+            Self::Missing => None,
+            Self::NotChecked | Self::Unknown(_) => persisted.profile_left(),
+        }
+    }
+}
+
+/// 从手机上的描述文件（原始内容）里挑 WDA 的：app-id 是「团队 ID.WDA Bundle ID」（不知道团队 ID 时只看 Bundle ID）、
+/// 设备列表里有这台手机，取最晚到期的那份。装过几次会留下几份，旧的过期了也还在
+pub fn wda_profile_expiry(profiles: &[Vec<u8>], team: Option<&str>, bundle: &str, udid: &str) -> Option<SystemTime> {
+    profiles
+        .iter()
+        .filter_map(|p| ictl_sign::Profile::parse(p))
+        .filter(|p| {
+            p.application_identifier
+                .split_once('.')
+                .is_some_and(|(t, b)| b == bundle && team.is_none_or(|team| t == team))
+                && p.devices.iter().any(|d| d.eq_ignore_ascii_case(udid))
+        })
+        .map(|p| p.expires)
+        .max()
+}
+
 /// 快照：`iphone-control status` 显示
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Snapshot {
     pub state: DeviceState,
     pub device: Option<DeviceInfo>,
+    /// USB 上接着的全部设备（读不到名字的只有 UDID）
+    #[serde(default)]
+    pub devices: Vec<DeviceInfo>,
+    /// 选定的设备：`IPHONE_UDID` 或运行中选的；None 是自动选
+    #[serde(default)]
+    pub pinned: Option<String>,
+    #[serde(default)]
+    pub pinned_by_env: bool,
     pub persisted: Persisted,
+    /// 当前这台手机上的 WDA 描述文件
+    #[serde(default)]
+    pub device_profile: DeviceProfile,
     pub auto_unlock: bool,
     pub unlock_disabled: bool,
     pub notify_configured: bool,
@@ -86,11 +148,19 @@ pub struct Snapshot {
 
 pub(crate) struct Inner {
     pub persisted: Persisted,
+    /// 当前这台手机上的 WDA 描述文件；换连接、离线时清成 NotChecked
+    pub device_profile: DeviceProfile,
     pub state: DeviceState,
     pub device: Option<Device>,
     pub info: Option<DeviceInfo>,
+    /// 最近一轮巡检时 USB 上接着的全部设备
+    pub connected: Vec<UsbDevice>,
+    /// 各设备的名字、型号（第一次见到时读一次）
+    pub infos: HashMap<String, DeviceInfo>,
     /// HID 和截图用的隧道（HID 会话归它所有）
     pub tunnel: Option<Tunnel>,
+    /// WDA 最近一次报的界面旋转及读取时间。只在短暂掉线时给 HID 使用，不持久化；换设备时清掉
+    pub wda_rotation: Option<(Instant, Rotation)>,
     pub runner: Option<WdaRunner>,
     pub wda: Option<WdaClient<DeviceTransport>>,
     /// 后台启动 WDA 的任务（含挂开发者镜像），巡检里收结果
@@ -143,8 +213,32 @@ pub(crate) async fn drop_tunnel(g: &mut Inner) {
     }
 }
 
-pub(crate) fn wda_down(state: &DeviceState) -> String {
-    format!("WDA 不可用({}),守护进程一般 1~2 分钟内会拉起;截图/点击/滑动/按键可照常用", state.describe())
+/// 一台设备的简短说明：`名字(型号 iOS 版本,UDID)`；读不到名字时只有 UDID
+pub fn device_label(i: &DeviceInfo) -> String {
+    if i.name.is_empty() && i.product_type.is_empty() {
+        i.udid.clone()
+    } else {
+        format!("{}({} iOS {},{})", i.name, i.product_type, i.product_version, i.udid)
+    }
+}
+
+/// WDA 不可用时的说明。HID 后备路线靠 iOS 27 起才有的 CoreDevice 屏幕服务，低版本不能说「照常用」
+pub(crate) fn wda_down(state: &DeviceState, info: Option<&DeviceInfo>) -> String {
+    // 没接设备时 WDA 不会自己起来，也没有 HID 后备
+    if matches!(state, DeviceState::Absent) {
+        return "WDA 不可用(手机未连接);接上设备后守护进程会自动拉起 WDA".into();
+    }
+    let fallback = if hid_supported(info) {
+        "截图/点击/滑动/按键可照常用"
+    } else {
+        "这台手机 iOS 低于 27,没有 HID 后备路线,WDA 恢复前截图、点击等操作都用不了"
+    };
+    format!("WDA 不可用({}),守护进程一般 1~2 分钟内会拉起;{fallback}", state.describe())
+}
+
+/// HID 后备路线（免 WDA 截图、点击）只有 iOS 27 起能用；不知道版本时照常尝试
+pub(crate) fn hid_supported(info: Option<&DeviceInfo>) -> bool {
+    info.is_none_or(|i| matches!(i.major_version(), 0 | 27..))
 }
 
 impl Daemon {
@@ -154,10 +248,14 @@ impl Daemon {
         let now = Instant::now();
         let inner = Inner {
             persisted,
+            device_profile: DeviceProfile::NotChecked,
             state: DeviceState::Absent,
             device: None,
             info: None,
+            connected: Vec::new(),
+            infos: HashMap::new(),
             tunnel: None,
+            wda_rotation: None,
             runner: None,
             wda: None,
             starting: None,
@@ -181,17 +279,16 @@ impl Daemon {
             next_session_check: now + Duration::from_secs(90),
             apps: HashMap::new(),
         };
-        let unlock = UnlockConfig {
-            passcode_file: cfg.passcode_file(),
-            disabled_flag: cfg.unlock_disabled_flag(),
-            timing: Default::default(),
-        };
         let first = Snapshot {
             state: DeviceState::Absent,
             device: None,
+            devices: Vec::new(),
+            pinned: cfg.udid.clone().or_else(|| inner.persisted.selected_udid.clone()),
+            pinned_by_env: cfg.udid.is_some(),
             persisted: inner.persisted.clone(),
-            auto_unlock: unlock.enabled(),
-            unlock_disabled: unlock.disabled_by_failure(),
+            device_profile: DeviceProfile::NotChecked,
+            auto_unlock: false,
+            unlock_disabled: cfg.unlock_disabled_flag().exists(),
             notify_configured: cfg.notify.any(),
             log_tail: Vec::new(),
         };
@@ -199,11 +296,54 @@ impl Daemon {
         Arc::new(Self { cfg, log, inner: Mutex::new(inner), snap })
     }
 
-    pub(crate) fn unlock_cfg(&self) -> UnlockConfig {
+    /// 自动解锁配置：用设备 `udid` 自己的密码。没接设备时密码文件不存在（自动解锁不可用）
+    pub(crate) fn unlock_cfg(&self, udid: Option<&str>) -> UnlockConfig {
         UnlockConfig {
-            passcode_file: self.cfg.passcode_file(),
+            passcode_file: self.cfg.passcode_file_for(udid.unwrap_or("_none")),
             disabled_flag: self.cfg.unlock_disabled_flag(),
             timing: Default::default(),
+        }
+    }
+
+    /// 选定的设备：`IPHONE_UDID` 优先，其次是运行中选的
+    pub(crate) fn pinned(&self, g: &Inner) -> Option<String> {
+        self.cfg.udid.clone().or_else(|| g.persisted.selected_udid.clone())
+    }
+
+    /// 接着的全部设备，读不到名字的只有 UDID
+    pub(crate) fn connected_infos(&self, g: &Inner) -> Vec<DeviceInfo> {
+        g.connected
+            .iter()
+            .map(|d| {
+                g.infos
+                    .get(&d.udid)
+                    .cloned()
+                    .unwrap_or_else(|| DeviceInfo { udid: d.udid.clone(), ..Default::default() })
+            })
+            .collect()
+    }
+
+    /// 旧版本那份不知道是哪台的密码：USB 上只接着一台、正好是要控制的这台、这台还没有自己的密码时，归到它名下。
+    /// 接着多台时不动它（也不用它）
+    pub(crate) fn adopt_legacy_passcode(&self, g: &Inner) {
+        let legacy = self.cfg.legacy_passcode_file();
+        let ([only], Some(d)) = (&g.connected[..], &g.device) else { return };
+        if only.udid != d.udid || !legacy.is_file() {
+            return;
+        }
+        let dst = self.cfg.passcode_file_for(&d.udid);
+        if dst.exists() {
+            return;
+        }
+        let r = std::fs::create_dir_all(self.cfg.passcodes_dir())
+            .and_then(|_| {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(self.cfg.passcodes_dir(), std::fs::Permissions::from_mode(0o700))
+            })
+            .and_then(|_| std::fs::rename(&legacy, &dst));
+        match r {
+            Ok(()) => self.log.log(&format!("旧的锁屏密码只有一份，USB 上只接着 {}，归到它名下", d.udid)),
+            Err(e) => tracing::warn!("把旧的锁屏密码归到 {} 名下失败：{e}", d.udid),
         }
     }
 
@@ -229,6 +369,28 @@ impl Daemon {
     }
 
     /// 丢掉整个会话：runner、WDA 客户端、正在后台启动的任务、隧道（先停 HID 媒体流）
+    /// 重读这台手机上的 WDA 描述文件（misagent，一次约几十毫秒）
+    pub(crate) async fn refresh_device_profile(&self, g: &mut Inner) {
+        let Some(d) = g.device.clone() else {
+            g.device_profile = DeviceProfile::NotChecked;
+            return;
+        };
+        let Some(bundle) = g.persisted.wda_bundle.clone() else {
+            g.device_profile = DeviceProfile::Missing;
+            return;
+        };
+        g.device_profile = match d.installed_profiles().await {
+            Ok(ps) => match wda_profile_expiry(&ps, g.persisted.team_id.as_deref(), &bundle, &d.udid) {
+                Some(t) => DeviceProfile::Expires(t.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs()),
+                None => DeviceProfile::Missing,
+            },
+            Err(e) => {
+                tracing::warn!("读手机上的描述文件失败，按签名记录算：{e}");
+                DeviceProfile::Unknown(e.to_string())
+            }
+        };
+    }
+
     pub(crate) async fn drop_session(&self, g: &mut Inner) {
         if let Some(h) = g.starting.take() {
             h.abort();
@@ -259,7 +421,7 @@ impl Daemon {
     }
 
     pub(crate) fn require_wda<'a>(&self, g: &'a mut Inner) -> Result<&'a mut WdaClient<DeviceTransport>, String> {
-        let msg = wda_down(&g.state);
+        let msg = wda_down(&g.state, g.info.as_ref());
         self.wda(g).ok_or(msg)
     }
 
@@ -269,11 +431,16 @@ impl Daemon {
 
     /// 发布快照给不拿锁的读者（`status`）。日志尾巴在读的时候再取
     pub(crate) fn publish(&self, g: &Inner) {
-        let unlock = self.unlock_cfg();
+        let unlock = self.unlock_cfg(g.device.as_ref().map(|d| d.udid.as_str()));
+        let pinned = self.pinned(g);
         self.snap.send_replace(Snapshot {
             state: g.state.clone(),
             device: g.info.clone(),
+            devices: self.connected_infos(g),
+            pinned,
+            pinned_by_env: self.cfg.udid.is_some(),
             persisted: g.persisted.clone(),
+            device_profile: g.device_profile.clone(),
             auto_unlock: unlock.enabled(),
             unlock_disabled: unlock.disabled_by_failure(),
             notify_configured: self.cfg.notify.any(),
@@ -289,8 +456,9 @@ impl Daemon {
         match req {
             Request::Daemon => {
                 let mut s = self.snap.borrow().clone();
-                s.unlock_disabled = self.unlock_cfg().disabled_by_failure();
-                s.auto_unlock = self.unlock_cfg().enabled();
+                let unlock = self.unlock_cfg(s.device.as_ref().map(|d| d.udid.as_str()));
+                s.unlock_disabled = unlock.disabled_by_failure();
+                s.auto_unlock = unlock.enabled();
                 s.log_tail = self.log.tail(15);
                 return Response::text(serde_json::to_string_pretty(&s).unwrap_or_default());
             }
@@ -349,6 +517,8 @@ impl Daemon {
                 g.dedup.clear("unlock");
                 Ok("已恢复自动解锁".into())
             }
+            Request::ListDevices => Ok(self.list_devices_text(g)),
+            Request::SelectDevice { device } => self.select_device(g, &device).await,
             Request::Daemon | Request::Resign { .. } => unreachable!("上面已处理"),
         };
         if invalidates {
@@ -392,6 +562,83 @@ fn check_request(req: &Request) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 手机上的描述文件：CMS 外壳里包着 XML plist（同 ictl-sign 的解析方式）
+    fn profile(app_id: &str, devices: &[&str], expires: &str) -> Vec<u8> {
+        let devs: String = devices.iter().map(|d| format!("<string>{d}</string>")).collect();
+        let xml = format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict>
+<key>Name</key><string>iOS Team Provisioning Profile</string>
+<key>TeamIdentifier</key><array><string>TEAM1</string></array>
+<key>ExpirationDate</key><date>{expires}</date>
+<key>ProvisionedDevices</key><array>{devs}</array>
+<key>Entitlements</key><dict><key>application-identifier</key><string>{app_id}</string></dict>
+</dict></plist>"#
+        );
+        [&[0x30u8, 0x82][..], xml.as_bytes(), &[0x00, 0xa0]].concat()
+    }
+
+    #[test]
+    fn wda_down_when_no_device_does_not_promise_recovery() {
+        let m = wda_down(&DeviceState::Absent, None);
+        assert!(m.contains("手机未连接") && !m.contains("1~2 分钟") && !m.contains("可照常用"), "{m}");
+    }
+
+    #[test]
+    fn wda_down_mentions_hid_fallback_only_from_ios_27() {
+        let info = |v: &str| DeviceInfo { product_version: v.into(), ..Default::default() };
+        let st = DeviceState::WdaStarting { last_error: None };
+        assert!(wda_down(&st, Some(&info("27.0.1"))).contains("可照常用"));
+        assert!(wda_down(&st, None).contains("可照常用"));
+        let old = wda_down(&st, Some(&info("26.6.1")));
+        assert!(old.contains("没有 HID 后备路线") && !old.contains("可照常用"), "{old}");
+    }
+
+    const WDA: &str = "com.facebook.WebDriverAgentRunner.xctrunner.TEAM1";
+
+    /// 和上面 XML 里的日期对应的时刻
+    fn at(s: &str) -> SystemTime {
+        let secs = match s {
+            "2026-11-10T15:35:00Z" => 1794324900,
+            "2026-11-12T00:00:00Z" => 1794441600,
+            _ => unreachable!(),
+        };
+        UNIX_EPOCH + Duration::from_secs(secs)
+    }
+
+    /// 真机情况：iPhone 上装的是 11-03 签的（11-10 到期），之后给 iPad 签的那份（11-13）只装到了 iPad 上
+    #[test]
+    fn wda_profile_is_the_one_on_this_phone() {
+        let iphone = "00008130-0019295E012B803A";
+        let ps = vec![
+            profile(&format!("TEAM1.{WDA}"), &[iphone], "2026-11-10T15:35:00Z"),
+            profile("TEAM1.com.example.other", &[iphone], "2027-01-01T00:00:00Z"),
+            profile(&format!("TEAM2.{WDA}"), &[iphone], "2027-01-01T00:00:00Z"),
+            profile(&format!("TEAM1.{WDA}"), &["00008020-000925043499002E"], "2026-11-13T12:26:31Z"),
+            b"not a profile".to_vec(),
+        ];
+        assert_eq!(wda_profile_expiry(&ps, Some("TEAM1"), WDA, iphone), Some(at("2026-11-10T15:35:00Z")));
+        // UDID 大小写不敏感；装过两次取晚的
+        let mut twice = ps.clone();
+        twice.push(profile(&format!("TEAM1.{WDA}"), &[&iphone.to_lowercase()], "2026-11-12T00:00:00Z"));
+        assert_eq!(wda_profile_expiry(&twice, Some("TEAM1"), WDA, iphone), Some(at("2026-11-12T00:00:00Z")));
+        // 没装过：没有包含这台手机的
+        assert_eq!(wda_profile_expiry(&ps, Some("TEAM1"), WDA, "00008101-AAAA"), None);
+        // 不知道团队 ID 时只看 Bundle ID
+        assert!(wda_profile_expiry(&ps, None, WDA, iphone).is_some());
+    }
+
+    #[test]
+    fn device_profile_left_falls_back_to_signing_record_only_when_unknown() {
+        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+        let p = Persisted { profile_expires: Some(now + 6 * 86400), ..Default::default() };
+        let days = |d: Option<Duration>| d.map(|d| (d.as_secs() + 3600) / 86400);
+        assert_eq!(days(DeviceProfile::Expires(now + 4 * 86400).left(&p)), Some(4));
+        assert_eq!(days(DeviceProfile::Unknown("x".into()).left(&p)), Some(6));
+        assert_eq!(days(DeviceProfile::NotChecked.left(&p)), Some(6));
+        assert_eq!(DeviceProfile::Missing.left(&p), None);
+        assert_eq!(DeviceProfile::Expires(now - 10).left(&p), Some(Duration::ZERO));
+    }
 
     #[test]
     fn gesture_seconds_are_bounded() {

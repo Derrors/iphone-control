@@ -12,11 +12,17 @@
 docker exec -it iphone-control iphone-control passcode set
 ```
 
-只支持 4 位以上的纯数字密码。关闭：
+密码存给守护进程正在控制的那台设备；要给别的设备设，加 `--device <UDID 或设备名>`。只支持 4 位以上的纯数字密码。关闭：
 
 ```bash
 docker exec -it iphone-control iphone-control passcode clear
 ```
+
+## 多台设备
+
+密码**按设备分开存**（数据目录 `secrets/passcodes/<UDID>`），一台的密码不会输进另一台；没设密码的设备锁屏时要人工解锁。`devices` 命令（或 `iphone_list_devices` 工具）会标出每台有没有设。
+
+旧版本只存一份密码（`secrets/passcode`），不知道是哪台的：升级后 USB 上只接着一台时，它自动归到那台名下；同时接着几台时不会用它，在要用的设备连着时重新 `passcode set` 即可。
 
 ## 保护规则
 

@@ -117,6 +117,12 @@ pub enum Request {
         force: bool,
     },
     UnlockReset,
+    /// 列出 USB 上接着的全部设备，标出正在控制哪台
+    ListDevices,
+    /// 改为控制另一台设备：`device` 是 UDID、设备名或 `auto`（取消选定，改回自动选）
+    SelectDevice {
+        device: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -158,6 +164,7 @@ impl Request {
                 | Self::LaunchApp { .. }
                 | Self::TerminateApp { .. }
                 | Self::OpenUrl { .. }
+                | Self::SelectDevice { .. }
         )
     }
 }

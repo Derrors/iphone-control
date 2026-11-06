@@ -8,7 +8,7 @@
 | `lockdown/` | Pairing records (Docker) | Tap *Trust* on the phone again |
 | `wda/` | Signed WebDriverAgent | Re-signed automatically |
 | `ddi/` | Developer Disk Image cache | Downloaded again |
-| `secrets/passcode` | Passcode (only with auto-unlock) | Run `passcode set` again |
+| `secrets/passcodes/` | Per-device passcodes (only with auto-unlock) | Run `passcode set` again |
 | `state.json` | State snapshot, last signing result | Rebuilt automatically |
 | `logs/` | Logs | — |
 

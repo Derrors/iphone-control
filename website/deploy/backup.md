@@ -8,7 +8,7 @@
 | `lockdown/` | 配对记录（Docker 部署） | 要在手机上重新点「信任」 |
 | `wda/` | 签好的 WebDriverAgent | 自动重签 |
 | `ddi/` | 开发者镜像缓存 | 自动重新下载 |
-| `secrets/passcode` | 锁屏密码（仅开启自动解锁时） | 要重新 `passcode set` |
+| `secrets/passcodes/` | 各设备的锁屏密码（仅开启自动解锁时） | 要重新 `passcode set` |
 | `state.json` | 状态快照、上次重签结果 | 自动重建 |
 | `logs/` | 日志 | — |
 

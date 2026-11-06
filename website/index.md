@@ -22,7 +22,7 @@ hero:
 features:
   - icon: 🤖
     title: 给 AI 用的工具
-    details: 截图、读屏幕元素、按文字点击、滑动、输入中文、启动 App、等页面加载、一次执行多步，共 15 个 MCP 工具
+    details: 截图、读屏幕元素、按文字点击、滑动、输入中文、启动 App、等页面加载、一次执行多步，共 17 个 MCP 工具
   - icon: 💻
     title: Linux 或 Mac 都行
     details: Linux 上不需要 Mac，Mac 上不需要 Xcode。用免费 Apple ID 给 WebDriverAgent 签名，7 天到期前自动重签

@@ -102,6 +102,7 @@ pub struct LockCheck {
 pub struct WdaClient<T> {
     transport: T,
     session: Option<String>,
+    /// `/wda/screen` 第一次给的尺寸（当时的方向）。当前方向下的宽高见 [`Self::view`]
     screen: Option<ScreenSize>,
     /// 本客户端（对应一次 WDA 启动）是否确认过一次「确实没锁屏」，确认后 `/wda/locked` 就可信了
     lock_state_trusted: bool,
@@ -183,19 +184,52 @@ impl<T: Transport> WdaClient<T> {
         Ok(self.call("GET", "/status", None, Duration::from_secs(5)).await?["value"]["ready"] == true)
     }
 
-    /// 屏幕点尺寸，拿到后缓存
+    /// 当前方向下的屏幕点尺寸（转屏后宽高跟着变）
     pub async fn screen_size(&mut self) -> Result<ScreenSize> {
-        if let Some(s) = self.screen {
-            return Ok(s);
-        }
-        let v = self.get("/wda/screen").await?;
-        let s = &v["screenSize"];
-        let size = match (s["width"].as_f64(), s["height"].as_f64()) {
-            (Some(width), Some(height)) => ScreenSize { width, height },
-            _ => return Err(WdaError::Unavailable("/wda/screen 没有 screenSize".into())),
+        Ok(self.view().await?.screen)
+    }
+
+    /// 当前方向下的屏幕尺寸和方向。尺寸只问一次 `/wda/screen`（约 0.3 秒），方向每次问（约 20 毫秒）：
+    /// 尺寸缓存的是问的那一刻的方向，转屏后不换算的话截图会被压扁、屏幕下半截的元素被当成屏幕外。
+    /// 问不到方向（旧版 WDA 等）就按缓存的尺寸、方向未知（不换算元素坐标）
+    pub async fn view(&mut self) -> Result<elements::View> {
+        let base = match self.screen {
+            Some(s) => s,
+            None => {
+                let v = self.get("/wda/screen").await?;
+                let s = &v["screenSize"];
+                let size = match (s["width"].as_f64(), s["height"].as_f64()) {
+                    (Some(width), Some(height)) => ScreenSize { width, height },
+                    _ => return Err(WdaError::Unavailable("/wda/screen 没有 screenSize".into())),
+                };
+                self.screen = Some(size);
+                size
+            }
         };
-        self.screen = Some(size);
-        Ok(size)
+        Ok(match self.orientation().await {
+            Ok(o) => elements::View { screen: o.orient(base), orientation: Some(o) },
+            Err(e) => {
+                tracing::debug!("读屏幕方向失败，按缓存的屏幕尺寸算：{e}");
+                elements::View { screen: base, orientation: None }
+            }
+        })
+    }
+
+    /// 界面相对设备竖放转了多少（`GET /rotation` 的 z）。能分出两个横屏方向，`/orientation` 分不出
+    pub async fn rotation(&mut self) -> Result<ictl_device::Rotation> {
+        let v = self.in_session("GET", "/rotation", None, Duration::from_secs(10)).await?;
+        v["z"]
+            .as_f64()
+            .and_then(ictl_device::Rotation::from_degrees)
+            .ok_or_else(|| WdaError::Unavailable(format!("看不懂 WDA 给的旋转角：{v}")))
+    }
+
+    /// 前台界面的方向
+    pub async fn orientation(&mut self) -> Result<elements::Orientation> {
+        let v = self.in_session("GET", "/orientation", None, Duration::from_secs(10)).await?;
+        v.as_str()
+            .and_then(elements::Orientation::from_wda)
+            .ok_or_else(|| WdaError::Unavailable(format!("看不懂 WDA 给的方向：{v}")))
     }
 
     /// 是否锁屏。WDA 的 `/wda/locked` 只靠 `com.apple.springboard.lockstate` 的变化通知维护
@@ -290,8 +324,8 @@ impl<T: Transport> WdaClient<T> {
 
     /// 元素树，带上「谁盖住谁」「有没有加载圈」等信息
     pub async fn tree(&mut self) -> Result<elements::Tree> {
-        let screen = self.screen_size().await?;
-        Ok(elements::parse_tree(&self.source_xml().await?, screen))
+        let view = self.view().await?;
+        Ok(elements::parse_tree(&self.source_xml().await?, view))
     }
 
     /// 点击：一个 W3C actions 单指手势（按下 50ms），期间把等待设置临时调小。真机计时（iOS 27）：
@@ -441,6 +475,12 @@ impl<T: Transport> WdaClient<T> {
                 _ => Launch::Slow,
             });
         }
+        self.settle_launched(started).await;
+        Ok(Launch::Foreground)
+    }
+
+    /// App 到了前台之后再等它画出来。`started`：发出启动请求的时刻
+    async fn settle_launched(&mut self, started: tokio::time::Instant) {
         // 冷启动后立即点击会被吞（回归用例 #13）。原来固定再等 1 秒；改为等界面稳定：连续两次元素树一样
         // （读元素树时 WDA 本身也等界面空闲），最多仍是 1 秒
         let deadline = tokio::time::Instant::now() + Duration::from_secs(1);
@@ -456,15 +496,52 @@ impl<T: Transport> WdaClient<T> {
         if let Some(left) = LAUNCH_MIN.checked_sub(started.elapsed()) {
             tokio::time::sleep(left).await;
         }
-        Ok(Launch::Foreground)
     }
 
     pub async fn terminate_app(&mut self, bundle_id: &str) -> Result<()> {
         self.post("/wda/apps/terminate", json!({"bundleId": bundle_id})).await.map(drop)
     }
 
-    pub async fn open_url(&mut self, url: &str) -> Result<()> {
-        self.in_session("POST", "/url", Some(json!({"url": url})), Duration::from_secs(60)).await.map(drop)
+    /// 打开网址或 URL Scheme，等打开它的 App 到前台、画出来再返回（最多约 8 秒），同 [`Self::launch_app`]。
+    /// 不等的话 App 冷启动时还是黑屏，紧接着截图会把两帧黑屏当成「画面已静止」（iPad Safari 真机）。
+    /// 返回结果和前台 App；在原来的前台 App 里打开（Safari 里开网址）时等 1 秒没换就算打开了
+    pub async fn open_url(&mut self, url: &str) -> Result<(Launch, String)> {
+        let started = tokio::time::Instant::now();
+        let before = self.active_app().await.unwrap_or_default();
+        self.in_session("POST", "/url", Some(json!({"url": url})), Duration::from_secs(60)).await?;
+        let deadline = started + Duration::from_secs(8);
+        // 前台要连续两次是同一个才算：Safari 冷启动的一瞬间前台是 `com.apple.DocumentManager.DockFolderViewService`（iPad 真机）
+        let mut last = String::new();
+        loop {
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            let waited = started.elapsed() >= Duration::from_secs(1);
+            let now = self.active_app().await;
+            let steady = now.as_ref().is_ok_and(|a| *a == last);
+            if let Ok(a) = &now {
+                last.clone_from(a);
+            }
+            match now {
+                Ok(a) if a != before && a != SPRINGBOARD && steady => {
+                    self.settle_launched(started).await;
+                    return Ok((Launch::Foreground, a));
+                }
+                Ok(a) if a == before && a != SPRINGBOARD && waited => {
+                    self.settle_launched(started).await;
+                    return Ok((Launch::Foreground, a));
+                }
+                // 「要在某 App 中打开吗」之类的系统弹窗挡着时前台一直是 SpringBoard
+                Ok(a) if a == SPRINGBOARD && waited => {
+                    if let Ok(Some(text)) = self.alert_text().await {
+                        return Ok((Launch::Blocked(text), a));
+                    }
+                }
+                _ => {}
+            }
+            if tokio::time::Instant::now() >= deadline {
+                let now = self.active_app().await.unwrap_or_default();
+                return Ok((Launch::Slow, now));
+            }
+        }
     }
 
     pub async fn idle_settings(&mut self) -> Result<IdleSettings> {
@@ -618,14 +695,76 @@ mod tests {
 
     #[tokio::test]
     async fn screen_size_is_cached_and_status_ready() {
+        let unknown = r#"{"value":{"error":"unknown command","message":"no"}}"#;
         let m = Mock::with(&[
             (200, r#"{"value":{"screenSize":{"width":430,"height":932},"scale":3}}"#),
+            (200, r#"{"sessionId":"S"}"#),
+            (404, unknown),
+            (404, unknown),
             (200, r#"{"value":{"ready":true}}"#),
         ]);
         let mut c = WdaClient::new(&m);
+        // 问不到方向：按缓存的尺寸
         assert_eq!(c.screen_size().await.unwrap(), ScreenSize { width: 430.0, height: 932.0 });
         assert_eq!(c.screen_size().await.unwrap().width, 430.0);
         assert!(c.ready().await.unwrap());
+        let paths: Vec<_> = m.seen.lock().unwrap().iter().map(|s| s.1.clone()).collect();
+        assert_eq!(paths.iter().filter(|p| *p == "/wda/screen").count(), 1);
+    }
+
+    #[tokio::test]
+    async fn rotation_reads_z_angle() {
+        let m = Mock::with(&[
+            (200, r#"{"sessionId":"S"}"#),
+            (200, r#"{"value":{"x":0,"y":0,"z":270}}"#),
+            (200, r#"{"value":{"x":0,"y":0,"z":12}}"#),
+        ]);
+        let mut c = WdaClient::new(&m);
+        assert_eq!(c.rotation().await.unwrap(), ictl_device::Rotation::TopToLeft);
+        assert!(c.rotation().await.is_err());
+        assert_eq!(m.seen.lock().unwrap()[1].1, "/session/S/rotation");
+    }
+
+    /// WDA 在横屏时启动，缓存的是 1024x768；转成竖屏后要给 768x1024
+    #[tokio::test]
+    async fn screen_size_follows_orientation_after_rotation() {
+        let m = Mock::with(&[
+            (200, r#"{"value":{"screenSize":{"width":1024,"height":768},"scale":2}}"#),
+            (200, r#"{"sessionId":"S"}"#),
+            (200, r#"{"value":"LANDSCAPE"}"#),
+            (200, r#"{"value":"PORTRAIT"}"#),
+        ]);
+        let mut c = WdaClient::new(&m);
+        let v = c.view().await.unwrap();
+        assert_eq!(
+            (v.screen, v.orientation),
+            (ScreenSize { width: 1024.0, height: 768.0 }, Some(elements::Orientation::LandscapeLeft))
+        );
+        assert_eq!(c.screen_size().await.unwrap(), ScreenSize { width: 768.0, height: 1024.0 });
+        assert_eq!(m.seen.lock().unwrap()[2].1, "/session/S/orientation");
+    }
+
+    /// 从主屏打开网址：等 Safari 到前台、元素树稳定才返回，不是发完请求就走；一闪而过的系统服务不算
+    #[tokio::test]
+    async fn open_url_waits_for_the_opening_app() {
+        let m = Mock::with(&[
+            (200, r#"{"value":{"bundleId":"com.apple.springboard"}}"#),
+            (200, r#"{"sessionId":"S"}"#),
+            (200, r#"{"value":null}"#),
+            (200, r#"{"value":{"bundleId":"com.apple.DocumentManager.DockFolderViewService"}}"#),
+            (200, r#"{"value":{"bundleId":"com.apple.mobilesafari"}}"#),
+            (200, r#"{"value":{"bundleId":"com.apple.mobilesafari"}}"#),
+            (200, r#"{"value":"<a/>"}"#),
+            (200, r#"{"value":"<a/>"}"#),
+        ]);
+        let mut c = WdaClient::new(&m);
+        let t0 = std::time::Instant::now();
+        let (r, app) = c.open_url("https://example.com").await.unwrap();
+        assert_eq!((r, app.as_str()), (Launch::Foreground, "com.apple.mobilesafari"));
+        assert!(t0.elapsed() >= LAUNCH_MIN);
+        let paths: Vec<_> = m.seen.lock().unwrap().iter().map(|s| s.1.clone()).collect();
+        assert_eq!(paths[2], "/session/S/url");
+        assert!(paths[6].starts_with("/source"), "{paths:?}");
     }
 
     #[tokio::test]

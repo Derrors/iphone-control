@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- iPad mini 5（iPadOS 26.6.1）横屏锁屏上滑后的「触控 ID」提示（按真机 dump 精简，Home 键在右；状态栏是贴树右边的竖条）：
+     Application 是屏幕坐标 1024x768，窗口和里面的元素是竖屏坐标 768x1024；没有数字键和密码栏 -->
+<XCUIElementTypeApplication type="XCUIElementTypeApplication" name=" " label=" " x="0" y="0" width="1024" height="768">
+  <XCUIElementTypeWindow type="XCUIElementTypeWindow" x="0" y="0" width="768" height="1024">
+    <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="768" height="1024"/>
+  </XCUIElementTypeWindow>
+  <XCUIElementTypeWindow type="XCUIElementTypeWindow" x="0" y="0" width="1536" height="2048"/>
+  <XCUIElementTypeWindow type="XCUIElementTypeWindow" x="0" y="0" width="768" height="1024">
+    <XCUIElementTypeStatusBar type="XCUIElementTypeStatusBar" x="736" y="0" width="32" height="1024"/>
+  </XCUIElementTypeWindow>
+  <XCUIElementTypeWindow type="XCUIElementTypeWindow" name="SBCoverSheetWindow" x="0" y="0" width="768" height="1024">
+    <XCUIElementTypeStaticText type="XCUIElementTypeStaticText" value="触控 ID" name="触控 ID" label="触控 ID" x="386" y="476" width="20" height="72"/>
+    <XCUIElementTypeButton type="XCUIElementTypeButton" name="使用密码" label="使用密码" x="323" y="484" width="29" height="56">
+      <XCUIElementTypeStaticText type="XCUIElementTypeStaticText" value="使用密码" name="使用密码" label="使用密码" x="327" y="484" width="20" height="56"/>
+    </XCUIElementTypeButton>
+    <XCUIElementTypeButton type="XCUIElementTypeButton" name="取消" label="取消" x="278" y="497" width="29" height="30">
+      <XCUIElementTypeStaticText type="XCUIElementTypeStaticText" value="取消" name="取消" label="取消" x="283" y="497" width="20" height="30"/>
+    </XCUIElementTypeButton>
+  </XCUIElementTypeWindow>
+</XCUIElementTypeApplication>

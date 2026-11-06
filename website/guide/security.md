@@ -9,7 +9,7 @@ iphone-control 本质上是一个手机遥控器：能访问它的人，就能�
 | 操控手机 | 控制接口（Unix socket，权限 0600） | 主机 root、能 `docker exec` 进容器的人、从源码运行时的同一用户 |
 | Apple ID 会话、开发签名私钥 | 数据目录 `account/` | 能读数据目录的人。Apple ID 密码本身不保存 |
 | 配对记录 | 数据目录 `lockdown/`（容器） | 能读数据目录的人；拿到它不用再点「信任」就能经 USB 访问手机 |
-| 锁屏密码（仅开启自动解锁时） | 数据目录 `secrets/passcode`，**明文** | 能读数据目录的人 |
+| 锁屏密码（仅开启自动解锁时） | 数据目录 `secrets/passcodes/<UDID>`，**明文** | 能读数据目录的人 |
 | 通知密钥 | `.env` 或 `~/.config/iphone-control/env` | 能读这个文件的人 |
 
 ## 默认的保护

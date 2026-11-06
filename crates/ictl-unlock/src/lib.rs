@@ -2,7 +2,9 @@
 //!
 //! 规则全部来自 toolkit 实测（docs/dev/capability-matrix.md §5）：
 //! 1. 先读 `/wda/locked`，没锁直接返回；WDA 不可用也直接返回（交给后面的调用去报错）
-//! 2. 每轮固定：按 Home → 等 1.0s → 底部上滑 → 等 1.5s。不以「树里有键盘」判断：键盘收起时按键元素也常驻树中
+//! 2. 每轮固定：按 Home → 等 1.0s → 底部上滑 → 等 1.5s。不以「树里有键盘」判断：键盘收起时按键元素也常驻树中。
+//!    有 Touch ID 的机型上滑后是「触控 ID」提示，先点「使用密码」再等 1.5s 调出键盘。
+//!    数字键的位置排不成电话键盘（坐标换算错了）就当没有键盘，一位都不按
 //! 3. 读密码栏「共N位数，已输入M位」：总位数和配置不符一位都不输；有残留输入先用右下角删除键逐位删到 0
 //!    （iOS 27 上 Home 不会清空残留），删不掉就下一轮
 //! 4. 每位一个独立 W3C 手势（按下 80ms），按完核对已输入位数正好 +1，不符立即停——确定没凑满整串的不算输错；
@@ -26,7 +28,7 @@ pub enum UnlockError {
     #[error("手机已锁屏；自动解锁之前失败过已停用，请人工解锁、核对密码后运行 iphone-control unlock-reset")]
     Disabled,
     #[error(
-        "调不出锁屏密码键盘（一位都没输进去），请截图看看锁屏界面；手机横放充电时会进入待机显示，那个界面调不出键盘，可在「设置 → 待机显示」里关掉"
+        "调不出锁屏密码键盘（一位都没输进去），需要人工解锁；iPhone 横放充电时会进入待机显示，那个界面调不出键盘，可在「设置 → 待机显示」里关掉"
     )]
     NoKeypad,
     /// 输入不完整，不算输错
@@ -199,7 +201,6 @@ fn write_flag(cfg: &UnlockConfig, why: &str) -> std::io::Result<()> {
 
 async fn unlock<T: Transport>(wda: &mut WdaClient<T>, cfg: &UnlockConfig, code: &[u8]) -> Result<Outcome> {
     let t = &cfg.timing;
-    let screen = wda.screen_size().await?;
     let digit = |i: usize| (code[i] - b'0') as usize;
     let len = code.len() as u32;
 
@@ -208,7 +209,8 @@ async fn unlock<T: Transport>(wda: &mut WdaClient<T>, cfg: &UnlockConfig, code: 
         // Home 唤醒（键盘已打开时 iOS 27 只是把键收起，半截输入还在，下面用删除键处理）
         // 熄屏锁屏刚唤醒时上滑偶尔卡十几秒后报 `point.x != INFINITY`（WDA 还拿不到界面尺寸）：一位没输，算这轮落空重来。
         // XCTest 的 home 和 IOHID 的 Home 轮流用：iPhone 12 mini（iOS 26.4.1）上 XCTest 的 home 点不亮熄灭的屏幕，
-        // IOHID 的能；iOS 27 上一直用的是 XCTest 的，第一轮还是它
+        // IOHID 的能；iOS 27 上一直用的是 XCTest 的，第一轮还是它。
+        // 唤醒后才问方向（iPad 横竖屏的上滑位置、键位换算都靠它）：熄屏时的第一个无障碍查询要等约 8 秒
         let woke = async {
             if round % 2 == 0 {
                 wda.press_button("home").await?;
@@ -216,19 +218,20 @@ async fn unlock<T: Transport>(wda: &mut WdaClient<T>, cfg: &UnlockConfig, code: 
                 wda.press_home_hid().await?;
             }
             tokio::time::sleep(t.wake_settle).await;
-            let (cx, h) = (screen.width / 2.0, screen.height);
-            wda.actions(&swipe_steps((cx, h - 8.0), (cx, h * 0.45), 250)).await
+            let view = wda.view().await?;
+            let (cx, h) = (view.screen.width / 2.0, view.screen.height);
+            wda.actions(&swipe_steps((cx, h - 8.0), (cx, h * 0.45), 250)).await?;
+            Ok::<_, WdaError>(view)
         }
         .await;
-        if let Err(e) = woke {
-            match e {
-                WdaError::Remote { .. } => {
-                    tracing::info!("唤醒/上滑失败，重来一轮：{e}");
-                    continue;
-                }
-                other => return Err(other.into()),
+        let view = match woke {
+            Ok(v) => v,
+            Err(e @ WdaError::Remote { .. }) => {
+                tracing::info!("唤醒/上滑失败，重来一轮：{e}");
+                continue;
             }
-        }
+            Err(other) => return Err(other.into()),
+        };
         tokio::time::sleep(t.swipe_settle).await;
         let check = wda.check_lock(None, false).await?;
         if !check.locked {
@@ -237,10 +240,18 @@ async fn unlock<T: Transport>(wda: &mut WdaClient<T>, cfg: &UnlockConfig, code: 
         // 核对时已取到元素树就直接用，密码栏也从树里读。那棵树是上滑后马上取的，键盘有时还没进树：
         // 缺键盘或密码栏时再取一次（真机上这样省掉一整轮，约 4.5 秒）
         let mut els = match &check.tree {
-            Some(xml) => elements::parse(xml, screen),
+            Some(xml) => elements::parse(xml, view),
             None => wda.elements().await?,
         };
         if check.tree.is_some() && (elements::keypad(&els).is_none() || elements::passcode_field(&els).is_none()) {
+            els = wda.elements().await?;
+        }
+        // Touch ID 机型：点「使用密码」调出键盘。不是数字键，点了不会算输错
+        if elements::keypad(&els).is_none()
+            && let Some(at) = elements::use_passcode_button(&els)
+        {
+            press(wda, at, t).await?;
+            tokio::time::sleep(t.swipe_settle).await;
             els = wda.elements().await?;
         }
         let field = match elements::passcode_field(&els) {
@@ -474,6 +485,41 @@ mod tests {
         let (cfg, dir) = cfg(Some("123456"));
         assert_eq!(ensure_unlocked(&mut WdaClient::new(&fake), &cfg).await.unwrap(), Outcome::Unlocked);
         assert_eq!(fake.state().hid_events, 0);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// iPad mini 5（iPadOS 26.6.1）横屏：上滑后是「触控 ID」提示，点「使用密码」调出键盘；树是竖屏坐标，换算后按对键
+    #[tokio::test]
+    async fn ipad_touch_id_landscape_taps_use_passcode_then_unlocks() {
+        let fake = FakeLockScreen::ipad_touch_id("123456", "LANDSCAPE");
+        let (cfg, dir) = cfg(Some("123456"));
+        assert_eq!(ensure_unlocked(&mut WdaClient::new(&fake), &cfg).await.unwrap(), Outcome::Unlocked);
+        let s = fake.state();
+        assert_eq!((s.failed_attempts, s.digits_typed, s.stray_taps), (0, 6, 0));
+        assert!(!cfg.disabled_flag.exists());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// 另一个横屏方向（Home 键在左）：WDA 照样报 `LANDSCAPE`，按状态栏的位置换算，按对键
+    #[tokio::test]
+    async fn ipad_touch_id_landscape_home_left_unlocks() {
+        let fake = FakeLockScreen::ipad_touch_id_home_left("123456", "LANDSCAPE");
+        let (cfg, dir) = cfg(Some("123456"));
+        assert_eq!(ensure_unlocked(&mut WdaClient::new(&fake), &cfg).await.unwrap(), Outcome::Unlocked);
+        let s = fake.state();
+        assert_eq!((s.failed_attempts, s.digits_typed, s.stray_taps), (0, 6, 0));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// 方向报错（树是竖屏坐标却当成不用转）：键位排不成电话键盘，一位数字都不按
+    #[tokio::test]
+    async fn ipad_landscape_with_wrong_orientation_types_nothing() {
+        let fake = FakeLockScreen::ipad_touch_id("123456", "PORTRAIT");
+        let (cfg, dir) = cfg(Some("123456"));
+        assert!(matches!(ensure_unlocked(&mut WdaClient::new(&fake), &cfg).await, Err(UnlockError::NoKeypad)));
+        let s = fake.state();
+        assert_eq!((s.failed_attempts, s.digits_typed), (0, 0));
+        assert!(!cfg.disabled_flag.exists());
         std::fs::remove_dir_all(dir).unwrap();
     }
 

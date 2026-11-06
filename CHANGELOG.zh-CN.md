@@ -6,6 +6,32 @@
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-11-07
+
+### 升级注意事项
+
+- 自动解锁密码改为按设备保存。升级前只连接旧版保存密码所对应的那台设备：仅连接一台时，旧密码会自动归到它名下。若不确定旧密码属于哪台，请先用旧版 `passcode clear` 清除，再升级并分别运行 `passcode set --device <UDID>` 设置。操作前先备份数据目录。
+- 所有客户端共享同一台被控设备。显式 `select` 选择会跨守护进程重启保留；自动模式只在进程运行期间、当前设备不断开的情况下保持选择。
+- 横屏 HID 后备触摸需要 30 秒内且匹配的 WDA 旋转角。WDA 不可用期间不要从一个横屏方向翻到另一侧；请等 WDA 恢复后再翻转。
+
+### 新增
+
+- 接着多台 iPhone/iPad 时可以选择控制哪一台：新增 MCP 工具 `iphone_list_devices`、`iphone_select_device`，命令 `devices`、`select`。选定的设备写进 state.json，重启后还记得；`select auto` 改回自动选。设了 `IPHONE_UDID` 时以它为准、不能切换。
+- 自动解锁密码按设备分开存（`secrets/passcodes/<UDID>`），`passcode set/clear` 可加 `--device`。旧版本的那份密码在 USB 上只接着一台时自动归到那台名下，接着多台时不会用。
+
+### 修复
+
+- 转屏后实时更新屏幕尺寸，避免截图拉伸和屏幕下部元素被过滤；将 iPad 横屏系统界面的竖屏坐标换算为屏幕坐标，按状态栏位置区分两个横屏方向。
+- Touch ID 设备自动解锁会先点“使用密码”；补全锁屏识别及 iPad 删除键定位，并在输入前校验数字键布局。
+- 经 misagent 读取当前设备已安装的 WDA 描述文件，供 `doctor`、`status` 和自动重签判断到期时间，避免混用另一台设备的签名记录。
+- `setup` 在签名安装前等待守护进程识别目标设备；修正设备离线和 iOS 低于 27 时的提示，并为 WDA 启动的笼统错误补充首次安装时信任开发者的排查提示。
+- `open_url` 等待前台 App 稳定后返回，减少冷启动时截到黑屏或把短暂系统服务当成目标 App 的情况。
+- HID 后备路线的点击、滑动会把横屏坐标换算回设备原生的竖屏坐标；持久化尺寸和复用的 HID 会话都按竖屏归一化。每次后备触摸前重新截图核对方向；横屏还需 30 秒内且匹配的 WDA 旋转角，缺失时（包括守护进程刚重启）拒绝触摸。WDA 不可用期间不要从一个横屏方向翻到另一个：仅凭截图宽高无法识别 180° 翻转。
+- 没设 `IPHONE_UDID`、接着多台时，usbmuxd 列表顺序变了会悄悄换成控制另一台（自动解锁可能把一台的密码输进另一台）。现在正在控制的那台一直用到它断开。
+- 设了 `IPHONE_UDID` 而那台没接、另一台接着时，usbmuxd 每 30 秒被重启一次。
+- 容器里已经接着一台时再插一台，usbmuxd 认不到新的那台（没有 udev，收不到热插拔），也不会被重启。现在比较 USB 上和 usbmuxd 认到的 iPhone/iPad 台数。
+- 换设备后还用上一台的 App 列表缓存和屏幕尺寸。
+
 ## [0.1.2] - 2026-11-04
 
 ### 新增
@@ -44,7 +70,8 @@
 - `setup`、`doctor`、`status`、`mcp-config`、`wda-bridge`、`notify-test` 命令。
 - Docker 镜像（非 privileged，linux/amd64、linux/arm64）；也可不用 Docker，从源码或预编译二进制以普通用户运行，附 systemd 用户服务。
 
-[Unreleased]: https://github.com/Derrors/iphone-control/compare/v0.1.2...HEAD
+[Unreleased]: https://github.com/Derrors/iphone-control/compare/v0.1.3...HEAD
+[0.1.3]: https://github.com/Derrors/iphone-control/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/Derrors/iphone-control/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/Derrors/iphone-control/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/Derrors/iphone-control/releases/tag/v0.1.0

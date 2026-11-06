@@ -13,7 +13,7 @@ use idevice::{
     tcp::handle::AdapterHandle,
 };
 
-use crate::{DeviceError, Result, ScreenSize, limit, media::ScreenMediaStream};
+use crate::{DeviceError, Result, Rotation, ScreenSize, limit, media::ScreenMediaStream};
 
 pub const HID_MAX: f64 = 65535.0;
 
@@ -103,7 +103,10 @@ pub fn ascii_to_usage(c: char) -> Option<(u64, bool)> {
 const KEY_LEFT_SHIFT: u64 = 0xE1;
 
 pub struct HidSession {
+    /// 设备竖放时的尺寸：HID 触摸坐标按竖放归一化
     pub screen: ScreenSize,
+    /// 界面现在转了多少；点击、拖动的坐标是界面上的，发出去前按它换算回竖放（调用方每次操作前设）
+    pub rotation: Rotation,
     stream: Option<ScreenMediaStream>,
     touch: UniversalHidServiceClient<Box<dyn ReadWrite>>,
     indigo: IndigoHidClient<Box<dyn ReadWrite>>,
@@ -125,7 +128,13 @@ impl HidSession {
         }
         .await;
         match clients {
-            Ok((touch, indigo)) => Ok(Self { screen, stream: Some(stream), touch, indigo }),
+            Ok((touch, indigo)) => Ok(Self {
+                screen: screen.portrait(),
+                rotation: Rotation::Portrait,
+                stream: Some(stream),
+                touch,
+                indigo,
+            }),
             Err(e) => {
                 // 媒体流已经起来了：不停掉的话手机端会一直挂着它
                 stream.stop().await;
@@ -134,15 +143,21 @@ impl HidSession {
         }
     }
 
+    /// 界面上的点 → HID 归一化坐标（先按 [`Self::rotation`] 换算回竖放）
+    fn hid_point(&self, p: (f64, f64)) -> (u16, u16) {
+        let (x, y) = self.rotation.to_portrait(p, self.screen);
+        to_hid(x, y, self.screen)
+    }
+
     pub async fn tap(&mut self, x: f64, y: f64) -> Result<()> {
-        let (hx, hy) = to_hid(x, y, self.screen);
+        let (hx, hy) = self.hid_point((x, y));
         limit("HID 点击", Duration::from_secs(10), async { Ok(self.touch.tap(hx, hy).await?) }).await
     }
 
     /// 拖动：按时长换算采样数（每 20ms 一个点，至少 10 个），太快会被识别成点击
     pub async fn drag(&mut self, from: (f64, f64), to: (f64, f64), seconds: f64) -> Result<()> {
-        let (x1, y1) = to_hid(from.0, from.1, self.screen);
-        let (x2, y2) = to_hid(to.0, to.1, self.screen);
+        let (x1, y1) = self.hid_point(from);
+        let (x2, y2) = self.hid_point(to);
         let steps = ((seconds * 1000.0 / 20.0).round() as u32).max(10);
         let d = Duration::from_secs_f64(seconds.max(0.0) + 10.0);
         limit("HID 拖动", d, async { Ok(self.touch.drag(x1, y1, x2, y2, steps, 20).await?) }).await

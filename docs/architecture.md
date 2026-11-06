@@ -62,7 +62,7 @@
 
 ## 3. 守护进程状态机
 
-状态定义在 `crates/ictl-daemon/src/machine.rs`（`DeviceState`），推进在 `supervise.rs`。先支持单设备（`IPHONE_UDID` 指定，否则用第一台）。
+状态定义在 `crates/ictl-daemon/src/machine.rs`（`DeviceState`），推进在 `supervise.rs`。同一时间只控制一台设备：`IPHONE_UDID` 固定 > 运行中选定的（`select`，存在 state.json）> 自动选（正在控制的那台一直用到它断开，没有才取第一台）。选定的那台没接时就是 Absent，不换成别的（`machine::pick_device`、`devices.rs`）。
 
 每 10 秒巡检一次，从上往下判断，第一个不满足的就是当前状态：
 
@@ -129,7 +129,7 @@
 | `profiles/` | 当前描述文件 | 0700 | 否 |
 | `ddi/` | 开发者镜像缓存（运行时下载的苹果文件） | 0755 | **否，不得分发** |
 | `wda/` | 当前签好的包 `WDA-signed.ipa`。未签名包在镜像的 `/usr/share/iphone-control/WDA-unsigned.ipa`：构建时下载 Appium 官方的未签名真机包（`WebDriverAgentRunner-Runner.zip` v16.15.3，校验 sha256）重新打包。从源码运行时没有镜像，第一次签名前按同一版本下载、校验，转成 `wda/WDA-unsigned.ipa`（`crates/ictl-daemon/src/wda_pkg.rs`，版本与 Dockerfile 由单测核对）；计划改为本项目 macOS CI 编译 | 0755 | 未签名包进镜像（从源码运行时在本机下载） |
-| `secrets/passcode` | 锁屏密码（仅启用自动解锁时） | 0600 | 否 |
+| `secrets/passcodes/<UDID>` | 各设备的锁屏密码（仅启用自动解锁时）；旧版本的 `secrets/passcode` 在只接着一台时归到那台名下 | 0600 | 否 |
 | `notify.toml` | 通知渠道配置 | 0600 | 否 |
 | `logs/` | 日志，按大小轮转 | 0755 | 否 |
 | `state.json` | 状态机快照、自动解锁停用标记、上次重签结果 | 0600 | 否 |

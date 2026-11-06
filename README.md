@@ -50,7 +50,7 @@ iphone-control does it all in **one Rust binary** on Linux or macOS, built on [i
 ## Features
 
 <p align="center">
-  <img src="docs/images/features.svg" alt="One binary, 15 MCP tools, fewer round trips, runs unattended, HID fallback, doctor and alerts" width="900">
+  <img src="docs/images/features.svg" alt="One binary, 17 MCP tools, fewer round trips, runs unattended, HID fallback, doctor and alerts" width="900">
 </p>
 
 - **See and touch the screen**: screenshots with region zoom, tap, swipe, long-press, text input (including Chinese), hardware buttons
@@ -79,7 +79,7 @@ claude mcp add iphone -s user -- docker exec -i iphone-control iphone-control mc
 **macOS** (Docker can't pass USB through on a Mac, so run the binary directly)
 
 ```bash
-V=v0.1.2   # latest release
+V=v0.1.3   # latest release
 curl -fsSL https://github.com/Derrors/iphone-control/releases/download/$V/iphone-control-$V-macos-arm64.tar.gz | tar xz
 mkdir -p ~/.local/bin && install -m 755 iphone-control-$V-macos-arm64/iphone-control ~/.local/bin/
 echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zprofile && source ~/.zprofile
@@ -121,7 +121,8 @@ Run them as `docker exec -it iphone-control iphone-control <command>`, or direct
 | `setup` | Guided setup; re-run any time |
 | `login` | Sign in to the Apple ID again when the session expires |
 | `resign [--force]` | Re-sign WebDriverAgent if it expires soon (or now) |
-| `passcode set\|clear` | Turn auto-unlock on or off |
+| `passcode set\|clear` | Turn auto-unlock on or off for a device (passcodes are kept per device) |
+| `devices` / `select <UDID\|name\|auto>` | List connected devices / switch which one is controlled |
 | `notify-test [event]` | Send test notifications |
 | `mcp-config` | Print the command that registers the MCP server |
 

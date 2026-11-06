@@ -22,7 +22,7 @@ hero:
 features:
   - icon: 🤖
     title: Tools for agents
-    details: Screenshots, on-screen elements, tap by text, swipe, typing (Chinese too), apps, waiting for pages, multi-step batches — 15 MCP tools
+    details: Screenshots, on-screen elements, tap by text, swipe, typing (Chinese too), apps, waiting for pages, multi-step batches — 17 MCP tools
   - icon: 💻
     title: Linux or Mac
     details: No Mac needed on Linux, no Xcode needed on a Mac. WebDriverAgent is signed with a free Apple ID and re-signed before the 7-day profile expires

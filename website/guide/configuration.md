@@ -12,7 +12,7 @@
 | 变量 | 默认 | 含义 |
 |---|---|---|
 | `HTTP_PROXY` / `HTTPS_PROXY` | 直连 | 访问苹果、anisette、开发者镜像、推送通知用的代理 |
-| `IPHONE_UDID` | 第一台 | 接了多台手机时指定用哪台 |
+| `IPHONE_UDID` | 自动选 | 固定控制哪台设备。不设时自动选：正在控制的那台一直用到它断开；运行中可以用 `select` 命令或 `iphone_select_device` 工具切换。设了就不能切换 |
 | `RESIGN_MIN_DAYS` | `2` | 描述文件剩余不到几天时重签 |
 | `RESIGN_CHECK_HOURS` | `6` | 每隔几小时检查一次 |
 | `OFFLINE_ALERT_MIN` | `10` | 手机离线超过几分钟推送提醒，`0` 不提醒 |

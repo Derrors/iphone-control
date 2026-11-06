@@ -31,6 +31,115 @@ impl Rect {
     }
 }
 
+/// 界面方向，来自 WDA 的 `GET /session/:id/orientation`
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Orientation {
+    Portrait,
+    PortraitUpsideDown,
+    /// WDA 报 `LANDSCAPE`
+    LandscapeLeft,
+    /// WDA 报 `UIA_DEVICE_ORIENTATION_LANDSCAPERIGHT`
+    LandscapeRight,
+}
+
+impl Orientation {
+    pub fn from_wda(s: &str) -> Option<Self> {
+        Some(match s {
+            "PORTRAIT" => Self::Portrait,
+            "UIA_DEVICE_ORIENTATION_PORTRAIT_UPSIDEDOWN" => Self::PortraitUpsideDown,
+            "LANDSCAPE" => Self::LandscapeLeft,
+            "UIA_DEVICE_ORIENTATION_LANDSCAPERIGHT" => Self::LandscapeRight,
+            _ => return None,
+        })
+    }
+
+    pub fn is_landscape(self) -> bool {
+        matches!(self, Self::LandscapeLeft | Self::LandscapeRight)
+    }
+
+    /// 把任一方向下量到的屏幕尺寸换成这个方向下的（横屏宽大于高，竖屏反过来）
+    pub fn orient(self, s: ScreenSize) -> ScreenSize {
+        let (short, long) = (s.width.min(s.height), s.width.max(s.height));
+        if self.is_landscape() {
+            ScreenSize { width: long, height: short }
+        } else {
+            ScreenSize { width: short, height: long }
+        }
+    }
+}
+
+/// 解析元素树要知道的：当前方向下的屏幕尺寸，和方向（不知道时为 None，不做坐标换算）
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct View {
+    pub screen: ScreenSize,
+    pub orientation: Option<Orientation>,
+}
+
+impl From<ScreenSize> for View {
+    fn from(screen: ScreenSize) -> Self {
+        Self { screen, orientation: None }
+    }
+}
+
+/// 元素树坐标到屏幕坐标的换算。iPad 横屏时 SpringBoard（主屏、长按菜单、锁屏）给的是竖屏坐标：
+/// 窗口 768x1024，屏幕 1024x768；App 里给的是屏幕坐标（iPadOS 26.6.1 真机）。点击用的是屏幕坐标。
+/// 往哪边转看状态栏：它在竖屏坐标里是一条贴边的竖条，贴哪边，哪边就是屏幕顶边。
+/// WDA 报的方向靠不住：iPad mini 5 两个横屏方向在主屏上都报 `LANDSCAPE`（rotation z=90）
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Rotate {
+    None,
+    /// 竖屏的顶边转到了屏幕左边（Home 键在右）：(x, y) → (y, 屏幕高 - x)
+    TopToLeft,
+    /// 竖屏的顶边转到了屏幕右边（Home 键在左）：(x, y) → (屏幕宽 - y, x)
+    TopToRight,
+}
+
+impl Rotate {
+    /// 第一个窗口的宽高和横屏的屏幕正好相反：树是竖屏坐标，按状态栏（`status_bar`，树里第一个 StatusBar）贴的边转。
+    /// 树里没有贴边的状态栏时退回看 WDA 报的方向；方向也不知道就不转
+    fn detect(window: Rect, view: View, status_bar: Option<Rect>) -> Self {
+        let s = view.screen;
+        let swapped = s.width > s.height && (window.w - s.height).abs() < 1.0 && (window.h - s.width).abs() < 1.0;
+        if !swapped {
+            return Self::None;
+        }
+        // 竖屏坐标里贴边的竖条：贴左边（x=0）是 Home 键在左，贴右边（x+w=屏幕高）是 Home 键在右
+        if let Some(b) = status_bar.filter(|b| (b.h - s.width).abs() < 1.0 && b.w > 0.0 && b.w < s.height / 4.0) {
+            if b.x.abs() < 1.0 {
+                return Self::TopToRight;
+            }
+            if (b.x + b.w - s.height).abs() < 1.0 {
+                return Self::TopToLeft;
+            }
+        }
+        match view.orientation {
+            Some(Orientation::LandscapeLeft) => Self::TopToLeft,
+            Some(Orientation::LandscapeRight) => Self::TopToRight,
+            o => {
+                tracing::warn!("元素树是竖屏坐标而屏幕是横的，但没有状态栏、方向是 {o:?}，坐标不换算");
+                Self::None
+            }
+        }
+    }
+
+    /// 树里第一个 StatusBar 的原始坐标（不管嵌在哪层，状态栏都是整屏坐标）
+    fn status_bar(xml: &str) -> Option<Rect> {
+        let tag = regex::Regex::new(r"<XCUIElementTypeStatusBar\b[^>]*>").ok()?.find(xml)?.as_str();
+        let attr = |k: &str| -> Option<f64> {
+            regex::Regex::new(&format!(r#"\b{k}="([^"]*)""#)).ok()?.captures(tag)?[1].parse().ok()
+        };
+        Some(Rect { x: attr("x")?, y: attr("y")?, w: attr("width")?, h: attr("height")? })
+    }
+
+    fn apply(self, r: Rect, s: ScreenSize) -> Rect {
+        match self {
+            Self::None => r,
+            Self::TopToLeft => Rect { x: r.y, y: s.height - r.x - r.w, w: r.h, h: r.w },
+            Self::TopToRight => Rect { x: s.width - r.y - r.h, y: r.x, w: r.h, h: r.w },
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct Element {
     pub kind: String,
@@ -244,12 +353,13 @@ fn py_round(v: f64) -> i64 {
     if (v - v.trunc()).abs() == 0.5 && (r as i64) % 2 != 0 { (r - v.signum()) as i64 } else { r as i64 }
 }
 
-pub fn parse(xml: &str, screen: ScreenSize) -> Vec<Element> {
-    parse_tree(xml, screen).elements
+pub fn parse(xml: &str, view: impl Into<View>) -> Vec<Element> {
+    parse_tree(xml, view).elements
 }
 
 /// 解析时每个还没闭合的节点
 struct Open {
+    /// 元素树坐标（小组件偏移已加上，还没换算到屏幕）
     abs: Rect,
     /// 在工具栏/标签栏里
     in_bar: bool,
@@ -268,8 +378,12 @@ struct Open {
     blocker: Option<usize>,
 }
 
-pub fn parse_tree(xml: &str, screen: ScreenSize) -> Tree {
+pub fn parse_tree(xml: &str, view: impl Into<View>) -> Tree {
+    let view = view.into();
+    let screen = view.screen;
     let (sw, sh) = (screen.width, screen.height);
+    // 看到 Application 下第一个窗口时定下来
+    let mut rotate: Option<Rotate> = None;
     let mut reader = quick_xml::Reader::from_str(xml);
     let mut seen = std::collections::HashSet::new();
     let mut tree = Tree::default();
@@ -330,6 +444,11 @@ pub fn parse_tree(xml: &str, screen: ScreenSize) -> Tree {
             offset = (p.abs.x, p.abs.y);
         }
         let abs = Rect { x: raw.x + offset.0, y: raw.y + offset.1, ..raw };
+        if rotate.is_none() && kind == "Window" && stack.len() == 1 && abs.w > 0.0 && abs.h > 0.0 {
+            rotate = Some(Rotate::detect(abs, view, Rotate::status_bar(xml)));
+        }
+        // 下面判断在不在屏幕内、挡没挡住、点哪里，都用屏幕坐标
+        let scr = rotate.unwrap_or(Rotate::None).apply(abs, screen);
         let in_status_bar = kind == "StatusBar" || parent.is_some_and(|p| p.in_status_bar);
         let in_bar = matches!(kind.as_str(), "Toolbar" | "TabBar") || parent.is_some_and(|p| p.in_bar);
         let on_bar = in_bar || kind == "NavigationBar" || parent.is_some_and(|p| p.on_bar);
@@ -338,9 +457,9 @@ pub fn parse_tree(xml: &str, screen: ScreenSize) -> Tree {
         let modal = MODALS.contains(&kind.as_str()) || parent.is_some_and(|p| p.modal);
         let group = if GROUPS.contains(&kind.as_str()) { n } else { parent.map_or(0, |p| p.group) };
         let onscreen =
-            abs.w > 0.0 && abs.h > 0.0 && abs.x < sw && abs.y < sh && abs.x + abs.w > 0.0 && abs.y + abs.h > 0.0;
-        let (vx1, vy1) = (abs.x.max(0.0), abs.y.max(0.0));
-        let visible = Rect { x: vx1, y: vy1, w: (abs.x + abs.w).min(sw) - vx1, h: (abs.y + abs.h).min(sh) - vy1 };
+            scr.w > 0.0 && scr.h > 0.0 && scr.x < sw && scr.y < sh && scr.x + scr.w > 0.0 && scr.y + scr.h > 0.0;
+        let (vx1, vy1) = (scr.x.max(0.0), scr.y.max(0.0));
+        let visible = Rect { x: vx1, y: vy1, w: (scr.x + scr.w).min(sw) - vx1, h: (scr.y + scr.h).min(sh) - vy1 };
         let text = [&label, &name, &value].into_iter().find(|s| !s.is_empty()).cloned();
         let scroll_bar = is_scroll_bar(&kind, &label);
         if kind == "ActivityIndicator" && onscreen {
@@ -383,7 +502,7 @@ pub fn parse_tree(xml: &str, screen: ScreenSize) -> Tree {
         let kind_for_children = kind.clone();
         let kept = text.filter(|text| {
             let noise = !onscreen
-                || (abs.w >= sw && abs.h >= sh)
+                || (scr.w >= sw && scr.h >= sh)
                 || scroll_bar
                 || (in_status_bar && kind != "Button")
                 || (matches!(kind.as_str(), "Other" | "Image")
@@ -397,7 +516,7 @@ pub fn parse_tree(xml: &str, screen: ScreenSize) -> Tree {
                             && !a.label.is_empty()
                             && (kind == "Image" || a.label.contains(text.as_str()))
                     }));
-            !noise && seen.insert((text.clone(), py_round(abs.x), py_round(abs.y), py_round(abs.w), py_round(abs.h)))
+            !noise && seen.insert((text.clone(), py_round(scr.x), py_round(scr.y), py_round(scr.w), py_round(scr.h)))
         });
         let kept = kept.map(|_| {
             tree.elements.push(Element {
@@ -406,7 +525,7 @@ pub fn parse_tree(xml: &str, screen: ScreenSize) -> Tree {
                 name,
                 value,
                 center: (py_round(visible.x + visible.w / 2.0), py_round(visible.y + visible.h / 2.0)),
-                size: (py_round(abs.w), py_round(abs.h)),
+                size: (py_round(scr.w), py_round(scr.h)),
                 visible,
                 span: (n, n),
                 layer: if on_bar {
@@ -484,6 +603,7 @@ pub fn field_values(elements: &[Element]) -> Option<Vec<String>> {
 
 /// 锁屏密码键盘上 0～9 各键的中心点；没找齐 10 个返回 None。
 /// 找到了也不代表键盘在屏幕上——按键后要核对密码栏的已输入位数。
+/// 键位不像电话键盘时也返回 None（见 [`keypad_layout_ok`]）。
 pub fn keypad(elements: &[Element]) -> Option<[(i64, i64); 10]> {
     let mut keys: [Option<(i64, i64)>; 10] = [None; 10];
     for e in elements.iter().filter(|e| e.kind == "Button" || e.kind == "Key") {
@@ -503,19 +623,51 @@ pub fn keypad(elements: &[Element]) -> Option<[(i64, i64); 10]> {
     for (i, k) in keys.into_iter().enumerate() {
         out[i] = k?;
     }
+    if !keypad_layout_ok(&out) {
+        tracing::warn!("锁屏数字键的位置不像电话键盘（坐标可能没换算对），不按：{out:?}");
+        return None;
+    }
     Some(out)
 }
 
+/// 键位像电话键盘：1 2 3、4 5 6、7 8 9 三行各自同高、从左到右、自上而下，三列上下对齐，0 在 8 正下方。
+/// 坐标换算错了（例如横屏时没把竖屏坐标转过来，1 2 3 会竖着排）就过不了：宁可调不出键盘，也不能按错键
+fn keypad_layout_ok(k: &[(i64, i64); 10]) -> bool {
+    const TOL: i64 = 10;
+    let near = |a: i64, b: i64| (a - b).abs() <= TOL;
+    let rows = [[1, 2, 3], [4, 5, 6], [7, 8, 9]];
+    let rows_ok = rows.iter().all(|r| {
+        near(k[r[0]].1, k[r[1]].1) && near(k[r[0]].1, k[r[2]].1) && k[r[0]].0 < k[r[1]].0 && k[r[1]].0 < k[r[2]].0
+    });
+    let cols_ok = (1..=3).all(|c| near(k[c].0, k[c + 3].0) && near(k[c].0, k[c + 6].0));
+    rows_ok && cols_ok && k[1].1 < k[4].1 && k[4].1 < k[7].1 && near(k[0].0, k[8].0) && k[0].1 > k[8].1
+}
+
 /// 密码键盘右下角的按钮：有输入时是「删除」（每按一下删一位），没输入时是「取消」。
-/// 标签随语言变，按位置认：和 9 同一列、在 0 下面的 Button
+/// 标签随语言变，按位置认：和 9 同一列、在 9 下面的 Button（iPhone 上在 0 的右下，iPad 上和 0 同一行）
 pub fn delete_key(elements: &[Element], pad: &[(i64, i64); 10]) -> Option<(i64, i64)> {
-    let (col, row0) = (pad[9].0, pad[0].1);
+    let (col, row9) = (pad[9].0, pad[9].1);
     elements
         .iter()
-        .filter(|e| e.kind == "Button" && (e.center.0 - col).abs() <= 10 && e.center.1 > row0 + 50)
+        .filter(|e| e.kind == "Button" && (e.center.0 - col).abs() <= 10 && e.center.1 > row9 + 50)
         .map(|e| e.center)
         .next()
 }
+
+/// 有 Touch ID 的机型（iPad mini 5，iPadOS 26.6.1 真机）上滑后先是「触控 ID」提示，只有「使用密码」和「取消」两个按钮，
+/// 树里没有数字键和密码栏，点「使用密码」才出键盘。返回它的中心。英文标签没在真机上核对过
+pub fn use_passcode_button(elements: &[Element]) -> Option<(i64, i64)> {
+    elements
+        .iter()
+        .find(|e| {
+            e.kind == "Button"
+                && (USE_PASSCODE_LABELS.contains(&e.label.as_str()) || USE_PASSCODE_LABELS.contains(&e.name.as_str()))
+        })
+        .map(|e| e.center)
+}
+
+/// 「触控 ID」提示上「使用密码」按钮的标签（英文的没在真机上核对过）
+const USE_PASSCODE_LABELS: [&str; 3] = ["使用密码", "Use Passcode", "Enter Passcode"];
 
 /// 元素树里锁屏密码栏的 (总位数, 已输入位数)
 pub fn passcode_field(elements: &[Element]) -> Option<(u32, u32)> {
@@ -533,9 +685,11 @@ pub fn parse_passcode_value(value: &str) -> Option<(u32, u32)> {
 }
 
 /// SpringBoard 元素树看到的是哪种「封面」界面。用来纠正 `/wda/locked`（见 [`crate::WdaClient::locked`]）。
-/// 标识都与语言无关（iOS 27 真机样本）：
-/// - 锁屏有锁图标 `proud-lock`（灵动岛里还有 `systemApertureElementIdentifierLock`），上滑后的密码键盘有 `passcode-view`
-/// - 通知中心和锁屏是同一个界面（都有 `lockscreen-date-view`），但没有锁图标
+/// 锁屏的标识（iOS 27 iPhone 和 iPadOS 26.6.1 iPad mini 5 真机样本）：
+/// - Face ID 机型锁屏有锁图标 `proud-lock`（灵动岛里还有 `systemApertureElementIdentifierLock`），上滑后的密码键盘有 `passcode-view`
+/// - Touch ID 机型没有锁图标，锁屏有 `call-to-action-label`（「按下主屏幕按钮以解锁」）；上滑后的「触控 ID」提示和数字键盘
+///   都没有与语言无关的标识，只能认「使用密码」按钮和锁屏密码栏（值是「共6位数，已输入0位」这样的）
+/// - 通知中心和锁屏是同一个界面（都有 `lockscreen-date-view`），但没有上面这些
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CoverSheet {
     Locked,
@@ -545,8 +699,14 @@ pub enum CoverSheet {
 
 pub fn cover_sheet(xml: &str) -> CoverSheet {
     let lock_glyph =
-        ["\"proud-lock\"", "systemApertureElementIdentifierLock", "\"passcode-view\""].iter().any(|m| xml.contains(m));
-    if lock_glyph {
+        ["\"proud-lock\"", "systemApertureElementIdentifierLock", "\"passcode-view\"", "\"call-to-action-label\""]
+            .iter()
+            .any(|m| xml.contains(m));
+    let use_passcode = USE_PASSCODE_LABELS.iter().any(|l| xml.contains(&format!("label=\"{l}\"")));
+    let passcode_field = regex::Regex::new(r#"<XCUIElementTypeSecureTextField [^>]*value="([^"]*)""#)
+        .ok()
+        .is_some_and(|re| re.captures_iter(xml).any(|c| parse_passcode_value(&c[1]).is_some()));
+    if lock_glyph || use_passcode || passcode_field {
         CoverSheet::Locked
     } else if xml.contains("\"lockscreen-date-view\"") {
         CoverSheet::NotificationCenter
@@ -569,6 +729,40 @@ mod tests {
     const SETTINGS_IOS27: &str = include_str!("../tests/fixtures/settings-floating-search-ios27.xml");
     const HOME_WIDGETS_IOS27: &str = include_str!("../tests/fixtures/home-widgets-ios27.xml");
     const WALLET_IOS27: &str = include_str!("../tests/fixtures/settings-wallet-ios27.xml");
+    const IPAD_TOUCHID: &str = include_str!("../tests/fixtures/ipad-touchid-landscape.xml");
+    const IPAD_PIN: &str = include_str!("../tests/fixtures/ipad-passcode-landscape.xml");
+    const IPAD_LOCK_P: &str = include_str!("../tests/fixtures/ipad-lockscreen-portrait.xml");
+    const IPAD_TOUCHID_P: &str = include_str!("../tests/fixtures/ipad-touchid-portrait.xml");
+    const IPAD_PIN_P: &str = include_str!("../tests/fixtures/ipad-passcode-portrait.xml");
+    const IPAD_TOUCHID_LEFT: &str = include_str!("../tests/fixtures/ipad-touchid-landscape-home-left.xml");
+    const IPAD_PIN_LEFT: &str = include_str!("../tests/fixtures/ipad-passcode-landscape-home-left.xml");
+    const IPAD_LAND: ScreenSize = ScreenSize { width: 1024.0, height: 768.0 };
+
+    fn land(o: Option<Orientation>) -> View {
+        View { screen: IPAD_LAND, orientation: o }
+    }
+
+    /// iPad 横屏主屏：Application 是屏幕坐标，窗口是竖屏坐标
+    fn ipad_home(window: (u32, u32)) -> String {
+        ipad_home_at(window, (386, 546), None)
+    }
+
+    /// `icon` 是「计算器」图标的原始坐标；`status_bar_x` 是竖屏坐标里状态栏竖条（32x1024）的 x
+    fn ipad_home_at(window: (u32, u32), icon: (u32, u32), status_bar_x: Option<u32>) -> String {
+        let bar = status_bar_x.map_or(String::new(), |x| {
+            format!(
+                r#"<XCUIElementTypeWindow type="XCUIElementTypeWindow" x="0" y="0" width="768" height="1024">
+<XCUIElementTypeStatusBar type="XCUIElementTypeStatusBar" x="{x}" y="0" width="32" height="1024"/></XCUIElementTypeWindow>"#
+            )
+        });
+        format!(
+            r#"<XCUIElementTypeApplication type="XCUIElementTypeApplication" x="0" y="0" width="1024" height="768">
+<XCUIElementTypeWindow type="XCUIElementTypeWindow" x="0" y="0" width="{}" height="{}">
+<XCUIElementTypeIcon type="XCUIElementTypeIcon" label="计算器" x="{}" y="{}" width="96" height="72"/>
+</XCUIElementTypeWindow>{bar}</XCUIElementTypeApplication>"#,
+            window.0, window.1, icon.0, icon.1
+        )
+    }
 
     #[test]
     fn delete_key_found_by_position_on_real_keypad() {
@@ -853,43 +1047,62 @@ mod tests {
         assert_eq!(filter(&h, "新项目").iter().map(|e| e.label.as_str()).collect::<Vec<_>>(), ["设置"]);
     }
 
-    fn key(label: &str, x: i64, kind: &str) -> Element {
+    fn key(label: &str, at: (i64, i64), kind: &str) -> Element {
         Element {
             kind: kind.into(),
             label: label.into(),
             name: label.into(),
-            center: (x, 100),
+            center: at,
             size: (80, 80),
             ..Default::default()
         }
     }
 
+    /// 电话键盘上数字 d 的位置：1 2 3 / 4 5 6 / 7 8 9 / 0 在 8 下面，间距 100
+    fn phone(d: i64) -> (i64, i64) {
+        if d == 0 { (200, 400) } else { ((d - 1) % 3 * 100 + 100, (d - 1) / 3 * 100 + 100) }
+    }
+
     #[test]
     fn keypad_needs_all_ten_digits() {
-        let keys: Vec<_> = (0..10).map(|d| key(&d.to_string(), d * 10, "Key")).collect();
+        let keys: Vec<_> = (0..10).map(|d| key(&d.to_string(), phone(d), "Key")).collect();
         let pad = keypad(&keys).unwrap();
-        assert_eq!(pad[0], (0, 100));
-        assert_eq!(pad[9], (90, 100));
+        assert_eq!(pad[0], (200, 400));
+        assert_eq!(pad[9], (300, 300));
         assert!(keypad(&keys[..9]).is_none());
     }
 
     #[test]
     fn keypad_accepts_letters_after_digit_but_not_multi_digit_labels() {
-        let keys: Vec<_> = (0..10).map(|d| key(&format!("{d} ABC"), d, "Button")).collect();
+        let keys: Vec<_> = (0..10).map(|d| key(&format!("{d} ABC"), phone(d), "Button")).collect();
         assert!(keypad(&keys).is_some());
-        let mut keys: Vec<_> = (0..9).map(|d| key(&d.to_string(), d, "Key")).collect();
-        keys.push(key("10", 0, "Key"));
+        let mut keys: Vec<_> = (0..9).map(|d| key(&d.to_string(), phone(d), "Key")).collect();
+        keys.push(key("10", phone(0), "Key"));
         assert!(keypad(&keys).is_none());
         // 锁屏通知上的「3条通知」不能占掉 3 的位置
-        let mut keys = vec![key("3条通知", 99, "Button")];
-        keys.extend((0..10).map(|d| key(&d.to_string(), d, "Key")));
-        assert_eq!(keypad(&keys).unwrap()[3], (3, 100));
+        let mut keys = vec![key("3条通知", (999, 50), "Button")];
+        keys.extend((0..10).map(|d| key(&d.to_string(), phone(d), "Key")));
+        assert_eq!(keypad(&keys).unwrap()[3], (300, 100));
     }
 
     #[test]
     fn keypad_ignores_non_key_types() {
-        let keys: Vec<_> = (0..10).map(|d| key(&d.to_string(), d, "StaticText")).collect();
+        let keys: Vec<_> = (0..10).map(|d| key(&d.to_string(), phone(d), "StaticText")).collect();
         assert!(keypad(&keys).is_none());
+    }
+
+    /// 横屏时竖屏坐标没换算：1 2 3 竖着排。不能当成键盘去按（会按错数字）
+    #[test]
+    fn keypad_with_wrong_layout_is_rejected() {
+        let rotated: Vec<_> = (0..10).map(|d| key(&d.to_string(), (phone(d).1, phone(d).0), "Key")).collect();
+        assert!(keypad(&rotated).is_none());
+        let mut swapped: Vec<_> = (0..10).map(|d| key(&d.to_string(), phone(d), "Key")).collect();
+        swapped[1].center = phone(3);
+        swapped[3].center = phone(1);
+        assert!(keypad(&swapped).is_none());
+        let mut zero_on_top: Vec<_> = (0..10).map(|d| key(&d.to_string(), phone(d), "Key")).collect();
+        zero_on_top[0].center = (200, 0);
+        assert!(keypad(&zero_on_top).is_none());
     }
 
     /// 回归用例 #1：键盘收起时 Key 元素仍在树里。只能证明"树里有"，解锁逻辑不能拿它判断键盘已显示
@@ -910,5 +1123,145 @@ mod tests {
         assert_eq!(parse_passcode_value("6-digit passcode, 3 entered"), Some((6, 3)));
         assert_eq!(parse_passcode_value("共4位数"), None);
         assert_eq!(parse_passcode_value(""), None);
+    }
+
+    #[test]
+    fn orientation_from_wda_and_screen_size() {
+        assert_eq!(Orientation::from_wda("LANDSCAPE"), Some(Orientation::LandscapeLeft));
+        assert_eq!(Orientation::from_wda("UIA_DEVICE_ORIENTATION_LANDSCAPERIGHT"), Some(Orientation::LandscapeRight));
+        assert_eq!(
+            Orientation::from_wda("UIA_DEVICE_ORIENTATION_PORTRAIT_UPSIDEDOWN"),
+            Some(Orientation::PortraitUpsideDown)
+        );
+        assert_eq!(Orientation::from_wda("PORTRAIT"), Some(Orientation::Portrait));
+        assert_eq!(Orientation::from_wda("UNKNOWN"), None);
+        let portrait = ScreenSize { width: 768.0, height: 1024.0 };
+        assert_eq!(Orientation::LandscapeRight.orient(portrait), IPAD_LAND);
+        assert_eq!(Orientation::Portrait.orient(IPAD_LAND), portrait);
+        assert_eq!(Orientation::PortraitUpsideDown.orient(portrait), portrait);
+    }
+
+    /// 真机：横屏主屏上「计算器」树里在 (434,582)，截图里在 (582,334) 附近
+    #[test]
+    fn ipad_landscape_springboard_is_rotated_to_screen_coordinates_by_orientation_without_status_bar() {
+        let left = parse(&ipad_home((768, 1024)), land(Some(Orientation::LandscapeLeft)));
+        assert_eq!((left[0].center, left[0].size), ((582, 334), (72, 96)));
+        let right = parse(&ipad_home((768, 1024)), land(Some(Orientation::LandscapeRight)));
+        assert_eq!((right[0].center, right[0].size), ((442, 434), (72, 96)));
+    }
+
+    /// App 里（窗口和屏幕一样是横的）坐标本来就是屏幕坐标，不转
+    #[test]
+    fn ipad_landscape_app_tree_is_not_rotated() {
+        let els = parse(&ipad_home((1024, 768)), land(Some(Orientation::LandscapeLeft)));
+        assert_eq!((els[0].center, els[0].size), ((434, 582), (96, 72)));
+    }
+
+    /// 竖屏时屏幕下半截（y > 768）的元素也要在：转屏前缓存的横屏尺寸会把它们当成屏幕外
+    #[test]
+    fn ipad_portrait_keeps_elements_below_768() {
+        let xml = r#"<XCUIElementTypeApplication type="XCUIElementTypeApplication" x="0" y="0" width="768" height="1024">
+<XCUIElementTypeWindow type="XCUIElementTypeWindow" x="0" y="0" width="768" height="1024">
+<XCUIElementTypeIcon type="XCUIElementTypeIcon" label="Safari浏览器" x="40" y="940" width="69" height="69"/>
+</XCUIElementTypeWindow>
+<XCUIElementTypeWindow type="XCUIElementTypeWindow" x="0" y="0" width="1024" height="768"/>
+</XCUIElementTypeApplication>"#;
+        let portrait =
+            View { screen: ScreenSize { width: 768.0, height: 1024.0 }, orientation: Some(Orientation::Portrait) };
+        assert_eq!(parse(xml, portrait)[0].center, (74, 974));
+    }
+
+    /// 横屏锁屏：转好之后键盘是电话键盘的样子，「取消/删除」和 0 同一行，「使用密码」在提示页中间（真机截图对得上）
+    #[test]
+    fn ipad_landscape_lock_screen_keypad_and_use_passcode() {
+        let els = parse(IPAD_PIN, land(Some(Orientation::LandscapeLeft)));
+        let pad = keypad(&els).expect("转好坐标后应能认出键盘");
+        let want = [
+            (512, 586),
+            (406, 282),
+            (512, 282),
+            (618, 282),
+            (406, 384),
+            (512, 384),
+            (618, 384),
+            (406, 484),
+            (512, 484),
+            (618, 484),
+        ];
+        assert_eq!(pad, want);
+        assert_eq!(delete_key(&els, &pad), Some((618, 586)));
+        assert_eq!(passcode_field(&els), Some((6, 0)));
+        assert_eq!(use_passcode_button(&els), None);
+
+        let bouncer = parse(IPAD_TOUCHID, land(Some(Orientation::LandscapeLeft)));
+        assert_eq!(use_passcode_button(&bouncer), Some((512, 430)));
+        assert!(keypad(&bouncer).is_none());
+        assert_eq!(passcode_field(&bouncer), None);
+    }
+
+    /// 没有状态栏、也不知道方向就不转；没转的竖屏坐标排不成电话键盘，认不出键盘，一位都不会按
+    #[test]
+    fn ipad_landscape_keypad_without_status_bar_or_orientation_is_not_used() {
+        let no_bar = regex::Regex::new(r"<XCUIElementTypeStatusBar [^>]*/>").unwrap().replace(IPAD_PIN, "");
+        assert!(!no_bar.contains("StatusBar"));
+        assert!(keypad(&parse(&no_bar, land(None))).is_none());
+        assert!(keypad(&parse(&no_bar, land(Some(Orientation::Portrait)))).is_none());
+        // 有状态栏就按它转，不用方向
+        assert!(keypad(&parse(IPAD_PIN, land(None))).is_some());
+    }
+
+    /// Touch ID 的 iPad 锁屏、上滑后的提示、数字键盘都要认成锁屏：WDA 在锁屏时启动时 `/wda/locked` 报 false，
+    /// 认不出就会当成没锁（真机上发生过：工具照常执行，停在锁屏上）
+    #[test]
+    fn ipad_touch_id_lock_screens_are_locked() {
+        for xml in [IPAD_LOCK_P, IPAD_TOUCHID_P, IPAD_PIN_P, IPAD_TOUCHID, IPAD_PIN] {
+            assert_eq!(cover_sheet(xml), CoverSheet::Locked);
+        }
+        assert_eq!(cover_sheet(NC_IOS27), CoverSheet::NotificationCenter);
+        assert_eq!(cover_sheet(HOME), CoverSheet::None);
+    }
+
+    /// 真机竖屏：提示页点「使用密码」，键盘页按键是电话键盘、「取消/删除」和 0 同一行
+    #[test]
+    fn ipad_portrait_touch_id_and_keypad_from_real_trees() {
+        let portrait =
+            View { screen: ScreenSize { width: 768.0, height: 1024.0 }, orientation: Some(Orientation::Portrait) };
+        let bouncer = parse(IPAD_TOUCHID_P, portrait);
+        assert_eq!(use_passcode_button(&bouncer), Some((384, 533)));
+        assert!(keypad(&bouncer).is_none());
+        let els = parse(IPAD_PIN_P, portrait);
+        let pad = keypad(&els).unwrap();
+        assert_eq!((pad[1], pad[0]), ((278, 410), (384, 714)));
+        assert_eq!(delete_key(&els, &pad), Some((490, 714)));
+        assert_eq!(passcode_field(&els), Some((6, 0)));
+    }
+
+    /// 真机两个横屏方向 WDA 都报 `LANDSCAPE`，「计算器」都在截图的 (582,334)：
+    /// Home 键在右时原始框 (386,546)、状态栏贴树的右边；Home 键在左时原始框 (286,406)、状态栏贴树的左边（x=0）
+    #[test]
+    fn ipad_landscape_direction_comes_from_status_bar_not_orientation() {
+        let o = land(Some(Orientation::LandscapeLeft));
+        let home_right = parse(&ipad_home_at((768, 1024), (386, 546), Some(736)), o);
+        assert_eq!((home_right[0].center, home_right[0].size), ((582, 334), (72, 96)));
+        let home_left = parse(&ipad_home_at((768, 1024), (286, 406), Some(0)), o);
+        assert_eq!((home_left[0].center, home_left[0].size), ((582, 334), (72, 96)));
+        // 状态栏说了算，方向报反了也一样
+        let reported_right = land(Some(Orientation::LandscapeRight));
+        assert_eq!(parse(&ipad_home_at((768, 1024), (386, 546), Some(736)), reported_right)[0].center, (582, 334));
+        // 状态栏不是贴边的竖条：按方向
+        assert_eq!(parse(&ipad_home_at((768, 1024), (386, 546), Some(300)), o)[0].center, (582, 334));
+    }
+
+    /// Home 键在左的横屏锁屏：WDA 照样报 LandscapeLeft，按状态栏换算后键位、「使用密码」和 Home 键在右时一样
+    #[test]
+    fn ipad_landscape_home_left_lock_screen_matches_home_right() {
+        let o = land(Some(Orientation::LandscapeLeft));
+        let right = parse(IPAD_PIN, o);
+        let left = parse(IPAD_PIN_LEFT, o);
+        let pad = keypad(&left).expect("Home 键在左也应认出键盘");
+        assert_eq!(Some(pad), keypad(&right));
+        assert_eq!(delete_key(&left, &pad), Some((618, 586)));
+        assert_eq!(use_passcode_button(&parse(IPAD_TOUCHID_LEFT, o)), Some((512, 430)));
+        assert_eq!(cover_sheet(IPAD_PIN_LEFT), CoverSheet::Locked);
     }
 }

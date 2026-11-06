@@ -9,7 +9,8 @@ use ictl_device::ScreenSize;
 pub struct Config {
     pub data_dir: PathBuf,
     pub socket: PathBuf,
-    /// 指定要控制的手机；None 用第一台
+    /// 固定要控制的手机（`IPHONE_UDID`）；None 时可以在运行中选（见 [`crate::core::Persisted::selected_udid`]），
+    /// 都没选就用第一台
     pub udid: Option<String>,
     /// 由守护进程拉起并看护 usbmuxd。默认以 root 运行（容器）时为 true；普通用户拉起的 usbmuxd 碰不到 USB，
     /// 改用系统的 usbmuxd 服务。宿主机以 root 运行、又已有 usbmuxd 服务时设 ICTL_MANAGE_USBMUXD=0
@@ -112,8 +113,18 @@ impl Config {
     pub fn ddi_cache(&self) -> PathBuf {
         self.ddi_dir.clone().unwrap_or_else(|| self.data_dir.join("ddi"))
     }
-    pub fn passcode_file(&self) -> PathBuf {
+    /// 旧版本的锁屏密码：只有一份，不知道是哪台设备的。USB 上只接着一台时归到那台名下（见
+    /// [`crate::core::Daemon::adopt_legacy_passcode`]），接着多台时不用，免得把一台的密码输进另一台
+    pub fn legacy_passcode_file(&self) -> PathBuf {
         self.data_dir.join("secrets/passcode")
+    }
+    pub fn passcodes_dir(&self) -> PathBuf {
+        self.data_dir.join("secrets/passcodes")
+    }
+    /// 这台设备的锁屏密码。UDID 来自 usbmuxd，只有字母、数字和 `-`；别的字符换掉，不让它变成路径
+    pub fn passcode_file_for(&self, udid: &str) -> PathBuf {
+        let name: String = udid.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '_' }).collect();
+        self.passcodes_dir().join(name)
     }
     pub fn unlock_disabled_flag(&self) -> PathBuf {
         self.logs().join("UNLOCK-DISABLED")

@@ -12,11 +12,17 @@ The passcode is stored **in plain text** in the data directory. Anyone who can l
 docker exec -it iphone-control iphone-control passcode set
 ```
 
-Numeric passcodes of 4 or more digits only. To disable:
+The passcode is saved for the device the daemon is controlling; for another one add `--device <UDID or name>`. Numeric passcodes of 4 or more digits only. To disable:
 
 ```bash
 docker exec -it iphone-control iphone-control passcode clear
 ```
+
+## Several devices
+
+Passcodes are **kept per device** (`secrets/passcodes/<UDID>` in the data directory), so one device's passcode is never typed into another; a device without one needs a person to unlock it. The `devices` command (or the `iphone_list_devices` tool) shows which devices have one.
+
+Older versions kept a single passcode (`secrets/passcode`) without knowing which device it belonged to. After upgrading, it is assigned to the device if exactly one is connected over USB; while several are connected it isn't used — run `passcode set` again with the right device connected.
 
 ## Safeguards
 

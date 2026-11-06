@@ -1,0 +1,190 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- iPad mini 5（iPadOS 26.6.1，Touch ID）竖屏锁屏，真机：没有锁图标 proud-lock，有 call-to-action-label「按下主屏幕按钮以解锁」 -->
+<XCUIElementTypeApplication type="XCUIElementTypeApplication" name=" " label=" " x="0" y="0" width="768" height="1024" processId="173" bundleId="com.apple.springboard">
+  <XCUIElementTypeWindow type="XCUIElementTypeWindow" x="0" y="0" width="768" height="1024">
+    <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="768" height="1024">
+      <XCUIElementTypeOther type="XCUIElementTypeOther" x="1166" y="-150" width="8" height="8"/>
+    </XCUIElementTypeOther>
+  </XCUIElementTypeWindow>
+  <XCUIElementTypeWindow type="XCUIElementTypeWindow" x="0" y="0" width="1536" height="2048">
+    <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="1536" height="2048">
+      <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="1536" height="2048">
+        <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="1536" height="2048">
+          <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="1536" height="2048">
+            <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="1536" height="2048"/>
+            <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="1536" height="2048"/>
+            <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="1536" height="2048"/>
+            <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="1536" height="2048"/>
+            <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="1536" height="2048"/>
+            <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="1536" height="2048"/>
+            <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="1536" height="2048"/>
+          </XCUIElementTypeOther>
+        </XCUIElementTypeOther>
+      </XCUIElementTypeOther>
+    </XCUIElementTypeOther>
+  </XCUIElementTypeWindow>
+  <XCUIElementTypeWindow type="XCUIElementTypeWindow" x="0" y="0" width="1536" height="2048">
+    <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="1536" height="2048"/>
+  </XCUIElementTypeWindow>
+  <XCUIElementTypeWindow type="XCUIElementTypeWindow" x="0" y="0" width="1024" height="768">
+    <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="1024" height="768">
+      <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="1024" height="768"/>
+    </XCUIElementTypeOther>
+  </XCUIElementTypeWindow>
+  <XCUIElementTypeWindow type="XCUIElementTypeWindow" x="0" y="0" width="768" height="1024">
+    <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="768" height="1024">
+      <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="768" height="1024"/>
+    </XCUIElementTypeOther>
+  </XCUIElementTypeWindow>
+  <XCUIElementTypeWindow type="XCUIElementTypeWindow" x="0" y="0" width="768" height="1024">
+    <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="768" height="1024">
+      <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="768" height="1024"/>
+    </XCUIElementTypeOther>
+  </XCUIElementTypeWindow>
+  <XCUIElementTypeWindow type="XCUIElementTypeWindow" name="SBCoverSheetWindow" x="0" y="0" width="768" height="1024">
+    <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="768" height="1024">
+      <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="768" height="1024">
+        <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="768" height="1024">
+          <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="768" height="1024"/>
+        </XCUIElementTypeOther>
+        <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="1024" width="768" height="1024"/>
+      </XCUIElementTypeOther>
+      <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="768" height="1024">
+        <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="768" height="1024">
+          <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="768" height="2048">
+            <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="768" height="1024">
+              <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="768" height="1024">
+                <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="768" height="1024">
+                  <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="768" height="1024"/>
+                  <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="768" height="1024"/>
+                  <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="768" height="1024"/>
+                </XCUIElementTypeOther>
+              </XCUIElementTypeOther>
+            </XCUIElementTypeOther>
+            <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="768" height="1024">
+              <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="768" height="1024">
+                <XCUIElementTypeImage type="XCUIElementTypeImage" name="StatusBarLegibilityShadow" x="0" y="0" width="450" height="75"/>
+                <XCUIElementTypeImage type="XCUIElementTypeImage" x="318" y="0" width="450" height="75"/>
+              </XCUIElementTypeOther>
+              <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="768" height="1024">
+                <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="768" height="1024"/>
+                <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="768" height="1024">
+                  <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="768" height="1024">
+                    <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="768" height="1024"/>
+                  </XCUIElementTypeOther>
+                </XCUIElementTypeOther>
+                <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="768" height="1024"/>
+                <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="768" height="1024"/>
+                <XCUIElementTypeScrollView type="XCUIElementTypeScrollView" x="0" y="0" width="768" height="1024">
+                  <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="768" height="1024">
+                    <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="768" height="1024">
+                      <XCUIElementTypeOther type="XCUIElementTypeOther" x="161" y="0" width="446" height="1024">
+                        <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="768" height="1024">
+                          <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="768" height="1024"/>
+                          <XCUIElementTypeScrollView type="XCUIElementTypeScrollView" x="161" y="0" width="446" height="1024">
+                            <XCUIElementTypeScrollView type="XCUIElementTypeScrollView" x="171" y="0" width="426" height="249">
+                              <XCUIElementTypeScrollView type="XCUIElementTypeScrollView" x="171" y="0" width="426" height="249">
+                                <XCUIElementTypeButton type="XCUIElementTypeButton" name="ListCell" x="171" y="0" width="426" height="249">
+                                  <XCUIElementTypeOther type="XCUIElementTypeOther" name="ListCell.ContentView" x="171" y="0" width="426" height="249">
+                                    <XCUIElementTypeOther type="XCUIElementTypeOther" x="171" y="0" width="426" height="249">
+                                      <XCUIElementTypeOther type="XCUIElementTypeOther" x="171" y="0" width="426" height="249">
+                                        <XCUIElementTypeOther type="XCUIElementTypeOther" x="171" y="0" width="426" height="249"/>
+                                        <XCUIElementTypeOther type="XCUIElementTypeOther" x="171" y="0" width="426" height="249"/>
+                                        <XCUIElementTypeOther type="XCUIElementTypeOther" x="171" y="0" width="426" height="249">
+                                          <XCUIElementTypeOther type="XCUIElementTypeOther" x="171" y="0" width="426" height="249"/>
+                                        </XCUIElementTypeOther>
+                                      </XCUIElementTypeOther>
+                                    </XCUIElementTypeOther>
+                                  </XCUIElementTypeOther>
+                                </XCUIElementTypeButton>
+                                <XCUIElementTypeOther type="XCUIElementTypeOther" value="0%" name="垂直滚动条, 1页" label="垂直滚动条, 1页" x="563" y="32" width="31" height="217">
+                                  <XCUIElementTypeOther type="XCUIElementTypeOther" x="590" y="35" width="4" height="211"/>
+                                </XCUIElementTypeOther>
+                                <XCUIElementTypeOther type="XCUIElementTypeOther" value="0%" name="垂直滚动条, 1页" label="垂直滚动条, 1页" x="563" y="32" width="31" height="217">
+                                  <XCUIElementTypeOther type="XCUIElementTypeOther" x="590" y="35" width="4" height="211"/>
+                                </XCUIElementTypeOther>
+                              </XCUIElementTypeScrollView>
+                              <XCUIElementTypeOther type="XCUIElementTypeOther" value="0%" name="垂直滚动条, 1页" label="垂直滚动条, 1页" x="563" y="32" width="31" height="217">
+                                <XCUIElementTypeOther type="XCUIElementTypeOther" x="590" y="35" width="4" height="211"/>
+                              </XCUIElementTypeOther>
+                              <XCUIElementTypeOther type="XCUIElementTypeOther" value="0%" name="垂直滚动条, 1页" label="垂直滚动条, 1页" x="563" y="32" width="31" height="217">
+                                <XCUIElementTypeOther type="XCUIElementTypeOther" x="590" y="35" width="4" height="211"/>
+                              </XCUIElementTypeOther>
+                            </XCUIElementTypeScrollView>
+                            <XCUIElementTypeScrollView type="XCUIElementTypeScrollView" x="171" y="1024" width="426" height="441">
+                              <XCUIElementTypeOther type="XCUIElementTypeOther" value="0%" name="垂直滚动条, 1页" label="垂直滚动条, 1页" x="563" y="1024" width="31" height="441">
+                                <XCUIElementTypeOther type="XCUIElementTypeOther" x="590" y="985" width="4" height="36"/>
+                              </XCUIElementTypeOther>
+                              <XCUIElementTypeOther type="XCUIElementTypeOther" value="0%" name="垂直滚动条, 1页" label="垂直滚动条, 1页" x="563" y="1024" width="31" height="441">
+                                <XCUIElementTypeOther type="XCUIElementTypeOther" x="590" y="985" width="4" height="36"/>
+                              </XCUIElementTypeOther>
+                            </XCUIElementTypeScrollView>
+                          </XCUIElementTypeScrollView>
+                        </XCUIElementTypeOther>
+                      </XCUIElementTypeOther>
+                    </XCUIElementTypeOther>
+                  </XCUIElementTypeOther>
+                  <XCUIElementTypeOther type="XCUIElementTypeOther" value="0%" name="垂直滚动条, 2页" label="垂直滚动条, 2页" x="735" y="32" width="30" height="992">
+                    <XCUIElementTypeOther type="XCUIElementTypeOther" x="762" y="35" width="3" height="986"/>
+                  </XCUIElementTypeOther>
+                  <XCUIElementTypeOther type="XCUIElementTypeOther" value="0%" name="垂直滚动条, 2页" label="垂直滚动条, 2页" x="735" y="32" width="30" height="992">
+                    <XCUIElementTypeOther type="XCUIElementTypeOther" x="762" y="35" width="3" height="986"/>
+                  </XCUIElementTypeOther>
+                </XCUIElementTypeScrollView>
+                <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="768" height="1024">
+                  <XCUIElementTypeOther type="XCUIElementTypeOther" x="314" y="966" width="140" height="18">
+                    <XCUIElementTypeOther type="XCUIElementTypeOther" x="314" y="966" width="140" height="18">
+                      <XCUIElementTypeButton type="XCUIElementTypeButton" name="call-to-action-label" label="按下主屏幕按钮以解锁" x="314" y="966" width="140" height="18"/>
+                    </XCUIElementTypeOther>
+                  </XCUIElementTypeOther>
+                  <XCUIElementTypePageIndicator type="XCUIElementTypePageIndicator" value="第1页（共2页）" x="369" y="998" width="30" height="15"/>
+                </XCUIElementTypeOther>
+                <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="768" height="2048">
+                  <XCUIElementTypeOther type="XCUIElementTypeOther" name="lockscreen-date-view" x="0" y="0" width="768" height="1024">
+                    <XCUIElementTypeStaticText type="XCUIElementTypeStaticText" value="11月6日 星期五, 丙午年九月廿八" name="11月6日 星期五, 丙午年九月廿八" label="11月6日 星期五, 丙午年九月廿八" x="198" y="85" width="372" height="36"/>
+                    <XCUIElementTypeStaticText type="XCUIElementTypeStaticText" value="21:05" name="21:05" label="21:05" x="202" y="99" width="362" height="156"/>
+                    <XCUIElementTypeOther type="XCUIElementTypeOther" x="198" y="258" width="372" height="69">
+                      <XCUIElementTypeOther type="XCUIElementTypeOther" x="198" y="258" width="372" height="69"/>
+                    </XCUIElementTypeOther>
+                  </XCUIElementTypeOther>
+                </XCUIElementTypeOther>
+              </XCUIElementTypeOther>
+              <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="768" height="1024">
+                <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="768" height="1024">
+                  <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="768" height="1024">
+                    <XCUIElementTypeOther type="XCUIElementTypeOther" x="692" y="31" width="62" height="3">
+                      <XCUIElementTypeOther type="XCUIElementTypeOther" x="692" y="31" width="62" height="3"/>
+                    </XCUIElementTypeOther>
+                    <XCUIElementTypeOther type="XCUIElementTypeOther" x="692" y="59" width="62" height="3"/>
+                  </XCUIElementTypeOther>
+                </XCUIElementTypeOther>
+              </XCUIElementTypeOther>
+              <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="768" height="1024"/>
+            </XCUIElementTypeOther>
+          </XCUIElementTypeOther>
+        </XCUIElementTypeOther>
+      </XCUIElementTypeOther>
+    </XCUIElementTypeOther>
+  </XCUIElementTypeWindow>
+  <XCUIElementTypeWindow type="XCUIElementTypeWindow" x="0" y="0" width="768" height="1024">
+    <XCUIElementTypeStatusBar type="XCUIElementTypeStatusBar" x="0" y="0" width="768" height="32">
+      <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="768" height="32">
+        <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="768" height="32">
+          <XCUIElementTypeOther type="XCUIElementTypeOther" x="6" y="11" width="370" height="10"/>
+          <XCUIElementTypeOther type="XCUIElementTypeOther" x="392" y="11" width="371" height="10">
+            <XCUIElementTypeOther type="XCUIElementTypeOther" value="SSID, 3（共3格无线局域网信号）" name="3（共3格无线局域网信号）" x="681" y="11" width="15" height="10"/>
+            <XCUIElementTypeStaticText type="XCUIElementTypeStaticText" value="86%" name="86%" label="86%" x="700" y="7" width="34" height="18"/>
+            <XCUIElementTypeOther type="XCUIElementTypeOther" value="正在充电" name="电池电量86%" label="电池电量86%" x="735" y="9" width="28" height="14"/>
+          </XCUIElementTypeOther>
+        </XCUIElementTypeOther>
+      </XCUIElementTypeOther>
+    </XCUIElementTypeStatusBar>
+    <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="768" height="1024"/>
+  </XCUIElementTypeWindow>
+  <XCUIElementTypeWindow type="XCUIElementTypeWindow" x="0" y="0" width="768" height="1024">
+    <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="768" height="1024"/>
+  </XCUIElementTypeWindow>
+  <XCUIElementTypeWindow type="XCUIElementTypeWindow" x="0" y="0" width="768" height="1024">
+    <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="768" height="1024"/>
+  </XCUIElementTypeWindow>
+</XCUIElementTypeApplication>

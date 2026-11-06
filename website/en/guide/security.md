@@ -9,7 +9,7 @@ iphone-control is a remote control for a phone: whoever can reach it can do anyt
 | Phone control | Control socket (Unix socket, mode 0600) | Root on the host, anyone who can `docker exec` into the container, the same user for a source install |
 | Apple ID session, signing key | `account/` in the data directory | Whoever can read the data directory. The Apple ID password is never stored |
 | Pairing records | `lockdown/` in the data directory (Docker) | Whoever can read it; it lets the holder talk to the phone over USB without another *Trust* prompt |
-| Passcode (only with auto-unlock) | `secrets/passcode`, **plain text** | Whoever can read the data directory |
+| Passcode (only with auto-unlock) | `secrets/passcodes/<UDID>`, **plain text** | Whoever can read the data directory |
 | Notification keys | `.env` or `~/.config/iphone-control/env` | Whoever can read that file |
 
 ## Built-in protections

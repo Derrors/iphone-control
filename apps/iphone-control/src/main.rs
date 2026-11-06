@@ -63,6 +63,13 @@ enum Command {
     },
     /// 自动解锁因输错被停用后，核对密码再恢复
     UnlockReset,
+    /// 列出 USB 上接着的设备，标出正在控制哪台
+    Devices,
+    /// 改为控制另一台设备，重启后还记得；auto 改回自动选（正在控制的那台断开才换）
+    Select {
+        /// UDID、设备名或 auto
+        device: String,
+    },
     /// 显式把 WDA 桥接到 127.0.0.1 供外部工具使用（默认不监听任何端口）
     WdaBridge {
         #[arg(long, default_value_t = 8100)]
@@ -78,10 +85,22 @@ enum Command {
     },
 }
 
+/// 锁屏密码按设备分开存：一台的密码不会输进另一台
 #[derive(Subcommand)]
 enum PasscodeAction {
-    Set,
-    Clear,
+    Set {
+        /// 哪台设备（UDID 或设备名）；不给就是守护进程正在控制的那台
+        #[arg(long)]
+        device: Option<String>,
+    },
+    Clear {
+        /// 哪台设备（UDID 或设备名）；不给就是守护进程正在控制的那台
+        #[arg(long)]
+        device: Option<String>,
+        /// 删掉所有设备的密码
+        #[arg(long, conflicts_with = "device")]
+        all: bool,
+    },
 }
 
 #[tokio::main]
@@ -118,9 +137,11 @@ async fn main() -> anyhow::Result<()> {
         Command::Login { email } => login(&cli.data_dir, email).await,
         Command::Sign => print_text(&cli.socket, Request::Resign { force: true }).await,
         Command::Resign { force } => print_text(&cli.socket, Request::Resign { force }).await,
-        Command::Passcode { action } => passcode(&cli.data_dir, action),
+        Command::Passcode { action } => passcode(&cli.data_dir, &cli.socket, action).await,
         Command::UnlockReset => print_text(&cli.socket, Request::UnlockReset).await,
-        Command::WdaBridge { port } => wda_bridge(port).await,
+        Command::Devices => print_text(&cli.socket, Request::ListDevices).await,
+        Command::Select { device } => print_text(&cli.socket, Request::SelectDevice { device }).await,
+        Command::WdaBridge { port } => wda_bridge(&cli.socket, port).await,
         Command::Debug(args) => debug::run(env_nonempty("IPHONE_UDID").as_deref(), args).await,
         Command::NotifyTest { event } => notify_test(&cli.data_dir, event.as_deref()).await,
     }
@@ -237,10 +258,34 @@ async fn status(socket: &Path) -> anyhow::Result<()> {
     if let Some(d) = &s.device {
         println!("手机      {} {} iOS {}", d.udid, d.product_type, d.product_version);
     }
+    let current = s.device.as_ref().map(|d| d.udid.as_str());
+    let others: Vec<String> =
+        s.devices.iter().filter(|d| Some(d.udid.as_str()) != current).map(ictl_daemon::core::device_label).collect();
+    if !others.is_empty() {
+        println!("另外接着  {}（iphone-control select 切换）", others.join("、"));
+    }
+    match (&s.pinned, s.pinned_by_env) {
+        (Some(p), true) => println!("选设备    IPHONE_UDID 固定为 {p}"),
+        (Some(p), false) => println!("选设备    选定了 {p}（iphone-control select auto 改回自动选）"),
+        (None, _) if !others.is_empty() => println!("选设备    自动（正在控制的那台断开才换）"),
+        (None, _) => {}
+    }
     let p = &s.persisted;
     println!("WDA       {}", p.wda_bundle.as_deref().unwrap_or("未签名"));
-    if let Some(left) = p.profile_left() {
-        println!("描述文件  还剩 {} 小时", left.as_secs() / 3600);
+    match &s.device_profile {
+        ictl_daemon::core::DeviceProfile::Missing => {
+            println!("描述文件  这台手机上没有装当前 Apple ID 签的 WDA（iphone-control setup）")
+        }
+        dp => {
+            if let Some(left) = dp.left(p) {
+                let whose = if matches!(dp, ictl_daemon::core::DeviceProfile::Expires(_)) {
+                    "手机上的"
+                } else {
+                    "上次签的"
+                };
+                println!("描述文件  {whose}还剩 {} 小时", left.as_secs() / 3600);
+            }
+        }
     }
     if let Some(r) = &p.last_resign {
         println!("上次重签  {r}");
@@ -328,15 +373,64 @@ async fn login(data_dir: &Path, email: Option<String>) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn passcode(data_dir: &Path, action: PasscodeAction) -> anyhow::Result<()> {
-    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-    let path = ictl_daemon::Config::from_env(data_dir).passcode_file();
-    match action {
-        PasscodeAction::Clear => {
-            let _ = std::fs::remove_file(&path);
-            println!("已删除锁屏密码，自动解锁关闭。");
+/// 命令要针对哪台设备：`IPHONE_UDID` > 守护进程正在控制的（或选定的）> USB 上唯一的一台。
+/// 给了 `query`（UDID 或设备名）就在接着的设备里找
+async fn target_device(socket: &Path, query: Option<&str>) -> anyhow::Result<ictl_device::DeviceInfo> {
+    let snap = snapshot(socket).await.ok();
+    let mut infos = snap.as_ref().map(|s| s.devices.clone()).unwrap_or_default();
+    if infos.is_empty() {
+        for d in ictl_device::list_devices().await.unwrap_or_default() {
+            let i = ictl_device::Device::from_usb(&d).info().await.unwrap_or_default();
+            infos.push(ictl_device::DeviceInfo { udid: d.udid, ..i });
         }
-        PasscodeAction::Set => {
+    }
+    let pick = |u: &str| {
+        infos
+            .iter()
+            .find(|d| d.udid.eq_ignore_ascii_case(u))
+            .cloned()
+            .unwrap_or_else(|| ictl_device::DeviceInfo { udid: u.to_owned(), ..Default::default() })
+    };
+    if let Some(q) = query {
+        let i = ictl_daemon::devices::resolve_device(&infos, q).map_err(anyhow::Error::msg)?;
+        return Ok(infos[i].clone());
+    }
+    if let Some(u) = env_nonempty("IPHONE_UDID") {
+        return Ok(pick(&u));
+    }
+    if let Some(s) = &snap {
+        if let Some(d) = &s.device {
+            return Ok(d.clone());
+        }
+        if let Some(p) = &s.pinned {
+            return Ok(pick(p));
+        }
+    }
+    match &infos[..] {
+        [one] => Ok(one.clone()),
+        [] => bail!("没接设备：用数据线接好并解锁"),
+        _ => bail!("接着 {} 台设备，不知道是哪台：先用 iphone-control select 选一台，或加 --device 指定", infos.len()),
+    }
+}
+
+async fn passcode(data_dir: &Path, socket: &Path, action: PasscodeAction) -> anyhow::Result<()> {
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+    let cfg = ictl_daemon::Config::from_env(data_dir);
+    match action {
+        PasscodeAction::Clear { all: true, .. } => {
+            let _ = std::fs::remove_dir_all(cfg.passcodes_dir());
+            let _ = std::fs::remove_file(cfg.legacy_passcode_file());
+            println!("已删除所有设备的锁屏密码，自动解锁关闭。");
+        }
+        PasscodeAction::Clear { device, .. } => {
+            let d = target_device(socket, device.as_deref()).await?;
+            let _ = std::fs::remove_file(cfg.passcode_file_for(&d.udid));
+            println!("已删除 {} 的锁屏密码，这台的自动解锁关闭。", ictl_daemon::core::device_label(&d));
+        }
+        PasscodeAction::Set { device } => {
+            let d = target_device(socket, device.as_deref()).await?;
+            let path = cfg.passcode_file_for(&d.udid);
+            println!("设备：{}", ictl_daemon::core::device_label(&d));
             println!("自动解锁：锁屏后，MCP 操作前会用这个密码解锁手机。");
             println!("风险：能登录这台机器、或能调用这个 MCP 的人，都能解锁你的手机。");
             println!("保护：每按一位都核对；整串输完仍锁着就停用自动解锁并推送通知，不会累计输错。只支持纯数字。");
@@ -351,7 +445,7 @@ fn passcode(data_dir: &Path, action: PasscodeAction) -> anyhow::Result<()> {
             // mode() 只在新建时生效：已有文件也收紧
             f.set_permissions(std::fs::Permissions::from_mode(0o600))?;
             f.write_all(p.as_bytes())?;
-            println!("已保存。别忘了在手机上把「自动锁定」从「永不」改回较短时间。");
+            println!("已保存（只用于这台设备）。别忘了在手机上把「自动锁定」从「永不」改回较短时间。");
         }
     }
     Ok(())
@@ -388,9 +482,11 @@ async fn setup(cli: &Cli) -> anyhow::Result<()> {
     if !found {
         bail!("10 分钟内没检测到手机：用数据线接好并解锁手机");
     }
-    let udid = env_nonempty("IPHONE_UDID");
+    // 和守护进程控制同一台：第 5 步的签名安装是守护进程对它正在控制的那台做的
+    let target = target_device(socket, None).await?;
+    let udid = Some(target.udid.clone());
     let device = Device::find(udid.as_deref()).await?;
-    println!("  手机 {}", device.udid);
+    println!("  手机 {}", ictl_daemon::core::device_label(&target));
 
     println!("[2/6] 配对");
     if device.paired().await? {
@@ -441,6 +537,18 @@ async fn setup(cli: &Cli) -> anyhow::Result<()> {
     }
 
     println!("[5/6] 注册设备、签名 WDA 并安装到手机（手机要保持解锁）");
+    // 前几步直接问 usbmuxd，重签却由守护进程做：它每 10 秒巡检一次才认到手机。手机刚重启完、usbmuxd 刚重启时
+    // 这里会先看到手机，马上请求重签就报「手机未连接」，所以先等守护进程认到同一台
+    let target = device.udid.clone();
+    let seen = wait_until(Duration::from_secs(60), Duration::from_secs(2), || async {
+        snapshot(socket).await.is_ok_and(|s| {
+            s.state != ictl_daemon::machine::DeviceState::Absent && s.device.as_ref().is_none_or(|d| d.udid == target)
+        })
+    })
+    .await;
+    if !seen {
+        bail!("守护进程 1 分钟内没认到手机 {}，运行 iphone-control doctor 看看卡在哪", device.udid);
+    }
     print_text(socket, Request::Resign { force: true }).await?;
 
     println!("[6/6] 等待 WDA 启动");
@@ -463,9 +571,10 @@ async fn setup(cli: &Cli) -> anyhow::Result<()> {
 /// 显式开启：127.0.0.1:port → 手机上的 WDA 8100。只绑本机回环地址。
 /// 容器用 host 网络，所以这就是宿主机的回环地址：本机的其他用户、浏览器里的网页都能访问到，而 WDA 没有认证。
 /// 浏览器那条路（DNS rebinding）靠检查 Host 头挡住；本机其他用户挡不住，用完就停。
-async fn wda_bridge(port: u16) -> anyhow::Result<()> {
-    let udid = env_nonempty("IPHONE_UDID");
-    let device = ictl_device::Device::find(udid.as_deref()).await?;
+async fn wda_bridge(socket: &Path, port: u16) -> anyhow::Result<()> {
+    // 和守护进程控制同一台（WDA 只在那台上跑着）
+    let target = target_device(socket, None).await?;
+    let device = ictl_device::Device::find(Some(&target.udid)).await?;
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", port)).await?;
     println!("WDA 桥接 127.0.0.1:{port} → 手机 {} 的 8100 端口（Ctrl-C 停止）", device.udid);
     println!("注意：本机所有用户都能经这个端口控制手机（WDA 没有认证），用完就停掉。");

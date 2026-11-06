@@ -2,7 +2,7 @@
 
 use std::time::Duration;
 
-use crate::core::{Daemon, Inner};
+use crate::core::{Daemon, DeviceProfile, Inner};
 
 impl Daemon {
     pub(crate) async fn doctor(&self, g: &mut Inner) -> String {
@@ -46,6 +46,17 @@ impl Daemon {
                     out.push("⚠️  iOS 低于 27  HID 后备路线(免签名截图/点击)不可用,只能走 WDA".into());
                 }
             }
+            // 选定的那台没接、别的接着：usbmuxd 没问题，不是重启它能解决的
+            (None, _) if self.pinned(g).is_some() && !g.connected.is_empty() => {
+                let p = self.pinned(g).unwrap_or_default();
+                let how = if self.cfg.udid.is_some() {
+                    "或改 .env 里的 IPHONE_UDID"
+                } else {
+                    "或 iphone-control select 换成接着的另一台(auto 改回自动选)"
+                };
+                out.push(format!("❌ 选定的设备 {p} 没连接\n     → 接上它;{how}"));
+                fails += 1;
+            }
             (None, _) => {
                 out.push(
                     if self.cfg.manage_usbmuxd {
@@ -61,6 +72,9 @@ impl Daemon {
             }
         }
         out.push(format!("   状态：{}", g.state.describe()));
+        if let Some(l) = self.devices_line(g) {
+            out.push(format!("   {l}"));
+        }
 
         out.push("== Apple ID 与签名".into());
         match self.account().selected_email().await {
@@ -70,19 +84,41 @@ impl Daemon {
                 fails += 1;
             }
         }
-        match (&g.persisted.wda_bundle, g.persisted.profile_left()) {
-            (Some(b), Some(left)) => {
+        match &g.persisted.wda_bundle {
+            Some(b) => {
                 out.push(format!("✅ WDA 已签名 {b}"));
-                if left.is_zero() {
-                    out.push("❌ 描述文件已过期\n     → iphone-control resign --force".into());
-                    fails += 1;
-                } else if left < Duration::from_secs(48 * 3600) {
-                    out.push(format!("⚠️  描述文件只剩 {} 小时  守护进程会自动重签", left.as_secs() / 3600));
-                } else {
-                    out.push(format!("✅ 描述文件有效  还剩 {} 天", left.as_secs() / 86400));
+                // 接着手机时看手机上装的那份：最近一次签名可能是给别的手机签的
+                if g.device.is_some() {
+                    self.refresh_device_profile(g).await;
+                }
+                let whose = match &g.device_profile {
+                    DeviceProfile::Expires(_) => "这台手机上的描述文件",
+                    DeviceProfile::Unknown(e) => {
+                        out.push(format!("⚠️  读不到手机上的描述文件({e}),下面按上次签名的记录"));
+                        "描述文件"
+                    }
+                    _ => "描述文件",
+                };
+                match g.device_profile.left(&g.persisted) {
+                    _ if g.device_profile == DeviceProfile::Missing => {
+                        out.push(
+                            "❌ 这台手机上没有装当前 Apple ID 签的 WDA\n     → iphone-control setup(会把这台手机注册到 Apple ID 并装上 WDA)"
+                                .into(),
+                        );
+                        fails += 1;
+                    }
+                    Some(left) if left.is_zero() => {
+                        out.push(format!("❌ {whose}已过期\n     → iphone-control resign --force"));
+                        fails += 1;
+                    }
+                    Some(left) if left < Duration::from_secs(48 * 3600) => {
+                        out.push(format!("⚠️  {whose}只剩 {} 小时  守护进程会自动重签", left.as_secs() / 3600));
+                    }
+                    Some(left) => out.push(format!("✅ {whose}有效  还剩 {} 天", left.as_secs() / 86400)),
+                    None => out.push("⚠️  不知道描述文件什么时候到期".into()),
                 }
             }
-            _ => {
+            None => {
                 out.push("❌ WDA 还没签名安装\n     → iphone-control sign".into());
                 fails += 1;
             }
@@ -108,16 +144,25 @@ impl Daemon {
         } else {
             out.push("⚠️  没有配置通知  重签失败、手机离线、需要输密码时不会提醒你".into());
         }
-        let unlock = self.unlock_cfg();
+        let unlock = self.unlock_cfg(g.device.as_ref().map(|d| d.udid.as_str()));
+        if self.cfg.legacy_passcode_file().is_file() {
+            out.push(
+                "⚠️  有一份旧版本保存的锁屏密码,没记是哪台设备的;同时接着几台时不会用它\n     \
+→ 在要用的设备连着时运行 iphone-control passcode set(USB 上只接着一台时会自动归到那台名下)"
+                    .into(),
+            );
+        }
         if unlock.disabled_by_failure() {
             out.push(
                 "❌ 自动解锁已停用(之前输错过或输入中途出错)\n     → 核对密码后 iphone-control unlock-reset".into(),
             );
             fails += 1;
         } else if unlock.enabled() {
-            out.push("✅ 自动解锁已启用".into());
+            out.push("✅ 自动解锁已启用(这台设备)".into());
+        } else if g.device.is_some() {
+            out.push("⚠️  这台设备没设自动解锁密码  锁屏时需要人工解锁(可选:iphone-control passcode set)".into());
         } else {
-            out.push("⚠️  自动解锁未启用  手机锁屏时需要人工解锁(可选:iphone-control passcode set)".into());
+            out.push("⚠️  没接设备,看不了自动解锁".into());
         }
         out.push(String::new());
         out.push(if fails == 0 { "全部正常".into() } else { format!("{fails} 项需要处理") });

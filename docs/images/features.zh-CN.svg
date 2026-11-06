@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 388" width="1200" height="388" role="img" aria-label="一个二进制: Linux 或 macOS 上直接运行 不需要 Xcode、付费账号，不越狱; 15 个 MCP 工具: 截图、点击、滑动、输入中文 按键、管理 App、读元素树; 少走往返: 操作后顺带返回稳定后的界面 iphone_batch 一次最多 20 步; 无人值守: 拔插、重启、WDA 崩溃后自动恢复 描述文件到期前自动重签; HID 后备: WDA 不可用时截图、点击、按键 改走 CoreDevice（iOS 27+）; 诊断与通知: doctor 从 USB 到 WDA 逐层检查 需要你时发 Telegram 或 Bark">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 388" width="1200" height="388" role="img" aria-label="一个二进制: Linux 或 macOS 上直接运行 不需要 Xcode、付费账号，不越狱; 17 个 MCP 工具: 截图、点击、滑动、输入中文 按键、管理 App、读元素树; 少走往返: 操作后顺带返回稳定后的界面 iphone_batch 一次最多 20 步; 无人值守: 拔插、重启、WDA 崩溃后自动恢复 描述文件到期前自动重签; HID 后备: WDA 不可用时截图、点击、按键 改走 CoreDevice（iOS 27+）; 诊断与通知: doctor 从 USB 到 WDA 逐层检查 需要你时发 Telegram 或 Bark">
   <defs>
     <linearGradient id="cd-bg" x1="0" y1="0" x2="0" y2="1">
       <stop offset="0" stop-color="#0f1b2d"/>
@@ -22,7 +22,7 @@
     <rect x="0.5" y="0.5" width="375" height="175" rx="18" fill="url(#cd-bg)" stroke="#155e75" stroke-opacity="0.7"/>
     <rect x="24" y="24" width="48" height="48" rx="12" fill="url(#cd-icon)"/>
     <g transform="translate(24 24)"><g fill="#fff"><rect x="13" y="13" width="10" height="10" rx="2.5"/><rect x="25" y="13" width="10" height="10" rx="2.5"/><rect x="13" y="25" width="10" height="10" rx="2.5"/><rect x="25" y="25" width="10" height="10" rx="2.5" fill-opacity="0.6"/></g></g>
-    <text x="24" y="104" font-size="22" font-weight="700" fill="#f0f9ff">15 个 MCP 工具</text>
+    <text x="24" y="104" font-size="22" font-weight="700" fill="#f0f9ff">17 个 MCP 工具</text>
     <text x="24" y="132" font-size="15" fill="#94a3b8">截图、点击、滑动、输入中文</text>
     <text x="24" y="155" font-size="15" fill="#94a3b8">按键、管理 App、读元素树</text>
   </g>

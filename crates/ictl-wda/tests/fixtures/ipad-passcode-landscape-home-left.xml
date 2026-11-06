@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- iPad mini 5（iPadOS 26.6.1）横屏锁屏点「使用密码」后的数字键盘（按真机 dump 精简，由 Home 键在右的样本在竖屏坐标里中心对称得到，Home 键在左；状态栏贴树的左边）：
+     窗口和里面的元素是竖屏坐标 768x1024；「取消」（有输入时是「删除」）和 0 在同一行 -->
+<XCUIElementTypeApplication type="XCUIElementTypeApplication" name=" " label=" " x="0" y="0" width="1024" height="768">
+  <XCUIElementTypeWindow type="XCUIElementTypeWindow" x="0" y="0" width="768" height="1024">
+    <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="768" height="1024"/>
+  </XCUIElementTypeWindow>
+  <XCUIElementTypeWindow type="XCUIElementTypeWindow" x="0" y="0" width="768" height="1024">
+    <XCUIElementTypeStatusBar type="XCUIElementTypeStatusBar" x="0" y="0" width="32" height="1024"/>
+  </XCUIElementTypeWindow>
+  <XCUIElementTypeWindow type="XCUIElementTypeWindow" name="SBCoverSheetWindow" x="0" y="0" width="768" height="1024">
+    <XCUIElementTypeStaticText type="XCUIElementTypeStaticText" value="触控 ID 或输入密码" name="触控 ID 或输入密码" label="触控 ID 或输入密码" x="110" y="440" width="24" height="144"/>
+    <XCUIElementTypeSecureTextField type="XCUIElementTypeSecureTextField" label="密码栏" value="共6位数，已输入0位" x="152" y="0" width="16" height="1024"/>
+    <XCUIElementTypeKey type="XCUIElementTypeKey" label="1" x="232" y="565" width="101" height="106"/>
+    <XCUIElementTypeKey type="XCUIElementTypeKey" label="2" x="232" y="459" width="101" height="106"/>
+    <XCUIElementTypeKey type="XCUIElementTypeKey" label="3" x="232" y="353" width="101" height="106"/>
+    <XCUIElementTypeKey type="XCUIElementTypeKey" label="4" x="333" y="565" width="101" height="106"/>
+    <XCUIElementTypeKey type="XCUIElementTypeKey" label="5" x="333" y="459" width="101" height="106"/>
+    <XCUIElementTypeKey type="XCUIElementTypeKey" label="6" x="333" y="353" width="101" height="106"/>
+    <XCUIElementTypeKey type="XCUIElementTypeKey" label="7" x="434" y="565" width="101" height="106"/>
+    <XCUIElementTypeKey type="XCUIElementTypeKey" label="8" x="434" y="459" width="101" height="106"/>
+    <XCUIElementTypeKey type="XCUIElementTypeKey" label="9" x="434" y="353" width="101" height="106"/>
+    <XCUIElementTypeKey type="XCUIElementTypeKey" label="0" x="535" y="459" width="101" height="106"/>
+    <XCUIElementTypeButton type="XCUIElementTypeButton" name="取消" label="取消" x="535" y="353" width="101" height="106"/>
+  </XCUIElementTypeWindow>
+</XCUIElementTypeApplication>

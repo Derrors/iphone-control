@@ -6,6 +6,8 @@
 //! - 按 Home 不清空半截输入（iOS 27 真机）；右下角删除键每按一下删一位
 //! - 可选熄屏：熄屏时上滑无效，要先按 Home 点亮；可设成 XCTest 的 home 点不亮（iPhone 12 mini / iOS 26.4.1 真机），
 //!   只有 IOHID 的 AC Home 能点亮
+//! - 可选 iPad 模式（iPad mini 5 / iPadOS 26.6.1 真机）：横屏、Touch ID。上滑后是「触控 ID」提示，点「使用密码」才出键盘；
+//!   SpringBoard 的树是竖屏坐标，点击是屏幕坐标。点到别处什么都不发生（记在 `stray_taps`）
 
 use std::sync::Mutex;
 use std::time::Duration;
@@ -30,6 +32,27 @@ const KEYS: [(i64, i64); 10] = [
 ];
 /// lockscreen.xml 里右下角按钮（有输入时是「删除」）的中心
 const DELETE: (i64, i64) = (327, 857);
+
+const IPAD_TOUCHID_XML: &str = include_str!("../../ictl-wda/tests/fixtures/ipad-touchid-landscape.xml");
+const IPAD_PIN_XML: &str = include_str!("../../ictl-wda/tests/fixtures/ipad-passcode-landscape.xml");
+/// Home 键在左的横屏：树里的坐标和上面中心对称，换算到屏幕上键位不变
+const IPAD_TOUCHID_LEFT_XML: &str = include_str!("../../ictl-wda/tests/fixtures/ipad-touchid-landscape-home-left.xml");
+const IPAD_PIN_LEFT_XML: &str = include_str!("../../ictl-wda/tests/fixtures/ipad-passcode-landscape-home-left.xml");
+/// ipad-passcode-landscape.xml 里各键按 Home 键在右的横屏换算到屏幕上的中心点（真机截图对得上）
+const IPAD_KEYS: [(i64, i64); 10] = [
+    (512, 586),
+    (406, 282),
+    (512, 282),
+    (618, 282),
+    (406, 384),
+    (512, 384),
+    (618, 384),
+    (406, 484),
+    (512, 484),
+    (618, 484),
+];
+const IPAD_DELETE: (i64, i64) = (618, 586);
+const IPAD_USE_PASSCODE: (i64, i64) = (512, 430);
 
 #[derive(Debug, Clone, Default)]
 pub struct State {
@@ -56,17 +79,35 @@ pub struct State {
     /// XCTest 的 home 点不亮屏幕
     xctest_home_dead: bool,
     pub hid_events: u32,
+    /// iPad 模式：点过「使用密码」，键盘出来了
+    pub passcode_requested: bool,
+    /// iPad 模式：点在键和按钮以外的次数
+    pub stray_taps: u32,
 }
 
 pub struct FakeLockScreen {
     code: Vec<u8>,
     st: Mutex<State>,
+    /// iPad 模式时 WDA 报的方向（`/orientation`）；None 是 iPhone 模式，`/orientation` 报 404
+    ipad: Option<&'static str>,
+    /// iPad 横屏时 Home 键在左（默认在右）
+    ipad_home_left: bool,
 }
 
 impl FakeLockScreen {
     pub fn new(code: &str) -> Self {
         let st = State { locked: true, idle: (10.0, 2.0), ..Default::default() };
-        Self { code: code.bytes().map(|b| b - b'0').collect(), st: Mutex::new(st) }
+        Self { code: code.bytes().map(|b| b - b'0').collect(), st: Mutex::new(st), ipad: None, ipad_home_left: false }
+    }
+
+    /// iPad 横屏（Home 键在右）、Touch ID；WDA 报的方向是 `orientation`
+    pub fn ipad_touch_id(code: &str, orientation: &'static str) -> Self {
+        Self { ipad: Some(orientation), ..Self::new(code) }
+    }
+
+    /// 同上，但 Home 键在左。真机上 WDA 照样报 `LANDSCAPE`
+    pub fn ipad_touch_id_home_left(code: &str, orientation: &'static str) -> Self {
+        Self { ipad_home_left: true, ..Self::ipad_touch_id(code, orientation) }
     }
 
     pub fn state(&self) -> State {
@@ -129,7 +170,11 @@ impl FakeLockScreen {
         let v = match (method, path) {
             ("GET", "/wda/locked") => json!(s.locked && !s.stale_wda_lock),
             ("GET", "/wda/activeAppInfo") => json!({"bundleId": "com.apple.springboard"}),
+            ("GET", "/wda/screen") if self.ipad.is_some() => {
+                json!({"screenSize": {"width": 1024, "height": 768}, "scale": 2})
+            }
             ("GET", "/wda/screen") => json!({"screenSize": {"width": 430, "height": 932}, "scale": 3}),
+            ("GET", "/orientation") if self.ipad.is_some() => json!(self.ipad),
             ("POST", "/session") => return (200, json!({"sessionId": "S", "value": {}})),
             ("GET", "/appium/settings") => json!({"waitForIdleTimeout": s.idle.0, "animationCoolOffTimeout": s.idle.1}),
             ("POST", "/appium/settings") => {
@@ -176,14 +221,28 @@ impl FakeLockScreen {
                 } else {
                     s.presses_per_action_max = s.presses_per_action_max.max(downs);
                     let (x, y) = (steps[0]["x"].as_f64().unwrap() as i64, steps[0]["y"].as_f64().unwrap() as i64);
-                    if (x, y) == DELETE {
+                    let (keys, delete) = if self.ipad.is_some() { (IPAD_KEYS, IPAD_DELETE) } else { (KEYS, DELETE) };
+                    // iPad：键盘要点「使用密码」才出来
+                    let pad_shown = s.shown && (self.ipad.is_none() || s.passcode_requested);
+                    if self.ipad.is_some() && (x, y) == IPAD_USE_PASSCODE {
                         if s.shown {
+                            s.passcode_requested = true;
+                        }
+                        return (200, json!({"value": null, "sessionId": "S"}));
+                    }
+                    if (x, y) == delete {
+                        if pad_shown {
                             s.entered.pop();
                         }
                         return (200, json!({"value": null, "sessionId": "S"}));
                     }
-                    let digit = KEYS.iter().position(|k| *k == (x, y)).expect("按在键盘以外") as u8;
-                    if s.shown {
+                    let Some(digit) = keys.iter().position(|k| *k == (x, y)) else {
+                        assert!(self.ipad.is_some(), "按在键盘以外：{x},{y}");
+                        s.stray_taps += 1;
+                        return (200, json!({"value": null, "sessionId": "S"}));
+                    };
+                    let digit = digit as u8;
+                    if pad_shown {
                         s.press_count += 1;
                         let times = match s.press_count {
                             n if s.drop_press == Some(n) => 0,
@@ -197,6 +256,7 @@ impl FakeLockScreen {
                                 if s.entered == self.code {
                                     s.locked = false;
                                     s.shown = false;
+                                    s.passcode_requested = false;
                                 } else {
                                     s.failed_attempts += 1;
                                 }
@@ -210,11 +270,21 @@ impl FakeLockScreen {
             ("GET", p) if p.starts_with("/source") => {
                 if s.locked {
                     let field = format!("共{}位数，已输入{}位", self.code.len(), s.entered.len());
-                    json!(LOCK_XML.replace("共6位数，已输入0位", &field))
+                    let pin = s.shown && s.passcode_requested;
+                    let xml = match (self.ipad, self.ipad_home_left, pin) {
+                        (None, ..) => LOCK_XML,
+                        (Some(_), false, true) => IPAD_PIN_XML,
+                        (Some(_), false, false) => IPAD_TOUCHID_XML,
+                        (Some(_), true, true) => IPAD_PIN_LEFT_XML,
+                        (Some(_), true, false) => IPAD_TOUCHID_LEFT_XML,
+                    };
+                    json!(xml.replace("共6位数，已输入0位", &field))
                 } else {
                     json!(HOME_XML)
                 }
             }
+            // iPad 的「触控 ID」提示页上没有密码栏
+            ("POST", "/elements") if self.ipad.is_some() && !(s.shown && s.passcode_requested) => json!([]),
             ("POST", "/elements") => json!([{"ELEMENT": "E1"}]),
             ("GET", "/element/E1/attribute/value") => {
                 json!(format!("共{}位数，已输入{}位", self.code.len(), s.entered.len()))

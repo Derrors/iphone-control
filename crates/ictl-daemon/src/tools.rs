@@ -3,13 +3,13 @@
 use std::time::{Duration, Instant};
 
 use base64::Engine;
-use ictl_device::{AppInfo, Button, DeviceError, HidSession, ScreenSize, apps, hid::ascii_to_usage};
+use ictl_device::{AppInfo, Button, DeviceError, HidSession, Rotation, ScreenSize, apps, hid::ascii_to_usage};
 use ictl_unlock::UnlockError;
 use ictl_wda::elements::{self, TapPoint, Tree};
 use ictl_wda::http::DeviceTransport;
 use ictl_wda::{Launch, WdaClient, WdaError};
 
-use crate::core::{Daemon, Inner, drop_tunnel, wda_down};
+use crate::core::{Daemon, Inner, drop_tunnel, hid_supported, wda_down};
 use crate::imaging::{self, fmt_g};
 use crate::notify::Event;
 use crate::protocol::Response;
@@ -36,7 +36,7 @@ const SPRINGBOARD: &str = "com.apple.springboard";
 impl Daemon {
     /// 配置了密码就在锁屏时自动解锁；没配置而手机锁着则报错（与 toolkit 一致）
     pub(crate) async fn ensure_unlocked(&self, g: &mut Inner) -> Result<(), String> {
-        let cfg = self.unlock_cfg();
+        let cfg = self.unlock_cfg(g.device.as_ref().map(|d| d.udid.as_str()));
         if let Some(left) = g.last_lock.and_then(|t| LOCK_SETTLE.checked_sub(t.elapsed())) {
             tokio::time::sleep(left).await;
         }
@@ -46,6 +46,11 @@ impl Daemon {
             Err(e @ (UnlockError::WrongPasscode | UnlockError::Uncertain(_))) => {
                 self.notify(g, Event::UnlockDisabled);
                 Err(format!("{e},已推送通知"))
+            }
+            Err(UnlockError::NoPasscode) if self.cfg.legacy_passcode_file().is_file() => {
+                Err("手机已锁屏,需要人工解锁:旧版本保存的锁屏密码没记是哪台设备的,同时接着几台时不会用它;\
+在这台设备连着时运行 iphone-control passcode set 重新设置"
+                    .into())
             }
             Err(e) => Err(e.to_string()),
         }
@@ -57,16 +62,57 @@ impl Daemon {
         {
             return Ok(s);
         }
+        // 记下的尺寸是别的设备的就不用（旧版本没记是哪台，照用）
+        let same = match (&g.persisted.screen_udid, &g.device) {
+            (Some(u), Some(d)) => *u == d.udid,
+            (Some(_), None) => false,
+            (None, _) => true,
+        };
         g.persisted
             .screen
+            .filter(|_| same)
             .or(self.cfg.screen_fallback)
             .ok_or_else(|| "WDA 不可用,也不知道屏幕尺寸;等 WDA 起来一次,或在 .env 里设 SCREEN_W/SCREEN_H".into())
     }
 
+    async fn refresh_hid_rotation(&self, g: &mut Inner) {
+        if let Some(w) = self.wda(g)
+            && let Ok(r) = w.rotation().await
+        {
+            g.wda_rotation = Some((Instant::now(), r));
+        }
+    }
+
+    /// 每次 HID 触摸前重新截图核对横竖，不依赖上次截图（转屏、回主屏、解锁都可能改变方向）。
+    /// 截图只给宽高，不能分辨横屏左右；短暂掉线时借用近期 WDA 方向，过期或不匹配就不触摸。
+    async fn hid_touch_rotation(&self, g: &mut Inner) -> Result<Rotation, String> {
+        self.refresh_hid_rotation(g).await;
+        let device = g.device.clone().ok_or("手机未连接")?;
+        let png = {
+            let t = self.ensure_tunnel(g, &device).await.map_err(|e| format!("核对 HID 方向失败：{e}"))?;
+            match t.screenshot_png().await {
+                Ok(p) => p,
+                Err(e) => {
+                    drop_tunnel(g).await;
+                    return Err(format!("核对 HID 方向失败，没有发送触摸：{e}"));
+                }
+            }
+        };
+        let (w, h) = imaging::png_size(&png).ok_or("无法读取截图尺寸，没有发送触摸")?;
+        let known = g.wda_rotation.map(|(at, r)| (at.elapsed(), r));
+        hid_rotation(w, h, known)
+    }
+
     /// HID 会话（WDA 不可用时的后备路线）。开不起来就丢掉隧道，下次重建
     async fn hid<'a>(&self, g: &'a mut Inner) -> Result<&'a mut HidSession, String> {
+        // 低版本建隧道只会报 service not found：直接说清楚
+        if !hid_supported(g.info.as_ref()) {
+            return Err(wda_down(&g.state, g.info.as_ref()));
+        }
         let screen = self.screen(g).await?;
         let device = g.device.clone().ok_or("手机未连接")?;
+        // HID 触摸按设备竖放的坐标归一化
+        let screen = screen.portrait();
         let t = self.ensure_tunnel(g, &device).await.map_err(|e| format!("HID 后备路线不可用：{e}"))?;
         if let Err(e) = t.hid(screen).await {
             drop_tunnel(g).await;
@@ -96,13 +142,45 @@ impl Daemon {
         }
     }
 
+    /// 接着多台、或选定的那台没接时，说明在控制哪台、怎么切换；只接着一台时为空（输出和原来一样）
+    pub(crate) fn devices_line(&self, g: &Inner) -> Option<String> {
+        let pinned = self.pinned(g);
+        let current = g.device.as_ref().map(|d| d.udid.as_str());
+        let others: Vec<String> = self
+            .connected_infos(g)
+            .iter()
+            .filter(|i| Some(i.udid.as_str()) != current)
+            .map(crate::core::device_label)
+            .collect();
+        let how = if self.cfg.udid.is_some() {
+            "(IPHONE_UDID 固定了设备,要换先改 .env)"
+        } else {
+            ";用 iphone_select_device 切换"
+        };
+        match (current, &pinned) {
+            (None, Some(p)) => Some(format!(
+                "设备: 选定的 {p} 没连接{}{how}",
+                if others.is_empty() { String::new() } else { format!(",接着的有 {}", others.join("、")) }
+            )),
+            (Some(_), _) if !others.is_empty() => {
+                let me = g.info.as_ref().map(crate::core::device_label).unwrap_or_default();
+                let mode = if pinned.is_some() { "选定" } else { "自动选" };
+                Some(format!("设备: 正在控制 {me}({mode});另外接着 {}{how}", others.join("、")))
+            }
+            _ => None,
+        }
+    }
+
     pub(crate) async fn status_text(&self, g: &mut Inner) -> String {
-        let daemon_line = format!("守护进程: {}", g.state.describe());
-        let unlock = self.unlock_cfg();
+        let mut daemon_line = format!("守护进程: {}", g.state.describe());
+        if let Some(l) = self.devices_line(g) {
+            daemon_line = format!("{l}\n{daemon_line}");
+        }
+        let unlock = self.unlock_cfg(g.device.as_ref().map(|d| d.udid.as_str()));
         let Some(w) = self.wda(g) else {
             return format!(
                 "{}\n读界面元素、按名字点击、启动 App、输入中文要等 WDA 恢复\n{daemon_line}",
-                wda_down(&g.state)
+                wda_down(&g.state, g.info.as_ref())
             );
         };
         let r: Result<String, WdaError> = async {
@@ -146,9 +224,16 @@ impl Daemon {
             Some(w) => w.screenshot_png().await.ok(),
             None => None,
         };
+        // 给短暂 WDA 掉线时的 HID 留一份近期方向；不把方向永久缓存到磁盘。
+        if wda_png.is_some() {
+            self.refresh_hid_rotation(g).await;
+        }
         let (png, via) = match wda_png {
             Some(p) => (p, "WDA"),
             None => {
+                if !hid_supported(g.info.as_ref()) {
+                    return Err(wda_down(&g.state, g.info.as_ref()));
+                }
                 let device = g.device.clone().ok_or("手机未连接")?;
                 let t = self.ensure_tunnel(g, &device).await.map_err(|e| format!("HID 命令失败: {e}"))?;
                 match t.screenshot_png().await {
@@ -341,7 +426,14 @@ impl Daemon {
                 Err(e) => return Err(e.to_string()),
             }
         }
-        self.hid_do(g, |h| Box::pin(h.tap(x, y))).await?;
+        let rot = self.hid_touch_rotation(g).await?;
+        self.hid_do(g, move |h| {
+            Box::pin(async move {
+                h.rotation = rot;
+                h.tap(x, y).await
+            })
+        })
+        .await?;
         Ok(format!("已点击 {pos}(经 HID)"))
     }
 
@@ -412,7 +504,14 @@ impl Daemon {
                 Err(e) => return Err(e.to_string()),
             }
         }
-        self.hid_do(g, |h| Box::pin(h.drag(from, to, seconds))).await?;
+        let rot = self.hid_touch_rotation(g).await?;
+        self.hid_do(g, move |h| {
+            Box::pin(async move {
+                h.rotation = rot;
+                h.drag(from, to, seconds).await
+            })
+        })
+        .await?;
         Ok(format!("已滑动 {desc}(经 HID)"))
     }
 
@@ -576,9 +675,33 @@ impl Daemon {
 
     pub(crate) async fn open_url(&self, g: &mut Inner, url: &str) -> Result<String, String> {
         self.ensure_unlocked(g).await?;
-        self.require_wda(g)?.open_url(url).await.map_err(|e| e.to_string())?;
-        Ok(format!("已打开 {url}"))
+        let (r, app) = self.require_wda(g)?.open_url(url).await.map_err(|e| e.to_string())?;
+        Ok(match r {
+            Launch::Foreground => format!("已打开 {url}(前台 {app})"),
+            Launch::Blocked(text) => {
+                format!("已打开 {url},但屏幕上有系统弹窗「{text}」挡着;先用 iphone_tap_element 点弹窗上的按钮")
+            }
+            Launch::Slow => format!("已打开 {url},但 8 秒内没有 App 到前台(前台还是 {app}),先截图确认"),
+        })
     }
+}
+
+/// 只给 WDA 短暂掉线留窗口。缓存不能跨进程重启、跨设备或长期代替方向查询。
+const HID_ROTATION_MAX_AGE: Duration = Duration::from_secs(30);
+
+/// 当前截图必须能确定横竖；横屏还需近期 WDA 旋转角。仅凭宽高无法识别 WDA 离线期间的 180° 翻转，
+/// 所以后备操作期间不要翻转设备；恢复 WDA 后重新确认方向。
+pub(crate) fn hid_rotation(w: u32, h: u32, known: Option<(Duration, Rotation)>) -> Result<Rotation, String> {
+    if w == 0 || h == 0 || w == h {
+        return Err("截图尺寸无效，无法核对 HID 方向，没有发送触摸".into());
+    }
+    let recent = known.filter(|(age, _)| *age <= HID_ROTATION_MAX_AGE).map(|(_, r)| r);
+    if w > h {
+        return recent.filter(|r| r.is_landscape()).ok_or_else(|| {
+            "当前为横屏，但没有近期且匹配的 WDA 旋转角，没有发送 HID 触摸；等 WDA 恢复后重试，或转回竖屏".into()
+        });
+    }
+    Ok(if recent == Some(Rotation::UpsideDown) { Rotation::UpsideDown } else { Rotation::Portrait })
 }
 
 /// 屏幕中间（上下各去掉一段，留给导航栏、标签栏）几乎没有元素：加载中、空白页
@@ -809,6 +932,22 @@ async fn verify_typed(w: &mut WdaClient<DeviceTransport>, text: &str) -> Typed {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hid_rotation_requires_fresh_matching_landscape() {
+        use Rotation::*;
+        let fresh = |r| Some((Duration::ZERO, r));
+        assert_eq!(hid_rotation(2796, 1290, fresh(TopToLeft)), Ok(TopToLeft));
+        assert_eq!(hid_rotation(2796, 1290, fresh(TopToRight)), Ok(TopToRight));
+        assert!(hid_rotation(2796, 1290, None).is_err());
+        assert!(hid_rotation(2796, 1290, fresh(Portrait)).is_err());
+        assert!(hid_rotation(2796, 1290, Some((Duration::from_secs(31), TopToLeft))).is_err());
+        assert_eq!(hid_rotation(1290, 2796, fresh(TopToLeft)), Ok(Portrait));
+        assert_eq!(hid_rotation(1290, 2796, fresh(UpsideDown)), Ok(UpsideDown));
+        assert_eq!(hid_rotation(1290, 2796, None), Ok(Portrait));
+        assert!(hid_rotation(0, 2796, fresh(Portrait)).is_err());
+        assert!(hid_rotation(100, 100, fresh(Portrait)).is_err());
+    }
 
     fn v(s: &[&str]) -> Vec<String> {
         s.iter().map(|x| x.to_string()).collect()

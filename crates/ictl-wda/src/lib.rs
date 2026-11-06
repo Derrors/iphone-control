@@ -10,7 +10,7 @@ pub mod http;
 pub mod runner;
 
 pub use client::{IdleSettings, Launch, LockCheck, PointerStep, WdaClient, actions_body, swipe_steps, tap_steps};
-pub use elements::Element;
+pub use elements::{Element, Orientation, View};
 pub use runner::WdaRunner;
 
 #[derive(Debug, thiserror::Error)]

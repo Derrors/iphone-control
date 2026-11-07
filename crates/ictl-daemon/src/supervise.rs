@@ -24,12 +24,27 @@ const USBMUXD_MAX_DELAY: Duration = Duration::from_secs(300);
 const LIST_ERRORS_OFFLINE: u32 = 3;
 /// 开发者镜像连续挂载失败这么多次就清缓存重新下载
 const DDI_FAILURES_INVALIDATE: u32 = 3;
+/// 整个重签（登录会话、注册设备、签名、上传安装）的时限：苹果服务器或安装卡住时不能永远「正在重签」
+const RESIGN_TIMEOUT: Duration = Duration::from_secs(15 * 60);
+/// Apple ID 会话检查的时限
+const SESSION_CHECK_TIMEOUT: Duration = Duration::from_secs(3 * 60);
+/// 换了设备或重新接上后，这么久内就检查一次要不要重签（离线期间可能过期了，不能等满 RESIGN_CHECK_HOURS）
+const RESIGN_CHECK_AFTER_CONNECT: Duration = Duration::from_secs(60);
 
 /// 后台启动 WDA 的结果
 pub(crate) enum StartOutcome {
-    Ready { runner: WdaRunner, client: WdaClient<DeviceTransport>, mounted: Option<String> },
+    Ready {
+        runner: WdaRunner,
+        client: WdaClient<DeviceTransport>,
+        mounted: Option<String>,
+    },
     NeedsUnlock,
-    Ddi(String),
+    /// 开发者镜像没准备好。`mount_failed`：是挂载这一步失败（才可能是缓存坏了）；
+    /// 建隧道、查询、下载失败都是 false
+    Ddi {
+        error: String,
+        mount_failed: bool,
+    },
     Wda(WdaError),
 }
 
@@ -212,6 +227,7 @@ impl Daemon {
             self.log.log(&format!("手机在线{model}"));
             g.device = Some(d);
             g.backoff.reset();
+            g.next_resign = g.next_resign.min(Instant::now() + RESIGN_CHECK_AFTER_CONNECT);
             if let Some(since) = g.offline_since.take()
                 && g.dedup.was_sent("offline")
             {
@@ -246,12 +262,7 @@ impl Daemon {
         };
         if ready {
             g.wda_misses.reset();
-            // 记下界面往哪边转：WDA 挂了以后 HID 点击要靠它换算横屏坐标（约 20 毫秒）
-            if let Some(w) = g.wda.as_mut()
-                && let Ok(r) = w.rotation().await
-            {
-                g.wda_rotation = Some((Instant::now(), r));
-            }
+            self.refresh_hid_rotation(g).await;
             if g.state != DeviceState::Ready {
                 if g.state == DeviceState::NeedsAutomationPin || g.dedup.was_sent("pin") {
                     g.dedup.clear("pin");
@@ -289,22 +300,26 @@ impl Daemon {
     /// 在后台启动 WDA：挂开发者镜像（单独开一条隧道，用完关掉）→ 启动 runner 等就绪。
     /// 最长约 2 分钟（等「Enable UI Automation」密码时），期间不持锁：工具调用照常走 HID 后备路线
     fn spawn_start(&self, g: &mut Inner, device: Device, bundle: String) {
-        // 正在等密码时保持这个状态，免得每次重试都在两个状态间来回切、刷日志
-        if g.state != DeviceState::NeedsAutomationPin {
+        // 正在等密码、等解锁时保持这个状态，免得每次重试都在两个状态间来回切、刷日志
+        if !matches!(g.state, DeviceState::NeedsAutomationPin | DeviceState::NeedsUnlock) {
             self.set_state(g, DeviceState::WdaStarting { last_error: None });
         }
         self.log.log("启动 WDA");
-        let (cache, url) = (self.cfg.ddi_cache(), self.cfg.ddi_url.clone());
+        let (cache, url, user_dir) = (self.cfg.ddi_cache(), self.cfg.ddi_url.clone(), self.cfg.ddi_dir.clone());
         g.starting = Some(tokio::task::spawn_local(async move {
-            // 手机重启后开发者镜像可能掉了；已挂载时只是一次查询
-            let ddi: Result<Option<String>, DeviceError> = async {
-                let mut t = device.open_tunnel().await?;
+            // 手机重启后开发者镜像可能掉了；已挂载时只是一次查询。错误带上「是不是挂载这一步」
+            let ddi: Result<Option<String>, (DeviceError, bool)> = async {
+                let mut t = device.open_tunnel().await.map_err(|e| (e, false))?;
                 let r = async {
-                    if t.ddi_mounted().await?.is_some() {
+                    if t.ddi_mounted().await.map_err(|e| (e, false))?.is_some() {
                         return Ok(None);
                     }
-                    let dir = ictl_device::ddi::ensure_cache(&cache, &url).await?;
-                    Ok(Some(t.mount_ddi(&dir).await?))
+                    let dir = match &user_dir {
+                        Some(d) => ictl_device::ddi::require_complete(d),
+                        None => ictl_device::ddi::ensure_cache(&cache, &url).await,
+                    }
+                    .map_err(|e| (e, false))?;
+                    Ok(Some(t.mount_ddi(&dir).await.map_err(|e| (e, true))?))
                 }
                 .await;
                 t.close().await;
@@ -313,8 +328,8 @@ impl Daemon {
             .await;
             let mounted = match ddi {
                 Ok(v) => v,
-                Err(DeviceError::PasswordProtected) => return StartOutcome::NeedsUnlock,
-                Err(e) => return StartOutcome::Ddi(e.to_string()),
+                Err((DeviceError::PasswordProtected, _)) => return StartOutcome::NeedsUnlock,
+                Err((e, mount_failed)) => return StartOutcome::Ddi { error: e.to_string(), mount_failed },
             };
             match WdaRunner::start(device.provider(), &bundle, WDA_START_TIMEOUT).await {
                 Ok((runner, client)) => StartOutcome::Ready { runner, client, mounted },
@@ -341,13 +356,20 @@ impl Daemon {
                 g.wda = Some(client);
                 // 状态在下面 online() 的健康检查里变成 Ready
             }
-            StartOutcome::NeedsUnlock => self.set_state(g, DeviceState::NeedsUnlock),
-            StartOutcome::Ddi(e) => {
-                g.ddi_failures += 1;
-                if g.ddi_failures >= DDI_FAILURES_INVALIDATE {
-                    self.log.log(&format!("开发者镜像连续 {} 次挂载失败，清掉缓存，下次重新下载", g.ddi_failures));
-                    ictl_device::ddi::invalidate(&self.cfg.ddi_cache());
-                    g.ddi_failures = 0;
+            StartOutcome::NeedsUnlock => {
+                // 不退避的话，紧接着的 online() 会立刻重新启动，状态被改回「正在启动」，用户看不到要解锁
+                g.backoff.retry_after(Instant::now(), crate::machine::UNLOCK_RETRY);
+                self.set_state(g, DeviceState::NeedsUnlock);
+            }
+            StartOutcome::Ddi { error: e, mount_failed } => {
+                // 只有挂载失败才可能是缓存坏了；ICTL_DDI_DIR 是用户自己的文件，从不删
+                if mount_failed && self.cfg.ddi_dir.is_none() {
+                    g.ddi_failures += 1;
+                    if g.ddi_failures >= DDI_FAILURES_INVALIDATE {
+                        self.log.log(&format!("开发者镜像连续 {} 次挂载失败，清掉缓存，下次重新下载", g.ddi_failures));
+                        ictl_device::ddi::invalidate(&self.cfg.ddi_cache());
+                        g.ddi_failures = 0;
+                    }
                 }
                 g.backoff.failed(Instant::now());
                 self.set_state(g, DeviceState::WdaStarting { last_error: Some(format!("开发者镜像：{e}")) });
@@ -372,10 +394,11 @@ impl Daemon {
         // plume_core 的 future 不是 Send，放到阻塞线程里 block_on（同重签）；也不持锁
         let r: Result<(), Option<String>> = tokio::task::spawn_blocking(move || {
             tokio::runtime::Handle::current().block_on(async move {
-                match account.session().await {
-                    Ok(_) => Ok(()),
-                    Err(ictl_sign::SignError::NotLoggedIn) => Err(None),
-                    Err(e) => Err(Some(e.to_string())),
+                match tokio::time::timeout(SESSION_CHECK_TIMEOUT, account.session()).await {
+                    Ok(Ok(_)) => Ok(()),
+                    Ok(Err(ictl_sign::SignError::NotLoggedIn)) => Err(None),
+                    Ok(Err(e)) => Err(Some(e.to_string())),
+                    Err(_) => Err(Some(format!("{} 分钟内没有完成", SESSION_CHECK_TIMEOUT.as_secs() / 60))),
                 }
             })
         })
@@ -426,6 +449,7 @@ impl Daemon {
             self.log.log("开始重签");
             (device, name)
         };
+        let signed_udid = device.udid.clone();
         let account = self.account();
         let (wda_dir, unsigned, signed_path) =
             (self.cfg.wda_dir(), self.cfg.wda_unsigned.clone(), self.cfg.wda_signed());
@@ -435,19 +459,23 @@ impl Daemon {
         }
         // plume_core 的签名 future 不是 Send（持有 &mut dyn FnMut 和非 Send 的私钥），放到阻塞线程里 block_on
         let r: Result<ictl_sign::Signed, String> = tokio::task::spawn_blocking(move || {
-            tokio::runtime::Handle::current().block_on(async move {
-                if fetch {
-                    crate::wda_pkg::ensure(&unsigned).await?;
-                }
-                let session = account.session().await.map_err(|e| e.to_string())?;
-                session.ensure_device(&device.udid, &name).await.map_err(|e| e.to_string())?;
-                std::fs::create_dir_all(&wda_dir).map_err(|e| e.to_string())?;
-                let tmp = wda_dir.join("WDA-signing.ipa");
-                let signed = session.sign_ipa(&unsigned, &tmp, &device.udid).await.map_err(|e| e.to_string())?;
-                device.install(&tmp).await.map_err(|e| format!("安装到手机失败(手机锁屏?)：{e}"))?;
-                std::fs::rename(&tmp, &signed_path).map_err(|e| e.to_string())?;
-                Ok(signed)
-            })
+            tokio::runtime::Handle::current()
+                .block_on(tokio::time::timeout(RESIGN_TIMEOUT, async move {
+                    if fetch {
+                        crate::wda_pkg::ensure(&unsigned).await?;
+                    }
+                    let session = account.session().await.map_err(|e| e.to_string())?;
+                    session.ensure_device(&device.udid, &name).await.map_err(|e| e.to_string())?;
+                    std::fs::create_dir_all(&wda_dir).map_err(|e| e.to_string())?;
+                    let tmp = wda_dir.join("WDA-signing.ipa");
+                    let signed = session.sign_ipa(&unsigned, &tmp, &device.udid).await.map_err(|e| e.to_string())?;
+                    device.install(&tmp).await.map_err(|e| format!("安装到手机失败(手机锁屏?)：{e}"))?;
+                    std::fs::rename(&tmp, &signed_path).map_err(|e| e.to_string())?;
+                    Ok(signed)
+                }))
+                .unwrap_or_else(|_| {
+                    Err(format!("{} 分钟内没有完成(苹果服务器或安装卡住)", RESIGN_TIMEOUT.as_secs() / 60))
+                })
         })
         .await
         .unwrap_or_else(|e| Err(format!("签名任务异常退出：{e}")));
@@ -463,10 +491,12 @@ impl Daemon {
                 g.persisted.profile_expires = Some(exp);
                 g.persisted.last_resign = Some(format!("{} 成功", crate::eventlog::timestamp()));
                 g.persisted.save(&self.cfg.state_file());
-                // 新包装上后旧的 runner 会失效，下一轮巡检重新拉起
-                self.drop_session(g).await;
-                self.refresh_device_profile(g).await;
-                g.backoff.reset();
+                // 新包装上后旧的 runner 会失效，下一轮巡检重新拉起。签名期间切到了别的设备就不动它的会话
+                if g.device.as_ref().is_some_and(|d| d.udid == signed_udid) {
+                    self.drop_session(g).await;
+                    self.refresh_device_profile(g).await;
+                    g.backoff.reset();
+                }
                 g.dedup.clear("resign");
                 let msg = format!("重签完成,新描述文件到期 {} UTC", crate::eventlog::format_utc(exp));
                 self.log.log(&msg);

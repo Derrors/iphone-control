@@ -1,6 +1,6 @@
 //! 设备层：一台 iPhone 的全部底层能力，基于 `idevice`。
 //!
-//! - 发现：usbmuxd `get_devices`；容器里没有 udev，另用 sysfs 判断 USB 上是否有 Apple 设备（[`apple_usb_present`]）
+//! - 发现：usbmuxd `get_devices`；容器里没有 udev，另用 sysfs 数 USB 上有几台 iPhone/iPad（[`ios_usb_count`]）
 //! - 配对、设备信息、开发者模式：lockdown / amfi
 //! - 隧道：CoreDeviceProxy + jktcp 用户态 TCP 栈（免 root、不建网卡），RSD 握手（[`Tunnel`]）
 //! - 开发者镜像：`cryptexd::installed_ddi` / `install_ddi`（个性化 + TSS）；DDI 下载见 [`ddi`]
@@ -69,6 +69,9 @@ pub enum DeviceError {
     #[error("{0}")]
     InvalidInput(String),
 }
+
+/// usbmuxd、lockdown 这类一问一答的查询的时限。idevice 读应答没有超时，对方接了连接不应答会一直等
+const QUERY: Duration = Duration::from_secs(15);
 
 /// 给对手机的一次调用加时限：卡住的服务不能把调用方（守护进程持锁时）一起卡死
 pub(crate) async fn limit<T>(what: &str, d: Duration, f: impl Future<Output = Result<T>>) -> Result<T> {
@@ -178,16 +181,8 @@ pub fn usbmuxd_addr() -> UsbmuxdAddr {
     UsbmuxdAddr::from_env_var().unwrap_or_default()
 }
 
-/// 检查 sysfs 里是否有 Apple（05ac）USB 设备。容器无 udev 时用来判断 usbmuxd 是否漏掉了设备。
-/// `root` 一般是 `/sys/bus/usb/devices`。
-pub fn apple_usb_present(root: &Path) -> bool {
-    let Ok(entries) = std::fs::read_dir(root) else { return false };
-    entries
-        .flatten()
-        .any(|e| std::fs::read_to_string(e.path().join("idVendor")).map(|v| v.trim() == "05ac").unwrap_or(false))
-}
-
 /// sysfs 里 iPhone/iPad/iPod 的台数：厂商号 05ac、产品名以 iPhone/iPad/iPod 开头（Apple 键盘之类的配件不算）。
+/// `root` 一般是 `/sys/bus/usb/devices`。
 /// 接着几台时和 usbmuxd 认到的台数比，才看得出「新插的那台没被认出来」
 pub fn ios_usb_count(root: &Path) -> usize {
     let Ok(entries) = std::fs::read_dir(root) else { return 0 };
@@ -205,11 +200,11 @@ pub fn ios_usb_count(root: &Path) -> usize {
 /// Linux 上 USB 设备在 sysfs 里的目录
 pub const SYSFS_USB: &str = "/sys/bus/usb/devices";
 
-/// 宿主机 USB 上有没有 iPhone/iPad：Linux 读 sysfs（[`apple_usb_present`]），macOS 查 IORegistry。
+/// 宿主机 USB 上有没有 iPhone/iPad：Linux 读 sysfs（[`ios_usb_count`]），macOS 查 IORegistry。
 /// 判断不了（其他系统、`ioreg` 运行失败）返回 `None`，调用方应跳过这项检查而不是当成「没有」。
-pub async fn host_apple_usb_present() -> Option<bool> {
+pub async fn host_ios_usb_present() -> Option<bool> {
     if cfg!(target_os = "linux") {
-        return Some(apple_usb_present(Path::new(SYSFS_USB)));
+        return Some(ios_usb_count(Path::new(SYSFS_USB)) > 0);
     }
     if !cfg!(target_os = "macos") {
         return None;
@@ -230,15 +225,18 @@ fn ioreg_has_ios_device(out: &str) -> bool {
 
 /// usbmuxd 看到的 USB 设备（不含网络设备）。usbmuxd 没在运行时返回错误。
 pub async fn list_devices() -> Result<Vec<UsbDevice>> {
-    // 不用 UsbmuxdConnection::default()：它固定连 /var/run/usbmuxd，不看 USBMUXD_SOCKET_ADDRESS
-    let mut mux = usbmuxd_addr().connect(0).await?;
-    Ok(mux
-        .get_devices()
-        .await?
-        .into_iter()
-        .filter(|d| matches!(d.connection_type, Connection::Usb))
-        .map(|d| UsbDevice { udid: d.udid, device_id: d.device_id })
-        .collect())
+    limit("列出 usbmuxd 设备", QUERY, async {
+        // 不用 UsbmuxdConnection::default()：它固定连 /var/run/usbmuxd，不看 USBMUXD_SOCKET_ADDRESS
+        let mut mux = usbmuxd_addr().connect(0).await?;
+        Ok(mux
+            .get_devices()
+            .await?
+            .into_iter()
+            .filter(|d| matches!(d.connection_type, Connection::Usb))
+            .map(|d| UsbDevice { udid: d.udid, device_id: d.device_id })
+            .collect())
+    })
+    .await
 }
 
 /// 一台设备的句柄。只持有 usbmuxd provider，每次调用按需新建连接；隧道见 [`Device::open_tunnel`]。
@@ -290,30 +288,40 @@ impl Device {
     /// usbmuxd 里有没有这台手机的配对记录。只有「没有记录」算 false；连不上 usbmuxd 等错误照常返回，
     /// 免得 usbmuxd 抖一下就让状态变成「请在手机上点信任」
     pub async fn paired(&self) -> Result<bool> {
-        let mut mux = self.provider.addr.connect(0).await?;
-        match mux.get_pair_record(&self.udid).await {
-            Ok(_) => Ok(true),
-            // 没有记录时 usbmuxd 的应答里没有 PairRecordData；记录损坏同样需要重新配对
-            Err(IdeviceError::UnexpectedResponse(_)) => Ok(false),
-            Err(e) => Err(e.into()),
-        }
+        limit("查配对记录", QUERY, async {
+            let mut mux = self.provider.addr.connect(0).await?;
+            match mux.get_pair_record(&self.udid).await {
+                Ok(_) => Ok(true),
+                // 没有记录时 usbmuxd 的应答里没有 PairRecordData；记录损坏同样需要重新配对
+                Err(IdeviceError::UnexpectedResponse(_)) => Ok(false),
+                Err(e) => Err(e.into()),
+            }
+        })
+        .await
     }
 
     /// 发起配对：手机上弹「信任此电脑」。用户还没点时返回 [`DeviceError::PairingPending`]，调用方应轮询重试。
     /// 成功后配对记录交给 usbmuxd 保存（容器里即 `/var/lib/lockdown`）。
     pub async fn pair(&self, host_name: &str) -> Result<()> {
-        let mut mux = self.provider.addr.connect(0).await?;
-        let buid = mux.get_buid().await?;
-        let mut lockdown = LockdownClient::connect(&*self.provider).await?;
-        let host_id = uuid::Uuid::new_v4().to_string().to_uppercase();
-        let record = lockdown.pair_once(host_id, buid, Some(host_name)).await?;
-        let mut mux = self.provider.addr.connect(0).await?;
-        mux.save_pair_record(&self.udid, record.serialize()?).await?;
-        Ok(())
+        limit("配对", Duration::from_secs(30), async {
+            let mut mux = self.provider.addr.connect(0).await?;
+            let buid = mux.get_buid().await?;
+            let mut lockdown = LockdownClient::connect(&*self.provider).await?;
+            let host_id = uuid::Uuid::new_v4().to_string().to_uppercase();
+            let record = lockdown.pair_once(host_id, buid, Some(host_name)).await?;
+            let mut mux = self.provider.addr.connect(0).await?;
+            mux.save_pair_record(&self.udid, record.serialize()?).await?;
+            Ok(())
+        })
+        .await
     }
 
     /// 名称、型号、iOS 版本（不需要配对）
     pub async fn info(&self) -> Result<DeviceInfo> {
+        limit("读设备信息", QUERY, self.info_inner()).await
+    }
+
+    async fn info_inner(&self) -> Result<DeviceInfo> {
         let mut lockdown = LockdownClient::connect(&*self.provider).await?;
         let mut get = async |key: &str| -> String {
             match lockdown.get_value(Some(key), None).await {
@@ -335,16 +343,23 @@ impl Device {
     /// 手机上装着的全部描述文件（.mobileprovision 原始内容，经 misagent 读）。装 App 时随包带的描述文件会留在这里，
     /// 用它判断「这台手机上的 WDA 还能用多久」：同一个 Apple ID 给几台手机先后签过，每台装的是各自那一次签的
     pub async fn installed_profiles(&self) -> Result<Vec<Vec<u8>>> {
-        Ok(MisagentClient::connect(&*self.provider).await?.copy_all().await?)
+        limit("读描述文件", QUERY, async { Ok(MisagentClient::connect(&*self.provider).await?.copy_all().await?) })
+            .await
     }
 
     pub async fn developer_mode_enabled(&self) -> Result<bool> {
-        Ok(AmfiClient::connect(&*self.provider).await?.get_developer_mode_status().await?)
+        limit("查开发者模式", QUERY, async {
+            Ok(AmfiClient::connect(&*self.provider).await?.get_developer_mode_status().await?)
+        })
+        .await
     }
 
     /// 让「设置 → 隐私与安全性」里出现开发者模式开关（打开仍需用户在手机上操作）
     pub async fn reveal_developer_mode(&self) -> Result<()> {
-        Ok(AmfiClient::connect(&*self.provider).await?.reveal_developer_mode_option_in_ui().await?)
+        limit("显示开发者模式开关", QUERY, async {
+            Ok(AmfiClient::connect(&*self.provider).await?.reveal_developer_mode_option_in_ui().await?)
+        })
+        .await
     }
 
     /// 建立 CoreDeviceProxy 用户态隧道并完成 RSD 握手。锁屏时报 [`DeviceError::PasswordProtected`]。
@@ -362,21 +377,28 @@ impl Device {
 
     /// 已安装的 App。`include_system` 为 false 只列用户 App，为 true 只列系统 App（与 toolkit 一致）。
     pub async fn list_apps(&self, include_system: bool) -> Result<Vec<AppInfo>> {
-        let mut proxy = InstallationProxyClient::connect(&*self.provider).await?;
-        let kind = if include_system { "System" } else { "User" };
-        Ok(apps::parse_apps(proxy.get_apps(Some(kind), None).await?))
+        limit("列出 App", Duration::from_secs(30), async {
+            let mut proxy = InstallationProxyClient::connect(&*self.provider).await?;
+            let kind = if include_system { "System" } else { "User" };
+            Ok(apps::parse_apps(proxy.get_apps(Some(kind), None).await?))
+        })
+        .await
     }
 
     /// 经 usbmuxd 直连手机上的 TCP 端口（`iphone-control wda-bridge` 用）
     pub async fn connect_port(&self, port: u16) -> Result<Box<dyn idevice::ReadWrite>> {
-        let dev = self.provider.connect(port).await?;
+        let dev = limit("连接手机端口", QUERY, async { Ok(self.provider.connect(port).await?) }).await?;
         dev.get_socket().ok_or_else(|| DeviceError::Idevice("连接没有套接字".into()))
     }
 
     /// 上传并安装 .ipa 或 .app 目录
     pub async fn install(&self, package: &Path) -> Result<()> {
-        idevice::utils::installation::install_package(&*self.provider, package, None).await?;
-        Ok(())
+        // 含上传几十 MB 的包，USB 2 上也就一两分钟
+        limit("安装", Duration::from_secs(600), async {
+            idevice::utils::installation::install_package(&*self.provider, package, None).await?;
+            Ok(())
+        })
+        .await
     }
 }
 
@@ -426,10 +448,8 @@ impl Tunnel {
     /// HID 会话；没有就开一个：先启动显示媒体流（HID 的授权闸门），再连 universalhidservice 和 indigo
     pub async fn hid(&mut self, screen: ScreenSize) -> Result<&mut HidSession> {
         if self.hid.is_none() {
-            let h = limit("开启 HID 会话", Duration::from_secs(20), async {
-                HidSession::open(&mut self.adapter, &mut self.handshake, screen).await
-            })
-            .await?;
+            // 各步自带时限（见 HidSession::open）：不能在这里整体取消，否则起来一半的媒体流没人停
+            let h = HidSession::open(&mut self.adapter, &mut self.handshake, screen).await?;
             self.hid = Some(h);
         }
         let h = self.hid.as_mut().expect("刚建好");
@@ -495,7 +515,6 @@ mod tests {
         // 接口目录没有 idVendor
         std::fs::create_dir_all(root.join("5-1:1.0")).unwrap();
         assert_eq!(ios_usb_count(&root), 2);
-        assert!(apple_usb_present(&root));
         std::fs::remove_dir_all(&root).unwrap();
         assert_eq!(ios_usb_count(&root), 0);
     }

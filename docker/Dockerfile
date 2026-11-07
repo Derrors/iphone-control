@@ -31,7 +31,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
       -o /THIRD_PARTY_LICENSES.html
 
 # ---- WebDriverAgent：Appium 官方构建的未签名真机包，重新打成 IPA ----
-# 计划改为本项目在 macOS CI 上自己编译（docs/dev/roadmap.md 阶段 7）
+# 计划改为本项目在 macOS CI 上自己编译（docs/dev/archive/roadmap.md 阶段 7）
 FROM ${DEBIAN_IMAGE} AS wda
 ARG WDA_VERSION=v16.15.3
 ARG WDA_SHA256=2176793538d902f6b1e61291e9997f68d306541f222ea715d256a7c6ce9d4fc5

@@ -73,9 +73,14 @@ impl Persisted {
 
     /// 描述文件还剩多久；不知道返回 None
     pub fn profile_left(&self) -> Option<Duration> {
-        let now = SystemTime::now().duration_since(UNIX_EPOCH).ok()?.as_secs();
-        self.profile_expires.map(|e| Duration::from_secs(e.saturating_sub(now)))
+        self.profile_expires.and_then(left_until)
     }
+}
+
+/// 离 Unix 时间 `at`（秒）还有多久，过了是 0
+fn left_until(at: u64) -> Option<Duration> {
+    let now = SystemTime::now().duration_since(UNIX_EPOCH).ok()?.as_secs();
+    Some(Duration::from_secs(at.saturating_sub(now)))
 }
 
 /// 这台手机上装着的 WDA 描述文件（经 misagent 读）。[`Persisted`] 只记最近一次签名：给别的手机签过之后，
@@ -97,10 +102,7 @@ impl DeviceProfile {
     /// 还剩多久：读到了用手机上的；还没读、读不出来按签名记录；手机上没有返回 None
     pub fn left(&self, persisted: &Persisted) -> Option<Duration> {
         match self {
-            Self::Expires(e) => {
-                let now = SystemTime::now().duration_since(UNIX_EPOCH).ok()?.as_secs();
-                Some(Duration::from_secs(e.saturating_sub(now)))
-            }
+            Self::Expires(e) => left_until(*e),
             Self::Missing => None,
             Self::NotChecked | Self::Unknown(_) => persisted.profile_left(),
         }
@@ -121,6 +123,16 @@ pub fn wda_profile_expiry(profiles: &[Vec<u8>], team: Option<&str>, bundle: &str
         })
         .map(|p| p.expires)
         .max()
+}
+
+/// 一次请求的附带条件（来自请求里的 [`ictl_protocol::CANCEL_ON_CLOSE`]、[`ictl_protocol::EXPECT_UDID`]）
+#[derive(Default)]
+pub struct CallCtx {
+    /// 调用方断开时收到信号。还在排队等设备锁的请求就不执行了；
+    /// 已经开始执行的照常做完（中途打断会留下改了一半的 WDA 设置）
+    pub gone: Option<tokio::sync::oneshot::Receiver<()>>,
+    /// 正在控制的不是这台就不执行
+    pub expect_udid: Option<String>,
 }
 
 /// 快照：`iphone-control status` 显示
@@ -233,7 +245,9 @@ pub(crate) fn wda_down(state: &DeviceState, info: Option<&DeviceInfo>) -> String
     } else {
         "这台手机 iOS 低于 27,没有 HID 后备路线,WDA 恢复前截图、点击等操作都用不了"
     };
-    format!("WDA 不可用({}),守护进程一般 1~2 分钟内会拉起;{fallback}", state.describe())
+    // 状态还是「就绪」：WDA 在两次巡检之间刚掉线，下一轮巡检才会发现并重新拉起
+    let why = if *state == DeviceState::Ready { "刚掉线".to_owned() } else { state.describe() };
+    format!("WDA 不可用({why}),守护进程一般 1~2 分钟内会拉起;{fallback}")
 }
 
 /// HID 后备路线（免 WDA 截图、点击）只有 iOS 27 起能用；不知道版本时照常尝试
@@ -335,12 +349,7 @@ impl Daemon {
         if dst.exists() {
             return;
         }
-        let r = std::fs::create_dir_all(self.cfg.passcodes_dir())
-            .and_then(|_| {
-                use std::os::unix::fs::PermissionsExt;
-                std::fs::set_permissions(self.cfg.passcodes_dir(), std::fs::Permissions::from_mode(0o700))
-            })
-            .and_then(|_| std::fs::rename(&legacy, &dst));
+        let r = self.cfg.ensure_passcodes_dir().and_then(|_| std::fs::rename(&legacy, &dst));
         match r {
             Ok(()) => self.log.log(&format!("旧的锁屏密码只有一份，USB 上只接着 {}，归到它名下", d.udid)),
             Err(e) => tracing::warn!("把旧的锁屏密码归到 {} 名下失败：{e}", d.udid),
@@ -368,7 +377,6 @@ impl Daemon {
         }
     }
 
-    /// 丢掉整个会话：runner、WDA 客户端、正在后台启动的任务、隧道（先停 HID 媒体流）
     /// 重读这台手机上的 WDA 描述文件（misagent，一次约几十毫秒）
     pub(crate) async fn refresh_device_profile(&self, g: &mut Inner) {
         let Some(d) = g.device.clone() else {
@@ -391,6 +399,7 @@ impl Daemon {
         };
     }
 
+    /// 丢掉整个会话：runner、WDA 客户端、正在后台启动的任务、隧道（先停 HID 媒体流）
     pub(crate) async fn drop_session(&self, g: &mut Inner) {
         if let Some(h) = g.starting.take() {
             h.abort();
@@ -451,7 +460,7 @@ impl Daemon {
     // ------------------------------------------------------------------ 请求处理
 
     /// 处理一个控制请求。`queued_at`：请求到达的时间，用来放弃排队太久的操作
-    pub async fn handle(self: &Arc<Self>, req: Request, queued_at: Instant) -> Response {
+    pub async fn handle(self: &Arc<Self>, req: Request, queued_at: Instant, ctx: CallCtx) -> Response {
         // 不需要设备锁的请求
         match req {
             Request::Daemon => {
@@ -472,8 +481,24 @@ impl Daemon {
             return Response::error(e);
         }
 
-        let mut g = self.inner.lock().await;
+        let mut g = match ctx.gone {
+            Some(mut gone) => tokio::select! {
+                biased;
+                g = self.inner.lock() => g,
+                Ok(()) = &mut gone => return Response::error("调用方已取消,请求没有执行"),
+            },
+            None => self.inner.lock().await,
+        };
         let g = &mut *g;
+        if let Some(want) = &ctx.expect_udid {
+            let now = g.device.as_ref().map(|d| d.udid.as_str());
+            if now != Some(want.as_str()) {
+                return Response::error(format!(
+                    "正在控制的设备变了(原来是 {want},现在{}),没有执行;先用 iphone_list_devices 确认",
+                    now.map_or("没有设备".into(), |u| format!("是 {u}"))
+                ));
+            }
+        }
         if req.is_device_action() && queued_at.elapsed() > STALE {
             return Response::error(format!(
                 "守护进程正忙,这个操作排队超过 {} 秒,已放弃执行(以免落到已经变化的屏幕上);先截图看看再重试",
@@ -563,6 +588,35 @@ fn check_request(req: &Request) -> Result<(), String> {
 mod tests {
     use super::*;
 
+    fn test_daemon(tag: &str) -> (Arc<Daemon>, std::path::PathBuf) {
+        let dir = std::env::temp_dir().join(format!("ictl-core-{tag}-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        (Daemon::new(Config::from_env(&dir)), dir)
+    }
+
+    /// 调用方已经断开：还在排队等设备锁的请求不执行
+    #[tokio::test]
+    async fn queued_request_is_dropped_when_caller_is_gone() {
+        let (d, dir) = test_daemon("gone");
+        let busy = d.inner.lock().await;
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        tx.send(()).unwrap();
+        let r = d.handle(Request::Status, Instant::now(), CallCtx { gone: Some(rx), expect_udid: None }).await;
+        drop(busy);
+        assert!(matches!(&r, Response::Error { message } if message.contains("已取消")), "{r:?}");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// 批量执行要求的设备不是正在控制的那台（例如拔线后改控了另一台）：不执行
+    #[tokio::test]
+    async fn request_for_another_device_is_refused() {
+        let (d, dir) = test_daemon("expect");
+        let ctx = CallCtx { gone: None, expect_udid: Some("00008130-AAAA".into()) };
+        let r = d.handle(Request::Status, Instant::now(), ctx).await;
+        assert!(matches!(&r, Response::Error { message } if message.contains("设备变了")), "{r:?}");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
     /// 手机上的描述文件：CMS 外壳里包着 XML plist（同 ictl-sign 的解析方式）
     fn profile(app_id: &str, devices: &[&str], expires: &str) -> Vec<u8> {
         let devs: String = devices.iter().map(|d| format!("<string>{d}</string>")).collect();
@@ -580,6 +634,7 @@ mod tests {
 
     #[test]
     fn wda_down_when_no_device_does_not_promise_recovery() {
+        assert!(wda_down(&DeviceState::Ready, None).starts_with("WDA 不可用(刚掉线)"));
         let m = wda_down(&DeviceState::Absent, None);
         assert!(m.contains("手机未连接") && !m.contains("1~2 分钟") && !m.contains("可照常用"), "{m}");
     }

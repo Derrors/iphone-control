@@ -13,7 +13,7 @@ No need to clone the repository — the least effort. Create a directory (e.g. `
 ```yaml
 services:
   iphone:
-    image: ghcr.io/derrors/iphone-control:latest   # or pin a version, e.g. :0.1.0
+    image: ghcr.io/derrors/iphone-control:latest   # or pin a version, e.g. :0.1.3
     container_name: iphone-control
     # USB character devices only; no privileged needed
     device_cgroup_rules:
@@ -54,10 +54,10 @@ docker compose up -d --build
 
 ### Use the prebuilt image
 
-After a release, images are published at `ghcr.io/derrors/iphone-control` (amd64, arm64). In `.env`:
+Images are published at `ghcr.io/derrors/iphone-control` (amd64, arm64). In `.env`:
 
 ```ini
-IMAGE=ghcr.io/derrors/iphone-control:latest   # or pin a version, e.g. :0.1.0
+IMAGE=ghcr.io/derrors/iphone-control:latest   # or pin a version, e.g. :0.1.3
 ```
 
 Then:
@@ -76,6 +76,8 @@ Afterwards, run the [setup wizard](../guide/getting-started) once.
 - `init: true` and `stop_grace_period: 30s` — on stop it closes the sessions on the phone first, so no "paired computer" icon is left behind.
 
 ## Upgrade
+
+Read the upgrade notes in the [changelog](https://github.com/Derrors/iphone-control/blob/main/CHANGELOG.md) first.
 
 ```bash
 docker compose pull && docker compose up -d             # just a compose file

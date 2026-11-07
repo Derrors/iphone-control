@@ -23,7 +23,19 @@ pub fn cache_complete(dir: &Path) -> bool {
     FILES.iter().all(|f| dir.join(f).is_file())
 }
 
-/// 删掉缓存（挂载反复失败时调用，下次重新下载）
+/// 用户自己提供的目录（`ICTL_DDI_DIR`）：不下载、不改动，只检查文件齐不齐
+pub fn require_complete(dir: &Path) -> Result<PathBuf> {
+    let missing: Vec<&str> = FILES.iter().copied().filter(|f| !dir.join(f).is_file()).collect();
+    if missing.is_empty() {
+        return Ok(dir.to_owned());
+    }
+    Err(DeviceError::Io(std::io::Error::new(
+        std::io::ErrorKind::NotFound,
+        format!("ICTL_DDI_DIR（{}）里缺少 {}", dir.display(), missing.join("、")),
+    )))
+}
+
+/// 删掉缓存（挂载反复失败时调用，下次重新下载）。只用于守护进程自己下载的缓存目录
 pub fn invalidate(dir: &Path) {
     for f in FILES.iter().chain([&SOURCE_STAMP]) {
         let _ = std::fs::remove_file(dir.join(f));
@@ -86,8 +98,11 @@ mod tests {
         assert!(!cache_complete(&dir));
         std::fs::write(dir.join(FILES[4]), b"x").unwrap();
         assert!(cache_complete(&dir));
+        assert!(require_complete(&dir).is_ok());
         invalidate(&dir);
         assert!(!cache_complete(&dir));
+        let e = require_complete(&dir).unwrap_err().to_string();
+        assert!(e.contains("BuildManifest.plist") && e.contains("Image.dmg.root_hash"), "{e}");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

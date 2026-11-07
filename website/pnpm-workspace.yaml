@@ -1,2 +1,6 @@
 allowBuilds:
   esbuild: true
+# VitePress 1.6.4（最新正式版）依赖 vite 5，vite 5 的开发服务器漏洞没有修复版：强制用修过的 vite 6。
+# 只影响构建文档站用的开发依赖；VitePress 出了依赖新版 vite 的正式版后去掉
+overrides:
+  vite: 6.4.5

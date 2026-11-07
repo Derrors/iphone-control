@@ -1,5 +1,7 @@
 # spike 结果
 
+> **历史记录，2026-11-01 第 0 步的结果**，不再更新。文中的 `iphone-control debug` 现在要用 `--features debug-cmds` 编译才有。
+
 设备：iPhone 15 Pro Max（iPhone16,2），iOS 27.0.1（24A446）。日期：2026-11-01。
 环境：单独的 spike 容器（`--privileged`，挂 `/dev/bus/usb`，容器内 Debian usbmuxd 1.1.1），程序为当时的 `spike/` crate（`cargo build --release -p ictl-spike`）。
 
@@ -15,6 +17,8 @@
 | 3 | 截图 | ✅ 通过 | 1290×2796 PNG，约 7.8MB |
 | 4 | 隧道稳定性 | ✅ 通过（部分） | 30 分钟 529 次截图 0 失败，共 4.1GB，最慢 1.49s；锁屏、内存未记录 |
 | 5 | 启动 WDA | ✅ 通过 | 2.1s 就绪；元素树 42KB/0.25s；截图 433KB/0.18s |
+
+> 下文的「未覆盖」和「待补」是当时的状态。后来确认的结论见[路线图的完成情况](roadmap.md#完成情况)：HID 点击和 Home 已由 `debug e2e` 以前台 App 变化确认生效；「Enable UI Automation」的报错文字已确认（回归用例 [#8](../regression-cases.md)）；从未挂载开始的挂载流程在 iOS 27 上仍没测到（重启后镜像还在）。
 
 ## 1. 开发者镜像
 

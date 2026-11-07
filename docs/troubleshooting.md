@@ -15,12 +15,12 @@ The program's own messages are in Simplified Chinese; the Chinese text is quoted
 
 | State (Chinese text) | Meaning | What to do |
 |---|---|---|
-| 手机未连接 | usbmuxd sees no phone | Check the cable and unlock the phone. Container: make sure no host `usbmuxd` is running (`sudo systemctl mask usbmuxd`). See [Phone not detected](#phone-not-detected) |
+| 手机未连接 | usbmuxd sees no phone | Check the cable and unlock the phone. Container: make sure no host `usbmuxd` is running (`sudo systemctl mask usbmuxd`). With several devices, a selected device that isn't connected also shows this: check the `选设备` line of `status`, or run `select auto`. See [Phone not detected](#phone-not-detected) |
 | 未配对 | No pairing record | Run `setup` and tap *Trust* on the phone |
 | 开发者模式未打开 | Developer Mode is off | *Settings → Privacy & Security → Developer Mode*. The toggle only appears after the phone has been seen by a developer tool; running `setup` takes care of that |
-| 手机锁屏，隧道建不起来 | The phone has not been unlocked since it restarted (BFU) | Unlock it once by hand. Auto-unlock cannot do this step |
+| 手机锁屏，隧道建不起来 | The phone has not been unlocked since it restarted (BFU) | Unlock it once by hand. Auto-unlock cannot do this step. The state stays until then and the daemon keeps retrying |
 | WDA 还没签名安装 | WebDriverAgent is not installed | Run `sign` (or `setup`) |
-| 正在启动 WDA | Starting WebDriverAgent (up to about 2 minutes) | Wait. Tools that only need coordinates (tap, swipe, screenshot, buttons) already work through the HID fallback |
+| 正在启动 WDA | Starting WebDriverAgent (up to about 2 minutes) | Wait. On iOS 27 and later, tools that only need coordinates (tap, swipe, screenshot, buttons) already work through the HID fallback. In landscape a touch needs a WDA orientation from the last 30 seconds and is refused otherwise; if the screen size isn't known, a touch returns an error. On older iOS, actions fail until WDA is up |
 | WDA 卡在手机上的「Enable UI Automation」密码框 | The phone is showing *Enter iPhone passcode for "XCTest"* | Enter the passcode on the phone. This happens after a reboot, and sometimes after the daemon is restarted several times in a row. The daemon retries every 60 seconds and notifies you once |
 | WDA 启动失败，稍后重试：… | WebDriverAgent failed for another reason | Read the error after the colon and run `doctor`. Retries back off up to 5 minutes |
 | 就绪 | Everything works | — |
@@ -36,9 +36,9 @@ The program's own messages are in Simplified Chinese; the Chinese text is quoted
 ## WebDriverAgent won't start
 
 - **"Untrusted developer":** after the first install, trust your Apple ID under *Settings → General → VPN & Device Management* (needs internet on the phone).
-- **Expired signature:** free provisioning profiles last 7 days. The daemon re-signs when fewer than `RESIGN_MIN_DAYS` (default 2) remain. `status` shows the remaining time; `resign --force` re-signs now.
+- **Expired signature:** free provisioning profiles last 7 days. The daemon re-signs when fewer than `RESIGN_MIN_DAYS` (default 2) remain. `status` shows the remaining time; `resign --force` re-signs now. Automatic re-signing only covers the controlled device, and is checked within a minute after it reconnects or you switch to it. A re-sign that takes too long counts as failed and you get a notification.
 - **Apple ID session expired:** you get a notification, and `resign` fails with a login error. Run `login` again.
-- **Developer Disk Image:** `doctor` reports whether it is mounted. Downloading needs access to GitHub; behind a firewall set `HTTP_PROXY`/`HTTPS_PROXY`, or point `ICTL_DDI_DIR` at an image extracted from Xcode.
+- **Developer Disk Image:** a failure shows on the first line of `status` as `WDA 启动失败，稍后重试：开发者镜像：…`; `doctor` has no separate check for it, and the details are in `logs/daemon.log`. Downloading needs access to GitHub; behind a firewall set `HTTP_PROXY`/`HTTPS_PROXY`, or point `ICTL_DDI_DIR` at an image extracted from Xcode. With `ICTL_DDI_DIR` the daemon neither downloads nor deletes anything, and the error names any missing file. The default cache (`ddi/` in the data directory) is deleted and downloaded again after 3 failed mounts in a row.
 
 ## Login and signing
 
@@ -50,6 +50,7 @@ The program's own messages are in Simplified Chinese; the Chinese text is quoted
 
 - **The client can't connect** ("connection closed", "failed to reconnect"): restarting the container ends the MCP process; reconnect from the client (in Claude Code, run `/mcp`). Check the registered command with `iphone-control mcp-config`.
 - **"守护进程正忙…已放弃执行":** an action waited more than 30 seconds for the device, so it was dropped instead of tapping a screen that has changed. Take a screenshot and try again.
+- **An action reports that the WDA connection dropped:** the request was already sent, so it may have happened. It is not redone over HID, to avoid tapping or typing twice. Take a screenshot before trying again.
 - **Taps do nothing:** a system alert may be covering the screen; the tool result says so (「屏幕上有系统弹窗…」). Dismiss it with `iphone_tap_element`. Taps right after launching an app are delayed until the launch animation is over.
 - **Typed text is incomplete:** `iphone_type_text` reads the field back and types missing characters again. If it still reports a mismatch, the app is rewriting the field while you type; type shorter pieces.
 
@@ -72,4 +73,4 @@ The HID fallback keeps a screen-mirroring session open while it is in use (the D
 
 ## Reporting a bug
 
-Please include the phone model, iOS version, how you run it (container or source), and the output of `iphone-control doctor`. Remove anything private (UDID, Apple ID, notification keys) first.
+Please include the iPhone or iPad model, iOS version, how you run it (Docker, prebuilt binary or source; Linux or macOS), and the output of `iphone-control doctor`. Remove anything private (UDID, Apple ID, notification keys) first.

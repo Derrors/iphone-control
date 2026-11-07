@@ -1,5 +1,7 @@
 # macOS 真机验证
 
+> **下面的验证记录早于 0.1.3**：多设备工具（`iphone_list_devices`、`iphone_select_device`，命令 `devices`、`select`）没有在 macOS 上验证过。
+
 CI 已经确认项目在 macOS（Apple Silicon）上能编译、链接，单元测试全部通过（PR #12），但单元测试不连手机。这份文档是在一台插着 iPhone 的 Mac 上要跑的步骤，换了 macOS、iOS 版本或机型时可以照着重跑一遍。
 
 ## 已有的验证记录
@@ -39,7 +41,7 @@ CI 已经确认项目在 macOS（Apple Silicon）上能编译、链接，单元�
 ## 准备
 
 - **Mac**：Apple Silicon。Intel Mac 也可以测，结果单独记录。
-- **iPhone**：iOS 17.4 以上，项目实测过的是 iPhone 15 Pro Max（iOS 27.0.1）。用**数据线**连接。
+- **iPhone**：iOS 17 以上，这份清单实测过的是 iPhone 15 Pro Max（iOS 27.0.1）。用**数据线**连接。
 - **Apple ID**：免费的即可，建议用专门的账号，不用主账号。
 - **系统语言**：回归脚本的默认步骤按中文 App 名（「时钟」「设置」）操作，手机最好设为简体中文；不是的话第 3 步要改步骤。
 - **不需要装 Xcode**。如果已经装了，第 4 步多测一个场景。
@@ -51,7 +53,7 @@ CI 已经确认项目在 macOS（Apple Silicon）上能编译、链接，单元�
 xcode-select --install            # 命令行工具：C 编译器、git（已装会提示）
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh   # Rust，1.88 以上即可
 git clone https://github.com/Derrors/iphone-control && cd iphone-control
-cargo install --path apps/iphone-control --locked   # 装到 ~/.cargo/bin/iphone-control
+cargo install --path apps/iphone-control --locked --features debug-cmds   # 装到 ~/.cargo/bin/iphone-control；第 2 步和第 4 步 D 的 debug 命令要这个 feature
 iphone-control --version
 ```
 
@@ -116,7 +118,7 @@ iphone-control doctor      # 每一项都应是 ✅
 
 ## 第 2 步：隧道、开发者镜像、截图、HID
 
-这些检查直接操作手机，**先在终端 A 按 Ctrl-C 停掉守护进程**。停掉后，手机灵动岛（或状态栏）上「配对的电脑」图标应该在几秒内消失；如果一直不消失，记录下来。
+`debug` 子命令默认不编译，预编译二进制里也没有，要用上面「安装」里带 `--features debug-cmds` 的命令装。这些检查直接操作手机，**先在终端 A 按 Ctrl-C 停掉守护进程**。停掉后，手机灵动岛（或状态栏）上「配对的电脑」图标应该在几秒内消失；如果一直不消失，记录下来。
 
 `--width`、`--height` 是屏幕的点尺寸，默认 430×932（Pro Max 机型）。其他机型请换成对应尺寸（例如 6.1 英寸 Pro 是 393×852）。
 
@@ -180,7 +182,7 @@ done
 | A. 基线 | 关掉 Finder 窗口，只跑循环 |
 | B. Finder | 打开 Finder，在侧边栏选中这部 iPhone，停在它的页面上，跑循环；中途切换几次「通用」「文件」等标签 |
 | C. Xcode（装了才测） | 打开 Xcode 的 Window → Devices and Simulators 并选中这部手机，跑循环 |
-| D. 隧道长测 | 停掉守护进程，Finder 保持选中手机，运行 `iphone-control debug soak --minutes 30`（同一条隧道持续截图） |
+| D. 隧道长测 | 停掉守护进程，Finder 保持选中手机，运行 `iphone-control debug soak --minutes 30`（同一条隧道持续截图；要 `--features debug-cmds`） |
 | E. 恢复 | 守护进程运行中：拔线再插回；锁屏再解锁；重启手机（重启后要手动解锁并输一次密码）。每次都看多久回到就绪 |
 
 每个场景看三处：

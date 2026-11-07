@@ -14,7 +14,7 @@ ictl-daemon.workspace = true
 ictl-device.workspace = true
 ictl-mcp.workspace = true
 ictl-sign.workspace = true
-ictl-wda.workspace = true
+ictl-wda = { workspace = true, optional = true }
 clap.workspace = true
 tokio.workspace = true
 anyhow.workspace = true
@@ -22,3 +22,8 @@ rustls.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+
+[features]
+# `iphone-control debug …` 真机诊断子命令（直接调设备层和 WDA，不经守护进程），开发时用，默认不编进去：
+#   cargo build --features debug-cmds
+debug-cmds = ["dep:ictl-wda"]

@@ -27,10 +27,10 @@ impl Daemon {
             }
         }
         // 判断不了（不是 Linux/macOS）就不报，免得误报「没有设备」
-        match ictl_device::host_apple_usb_present().await {
-            Some(true) => out.push("✅ USB 上有 Apple 设备".into()),
+        match ictl_device::host_ios_usb_present().await {
+            Some(true) => out.push("✅ USB 上有 iPhone/iPad".into()),
             Some(false) => {
-                out.push("❌ USB 上没有 Apple 设备\n     → 插好数据线;用 USB-C 转接头的话换一根试试".into());
+                out.push("❌ USB 上没有 iPhone/iPad\n     → 插好数据线;用 USB-C 转接头的话换一根试试".into());
                 fails += 1;
             }
             None => {}

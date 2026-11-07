@@ -11,7 +11,11 @@ use std::time::Duration;
 use idevice::provider::IdeviceProvider;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-/// 一次 HTTP 请求的传输。抽象出来便于单测里换成假的
+/// 一次 HTTP 请求的传输。抽象出来便于单测里换成假的。
+///
+/// 错误的 kind 区分请求有没有送到 WDA（决定能不能退到 HID 重做）：
+/// [`ErrorKind::TimedOut`](std::io::ErrorKind::TimedOut) 是发出后没在时限内应答，
+/// [`AFTER_SENT`] 是发出后连接断了或响应不完整、看不懂；其他 kind 都表示请求没送到
 pub trait Transport: Send + Sync {
     fn send(
         &self,
@@ -39,6 +43,13 @@ impl DeviceTransport {
 /// 连上之后的超时是「请求已发出、手机可能还在执行」，不能退到 HID 重做一遍
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// 请求已经整个发出、之后读响应出错的 kind：WDA 可能已经执行了这个操作
+pub const AFTER_SENT: std::io::ErrorKind = std::io::ErrorKind::ConnectionAborted;
+
+fn after_sent(e: std::io::Error) -> std::io::Error {
+    std::io::Error::new(AFTER_SENT, e.to_string())
+}
+
 impl Transport for DeviceTransport {
     async fn send(
         &self,
@@ -57,8 +68,10 @@ impl Transport for DeviceTransport {
             .get_socket()
             .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotConnected, "连接没有套接字"))?;
         let fut = async {
-            sock.write_all(&req).await?;
-            sock.flush().await?;
+            // 没写完 WDA 不会处理（HTTP 请求不完整），算没送到
+            let not_sent = |e: std::io::Error| std::io::Error::new(std::io::ErrorKind::NotConnected, e.to_string());
+            sock.write_all(&req).await.map_err(not_sent)?;
+            sock.flush().await.map_err(not_sent)?;
             // WDA 收到 `Connection: close` 也不关连接，不能读到 EOF：读够一个完整响应就停。
             // 头部只解析一次；正文按 Content-Length 判断，chunked 只在收到结束块后才完整解一次
             let mut buf = Vec::new();
@@ -76,13 +89,13 @@ impl Transport for DeviceTransport {
                 {
                     break;
                 }
-                let n = sock.read(&mut chunk).await?;
+                let n = sock.read(&mut chunk).await.map_err(after_sent)?;
                 if n == 0 {
                     break;
                 }
                 buf.extend_from_slice(&chunk[..n]);
             }
-            parse_response(buf)
+            parse_response(buf).map_err(after_sent)
         };
         let r = tokio::time::timeout(timeout, fut).await.map_err(|_| {
             std::io::Error::new(std::io::ErrorKind::TimedOut, format!("请求超时（{} 秒）", timeout.as_secs()))

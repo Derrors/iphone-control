@@ -5,7 +5,7 @@
 ## 准备
 
 - 一台 Linux 主机，装好 Docker（含 Compose v2）
-- iPhone（iOS 17+）和能传数据的线
+- iPhone 或 iPad（iOS 17+）和能传数据的线
 - 一个免费 Apple ID（建议专门注册一个）
 - 主机能访问苹果服务器和 GitHub；国内网络一般要配代理
 
@@ -21,7 +21,7 @@ cp .env.example .env        # 需要代理的话在这里填 HTTP_PROXY / HTTPS_
 docker compose up -d --build
 ```
 
-首次构建要编译 Rust，需要几分钟。发布了正式版本后也可以直接用预构建镜像，见 [Docker 部署](../deploy/docker)。
+首次构建要编译 Rust，需要几分钟。也可以直接用预构建镜像，见 [Docker 部署](../deploy/docker)。
 
 ## 2. 运行安装向导
 

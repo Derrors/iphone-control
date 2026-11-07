@@ -1,4 +1,4 @@
-//! `iphone-control debug …`：真机诊断（原第 0 步 spike，结果见 docs/dev/spike-results.md）。直接调用设备层和 WDA 客户端，
+//! `iphone-control debug …`：真机诊断（`--features debug-cmds` 才编译）。直接调用设备层和 WDA 客户端，
 //! 不经守护进程。`wda`、`e2e` 会启动 XCTest、`hid` 会开屏幕媒体流，和守护进程同时跑会互相干扰：
 //! 先停掉守护进程（例如在另一个只跑 usbmuxd 的容器里运行）。
 
@@ -7,10 +7,11 @@ use std::time::{Duration, Instant};
 
 use clap::{Args, Subcommand};
 use ictl_device::{Button, Device, ScreenSize};
+use ictl_wda::client::SPRINGBOARD;
 
 #[derive(Args)]
 pub struct DebugArgs {
-    /// 屏幕点尺寸（HID 坐标换算用）
+    /// 屏幕点尺寸（HID 坐标换算用；默认是 iPhone 15 Pro Max，别的机型按 `iphone-control status` 里的屏幕尺寸传）
     #[arg(long, default_value_t = 430.0)]
     width: f64,
     #[arg(long, default_value_t = 932.0)]
@@ -53,7 +54,6 @@ enum Check {
     },
 }
 
-const SPRINGBOARD: &str = "com.apple.springboard";
 const PREFERENCES: &str = "com.apple.Preferences";
 
 /// 等前台 App 变成 `want`，最多 8 秒；返回最后看到的前台 App
@@ -115,7 +115,8 @@ async fn e2e_with_wda(
 
     let t = Instant::now();
     let els = wda.elements().await?;
-    let icon = els.iter().find(|e| e.label == "设置" && e.kind == "Icon").cloned();
+    // 系统语言是中文或英文时主屏上「设置」的名字
+    let icon = els.iter().find(|e| matches!(e.label.as_str(), "设置" | "Settings") && e.kind == "Icon").cloned();
     check(
         "读元素",
         t,

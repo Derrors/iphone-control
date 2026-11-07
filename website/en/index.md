@@ -4,7 +4,7 @@ layout: home
 hero:
   name: iphone-control
   text: Let AI agents use a real iPhone
-  tagline: Control an iPhone over USB from Linux or a Mac and hand it to Claude and other AI as MCP tools. No Xcode, no paid developer account.
+  tagline: Control an iPhone or iPad over USB from Linux or a Mac and hand it to Claude and other AI as MCP tools. No Xcode, no paid developer account.
   image:
     src: /logo.svg
     alt: iphone-control

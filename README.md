@@ -4,14 +4,14 @@
   </a>
 
   <p align="center">
-    Let an AI agent operate a real iPhone plugged into a Linux machine or a Mac — one Rust binary, no Xcode, no paid developer account, no jailbreak.
+    Let an AI agent operate a real iPhone or iPad plugged into a Linux machine or a Mac — one Rust binary, no Xcode, no paid developer account, no jailbreak.
   </p>
 
   <p align="center">
     <a href="https://github.com/Derrors/iphone-control/releases/latest"><img src="https://img.shields.io/github/v/release/Derrors/iphone-control?style=flat" alt="Release"></a>
     <img src="https://img.shields.io/badge/iOS-17%2B-black?style=flat&logo=apple" alt="iOS">
     <img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS-0E7490?style=flat" alt="Platform: Linux | macOS">
-    <img src="https://img.shields.io/badge/MCP-15%20tools-8A2BE2?style=flat" alt="MCP">
+    <img src="https://img.shields.io/badge/MCP-17%20tools-8A2BE2?style=flat" alt="MCP">
     <a href="Cargo.toml"><img src="https://img.shields.io/badge/Rust-1.88%2B-CE422B?style=flat&logo=rust&logoColor=white" alt="Rust"></a>
     <a href="LICENSE"><img src="https://img.shields.io/github/license/Derrors/iphone-control?style=flat" alt="License"></a>
     <a href="https://m8ven.ai/mcp/derrors-iphone-control-1pcmse?s=readme"><img src="https://m8ven.ai/badge/mcp/derrors-iphone-control-1pcmse?variant=verified" alt="M8ven verified"></a>
@@ -43,7 +43,7 @@ iphone-control does it all in **one Rust binary** on Linux or macOS, built on [i
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="website/public/architecture-dark.svg">
-    <img src="website/public/architecture-light.svg" alt="Architecture: an MCP client talks to iphone-control mcp over stdio, which talks to the daemon over a Unix socket; the daemon drives the iPhone over USB through WebDriverAgent, with CoreDevice HID as fallback" width="900">
+    <img src="website/public/architecture-light.svg" alt="Architecture: an MCP client talks to iphone-control mcp over stdio, which talks to the daemon over a Unix socket; the daemon drives the iPhone or iPad over USB through WebDriverAgent, with CoreDevice HID as fallback" width="900">
   </picture>
 </p>
 
@@ -64,7 +64,7 @@ iphone-control does it all in **one Rust binary** on Linux or macOS, built on [i
 
 ## Quick Start
 
-You need an iPhone on iOS 17+ connected by a **data** cable, a free Apple ID (use a dedicated one), and a Linux host with Docker or an Apple Silicon Mac.
+You need an iPhone or iPad on iOS 17+ connected by a **data** cable, a free Apple ID (use a dedicated one), and a Linux host with Docker or an Apple Silicon Mac.
 
 **Linux (Docker)**
 
@@ -107,6 +107,8 @@ More: [step-by-step guide](https://derrors.github.io/iphone-control/en/guide/get
 | `iphone_open_url` | Open a URL or URL scheme |
 | `iphone_wait_for` | Wait until some text appears instead of polling with screenshots |
 | `iphone_batch` | Run up to 20 steps in one call, stopping at the first error |
+| `iphone_list_devices` | Every iPhone/iPad on USB; marks the one being controlled |
+| `iphone_select_device` | Switch to another device, or back to automatic choice |
 
 Action tools accept `then: "elements" | "screenshot"` to return the screen after the action. Screenshot pixels are tap coordinates, so the agent can tap what it sees. Games, maps and video players draw their own UI and have no element tree — use screenshots and coordinates there. Full parameters: [docs/tools.md](docs/tools.md).
 
@@ -116,24 +118,31 @@ Run them as `docker exec -it iphone-control iphone-control <command>`, or direct
 
 | Command | What it does |
 | --- | --- |
+| `daemon` | The long-running daemon: the container's entry point; on a source install or macOS you start it yourself |
+| `mcp` | The MCP server; your AI client starts it |
 | `status` | Daemon state, time left on the signing profile, recent log |
 | `doctor` | Layer-by-layer health check with a fix for each failure |
 | `setup` | Guided setup; re-run any time |
 | `login` | Sign in to the Apple ID again when the session expires |
+| `sign` | Sign and install WebDriverAgent now |
 | `resign [--force]` | Re-sign WebDriverAgent if it expires soon (or now) |
 | `passcode set\|clear` | Turn auto-unlock on or off for a device (passcodes are kept per device) |
+| `unlock-reset` | Turn auto-unlock back on after it was disabled |
 | `devices` / `select <UDID\|name\|auto>` | List connected devices / switch which one is controlled |
 | `notify-test [event]` | Send test notifications |
 | `mcp-config` | Print the command that registers the MCP server |
+| `wda-bridge [--port]` | Expose WebDriverAgent on 127.0.0.1 for other tools; stop it when done |
 
-Upgrade with `git pull && docker compose up -d --build` (or `docker compose pull` for the prebuilt image). Settings live in `.env` — see [configuration](https://derrors.github.io/iphone-control/en/guide/configuration). All state lives in `data/`: pairing records, the Apple ID session and signing key, and the passcode if auto-unlock is on. **Back it up; never commit or share it.**
+All commands and options: [CLI reference](https://derrors.github.io/iphone-control/en/guide/cli).
+
+Upgrade with `git pull && docker compose up -d --build` (or `docker compose pull && docker compose up -d --no-build` for the prebuilt image); for the binary and macOS, see [Source / binary](https://derrors.github.io/iphone-control/en/deploy/source#upgrade) and [macOS](https://derrors.github.io/iphone-control/en/deploy/macos#upgrade). Read the upgrade notes in the [changelog](CHANGELOG.md) first. Settings live in `.env` — see [configuration](https://derrors.github.io/iphone-control/en/guide/configuration). All state lives in `data/`: pairing records, the Apple ID session and signing key, and the passcode if auto-unlock is on. **Back it up; never commit or share it.**
 
 ## Documentation
 
 | | |
 | --- | --- |
 | Guide | [What is it](https://derrors.github.io/iphone-control/en/guide/what-is-iphone-control) · [Limitations](https://derrors.github.io/iphone-control/en/guide/what-is-iphone-control#limitations) · [Getting started](https://derrors.github.io/iphone-control/en/guide/getting-started) · [AI clients](https://derrors.github.io/iphone-control/en/guide/mcp-clients) · [Tools](https://derrors.github.io/iphone-control/en/guide/tools) |
-| Usage | [Configuration](https://derrors.github.io/iphone-control/en/guide/configuration) · [Notifications](https://derrors.github.io/iphone-control/en/guide/notifications) · [Auto-unlock](https://derrors.github.io/iphone-control/en/guide/auto-unlock) |
+| Usage | [Configuration](https://derrors.github.io/iphone-control/en/guide/configuration) · [CLI](https://derrors.github.io/iphone-control/en/guide/cli) · [Several devices](https://derrors.github.io/iphone-control/en/guide/multi-device) · [Notifications](https://derrors.github.io/iphone-control/en/guide/notifications) · [Auto-unlock](https://derrors.github.io/iphone-control/en/guide/auto-unlock) |
 | Deployment | [Docker](https://derrors.github.io/iphone-control/en/deploy/docker) · [Source / binary](https://derrors.github.io/iphone-control/en/deploy/source) · [macOS](https://derrors.github.io/iphone-control/en/deploy/macos) · [Data and backups](https://derrors.github.io/iphone-control/en/deploy/backup) |
 | Problems | [FAQ](https://derrors.github.io/iphone-control/en/troubleshoot/faq) · [Troubleshooting](docs/troubleshooting.md) · [Issues](https://github.com/Derrors/iphone-control/issues) |
 | Security | [SECURITY.md](SECURITY.md): what is stored, who can reach it, reporting vulnerabilities |

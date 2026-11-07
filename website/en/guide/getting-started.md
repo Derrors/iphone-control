@@ -5,7 +5,7 @@ Deploying with Docker on Linux takes about 15 minutes. Without Docker, see [Sour
 ## You need
 
 - A Linux host with Docker (including Compose v2)
-- An iPhone (iOS 17+) and a cable that carries data
+- An iPhone or iPad (iOS 17+) and a cable that carries data
 - A free Apple ID (a dedicated one is recommended)
 - Internet access to Apple and GitHub from the host (set a proxy if needed)
 
@@ -21,7 +21,7 @@ cp .env.example .env        # set HTTP_PROXY / HTTPS_PROXY here if you need a pr
 docker compose up -d --build
 ```
 
-The first build compiles Rust and takes a few minutes. After a release you can use the prebuilt image instead; see [Docker](../deploy/docker).
+The first build compiles Rust and takes a few minutes. You can also use the prebuilt image instead; see [Docker](../deploy/docker).
 
 ## 2. Run the setup wizard
 

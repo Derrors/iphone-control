@@ -14,7 +14,12 @@ use idevice::{
     tcp::handle::{AdapterHandle, UdpSocketHandle},
 };
 
-use crate::{DeviceError, Result};
+use std::time::Duration;
+
+use crate::{DeviceError, Result, limit};
+
+/// 每一步的时限。超时不能在外层直接取消：音频流可能已经起来了，必须走到 stop
+const STEP: Duration = Duration::from_secs(10);
 
 /// 我们（控制端）支持的特性，不是设备的。Device Hub 屏幕共享发 140；
 /// 发设备的掩码会让协商出无效的视频配置。
@@ -29,9 +34,7 @@ pub(crate) struct ScreenMediaStream {
 
 impl ScreenMediaStream {
     pub async fn stop(mut self) {
-        if let Err(e) = self.client.stop_media_stream().await {
-            tracing::debug!("stop_media_stream: {e}");
-        }
+        stop(&mut self.client).await;
     }
 }
 
@@ -42,8 +45,10 @@ pub(crate) async fn start(
 ) -> Result<ScreenMediaStream> {
     let fail = |what: &str, e: &dyn std::fmt::Display| DeviceError::Idevice(format!("媒体流 {what}：{e}"));
 
-    let mut client =
-        DisplayServiceClient::connect_rsd(adapter, handshake).await.map_err(|e| fail("连接 displayservice", &e))?;
+    let mut client = limit("连接 displayservice", STEP, async {
+        DisplayServiceClient::connect_rsd(adapter, handshake).await.map_err(|e| fail("连接 displayservice", &e))
+    })
+    .await?;
     let audio_udp = adapter.bind_udp(0).await.map_err(|e| fail("绑定音频 UDP", &e))?;
     let video_udp = adapter.bind_udp(0).await.map_err(|e| fail("绑定视频 UDP", &e))?;
     let receiver_ip = adapter.host_ip().to_string();
@@ -73,7 +78,6 @@ pub(crate) async fn start(
         CLIENT_SUPPORTED_FEATURES,
         session,
     );
-    client.start_media_stream(audio_params).await.map_err(|e| fail("启动音频流", &e))?;
 
     let call_id = uuid::Uuid::new_v4().to_string().to_uppercase();
     let ssrc = uuid::Uuid::new_v4().as_u128() as u32;
@@ -88,11 +92,24 @@ pub(crate) async fn start(
         display_id,
         session,
     );
-    if let Err(e) = client.start_media_stream(params).await {
-        // 音频流已经起来了，要停掉：stopAll 连同会话一起结束，否则手机端一直挂着
-        let _ = client.stop_media_stream().await;
-        return Err(fail("启动视频流", &e));
+    let started = limit("启动媒体流", STEP * 2, async {
+        client.start_media_stream(audio_params).await.map_err(|e| fail("启动音频流", &e))?;
+        client.start_media_stream(params).await.map_err(|e| fail("启动视频流", &e))
+    })
+    .await;
+    if let Err(e) = started {
+        // 音频流可能已经起来了（包括超时的情况），要停掉：stopAll 连同会话一起结束，否则手机端一直挂着
+        stop(&mut client).await;
+        return Err(e);
     }
 
     Ok(ScreenMediaStream { client, _audio_udp: audio_udp, _video_udp: video_udp })
+}
+
+async fn stop(client: &mut DisplayServiceClient<Box<dyn ReadWrite>>) {
+    match tokio::time::timeout(STEP, client.stop_media_stream()).await {
+        Ok(Ok(_)) => {}
+        Ok(Err(e)) => tracing::debug!("stop_media_stream: {e}"),
+        Err(_) => tracing::warn!("停止屏幕媒体流超时，手机上可能还挂着屏幕共享会话"),
+    }
 }

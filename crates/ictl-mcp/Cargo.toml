@@ -7,7 +7,7 @@ license.workspace = true
 publish.workspace = true
 repository.workspace = true
 homepage.workspace = true
-description = "MCP stdio 服务（13 个 iphone_* 工具）"
+description = "MCP stdio 服务（17 个 iphone_* 工具）"
 
 [dependencies]
 ictl-protocol.workspace = true

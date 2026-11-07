@@ -13,7 +13,14 @@ The daemon notifies you when the phone needs attention, through whichever channe
 | Auto-unlock failed and was disabled | See [Auto-unlock](./auto-unlock) |
 | Phone offline / back online | Check the cable and the host |
 
-The same event isn't sent twice; recovery is sent once.
+How repeats are limited:
+
+- Re-signing failed, Apple ID session expired: not repeated for 20 hours; sent again after that if the problem is still there.
+- Passcode needed, phone offline: sent once until it recovers. Only these two have a recovery notification ("WDA recovered", "back online").
+- Auto-unlock disabled: sent once; it can only be sent again after `unlock-reset`.
+- This record is kept in memory only. Restarting the daemon clears it, so a problem that isn't solved yet is sent again.
+
+Notifications don't name the device; with several connected, use `status` to see which one. See [Several devices](./multi-device).
 
 ## Bark
 

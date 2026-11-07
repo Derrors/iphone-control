@@ -1,5 +1,7 @@
 # 路线图
 
+> **历史记录，0.1.0 前的规划**，不再更新。文中的「回归用例 #N」在 [regression-cases.md](../regression-cases.md)；`iphone-control debug` 现在要用 `--features debug-cmds` 编译才有。现状见[架构](../../architecture.md)和[更新日志](../../../CHANGELOG.zh-CN.md)。
+
 每个阶段都有明确的完成标准；未达标不进入下一阶段。toolkit 在阶段 7 之前一直是正式版本。
 
 ## 完成情况
@@ -86,41 +88,4 @@ Bark、Telegram；事件见 architecture §7；同一事件去重。
 
 ## 必须覆盖的回归用例
 
-这些全部是 toolkit 实际踩过的坑。能单测的写单测，不能单测的进真机回归清单。
-
-| # | 坑 | 正确行为 | 测试方式 |
-|---|---|---|---|
-| 1 | 锁屏密码键盘不显示时，`Key` 元素仍留在元素树里（`visible=false`） | 不以"树里有键盘"判断键盘已出现；固定先唤醒再上滑 | 单测（脱敏 XML 样本）+ 真机 |
-| 2 | `displayed` 接口在锁屏上返回 false，即使键盘可见 | 以密码栏「已输入 N 位」为准 | 真机 |
-| 3 | 锁屏界面 Face ID 动画使 WDA 每请求等 idle 至 10 秒，键盘随后自动收起 | 解锁期间 `waitForIdleTimeout=1`、`animationCoolOffTimeout=0.2`，结束恢复；0 会导致唤醒失败 | 真机 |
-| 4 | 多位密码合成一个 W3C 手势会漏键 | 每位单独一个手势并逐位核对 | 真机 |
-| 5 | 锁屏上 `/wda/tap` 每次约 2.9 秒 | 解锁用 W3C 单手势（约 0.7 秒） | 真机计时 |
-| 6 | 同名「设置」有 5 个 `SBAppTags` 含 `hidden` 的后台服务 | 按名字解析 App 时跳过 hidden | 单测 |
-| 7 | 容器无 udev，手机重启/重插后 usbmuxd 看不到设备 | sysfs 有 `05ac` 但 usbmuxd 无设备连续 3 次 → 重启 usbmuxd | 真机（杀 usbmuxd 模拟） |
-| 8 | 手机重启后 XCTest 弹「Enable UI Automation」密码框 | 识别错误、只推送一次、60 秒重试、恢复后再推送 | 单测（错误识别）+ 真机 |
-| 9 | plumesign 不签 `.xctest`，WDA 报 XCTest 103 | `.xctest` 签名、无 entitlements | 单测（签完检查 `_CodeSignature`）+ 真机 |
-| 10 | `ios forward` 监听所有网卡，WDA 无认证，局域网可直接控制手机 | 默认不监听任何端口；bridge 只绑 127.0.0.1 | 集成测试（检查监听地址） |
-| 11 | 依赖大版本漂移（mcp 2.x 把 FastMCP 改名、idevice 0.1.x 每版破坏性变更） | 所有依赖锁定精确版本 + `Cargo.lock` 入库；升级单独提交 | CI |
-| 12 | host 侧 runner 退出后手机上残留 WDA 仍响应几十秒 | 就绪 = 本进程 XCTest 会话存活 且 `/status` ready | 真机 |
-| 13 | App 冷启动后立即点击会被吞 | `launch_app` 等到前台再停 1 秒 | 真机 |
-| 14 | 完整元素树 7～8 秒 | `excluded_attributes` 排除可见性等属性（约 0.3 秒），可见性按坐标判断 | 单测 + 计时 |
-| 15 | 铺满全屏的 Application/Window/Toolbar 等元素没有定位价值 | 列表中过滤 | 单测 |
-| 16 | 区域放大倍数只保留 2 位有效数字导致边缘约 1.4 点误差 | 保留 3 位 | 单测 |
-| 17 | 只有 ToolError 的消息能透传给 MCP 客户端（Python SDK） | 所有预期错误都转成工具错误文本 | 单测 |
-| 18 | 锁屏（未首次解锁）时隧道报 `PasswordProtected` | 进入 NeedsUnlock，提示人工 | 真机 |
-| 19 | Apple ID 会话过期只在重签时才发现 | 每日独立验证会话 | 单测（模拟过期） |
-| 20 | WDA 在锁屏时启动，`/wda/locked` 一直报 false（只靠变化通知维护，初值 false） | 本次 WDA 启动后确认过一次未锁屏之前，用元素树核对（锁图标 `proud-lock` / `passcode-view`） | 单测（iOS 27 真机样本）+ 真机 |
-| 21 | 下拉通知中心时 `/wda/locked` 报 true | WDA 说锁了时核对元素树：只有 `lockscreen-date-view`、没有锁图标的是通知中心 | 单测（真机样本）+ 真机 |
-| 22 | iOS 27 上锁屏密码键盘有残留输入时，按 Home 不清空（键隐藏但仍可按） | 用右下角删除键逐位删到 0（按位置认，不依赖语言），每删一位核对 | 单测（真机样本 + 假锁屏）+ 真机 |
-| 23 | 熄屏锁屏时第一个无障碍查询等约 8 秒；锁屏 0.5 秒内唤醒，第一下上滑卡约 16 秒后报 `point.x != INFINITY` | 能自动解锁时先按 Home 再核对；本进程锁屏后 3 秒内不解锁；唤醒/上滑报错算这轮落空重来 | 单测 + 真机计时 |
-| 24 | HID 会话的屏幕媒体流没正常停止时，手机端一直挂着：灵动岛「配对的电脑」图标常驻、不自动锁屏，进程退出和拔插都清不掉 | HID 空闲 30 秒关闭；所有丢弃路径（含退出）先停流；WDA 锁屏报错时确认已锁就不退到 HID | 真机 |
-| 25 | 自动解锁第 2 位之后出错（点击报错、核对锁屏报错、进程被杀）会跳过写停用标记，下次可能把同一个错误密码再输一遍 | 输第 2 位之前先写停用标记，只有确认解开或确认没凑满整串才撤掉；出错返回 `UnlockError::Uncertain` 并推送通知 | 单测（`ictl-unlock`：`error_after_second_digit_keeps_auto_unlock_disabled`、`double_press_that_fills_the_entry_disables`、`dropped_last_digit_is_not_a_wrong_attempt`） |
-| 26 | 最后一位输完后用 WDA 的锁屏状态确认结果：WDA 在锁屏时启动会报 false，把输错当成解开 | 确认时用严格判断 `WdaClient::check_lock(_, strict = true)`：核对出错一律算仍锁着 | 单测（`stale_wda_lock_state_cannot_turn_a_wrong_entry_into_unlocked`） |
-| 27 | HID 会话在屏幕媒体流起来之后才失败，媒体流没停（症状同 #24） | `HidSession::open`、`media::start` 出错时先停流；HID 会话归 `Tunnel` 所有，关隧道必先停流 | 真机 |
-| 28 | 一个长操作（启动 WDA 等自动化密码最长 120 秒）挡住所有工具、`status` 和 SIGTERM，排队的点击几分钟后才执行 | 启动 WDA、重签、会话检查不持设备锁；`status` 读快照；改变手机状态的请求排队超过 30 秒就放弃；停止信号优先处理（architecture §2 并发模型） | 真机 |
-| 29 | WDA 请求超时后退到 HID，同一个动作做了两遍 | 传输层区分连不上（`WdaError::Unavailable`，可以退到 HID）和请求已发出后超时（`WdaError::Timeout`，不退） | 单测 + 代码审查 |
-| 30 | `.env` 里留空的 `ICTL_LOG=` 生成一个什么都不放行的过滤器，日志全没了 | 空值当作没设 | 真机（`docker logs`） |
-| 31 | `/wda/tap` 每次先等界面空闲：主屏点图标约 1.7 秒（调小等待设置也没用）；W3C actions 手势做完又要等动画冷却（默认 2 秒），App 里切标签约 1.9 秒 | 点击用单个 actions 手势，期间临时把 waitForIdleTimeout/animationCoolOffTimeout 调成 1/0.2，做完恢复（原值只读一次）。真机：主屏点图标 1.70→0.91 秒（到前台 1.80→1.01 秒），App 里 0.62→0.72 秒 | 单测（请求顺序、恢复原值）+ 真机计时 |
-| 32 | `/wda/keys` 没有输入框获得焦点时也返回成功，什么都没输（真机：Safari 地址栏没点中、主屏上直接输入） | 输入前查屏幕上有没有软键盘（`XCUIElementTypeKeyboard`，约 0.2 秒），没有就报错让先点输入框 | 真机 |
-| 33 | 系统弹窗（定位、通知权限）挡着时 Home 不生效、App 到不了前台，WDA 照样报成功；弹窗属于 SpringBoard，看前台 App 发现不了 | 按 Home 前查 `/alert/text`（App 静止时约 0.4 秒；按下后动画中查要好几秒）；有弹窗就说明并不按。launch_app 没到前台时同样带上弹窗文字。按 Home 后等主屏到前台再返回 | 真机计时；弹窗路径待弹窗再出现时复测 |
-| 34 | `/wda/touchAndHold` 前后都等界面空闲：主屏长按图标 1.2 秒要约 12 秒 | 长按和点击一样用单个 actions 手势、临时调小等待：约 2 秒 | 真机计时 |
+已拆到 [regression-cases.md](../regression-cases.md)。

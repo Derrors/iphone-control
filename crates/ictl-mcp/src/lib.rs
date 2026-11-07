@@ -18,11 +18,11 @@ use rmcp::{
 };
 use serde_json::{Map, Value, json};
 
-/// 服务说明（发给客户端的 instructions），与 toolkit 一致
-pub const INSTRUCTIONS: &str = "控制一台通过 USB 连接的真实 iPhone。坐标单位是点(pt),与 iphone_screenshot 图像像素一致。\
+/// 服务说明（发给客户端的 instructions）：toolkit 的那段，加上自动解锁范围、多设备的说明
+pub const INSTRUCTIONS: &str = "控制一台通过 USB 连接的真实 iPhone(或 iPad)。坐标单位是点(pt),与 iphone_screenshot 图像像素一致。\
 操作前先用 iphone_screenshot 或 iphone_list_elements 看清屏幕;能按名字点就优先用 iphone_tap_element。\
 游戏、地图等界面没有元素树,只能看截图按坐标操作;小图标、小字看不清时用 iphone_screenshot 的区域放大。\
-配置了锁屏密码时,各操作工具会先自动解锁。每次操作后再截图确认结果。\
+配置了锁屏密码时,截图、读元素在内的各工具都会先自动解锁。每次操作后再截图确认结果。\
 涉及付款、删除、发送消息、修改账号或隐私设置的操作,先向用户确认。\
 省时间:操作类工具可带 then=elements 或 then=screenshot,等界面稳定后顺带返回操作后的界面,不用再单独调一次;\
 几步确定的连续操作(按键、逐级点菜单、填表)用 iphone_batch 一次发完;等页面加载用 iphone_wait_for,不要反复截图。\
@@ -130,7 +130,8 @@ WDA 不可用时会说明哪些功能受影响(读元素、按名字点击、启
 看不清小图标、小字时,传 x/y/width/height(点,四个要一起给)放大这块区域:从原始高清截图裁剪,小区域再额外放大。\
 返回文字里有放大倍数,图中坐标换算回屏幕点:x + 像素/倍数。\n\n\
 何时用:游戏、地图、图片等没有元素树的界面,或要确认画面效果时。只想知道有哪些按钮、文字,iphone_list_elements 更快更省上下文。\
-操作后要看结果时,优先给操作工具带 then=screenshot。WDA 不可用时改用 CoreDevice 截图(说明里注明「HID」)。只读。"
+操作后要看结果时,优先给操作工具带 then=screenshot。WDA 不可用时改用 CoreDevice 截图(iOS 27 起,说明里注明「HID」)。\
+只读:不改变界面,但配置了锁屏密码时会先解锁。"
                 .into(),
             schema(
                 json!({"x": num("区域左上角 x(点)"), "y": num("区域左上角 y(点)"), "width": num("区域宽(点)"), "height": num("区域高(点)")}),
@@ -143,7 +144,8 @@ WDA 不可用时会说明哪些功能受影响(读元素、按名字点击、启
             "列出屏幕上带文字的界面元素,每行一个:类型、标签、名字、值、中心点坐标、尺寸(点)。\n\n\
 何时用:找按钮、输入框、列表项的文字和位置,比截图快、省上下文;找到后用 iphone_tap_element 按文字点。\
 游戏、地图等没有元素树的界面这里是空的,改用 iphone_screenshot。\n\n\
-注意:按坐标判断是否在屏幕内,被弹窗遮住的元素也可能列出来,不确定时截图核对。需要 WDA。只读。"
+注意:按坐标判断是否在屏幕内,被弹窗遮住的元素也可能列出来,不确定时截图核对。需要 WDA。\
+只读:不改变界面,但配置了锁屏密码时会先解锁。"
                 .into(),
             schema(
                 json!({
@@ -162,7 +164,7 @@ WDA 不可用时会说明哪些功能受影响(读元素、按名字点击、启
 何时用:目标没有文字(图标、图片)、在游戏或地图里,或 iphone_list_elements 里找不到它时。\
 带文字的按钮、列表项优先用 iphone_tap_element,界面布局变了也点得准。按住用 iphone_long_press,滚动用 iphone_swipe。\n\n\
 行为:单指按下约 0.05 秒后抬起,点一次。不检查坐标上是什么,点之前先截图确认位置。\
-WDA 不可用时改用 CoreDevice HID(结果里注明「经 HID」)。",
+WDA 不可用时改用 CoreDevice HID(iOS 27 起;结果里注明「经 HID」)。",
                 "已点击 (120,300)",
                 true,
             ),
@@ -218,7 +220,7 @@ WDA 不可用时改用 CoreDevice HID(结果里注明「经 HID」)。",
 何时用:滚动列表或页面、左右翻页、拖动滑块。向上滑看下面的内容:from_y 大、to_y 小(例如 y 从 700 滑到 300);\
 向左滑看右边的内容:from_x 大、to_x 小。点击用 iphone_tap,原地按住用 iphone_long_press。\n\n\
 行为:seconds 越小滑得越快,快滑会带惯性多滚一段;要精确移动(滑块)把 seconds 调到 1 秒左右。\
-滑完会等列表停止滚动(最多 2.5 秒)再返回,还在滚就在结果里说明。WDA 不可用时改用 CoreDevice HID。",
+滑完会等列表停止滚动(最多 2.5 秒)再返回,还在滚就在结果里说明。WDA 不可用时改用 CoreDevice HID(iOS 27 起)。",
                 "已滑动 (215,700) → (215,300)",
                 true,
             ),
@@ -241,7 +243,7 @@ WDA 不可用时改用 CoreDevice HID(结果里注明「经 HID」)。",
 何时用:搜索框、表单、聊天框等。要先点中输入框让键盘弹出;屏幕上没有键盘时报错,什么都不输。\
 回车可能会发送消息或提交表单,发送前先向用户确认。\n\n\
 行为:输完会读回输入框核对,少了结尾几个字会自动补上;对不上就报错,也不按回车。\
-WDA 不可用时改用 HID,只能输入美式键盘上的英文和符号。",
+WDA 不可用时改用 HID(iOS 27 起),只能输入美式键盘上的英文和符号。",
                 "已输入 4 个字符,并按了回车",
                 true,
             ),
@@ -328,7 +330,7 @@ WDA 不可用时改用 HID,只能输入美式键盘上的英文和符号。",
             "iphone_wait_for",
             "等包含某段文字的界面元素出现(例如页面加载完、搜索结果出来、弹窗出现),出现就立即返回找到的元素和用时;超时报错。\n\n\
 何时用:操作后要等加载时代替反复截图轮询,每 0.3 秒查一次,不占上下文。输入框里的字不算(刚输入的搜索词不会被当成结果)。\
-需要 WDA。只读,不改变手机状态。"
+需要 WDA。只读:不改变界面,但配置了锁屏密码时会先解锁。"
                 .into(),
             schema(
                 json!({
@@ -352,7 +354,8 @@ WDA 不可用时改用 HID,只能输入美式键盘上的英文和符号。",
             "改为控制另一台设备,之后所有工具都作用在它上面,守护进程重启后还记得。device 是 UDID 或设备名(设备名包含这段文字且只有一台也行),\
 auto 表示取消选定、改回自动选(正在控制的那台断开才换)。\n\n\
 何时用:接着多台设备、要操作的不是正在控制的那台。先用 iphone_list_devices 看有哪几台。\n\n\
-行为:切换后要在新设备上拉起 WDA(10~60 秒),期间读界面、按名字点击等用不了,先用 iphone_status 确认就绪。\
+行为:切换后要在新设备上拉起 WDA(10~60 秒),期间读界面、按名字点击等用不了,先用 iphone_status 确认就绪;\
+这台从没装过 WDA 时起不来,要请用户运行 iphone-control setup。\
 自动解锁按设备分开存密码,新设备没设就不会自动解锁。设了 IPHONE_UDID 时不能切换。\n\n\
 返回:一行结果文字,例如「已切换到 Derrors 的 iPad(iPad11,1 iOS 26.6.1,00008020-…)」。"
                 .into(),
@@ -569,7 +572,7 @@ pub fn batch_steps(args: &Map<String, Value>) -> Result<Vec<Step>, String> {
 
 /// tap_element 的结果是不是「没点到」（没找到、index 超出匹配个数、或整个被别的东西盖住）
 pub fn tap_missed(text: &str) -> bool {
-    text.starts_with("没找到") || text.starts_with("只匹配到") || text.starts_with("被挡住")
+    protocol::TAP_MISSED.iter().any(|p| text.starts_with(p))
 }
 
 /// 不带 then 的操作做完后要不要查系统弹窗（弹窗挡着时操作都落在弹窗上，WDA 照样报成功）。
@@ -612,8 +615,19 @@ impl ServerHandler for McpServer {
     async fn call_tool(
         &self,
         request: CallToolRequestParams,
-        _context: RequestContext<RoleServer>,
+        context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, ErrorData> {
+        // rmcp 收到取消通知只是置这个令牌，不会中止处理：自己停下。丢掉进行中的调用会断开到守护进程的连接，
+        // 守护进程那边还在排队的请求随之放弃（protocol::call），iphone_batch 剩下的步骤也不再执行
+        tokio::select! {
+            r = self.call_tool_inner(request) => r,
+            _ = context.ct.cancelled() => Ok(to_result(Response::error("调用已取消")).into()),
+        }
+    }
+}
+
+impl McpServer {
+    async fn call_tool_inner(&self, request: CallToolRequestParams) -> Result<CallToolResponse, ErrorData> {
         let args = request.arguments.unwrap_or_default();
         let then = match parse_then(&args) {
             Ok(t) => t,
@@ -636,17 +650,22 @@ impl ServerHandler for McpServer {
         }
         .into())
     }
-}
 
-impl McpServer {
     async fn call(&self, req: &Request) -> Response {
+        self.call_on(req, None).await
+    }
+
+    /// `expect_udid`：守护进程正在控制的不是这台就不执行（见 [`protocol::EXPECT_UDID`]）
+    async fn call_on(&self, req: &Request, expect_udid: Option<&str>) -> Response {
         // 守护进程正忙（例如在自动解锁）时会排队；最多等 150 秒，免得 agent 一直挂着
-        protocol::call(&self.socket, req, Some(Duration::from_secs(150))).await.unwrap_or_else(|e| {
-            Response::error(format!(
-                "连不上守护进程({}):{e};确认守护进程在运行(容器部署看 iphone-control 容器)",
-                self.socket.display()
-            ))
-        })
+        protocol::call_expecting(&self.socket, req, Some(Duration::from_secs(150)), expect_udid).await.unwrap_or_else(
+            |e| {
+                Response::error(format!(
+                    "连不上守护进程({}):{e};确认守护进程在运行(容器部署看 iphone-control 容器)",
+                    self.socket.display()
+                ))
+            },
+        )
     }
 
     /// 操作完成后：按 then 等界面稳定，再附上元素列表或截图（等稳定时顺带提醒弹窗）。
@@ -659,7 +678,7 @@ impl McpServer {
         if then == Then::None {
             // 结果里已经说了有弹窗（启动 App 被挡）就不再查
             if alert_check
-                && !text.contains("系统弹窗")
+                && !text.contains(protocol::ALERT_BLOCKING)
                 && let Response::Text { text: t } = self.call(&Request::AlertCheck).await
             {
                 text += &t;
@@ -695,6 +714,13 @@ impl McpServer {
         }
     }
 
+    /// 守护进程正在控制的设备的 UDID；读不到（没接设备、连不上）返回 None
+    async fn controlled_udid(&self) -> Option<String> {
+        let Response::Text { text } = self.call(&Request::Daemon).await else { return None };
+        let v: Value = serde_json::from_str(&text).ok()?;
+        v["device"]["udid"].as_str().filter(|u| !u.is_empty()).map(str::to_owned)
+    }
+
     /// 按顺序执行；某一步出错就停，说明是第几步、后面几步没执行。出错时也按 then 附上当前界面，方便看停在哪
     async fn batch(&self, args: &Map<String, Value>, then: ThenOpts) -> CallToolResult {
         let steps = match batch_steps(args) {
@@ -702,6 +728,8 @@ impl McpServer {
             Err(e) => return to_result(Response::error(e)),
         };
         let total = steps.len();
+        // 每一步都要求还是开始时控制的那台：自动选设备时拔掉它会改控另一台，剩下的步骤不能落到那台上
+        let udid = self.controlled_udid().await;
         let mut lines = Vec::new();
         // 最后一步是不是需要查弹窗的操作
         let mut check = false;
@@ -712,7 +740,7 @@ impl McpServer {
                     tokio::time::sleep(d).await;
                     lines.push(format!("{n}. wait → 等了 {} 秒", d.as_secs_f64()));
                 }
-                Step::Request { tool, req } => match self.call(&req).await {
+                Step::Request { tool, req } => match self.call_on(&req, udid.as_deref()).await {
                     // 按名字没点到（toolkit 兼容：单独调用时是普通结果）在批量里要停下：后面的步骤都建立在它点中的前提上
                     Response::Text { text } if tool == "iphone_tap_element" && tap_missed(&text) => {
                         lines.push(format!("{n}. {tool} → {text}"));

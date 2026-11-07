@@ -50,6 +50,8 @@ pub struct Backoff {
 pub const BACKOFF_START: Duration = Duration::from_secs(60);
 pub const BACKOFF_MAX: Duration = Duration::from_secs(300);
 pub const PIN_RETRY: Duration = Duration::from_secs(60);
+/// 手机锁着、建不了隧道时多久再试（不用等 60 秒那么久：用户解锁后很快就能起来）
+pub const UNLOCK_RETRY: Duration = Duration::from_secs(20);
 
 impl Default for Backoff {
     fn default() -> Self {
@@ -68,7 +70,12 @@ impl Backoff {
     }
 
     pub fn waiting_for_pin(&mut self, now: Instant) {
-        self.next_at = Some(now + PIN_RETRY);
+        self.retry_after(now, PIN_RETRY);
+    }
+
+    /// 等用户在手机上操作（输密码、解锁）：固定间隔重试，不翻倍，用户弄好后很快就能起来
+    pub fn retry_after(&mut self, now: Instant, d: Duration) {
+        self.next_at = Some(now + d);
         self.delay = BACKOFF_START;
     }
 
@@ -155,6 +162,19 @@ mod tests {
         assert!(!b.ready(t + Duration::from_secs(10)));
         b.reset();
         assert!(b.ready(t));
+    }
+
+    /// 手机锁着、建不了隧道：固定间隔再试，不翻倍（用户解锁后很快就能起来）
+    #[test]
+    fn unlock_wait_retries_at_fixed_interval() {
+        let t = Instant::now();
+        let mut b = Backoff::default();
+        for _ in 0..3 {
+            b.retry_after(t, UNLOCK_RETRY);
+            assert!(!b.ready(t + UNLOCK_RETRY - Duration::from_secs(1)));
+            assert!(b.ready(t + UNLOCK_RETRY));
+        }
+        assert_eq!(b.current_delay(), BACKOFF_START);
     }
 
     /// 回归用例 #8：等自动化密码时固定 60 秒重试，不指数退避

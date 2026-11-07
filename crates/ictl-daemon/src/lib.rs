@@ -111,8 +111,29 @@ async fn serve_conn(daemon: Arc<Daemon>, stream: tokio::net::UnixStream) {
         let resp = if line.len() as u64 > MAX_REQUEST_LINE {
             protocol::Response::error("请求太长")
         } else {
-            match serde_json::from_slice::<protocol::Request>(&line) {
-                Ok(req) => daemon.handle(req, queued_at).await,
+            match parse_request(&line) {
+                Ok((req, false, expect_udid)) => {
+                    daemon.handle(req, queued_at, core::CallCtx { gone: None, expect_udid }).await
+                }
+                Ok((req, true, expect_udid)) => {
+                    // 调用方断开（取消、超时）就告诉 handle：还在排队的话不再执行
+                    let (gone_tx, gone_rx) = tokio::sync::oneshot::channel();
+                    let mut gone_tx = Some(gone_tx);
+                    let handling = daemon.handle(req, queued_at, core::CallCtx { gone: Some(gone_rx), expect_udid });
+                    tokio::pin!(handling);
+                    let resp = loop {
+                        tokio::select! {
+                            r = &mut handling => break r,
+                            () = wait_closed(&mut reader), if gone_tx.is_some() => {
+                                let _ = gone_tx.take().map(|t| t.send(()));
+                            }
+                        }
+                    };
+                    if gone_tx.is_none() {
+                        break;
+                    }
+                    resp
+                }
                 Err(e) => protocol::Response::error(format!("请求格式错误：{e}")),
             }
         };
@@ -121,5 +142,44 @@ async fn serve_conn(daemon: Arc<Daemon>, stream: tokio::net::UnixStream) {
         if w.write_all(out.as_bytes()).await.is_err() || line.len() as u64 > MAX_REQUEST_LINE {
             break;
         }
+    }
+}
+
+/// 解析一行请求，并取出 [`protocol::CANCEL_ON_CLOSE`]、[`protocol::EXPECT_UDID`]
+fn parse_request(line: &[u8]) -> serde_json::Result<(protocol::Request, bool, Option<String>)> {
+    let mut v: serde_json::Value = serde_json::from_slice(line)?;
+    let (cancel, expect) = match v.as_object_mut() {
+        Some(o) => (
+            o.remove(protocol::CANCEL_ON_CLOSE).is_some_and(|c| c == true),
+            o.remove(protocol::EXPECT_UDID).and_then(|u| u.as_str().map(str::to_owned)),
+        ),
+        None => (false, None),
+    };
+    Ok((serde_json::from_value(v)?, cancel, expect))
+}
+
+/// 等到调用方关掉连接（读到 EOF 或出错）。带 cancel_on_close 的客户端一个连接只发一个请求，之后不会再写
+async fn wait_closed<R: tokio::io::AsyncRead + Unpin>(reader: &mut R) {
+    let mut buf = [0u8; 64];
+    while let Ok(n) = reader.read(&mut buf).await
+        && n > 0
+    {}
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn request_options_are_taken_out_before_parsing() {
+        let (req, cancel, expect) =
+            parse_request(br#"{"op":"tap","x":1.0,"y":2.0,"cancel_on_close":true,"expect_udid":"U1"}"#).unwrap();
+        assert_eq!(req, protocol::Request::Tap { x: 1.0, y: 2.0 });
+        assert!(cancel);
+        assert_eq!(expect.as_deref(), Some("U1"));
+        // 旧版本客户端：没有这两个键
+        let (_, cancel, expect) = parse_request(br#"{"op":"status"}"#).unwrap();
+        assert!(!cancel && expect.is_none());
+        assert!(parse_request(b"{").is_err());
     }
 }

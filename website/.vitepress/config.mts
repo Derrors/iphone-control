@@ -36,6 +36,8 @@ export default defineConfig({
             text: '使用',
             items: [
               { text: '配置', link: '/guide/configuration' },
+              { text: '命令行', link: '/guide/cli' },
+              { text: '多台设备', link: '/guide/multi-device' },
               { text: '通知', link: '/guide/notifications' },
               { text: '自动解锁', link: '/guide/auto-unlock' },
               { text: '安全与隐私', link: '/guide/security' },
@@ -99,6 +101,8 @@ export default defineConfig({
             text: 'Usage',
             items: [
               { text: 'Configuration', link: '/en/guide/configuration' },
+              { text: 'CLI', link: '/en/guide/cli' },
+              { text: 'Several Devices', link: '/en/guide/multi-device' },
               { text: 'Notifications', link: '/en/guide/notifications' },
               { text: 'Auto-unlock', link: '/en/guide/auto-unlock' },
               { text: 'Security and Privacy', link: '/en/guide/security' },

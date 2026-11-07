@@ -1,6 +1,6 @@
 //! 锁屏自动解锁（默认关闭，需显式配置密码文件）。
 //!
-//! 规则全部来自 toolkit 实测（docs/dev/capability-matrix.md §5）：
+//! 规则来自 toolkit 实测，之后按 iOS 26/27 的 iPhone、iPad 真机补充（以下是现行规则）：
 //! 1. 先读 `/wda/locked`，没锁直接返回；WDA 不可用也直接返回（交给后面的调用去报错）
 //! 2. 每轮固定：按 Home → 等 1.0s → 底部上滑 → 等 1.5s。不以「树里有键盘」判断：键盘收起时按键元素也常驻树中。
 //!    有 Touch ID 的机型上滑后是「触控 ID」提示，先点「使用密码」再等 1.5s 调出键盘。
@@ -75,10 +75,6 @@ impl Default for Timing {
 }
 
 pub const FIRST_DIGIT_ROUNDS: u32 = 3;
-/// 解锁期间的等待上限（不能是 0：唤醒会失败）
-pub const UNLOCK_IDLE: IdleSettings = IdleSettings::QUICK;
-/// WDA 的默认等待设置（上次没恢复时用它恢复）
-pub const WDA_DEFAULT_IDLE: IdleSettings = IdleSettings::DEFAULT;
 
 pub struct UnlockConfig {
     pub passcode_file: PathBuf,
@@ -117,20 +113,21 @@ pub async fn ensure_unlocked<T: Transport>(wda: &mut WdaClient<T>, cfg: &UnlockC
     let code = passcode(cfg);
     // WDA 说锁了且能自动解锁：不先核对（熄屏锁屏时第一个无障碍查询要等约 8 秒），直接进解锁流程——第一步按 Home
     // 唤醒屏幕；若其实是通知中心（WDA 误报），Home 会收起它，随后核对为未锁屏，一位都不输。
-    // 其余情况先核对，不动等待设置：不能自动解锁时免得把通知中心报成「需要人工解锁」，WDA 说没锁时确认一次就可信了
+    // 其余情况先核对，不动等待设置：不能自动解锁时免得把通知中心报成「需要人工解锁」，WDA 说没锁时确认一次就可信了。
+    // 核对也拿不准（锁屏样式的界面，WDA 说没锁）时：能自动解锁就进解锁流程，理由同上；不能就按没锁处理
     if !(reported && code.is_ok()) {
         match wda.check_lock(Some(reported), false).await {
-            Ok(c) if !c.locked => return Ok(Outcome::NotLocked),
+            Ok(c) if !c.locked && !(c.uncertain && code.is_ok()) => return Ok(Outcome::NotLocked),
             Ok(_) => {}
             Err(WdaError::Unavailable(_)) => return Ok(Outcome::NotLocked),
             Err(e) => return Err(e.into()),
         }
     }
     let code = code?;
-    let saved = wda.idle_settings().await?;
-    // 上次异常退出没恢复的话，读到的就是解锁用的值：恢复成 WDA 默认值
-    let restore = if saved == UNLOCK_IDLE { WDA_DEFAULT_IDLE } else { saved };
-    wda.set_idle_settings(UNLOCK_IDLE).await?;
+    // 解锁期间等待上限调小（不能是 0：唤醒会失败），做完恢复成平时的值。
+    // 上次异常退出没恢复的话读到的是调小的值，baseline 会按 WDA 默认值算
+    let restore = wda.baseline().await?;
+    wda.set_idle_settings(IdleSettings::QUICK).await?;
     let r = unlock(wda, cfg, code.as_bytes()).await;
     if let Err(e) = wda.set_idle_settings(restore).await {
         tracing::warn!("恢复 WDA 等待设置失败：{e}");
@@ -234,7 +231,8 @@ async fn unlock<T: Transport>(wda: &mut WdaClient<T>, cfg: &UnlockConfig, code: 
         };
         tokio::time::sleep(t.swipe_settle).await;
         let check = wda.check_lock(None, false).await?;
-        if !check.locked {
+        // 按过 Home、上滑之后还是认不出的锁屏样式界面：不算解开，接着找键盘（找不到就重来一轮）
+        if !check.locked && !check.uncertain {
             return Ok(Outcome::Unlocked);
         }
         // 核对时已取到元素树就直接用，密码栏也从树里读。那棵树是上滑后马上取的，键盘有时还没进树：
@@ -500,6 +498,35 @@ mod tests {
         std::fs::remove_dir_all(dir).unwrap();
     }
 
+    /// iPad mini 5 真机：WDA 在锁屏时启动（一直报没锁），熄屏、有通知的锁屏上又没有锁的标记，认不出是锁屏。
+    /// 以前会因此认定 WDA 可信、永远不自动解锁；现在能自动解锁就进解锁流程
+    #[tokio::test]
+    async fn unmarked_ipad_lock_screen_with_stale_wda_is_unlocked() {
+        let fake = FakeLockScreen::ipad_lock_screen_without_hint("123456", "LANDSCAPE");
+        fake.stale_wda_lock();
+        let (cfg, dir) = cfg(Some("123456"));
+        let mut wda = WdaClient::new(&fake);
+        assert_eq!(ensure_unlocked(&mut wda, &cfg).await.unwrap(), Outcome::Unlocked);
+        let s = fake.state();
+        assert_eq!((s.locked, s.failed_attempts, s.digits_typed), (false, 0, 6));
+        // 解开后在主屏上确认过，之后 WDA 说没锁就直接信
+        assert!(wda.lock_state_trusted());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// 同上但没配密码：拿不准时按没锁处理，不报「需要人工解锁」（可能只是通知中心），也不认定 WDA 可信
+    #[tokio::test]
+    async fn unmarked_lock_screen_without_passcode_is_not_reported_locked() {
+        let fake = FakeLockScreen::ipad_lock_screen_without_hint("123456", "LANDSCAPE");
+        fake.stale_wda_lock();
+        let (cfg, dir) = cfg(None);
+        let mut wda = WdaClient::new(&fake);
+        assert_eq!(ensure_unlocked(&mut wda, &cfg).await.unwrap(), Outcome::NotLocked);
+        assert!(!wda.lock_state_trusted());
+        assert_eq!(fake.state().digits_typed, 0);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
     /// 另一个横屏方向（Home 键在左）：WDA 照样报 `LANDSCAPE`，按状态栏的位置换算，按对键
     #[tokio::test]
     async fn ipad_touch_id_landscape_home_left_unlocks() {
@@ -603,13 +630,16 @@ mod tests {
     /// 上次异常退出没恢复等待设置：恢复成 WDA 默认值，而不是把解锁用的值当成原值
     #[tokio::test]
     async fn stuck_unlock_idle_settings_are_restored_to_defaults() {
-        let fake = FakeLockScreen::new("123456");
-        let (cfg, dir) = cfg(Some("123456"));
-        let mut wda = WdaClient::new(&fake);
-        wda.set_idle_settings(UNLOCK_IDLE).await.unwrap();
-        assert_eq!(ensure_unlocked(&mut wda, &cfg).await.unwrap(), Outcome::Unlocked);
-        assert_eq!(fake.state().idle, (10.0, 2.0));
-        std::fs::remove_dir_all(dir).unwrap();
+        // 解锁用的值，或轮询、滑动用的值（之前漏判了这个）
+        for stuck in [IdleSettings::QUICK, IdleSettings::NO_COOL_OFF] {
+            let fake = FakeLockScreen::new("123456");
+            let (cfg, dir) = cfg(Some("123456"));
+            let mut wda = WdaClient::new(&fake);
+            wda.set_idle_settings(stuck).await.unwrap();
+            assert_eq!(ensure_unlocked(&mut wda, &cfg).await.unwrap(), Outcome::Unlocked);
+            assert_eq!(fake.state().idle, (10.0, 2.0), "{stuck:?}");
+            std::fs::remove_dir_all(dir).unwrap();
+        }
     }
 
     #[tokio::test]

@@ -24,7 +24,7 @@ Docker Desktop on a Mac runs containers in a Linux VM without USB passthrough, s
 Since 0.1.2, [Releases](https://github.com/Derrors/iphone-control/releases) has a macOS archive (Apple Silicon, macOS 11+): `iphone-control-<version>-macos-arm64.tar.gz`. Download and install it from a terminal (set `V` to the latest version):
 
 ```bash
-V=v0.1.3
+V=v0.1.4
 curl -fsSLO https://github.com/Derrors/iphone-control/releases/download/$V/iphone-control-$V-macos-arm64.tar.gz
 curl -fsSLO https://github.com/Derrors/iphone-control/releases/download/$V/iphone-control-$V-macos-arm64.tar.gz.sha256
 shasum -a 256 -c iphone-control-$V-macos-arm64.tar.gz.sha256   # should print OK

@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format is based on 
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-11-07
+
 ### Security
 
 - Updated the `zip` crate to 9.4.1 (from 8.6.0, and 2.6.1 in the vendored apple-codesign) for GHSA-m665-v7pm-7grj, GHSA-q7v9-x93c-xqv3, GHSA-hjqx-j4rw-g7xv, GHSA-9hj8-73fh-9963 and GHSA-8hxf-qr8p-62x4. iphone-control only unpacks the checksum-verified WebDriverAgent package from Appium, so the practical exposure was small.
@@ -30,6 +32,9 @@ All notable changes to this project are documented here. The format is based on 
 - `doctor` counts only iPhones, iPads and iPods as phones on USB; an Apple keyboard no longer passes the check.
 - The system-alert check after an action is no longer skipped when the tapped element's text happens to contain the words "系统弹窗".
 - Auto-unlock now also recognizes leftover WDA wait settings from an interrupted swipe or poll and restores the defaults.
+- iPad: when WebDriverAgent was started while the iPad was locked, it keeps reporting "not locked", and a dark Touch ID lock screen with notifications has no lock marker in the element tree. Auto-unlock used to trust WDA from then on and never unlock; such an ambiguous screen is now treated as possibly locked (unlocked automatically when a passcode is set, shown as "possibly locked" in `status`).
+- iPad: rows in the floating sidebar of iPadOS 26 apps such as Settings can be tapped by name again; the empty sidebar-sized containers behind the list were mistaken for something covering it.
+- When WDA drops between two health checks, errors say it just dropped instead of showing the state as "ready".
 
 ## [0.1.3] - 2026-11-07
 
@@ -97,7 +102,8 @@ First public release.
 - Docker image (single binary plus Debian's usbmuxd, not privileged) with a generated third-party license list, published to `ghcr.io/derrors/iphone-control` for linux/amd64 and linux/arm64.
 - Running without Docker, from source or from the prebuilt Linux binaries (x86_64, aarch64): as a regular user with the system usbmuxd, XDG data and socket paths, the unsigned WebDriverAgent downloaded and checksum-verified before the first signing, `mcp-config` printing a direct command, and a systemd user service.
 
-[Unreleased]: https://github.com/Derrors/iphone-control/compare/v0.1.3...HEAD
+[Unreleased]: https://github.com/Derrors/iphone-control/compare/v0.1.4...HEAD
+[0.1.4]: https://github.com/Derrors/iphone-control/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/Derrors/iphone-control/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/Derrors/iphone-control/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/Derrors/iphone-control/compare/v0.1.0...v0.1.1

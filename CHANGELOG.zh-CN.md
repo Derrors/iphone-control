@@ -6,6 +6,8 @@
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-11-07
+
 ### 安全
 
 - `zip` 升级到 9.4.1（原来是 8.6.0，vendor 的 apple-codesign 里是 2.6.1），修复 GHSA-m665-v7pm-7grj、GHSA-q7v9-x93c-xqv3、GHSA-hjqx-j4rw-g7xv、GHSA-9hj8-73fh-9963、GHSA-8hxf-qr8p-62x4。iphone-control 只解压核对过 sha256 的 Appium 官方 WDA 包，实际受影响的可能很小。
@@ -30,6 +32,9 @@
 - `doctor` 只把 iPhone、iPad、iPod 算作 USB 上的手机，接着苹果键盘时不再误报。
 - 点到的元素文字里正好含“系统弹窗”时，操作后的弹窗检查不再被跳过。
 - 自动解锁也能认出滑动、轮询中途被打断后残留的 WDA 等待设置，并恢复默认值。
+- iPad：WebDriverAgent 在 iPad 锁屏时启动会一直报“未锁”，而 Touch ID 机型熄屏、有通知时的锁屏上又没有锁的标记，以前会因此一直相信 WDA、永远不自动解锁。现在认不出时按可能锁着处理：配置了密码就自动解锁，`status` 显示“可能已锁屏”。
+- iPad：设置等 iPadOS 26 App 的浮动侧栏里的项目又能按名字点了，以前把列表背后和侧栏一样大的空容器误当成遮挡。
+- WDA 在两次巡检之间掉线时，提示改为“刚掉线”，不再显示成“就绪”。
 
 ## [0.1.3] - 2026-11-07
 
@@ -95,7 +100,8 @@
 - `setup`、`doctor`、`status`、`mcp-config`、`wda-bridge`、`notify-test` 命令。
 - Docker 镜像（非 privileged，linux/amd64、linux/arm64）；也可不用 Docker，从源码或预编译二进制以普通用户运行，附 systemd 用户服务。
 
-[Unreleased]: https://github.com/Derrors/iphone-control/compare/v0.1.3...HEAD
+[Unreleased]: https://github.com/Derrors/iphone-control/compare/v0.1.4...HEAD
+[0.1.4]: https://github.com/Derrors/iphone-control/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/Derrors/iphone-control/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/Derrors/iphone-control/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/Derrors/iphone-control/compare/v0.1.0...v0.1.1

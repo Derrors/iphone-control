@@ -9,8 +9,8 @@
 | `wda/` | 签好的 WebDriverAgent | 自动重签 |
 | `ddi/` | 开发者镜像缓存 | 自动重新下载 |
 | `secrets/passcodes/` | 各设备的锁屏密码（仅开启自动解锁时） | 要重新 `passcode set` |
-| `state.json` | 状态快照、上次重签结果 | 自动重建 |
-| `logs/` | 日志 | — |
+| `state.json` | 签好的 WDA 包信息（Team ID、Bundle ID、描述文件到期时间）、选定的设备、最近一台设备的屏幕尺寸、上次重签结果 | 守护进程按「WDA 还没签名」启动：要重新 `sign` 或 `setup`，选过设备的要重新 `select` |
+| `logs/` | 日志、自动解锁的停用标记 `UNLOCK-DISABLED` | 日志没了不要紧。但停用标记没了就撤销了这层保护：之前输错过的话，可能再用同一个错误密码输一遍 |
 
 位置：Docker 部署是仓库目录下的 `./data`（root 所有，权限 0700）；从源码运行是 `~/.local/share/iphone-control`，配对记录在系统的 `/var/lib/lockdown`；macOS 上数据目录也是 `~/.local/share/iphone-control`，配对记录由系统保存在 `/var/db/lockdown`（和 Finder 共用）。
 

@@ -1,6 +1,6 @@
 # What is iphone-control?
 
-iphone-control lets an AI agent such as Claude use a real iPhone that is plugged into a Linux machine or a Mac: look at the screen, tap buttons, type, open apps — like a person holding the phone.
+iphone-control lets an AI agent such as Claude use a real iPhone or iPad that is plugged into a Linux machine or a Mac: look at the screen, tap buttons, type, open apps — like a person holding the phone.
 
 It works as a set of [MCP](https://modelcontextprotocol.io) (Model Context Protocol) tools, so any MCP client — Claude Code, Claude Desktop, Cursor and others — can use it directly.
 
@@ -12,8 +12,8 @@ It works as a set of [MCP](https://modelcontextprotocol.io) (Model Context Proto
 
 ## How it works
 
-![Architecture: an MCP client talks to iphone-control mcp over stdio, which talks to the daemon over a Unix socket; the daemon drives the iPhone over USB through WebDriverAgent](/architecture-light.svg){.light-only}
-![Architecture: an MCP client talks to iphone-control mcp over stdio, which talks to the daemon over a Unix socket; the daemon drives the iPhone over USB through WebDriverAgent](/architecture-dark.svg){.dark-only}
+![Architecture: an MCP client talks to iphone-control mcp over stdio, which talks to the daemon over a Unix socket; the daemon drives the iPhone or iPad over USB through WebDriverAgent](/architecture-light.svg){.light-only}
+![Architecture: an MCP client talks to iphone-control mcp over stdio, which talks to the daemon over a Unix socket; the daemon drives the iPhone or iPad over USB through WebDriverAgent](/architecture-dark.svg){.dark-only}
 
 - A **daemon** runs all the time and owns the phone: it pairs, mounts the Developer Disk Image, opens a tunnel, and runs [WebDriverAgent](https://github.com/appium/WebDriverAgent) (WDA, an agent on top of Apple's XCTest automation) on the phone to read the screen, tap and type.
 - The **MCP server** is started by the AI client on demand and simply forwards tool calls to the daemon.
@@ -25,8 +25,8 @@ It works as a set of [MCP](https://modelcontextprotocol.io) (Model Context Proto
 | | |
 |---|---|
 | Host | Linux, x86_64 or arm64: Docker (Compose v2), or Rust 1.88+ to build from source<br>macOS, Apple Silicon: prebuilt binary, or Rust 1.88+ to build from source, see [macOS](../deploy/macos) |
-| Phone | iOS 17 or later; the HID fallback needs iOS 27 or later |
-| Verified on | iPhone 15 Pro Max, iOS 27.0.1 (Linux, macOS)<br>iPhone 12 mini, iOS 26.4.1 (Linux) |
+| Phone | iPhone or iPad, iOS 17 or later; the HID fallback needs iOS 27 or later |
+| Verified on | iPhone 15 Pro Max, iOS 27.0.1 (Linux, macOS)<br>iPhone 12 mini, iOS 26.4.1 (Linux)<br>iPad mini 5, iOS 26.6.1 (Linux, Docker) |
 | Account | A free Apple ID; a dedicated one is recommended |
 
 Other models and iOS versions should work but are untested — [reports](https://github.com/Derrors/iphone-control/issues) are welcome.
@@ -44,7 +44,7 @@ The CLI, `doctor` output and MCP tool results are currently in Simplified Chines
 
 **Usage**
 
-- One phone per host. Don't run two copies of iphone-control, or other usbmuxd-based tools, against the same phone.
+- A host can have several iPhones and iPads connected, but controls one at a time; see [Several devices](./multi-device). Don't run two copies of iphone-control, or other usbmuxd-based tools, against the same device.
 - Games, maps and video have no element tree; agents work from screenshots and coordinates there.
 - The HID fallback needs iOS 27 or later. On older iOS everything goes through WebDriverAgent, and actions fail while it restarts.
 - Free Apple ID profiles last 7 days. Re-signing is automatic, but an expired Apple ID session needs `login`.

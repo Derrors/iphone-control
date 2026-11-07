@@ -305,7 +305,7 @@ version = "1.8.1"
 features = ["zeroize_derive"]
 
 [dependencies.zip]
-version = "2.2.1"
+version = "9.4.1"
 features = ["deflate"]
 default-features = false
 
@@ -328,7 +328,7 @@ version = "0.4.43"
 version = "0.14.20"
 
 [dev-dependencies.zip]
-version = "2.2.1"
+version = "9.4.1"
 default-features = false
 
 [features]

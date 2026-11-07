@@ -29,6 +29,14 @@ impl Rect {
     fn contains(&self, (px, py): (f64, f64)) -> bool {
         px >= self.x && px < self.x + self.w && py >= self.y && py < self.y + self.h
     }
+
+    /// 整个盖住 `o`（各边容差 1 点）
+    fn covers(&self, o: &Rect) -> bool {
+        self.x <= o.x + 1.0
+            && self.y <= o.y + 1.0
+            && self.x + self.w >= o.x + o.w - 1.0
+            && self.y + self.h >= o.y + o.h - 1.0
+    }
 }
 
 /// 界面方向，来自 WDA 的 `GET /session/:id/orientation`
@@ -156,6 +164,8 @@ pub struct Element {
     layer: Layer,
     /// 最近的栏、键盘、弹窗、面板祖先（含自己）的序号；0 = 没有。同一个栏/弹窗里的东西互相不算盖住
     group: usize,
+    /// 所在的可滚动区域（屏幕坐标）；不在可滚动内容里时为 None
+    scroller: Option<Rect>,
 }
 
 /// 元素所在的层
@@ -170,17 +180,9 @@ enum Layer {
     Bar,
 }
 
-/// 只比看得见的内容：等界面稳定时比较前后两棵树，不因没有文字的节点增减而算「变了」
-impl PartialEq for Element {
-    fn eq(&self, o: &Self) -> bool {
-        (&self.kind, &self.label, &self.name, &self.value, self.center, self.size)
-            == (&o.kind, &o.label, &o.name, &o.value, o.center, o.size)
-    }
-}
-
 /// 可能盖住别的元素的东西，包括没有文字的容器（例如悬浮搜索栏的底板、键盘）。
 /// 可滚动内容里的节点不算（单元格的背景层、滚到导航栏底下的行）
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 struct Blocker {
     span: (usize, usize),
     rect: Rect,
@@ -201,12 +203,6 @@ pub struct Tree {
     blockers: Vec<Blocker>,
     /// 屏幕上有转圈的加载指示（ActivityIndicator，有没有文字都算）
     pub loading: bool,
-}
-
-impl PartialEq for Tree {
-    fn eq(&self, o: &Self) -> bool {
-        self.elements == o.elements && self.loading == o.loading
-    }
 }
 
 /// 按名字点击时实际点哪里
@@ -255,14 +251,15 @@ impl Tree {
     /// 点 `e` 时落在哪。WDA 不给可见性（太慢），只能按位置推：树里在它后面出现、又不是它后代、并且能盖住它的东西
     /// 画在它上面。单靠树里的先后会误判（单元格里的背景层排在按钮后面；导航栏排在滚到它底下的内容前面），所以按层限定：
     /// - 栏里的元素只会被键盘、弹窗、面板盖住
-    /// - 可滚动内容里的元素会被内容外面的任何东西盖住（悬浮栏、浮层横幅）
+    /// - 可滚动内容里的元素会被内容外面的任何东西盖住（悬浮栏、浮层横幅），但和整个滚动区一样大或更大的非模态层不算：
+    ///   那是滚动区的背景、边缘效果（iPadOS 26 浮动侧栏的列表后面跟着几层和侧栏一样大的空容器），不是盖在上面的东西
     /// - 其他元素只会被浮在上面的层（工具栏、标签栏、键盘、弹窗、面板）盖住
     pub fn tap_point(&self, e: &Element) -> TapPoint {
         let can_cover = |b: &Blocker| {
             (e.group == 0 || b.group != e.group)
                 && match e.layer {
                     Layer::Bar => b.modal,
-                    Layer::Scroll => true,
+                    Layer::Scroll => b.modal || !e.scroller.is_some_and(|s| b.rect.covers(&s)),
                     Layer::Plain => b.floating,
                 }
         };
@@ -367,6 +364,8 @@ struct Open {
     on_bar: bool,
     /// 在可滚动的内容里
     in_scroll: bool,
+    /// 自己是滚动区就是自己，否则同父节点（屏幕坐标）
+    scroller: Option<Rect>,
     /// 在键盘、弹窗、面板里
     modal: bool,
     group: usize,
@@ -499,6 +498,7 @@ pub fn parse_tree(xml: &str, view: impl Into<View>) -> Tree {
             }
         }
 
+        let scroller = if SCROLLERS.contains(&kind.as_str()) { Some(visible) } else { parent.and_then(|p| p.scroller) };
         let kind_for_children = kind.clone();
         let kept = text.filter(|text| {
             let noise = !onscreen
@@ -536,6 +536,7 @@ pub fn parse_tree(xml: &str, view: impl Into<View>) -> Tree {
                     Layer::Plain
                 },
                 group,
+                scroller: parent.and_then(|p| p.scroller),
             });
             tree.elements.len() - 1
         });
@@ -544,6 +545,7 @@ pub fn parse_tree(xml: &str, view: impl Into<View>) -> Tree {
             in_bar,
             on_bar,
             in_scroll,
+            scroller,
             modal,
             group,
             kind: kind_for_children,
@@ -883,6 +885,18 @@ mod tests {
         let t = parse_tree(xml, SCREEN);
         let cancel = t.elements.iter().find(|e| e.label == "取消").unwrap();
         assert!(matches!(t.tap_point(cancel), TapPoint::Center(_)));
+    }
+
+    /// iPad mini 5 / iPadOS 26.6.1 横屏的设置：浮动侧栏的列表后面跟着几层和侧栏一样大、没有文字的容器。
+    /// 它们不是盖在列表上的东西，侧栏里的「通用」要点得到
+    #[test]
+    fn ipad_floating_sidebar_rows_are_not_covered_by_sidebar_backdrop() {
+        let xml = include_str!("../tests/fixtures/ipad-settings-sidebar-landscape.xml");
+        let tree = parse_tree(xml, IPAD_LAND);
+        for text in ["通用", "电池", "辅助功能", "关于本机"] {
+            let e = find(&tree.elements, text)[0];
+            assert!(matches!(tree.tap_point(e), TapPoint::Center(_)), "{text}: {:?}", tree.tap_point(e));
+        }
     }
 
     #[test]

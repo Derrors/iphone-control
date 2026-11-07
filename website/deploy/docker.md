@@ -13,7 +13,7 @@
 ```yaml
 services:
   iphone:
-    image: ghcr.io/derrors/iphone-control:latest   # 或固定版本，例如 :0.1.0
+    image: ghcr.io/derrors/iphone-control:latest   # 或固定版本，例如 :0.1.3
     container_name: iphone-control
     # 只开放 USB 字符设备，不需要 privileged
     device_cgroup_rules:
@@ -54,10 +54,10 @@ docker compose up -d --build
 
 ### 用预构建镜像
 
-发布正式版本后，镜像在 `ghcr.io/derrors/iphone-control`（amd64、arm64）。在 `.env` 里设：
+镜像在 `ghcr.io/derrors/iphone-control`（amd64、arm64）。在 `.env` 里设：
 
 ```ini
-IMAGE=ghcr.io/derrors/iphone-control:latest   # 或固定版本，例如 :0.1.0
+IMAGE=ghcr.io/derrors/iphone-control:latest   # 或固定版本，例如 :0.1.3
 ```
 
 然后：
@@ -76,6 +76,8 @@ docker compose pull && docker compose up -d --no-build
 - `init: true`、`stop_grace_period: 30s`：停止时先关掉手机上的会话，避免留下「配对的电脑」图标。
 
 ## 升级
+
+升级前先看[更新日志](https://github.com/Derrors/iphone-control/blob/main/CHANGELOG.zh-CN.md)里的升级注意事项。
 
 ```bash
 docker compose pull && docker compose up -d             # 只写 compose 文件

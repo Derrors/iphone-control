@@ -5,6 +5,7 @@ use std::time::{Duration, Instant};
 use base64::Engine;
 use ictl_device::{AppInfo, Button, DeviceError, HidSession, Rotation, ScreenSize, apps, hid::ascii_to_usage};
 use ictl_unlock::UnlockError;
+use ictl_wda::client::SPRINGBOARD;
 use ictl_wda::elements::{self, TapPoint, Tree};
 use ictl_wda::http::DeviceTransport;
 use ictl_wda::{Launch, WdaClient, WdaError};
@@ -12,7 +13,7 @@ use ictl_wda::{Launch, WdaClient, WdaError};
 use crate::core::{Daemon, Inner, drop_tunnel, hid_supported, wda_down};
 use crate::imaging::{self, fmt_g};
 use crate::notify::Event;
-use crate::protocol::Response;
+use crate::protocol::{ALERT_BLOCKING, Response, TAP_MISSED};
 
 /// 锁屏后至少等这么久再自动解锁：锁屏过渡没走完就唤醒，WDA 第一下上滑卡约 16 秒后报 `point.x != INFINITY`
 pub(crate) const LOCK_SETTLE: Duration = Duration::from_secs(3);
@@ -27,11 +28,12 @@ const LOCAL_MOTION: f64 = 4.0;
 const STILL_TOLERANCE: i64 = 3;
 /// 滑动后最多等这么久让列表停下（快速滑动的惯性滚动约 2 秒）
 const SCROLL_SETTLE: Duration = Duration::from_millis(2500);
+/// WDA 不可用时 status 里说明哪些功能用不了
+const NEEDS_WDA: &str = "读界面元素、按名字点击、启动 App、输入中文要等 WDA 恢复";
 /// 按 Home 后最多等这么久，确认主屏到了前台（iPhone 12 mini 上 IOHID 的 Home 约 1.3～1.5 秒）
 const HOME_SETTLE: Duration = Duration::from_secs(2);
 /// 按电源键后最多等这么久，等 WDA 报锁屏（iPhone 12 mini 实测约 1 秒）
 const LOCK_WAIT: Duration = Duration::from_secs(3);
-const SPRINGBOARD: &str = "com.apple.springboard";
 
 impl Daemon {
     /// 配置了密码就在锁屏时自动解锁；没配置而手机锁着则报错（与 toolkit 一致）
@@ -75,7 +77,8 @@ impl Daemon {
             .ok_or_else(|| "WDA 不可用,也不知道屏幕尺寸;等 WDA 起来一次,或在 .env 里设 SCREEN_W/SCREEN_H".into())
     }
 
-    async fn refresh_hid_rotation(&self, g: &mut Inner) {
+    /// 记下 WDA 报的界面旋转角：WDA 挂了以后 HID 点击要靠它换算横屏坐标（约 20 毫秒）
+    pub(crate) async fn refresh_hid_rotation(&self, g: &mut Inner) {
         if let Some(w) = self.wda(g)
             && let Ok(r) = w.rotation().await
         {
@@ -87,20 +90,23 @@ impl Daemon {
     /// 截图只给宽高，不能分辨横屏左右；短暂掉线时借用近期 WDA 方向，过期或不匹配就不触摸。
     async fn hid_touch_rotation(&self, g: &mut Inner) -> Result<Rotation, String> {
         self.refresh_hid_rotation(g).await;
-        let device = g.device.clone().ok_or("手机未连接")?;
-        let png = {
-            let t = self.ensure_tunnel(g, &device).await.map_err(|e| format!("核对 HID 方向失败：{e}"))?;
-            match t.screenshot_png().await {
-                Ok(p) => p,
-                Err(e) => {
-                    drop_tunnel(g).await;
-                    return Err(format!("核对 HID 方向失败，没有发送触摸：{e}"));
-                }
-            }
-        };
+        let png = self.hid_screenshot(g).await.map_err(|e| format!("核对 HID 方向失败，没有发送触摸：{e}"))?;
         let (w, h) = imaging::png_size(&png).ok_or("无法读取截图尺寸，没有发送触摸")?;
         let known = g.wda_rotation.map(|(at, r)| (at.elapsed(), r));
         hid_rotation(w, h, known)
+    }
+
+    /// 经隧道截图（WDA 不可用时）。失败就丢掉隧道，下次重建
+    async fn hid_screenshot(&self, g: &mut Inner) -> Result<Vec<u8>, String> {
+        let device = g.device.clone().ok_or("手机未连接")?;
+        let t = self.ensure_tunnel(g, &device).await.map_err(|e| e.to_string())?;
+        match t.screenshot_png().await {
+            Ok(p) => Ok(p),
+            Err(e) => {
+                drop_tunnel(g).await;
+                Err(e.to_string())
+            }
+        }
     }
 
     /// HID 会话（WDA 不可用时的后备路线）。开不起来就丢掉隧道，下次重建
@@ -178,17 +184,17 @@ impl Daemon {
         }
         let unlock = self.unlock_cfg(g.device.as_ref().map(|d| d.udid.as_str()));
         let Some(w) = self.wda(g) else {
-            return format!(
-                "{}\n读界面元素、按名字点击、启动 App、输入中文要等 WDA 恢复\n{daemon_line}",
-                wda_down(&g.state, g.info.as_ref())
-            );
+            return format!("{}\n{NEEDS_WDA}\n{daemon_line}", wda_down(&g.state, g.info.as_ref()));
         };
         let r: Result<String, WdaError> = async {
             let ready = w.ready().await?;
             let app = w.active_app().await?;
             let s = w.screen_size().await?;
-            let locked = w.locked().await?;
-            let mut lock = if !locked {
+            let check = w.check_lock(None, false).await?;
+            let locked = check.locked;
+            let mut lock = if check.uncertain {
+                "可能已锁屏(屏幕上是锁屏样式的界面,WDA 说没锁;配置了自动解锁时操作前会先尝试解锁)".to_owned()
+            } else if !locked {
                 "未锁屏".to_owned()
             } else if unlock.disabled_by_failure() {
                 "已锁屏(自动解锁之前失败过已停用,需要人工解锁,核对密码后运行 iphone-control unlock-reset)".to_owned()
@@ -210,7 +216,7 @@ impl Daemon {
         .await;
         match r {
             Ok(t) => format!("{t}\n{daemon_line}"),
-            Err(e) => format!("{e}\n读界面元素、按名字点击、启动 App、输入中文要等 WDA 恢复\n{daemon_line}"),
+            Err(e) => format!("{e}\n{NEEDS_WDA}\n{daemon_line}"),
         }
     }
 
@@ -234,15 +240,7 @@ impl Daemon {
                 if !hid_supported(g.info.as_ref()) {
                     return Err(wda_down(&g.state, g.info.as_ref()));
                 }
-                let device = g.device.clone().ok_or("手机未连接")?;
-                let t = self.ensure_tunnel(g, &device).await.map_err(|e| format!("HID 命令失败: {e}"))?;
-                match t.screenshot_png().await {
-                    Ok(p) => (p, "HID"),
-                    Err(e) => {
-                        drop_tunnel(g).await;
-                        return Err(format!("HID 命令失败: {e}"));
-                    }
-                }
+                (self.hid_screenshot(g).await.map_err(|e| format!("HID 命令失败: {e}"))?, "HID")
             }
         };
         let screen = self.screen(g).await?;
@@ -331,9 +329,7 @@ impl Daemon {
         let mut prev: Option<Vec<u8>> = None;
         loop {
             let png = w.screenshot_png().await.map_err(|e| e.to_string())?;
-            let cur = tokio::task::spawn_blocking(move || imaging::thumbnail(&png))
-                .await
-                .map_err(|e| format!("图像处理任务异常：{e}"))??;
+            let cur = thumbnail(png).await?;
             if let Some(p) = &prev {
                 let m = imaging::thumb_motion(p, &cur);
                 if m.mean < VISUAL_STILL {
@@ -363,10 +359,8 @@ impl Daemon {
                 tokio::time::sleep(Duration::from_millis(150)).await;
             }
             let Ok(png) = w.screenshot_png().await else { return String::new() };
-            match tokio::task::spawn_blocking(move || imaging::thumbnail(&png)).await {
-                Ok(Ok(t)) => thumbs.push(t),
-                _ => return String::new(),
-            }
+            let Ok(t) = thumbnail(png).await else { return String::new() };
+            thumbs.push(t);
         }
         let m = imaging::thumb_motion(&thumbs[0], &thumbs[1]);
         if (m.mean >= VISUAL_STILL || m.max_tile >= LOCAL_MOTION) && imaging::mostly_blank(&thumbs[1]) {
@@ -448,11 +442,11 @@ impl Daemon {
         let tree = self.tree(g, max_age).await?;
         let matches = elements::find(&tree.elements, text);
         if matches.is_empty() {
-            return Ok(format!("没找到包含 \"{text}\" 的元素,先用 iphone_list_elements 或截图看看屏幕"));
+            return Ok(format!("{}包含 \"{text}\" 的元素,先用 iphone_list_elements 或截图看看屏幕", TAP_MISSED[0]));
         }
         if index >= matches.len() {
             let list: Vec<_> = matches.iter().map(|e| e.describe()).collect();
-            return Ok(format!("只匹配到 {} 个:\n{}", matches.len(), list.join("\n")));
+            return Ok(format!("{} {} 个:\n{}", TAP_MISSED[1], matches.len(), list.join("\n")));
         }
         let e = matches[index];
         // 中心被悬浮栏、键盘、浮层之类盖住时，点上去会落在盖着的东西上
@@ -463,7 +457,8 @@ impl Daemon {
             }
             TapPoint::Covered { by } => {
                 return Ok(format!(
-                    "被挡住:{} 整个被「{by}」盖住,没有点;先滑动让它露出来,或截图后按坐标点",
+                    "{}:{} 整个被「{by}」盖住,没有点;先滑动让它露出来,或截图后按坐标点",
+                    TAP_MISSED[2],
                     e.describe()
                 ));
             }
@@ -577,9 +572,7 @@ impl Daemon {
             if hid_button == Button::Home
                 && let Ok(Some(text)) = w.alert_text().await
             {
-                return Ok(format!(
-                    "屏幕上有系统弹窗「{text}」挡着,按 Home 不会生效,没有按;先用 iphone_tap_element 点弹窗上的按钮"
-                ));
+                return Ok(format!("{},按 Home 不会生效,没有按;{TAP_ALERT}", blocking(&text)));
             }
             let r = if hid_button == Button::Home {
                 press_home(w).await
@@ -660,7 +653,7 @@ impl Daemon {
         Ok(match w.launch_app(&bid).await.map_err(|e| e.to_string())? {
             Launch::Foreground => format!("已启动 {bid}"),
             Launch::Blocked(text) => {
-                format!("已启动 {bid},但屏幕上有系统弹窗「{text}」挡着;先用 iphone_tap_element 点弹窗上的按钮")
+                format!("已启动 {bid},但{};{TAP_ALERT}", blocking(&text))
             }
             Launch::Slow => format!("已启动 {bid},但 8 秒内没到前台(可能启动慢),先截图确认"),
         })
@@ -679,7 +672,7 @@ impl Daemon {
         Ok(match r {
             Launch::Foreground => format!("已打开 {url}(前台 {app})"),
             Launch::Blocked(text) => {
-                format!("已打开 {url},但屏幕上有系统弹窗「{text}」挡着;先用 iphone_tap_element 点弹窗上的按钮")
+                format!("已打开 {url},但{};{TAP_ALERT}", blocking(&text))
             }
             Launch::Slow => format!("已打开 {url},但 8 秒内没有 App 到前台(前台还是 {app}),先截图确认"),
         })
@@ -704,7 +697,6 @@ pub(crate) fn hid_rotation(w: u32, h: u32, known: Option<(Duration, Rotation)>) 
     Ok(if recent == Some(Rotation::UpsideDown) { Rotation::UpsideDown } else { Rotation::Portrait })
 }
 
-/// 屏幕中间（上下各去掉一段，留给导航栏、标签栏）几乎没有元素：加载中、空白页
 /// 按 Home，等主屏真的到前台再说「已按」（紧接着查状态时前台不再是旧 App）。
 /// 先经 IOHID 按（XCTest 的 home 在 iPhone 12 mini / iOS 26.4.1 上不起作用却报成功），
 /// [`HOME_SETTLE`] 内没回到主屏再用 XCTest 的 home 补一次；IOHID 这一下报错也改用 XCTest 的
@@ -759,6 +751,7 @@ async fn lock_by_power_hid(w: &mut WdaClient<DeviceTransport>) -> bool {
     }
 }
 
+/// 屏幕中间（上下各去掉一段，留给导航栏、标签栏）几乎没有元素：加载中、空白页
 fn middle_is_empty(tree: &Tree, screen_h: f64) -> bool {
     let (top, bottom) = ((screen_h * 0.25) as i64, (screen_h * 0.85) as i64);
     tree.elements.iter().filter(|e| e.center.1 > top && e.center.1 < bottom).count() <= 1
@@ -830,6 +823,11 @@ async fn poll_stable(
     Ok((first, Some((msg, prev))))
 }
 
+/// 判断画面动没动用的缩略图。解码是 CPU 活，放到阻塞线程
+async fn thumbnail(png: Vec<u8>) -> Result<Vec<u8>, String> {
+    tokio::task::spawn_blocking(move || imaging::thumbnail(&png)).await.map_err(|e| format!("图像处理任务异常：{e}"))?
+}
+
 /// 列元素一个都没列出来时的说明。带 filter 没匹配上时要说清楚，不然 agent 会以为屏幕上什么都没有
 fn no_elements_text(filter: &str, total: usize) -> String {
     if filter.is_empty() || total == 0 {
@@ -841,7 +839,14 @@ fn no_elements_text(filter: &str, total: usize) -> String {
 }
 
 fn alert_msg(text: &str) -> String {
-    format!("\n注意:屏幕上有系统弹窗「{text}」挡着,点击、滑动都会落在弹窗上;先用 iphone_tap_element 点弹窗上的按钮")
+    format!("\n注意:{},点击、滑动都会落在弹窗上;{TAP_ALERT}", blocking(text))
+}
+
+const TAP_ALERT: &str = "先用 iphone_tap_element 点弹窗上的按钮";
+
+/// 「屏幕上有系统弹窗「…」挡着」：MCP 端靠固定的开头认出结果里已经报过弹窗
+fn blocking(text: &str) -> String {
+    format!("{ALERT_BLOCKING}「{text}」挡着")
 }
 
 /// 树里有弹窗就返回提醒

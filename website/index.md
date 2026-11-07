@@ -4,7 +4,7 @@ layout: home
 hero:
   name: iphone-control
   text: 让 AI agent 操作真实的 iPhone
-  tagline: 在 Linux 或 Mac 上通过 USB 控制 iPhone，以 MCP 工具交给 Claude 等 AI。不需要 Xcode，不需要付费开发者账号。
+  tagline: 在 Linux 或 Mac 上通过 USB 控制 iPhone 或 iPad，以 MCP 工具交给 Claude 等 AI。不需要 Xcode，不需要付费开发者账号。
   image:
     src: /logo.svg
     alt: iphone-control

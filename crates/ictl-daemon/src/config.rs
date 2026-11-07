@@ -9,8 +9,8 @@ use ictl_device::ScreenSize;
 pub struct Config {
     pub data_dir: PathBuf,
     pub socket: PathBuf,
-    /// 固定要控制的手机（`IPHONE_UDID`）；None 时可以在运行中选（见 [`crate::core::Persisted::selected_udid`]），
-    /// 都没选就用第一台
+    /// 固定要控制的手机（`IPHONE_UDID`）；None 时可以在运行中选（见 [`crate::core::Persisted::selected_udid`]）。
+    /// 都没选是自动选：正在控制的那台一直用到断开，没有正在控制的才取 usbmuxd 列出的第一台
     pub udid: Option<String>,
     /// 由守护进程拉起并看护 usbmuxd。默认以 root 运行（容器）时为 true；普通用户拉起的 usbmuxd 碰不到 USB，
     /// 改用系统的 usbmuxd 服务。宿主机以 root 运行、又已有 usbmuxd 服务时设 ICTL_MANAGE_USBMUXD=0
@@ -19,7 +19,7 @@ pub struct Config {
     /// 未签名的 WDA：镜像里自带；从源码运行时是数据目录里的 [`Config::wda_unsigned_cache`]，第一次签名前下载
     pub wda_unsigned: PathBuf,
     pub ddi_url: String,
-    /// 自己从 Xcode 提取的 DDI Restore 目录；设了就不下载
+    /// 自己从 Xcode 提取的 DDI Restore 目录；设了就不下载，也从不删除里面的文件
     pub ddi_dir: Option<PathBuf>,
     pub anisette_url: Option<String>,
     /// WDA 从没连上过时，HID 换算坐标用的屏幕尺寸
@@ -46,7 +46,8 @@ impl NotifyConfig {
     }
 }
 
-fn env(k: &str) -> Option<String> {
+/// 读环境变量，去掉首尾空白，空值当作没设（.env 里常留着 `KEY=`）
+pub fn env(k: &str) -> Option<String> {
     std::env::var(k).ok().map(|v| v.trim().to_owned()).filter(|v| !v.is_empty())
 }
 
@@ -110,8 +111,9 @@ impl Config {
     pub fn wda_unsigned_is_cache(&self) -> bool {
         self.wda_unsigned == wda_unsigned_cache(&self.data_dir)
     }
+    /// 守护进程自己下载的开发者镜像缓存（没设 `ICTL_DDI_DIR` 时用）
     pub fn ddi_cache(&self) -> PathBuf {
-        self.ddi_dir.clone().unwrap_or_else(|| self.data_dir.join("ddi"))
+        self.data_dir.join("ddi")
     }
     /// 旧版本的锁屏密码：只有一份，不知道是哪台设备的。USB 上只接着一台时归到那台名下（见
     /// [`crate::core::Daemon::adopt_legacy_passcode`]），接着多台时不用，免得把一台的密码输进另一台
@@ -120,6 +122,14 @@ impl Config {
     }
     pub fn passcodes_dir(&self) -> PathBuf {
         self.data_dir.join("secrets/passcodes")
+    }
+    /// 建好 [`Self::passcodes_dir`]，只有自己能进
+    pub fn ensure_passcodes_dir(&self) -> std::io::Result<PathBuf> {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = self.passcodes_dir();
+        std::fs::create_dir_all(&dir)?;
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))?;
+        Ok(dir)
     }
     /// 这台设备的锁屏密码。UDID 来自 usbmuxd，只有字母、数字和 `-`；别的字符换掉，不让它变成路径
     pub fn passcode_file_for(&self, udid: &str) -> PathBuf {

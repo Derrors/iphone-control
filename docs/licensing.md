@@ -16,9 +16,9 @@
 | plume_store（Impactor） | 账号会话存储 | MIT（Impactor 根 LICENSE） | vendor 到 `vendor/plume_store`，源码未改 | 保留版权声明（`vendor/plume_store/LICENSE-MIT-Impactor`） |
 | omnisette（Impactor 3rdparty） | anisette 数据 | **MPL-2.0**（目录内 LICENSE；早期文档误写为 MIT，读源码后更正） | vendor 到 `vendor/omnisette`，`src/lib.rs` 加了 v3 服务地址的 getter/setter（自建 anisette 服务才能生效），其余源码未改；Cargo.toml 把本地 anisette 改成可选 feature `local-anisette`，本项目不启用，所以不编译没有许可证声明的 `android-loader`/`sysv64` 和 AGPL-3.0 的 `remove-async-await` | 同 plume_core |
 | plume_utils（Impactor） | Bundle、Signer | MIT（Impactor 根 LICENSE） | **未 vendor**：`ictl-sign/src/bundle.rs` 改写自它的 `bundle.rs`，签名流程在 `ictl-sign/src/lib.rs` 重写 | 文件头注明来源和版权 |
-| apple-codesign 0.29.0 | 代码签名 | **MPL-2.0** | vendor 到 `vendor/apple-codesign`（Impactor 打过 0o755 权限补丁的副本；去掉了上游的 tests/、docs/），经 `[patch.crates-io]` 替换 | 以 MPL-2.0 随仓库提供源码 |
+| apple-codesign 0.29.0 | 代码签名 | **MPL-2.0** | vendor 到 `vendor/apple-codesign`（Impactor 打过 0o755 权限补丁的副本；去掉了上游的 tests/、docs/、src/testdata/），经 `[patch.crates-io]` 替换 | 以 MPL-2.0 随仓库提供源码 |
 | rmcp 3.8.0 | MCP SDK | Apache-2.0（部分历史代码 MIT） | crates.io 依赖 | 保留 NOTICE/版权声明 |
-| tokio、reqwest、quick-xml、image、clap、serde 等 | 通用 | MIT / Apache-2.0 | crates.io 依赖 | 保留声明：镜像里的 `/usr/share/doc/iphone-control/THIRD_PARTY_LICENSES.html` 由 cargo-about 按 Cargo.lock 生成，含许可证全文 |
+| tokio、reqwest、quick-xml、image、clap、serde 等 | 通用 | MIT / Apache-2.0 | crates.io 依赖 | 保留声明：镜像里的 `/usr/share/doc/iphone-control/THIRD_PARTY_LICENSES.html` 由 cargo-about 按 Cargo.lock 生成，含许可证全文。这份清单只随镜像分发，预编译二进制的压缩包只带 `LICENSE` 和 `THIRD_PARTY.md` |
 | WebDriverAgent（Appium） | 手机端代理 | BSD-3-Clause（Facebook 原始） | 镜像构建时下载 Appium 官方的未签名真机包（v16.15.3，校验 sha256）打成 IPA；计划改为本项目 macOS CI 编译 | 保留 BSD 声明（镜像里 `/usr/share/licenses/WebDriverAgent/LICENSE`） |
 | usbmuxd | USB 守护进程 | **GPL-3.0**（以其 README 为准；GitHub 显示 GPL-2.0 有误） | 系统包，独立进程，不链接 | 仅"放在一起分发"。发布镜像时要提供对应源码（Debian 源码包）和许可证文本 |
 

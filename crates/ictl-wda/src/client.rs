@@ -70,7 +70,8 @@ impl IdleSettings {
     pub const NO_COOL_OFF: Self = Self { wait_for_idle_timeout: 1.0, animation_cool_off_timeout: 0.0 };
 }
 
-const SPRINGBOARD: &str = "com.apple.springboard";
+/// 主屏、锁屏、系统弹窗所属的进程
+pub const SPRINGBOARD: &str = "com.apple.springboard";
 /// IOHID 消费者页（Consumer）
 const HID_PAGE_CONSUMER: u32 = 0x0C;
 /// 消费者页里的电源键
@@ -95,6 +96,9 @@ pub enum Launch {
 #[derive(Debug)]
 pub struct LockCheck {
     pub locked: bool,
+    /// 拿不准：WDA 说没锁，屏幕上却是锁屏样式的界面，认不出是锁屏还是通知中心（见 [`WdaClient::check_lock`]）。
+    /// `locked` 这时为 false；能自动解锁的调用方应当按可能锁着处理
+    pub uncertain: bool,
     /// 核对时取到的 SpringBoard 元素树（没核对或前台不是 SpringBoard 时为 None）
     pub tree: Option<String>,
 }
@@ -119,6 +123,7 @@ impl<T: Transport> WdaClient<T> {
         let body = body.map(|b| b.to_string().into_bytes());
         let (status, raw) = self.transport.send(method, path, body, timeout).await.map_err(|e| match e.kind() {
             std::io::ErrorKind::TimedOut => WdaError::Timeout(e.to_string()),
+            crate::http::AFTER_SENT => WdaError::Interrupted(e.to_string()),
             _ => WdaError::Unavailable(e.to_string()),
         })?;
         let v: Value = match serde_json::from_slice(&raw) {
@@ -126,7 +131,7 @@ impl<T: Transport> WdaClient<T> {
             Err(_) if status >= 400 => {
                 return Err(WdaError::Remote { kind: "http".into(), message: status.to_string() });
             }
-            Err(e) => return Err(WdaError::Unavailable(format!("响应不是 JSON：{e}"))),
+            Err(e) => return Err(WdaError::Interrupted(format!("响应不是 JSON：{e}"))),
         };
         if let Some(err) = v.get("value").and_then(|x| x.get("error")).and_then(|e| e.as_str()) {
             let msg = v["value"].get("message").and_then(|m| m.as_str()).unwrap_or_default();
@@ -253,28 +258,34 @@ impl<T: Transport> WdaClient<T> {
         };
         if self.lock_state_trusted && (!wda_locked || strict) {
             // 已同步过：WDA 说没锁就是没锁；strict 场景在密码键盘上，WDA 说锁了也不会是通知中心
-            return Ok(LockCheck { locked: wda_locked, tree: None });
+            return Ok(LockCheck { locked: wda_locked, uncertain: false, tree: None });
         }
         let (sheet, tree) = match self.cover_tree().await {
             Ok(x) => x,
             Err(e) => {
                 tracing::debug!("核对锁屏界面失败，按{}处理：{e}", if strict { "锁着" } else { " WDA 的结果" });
-                return Ok(LockCheck { locked: strict || wda_locked, tree: None });
+                return Ok(LockCheck { locked: strict || wda_locked, uncertain: false, tree: None });
             }
         };
-        let locked = match (wda_locked, sheet) {
-            (true, elements::CoverSheet::NotificationCenter) => false,
-            (true, _) => true,
+        let (locked, uncertain) = match (wda_locked, sheet) {
+            (true, elements::CoverSheet::NotificationCenter) => (false, false),
+            (true, _) => (true, false),
             (false, elements::CoverSheet::Locked) => {
                 tracing::info!("WDA 报未锁屏，但屏幕上是锁屏界面（WDA 在锁屏时启动，状态未同步）");
-                true
+                (true, false)
             }
-            (false, _) => {
+            // 锁屏样式、却没有锁的标记：可能是通知中心，也可能是 Touch ID 机型熄屏、有通知时的锁屏
+            // （iPad mini 5 / iPadOS 26.6.1 真机：没有「按下主屏幕按钮以解锁」那行）。WDA 在锁屏时启动的话一直报 false，
+            // 不能在这里认定它可信，否则之后再也不核对、永远不会自动解锁
+            // 严格核对时拿不准就算锁着（同 `strict` 的说明）
+            (false, elements::CoverSheet::NotificationCenter) => (strict, !strict),
+            // 普通界面上确认过一次：WDA 的状态是同步的
+            (false, elements::CoverSheet::None) => {
                 self.lock_state_trusted = true;
-                false
+                (false, false)
             }
         };
-        Ok(LockCheck { locked, tree })
+        Ok(LockCheck { locked, uncertain, tree })
     }
 
     /// WDA 自己报的锁屏状态，不核对。可能误报，见 [`Self::locked`]；配合 [`Self::lock_state_trusted`] 做快速判断
@@ -364,8 +375,8 @@ impl<T: Transport> WdaClient<T> {
         }
     }
 
-    /// 平时的等待设置（第一次用时读一次）
-    async fn baseline(&mut self) -> Result<IdleSettings> {
+    /// 平时的等待设置（第一次用时读一次）。临时调小、改回之前都按它恢复
+    pub async fn baseline(&mut self) -> Result<IdleSettings> {
         if let Some(b) = self.idle_baseline {
             return Ok(b);
         }
@@ -691,6 +702,24 @@ mod tests {
             other => panic!("{other:?}"),
         }
         assert!(matches!(c.active_app().await, Err(WdaError::Unavailable(_))));
+    }
+
+    /// 传输层报的错误按「请求送没送到」分类：只有没送到的才是 Unavailable（调用方会退到 HID 重做）
+    #[tokio::test]
+    async fn errors_after_sending_are_not_unavailable() {
+        struct Fails(std::io::ErrorKind);
+        impl Transport for Fails {
+            async fn send(&self, _: &str, _: &str, _: Option<Vec<u8>>, _: Duration) -> std::io::Result<(u16, Vec<u8>)> {
+                Err(std::io::Error::new(self.0, "x"))
+            }
+        }
+        let kind = |k| async move { WdaClient::new(Fails(k)).active_app().await };
+        assert!(matches!(kind(crate::http::AFTER_SENT).await, Err(WdaError::Interrupted(_))));
+        assert!(matches!(kind(std::io::ErrorKind::TimedOut).await, Err(WdaError::Timeout(_))));
+        assert!(matches!(kind(std::io::ErrorKind::NotConnected).await, Err(WdaError::Unavailable(_))));
+        // 应答了但不是 JSON：WDA 收到了请求
+        let m = Mock::with(&[(200, "<html>")]);
+        assert!(matches!(WdaClient::new(&m).active_app().await, Err(WdaError::Interrupted(_))));
     }
 
     #[tokio::test]

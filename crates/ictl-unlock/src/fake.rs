@@ -37,6 +37,8 @@ const IPAD_TOUCHID_XML: &str = include_str!("../../ictl-wda/tests/fixtures/ipad-
 const IPAD_PIN_XML: &str = include_str!("../../ictl-wda/tests/fixtures/ipad-passcode-landscape.xml");
 /// Home 键在左的横屏：树里的坐标和上面中心对称，换算到屏幕上键位不变
 const IPAD_TOUCHID_LEFT_XML: &str = include_str!("../../ictl-wda/tests/fixtures/ipad-touchid-landscape-home-left.xml");
+/// iPad 竖屏锁屏（上滑之前）。去掉「按下主屏幕按钮以解锁」那行就是熄屏、有通知时的样子：认不出是锁屏
+const IPAD_LOCK_XML: &str = include_str!("../../ictl-wda/tests/fixtures/ipad-lockscreen-portrait.xml");
 const IPAD_PIN_LEFT_XML: &str = include_str!("../../ictl-wda/tests/fixtures/ipad-passcode-landscape-home-left.xml");
 /// ipad-passcode-landscape.xml 里各键按 Home 键在右的横屏换算到屏幕上的中心点（真机截图对得上）
 const IPAD_KEYS: [(i64, i64); 10] = [
@@ -92,12 +94,20 @@ pub struct FakeLockScreen {
     ipad: Option<&'static str>,
     /// iPad 横屏时 Home 键在左（默认在右）
     ipad_home_left: bool,
+    /// iPad 模式：上滑之前的锁屏上没有「按下主屏幕按钮以解锁」（熄屏、有通知时），树里没有锁的标记
+    ipad_hint_hidden: bool,
 }
 
 impl FakeLockScreen {
     pub fn new(code: &str) -> Self {
         let st = State { locked: true, idle: (10.0, 2.0), ..Default::default() };
-        Self { code: code.bytes().map(|b| b - b'0').collect(), st: Mutex::new(st), ipad: None, ipad_home_left: false }
+        Self {
+            code: code.bytes().map(|b| b - b'0').collect(),
+            st: Mutex::new(st),
+            ipad: None,
+            ipad_home_left: false,
+            ipad_hint_hidden: false,
+        }
     }
 
     /// iPad 横屏（Home 键在右）、Touch ID；WDA 报的方向是 `orientation`
@@ -108,6 +118,11 @@ impl FakeLockScreen {
     /// 同上，但 Home 键在左。真机上 WDA 照样报 `LANDSCAPE`
     pub fn ipad_touch_id_home_left(code: &str, orientation: &'static str) -> Self {
         Self { ipad_home_left: true, ..Self::ipad_touch_id(code, orientation) }
+    }
+
+    /// iPad 锁屏上没有解锁提示（见 `ipad_hint_hidden`）
+    pub fn ipad_lock_screen_without_hint(code: &str, orientation: &'static str) -> Self {
+        Self { ipad_hint_hidden: true, ..Self::ipad_touch_id(code, orientation) }
     }
 
     pub fn state(&self) -> State {
@@ -271,6 +286,12 @@ impl FakeLockScreen {
                 if s.locked {
                     let field = format!("共{}位数，已输入{}位", self.code.len(), s.entered.len());
                     let pin = s.shown && s.passcode_requested;
+                    if self.ipad_hint_hidden && !s.shown {
+                        return (
+                            200,
+                            json!({"value": IPAD_LOCK_XML.replace("call-to-action-label", "x"), "sessionId": "S"}),
+                        );
+                    }
                     let xml = match (self.ipad, self.ipad_home_left, pin) {
                         (None, ..) => LOCK_XML,
                         (Some(_), false, true) => IPAD_PIN_XML,

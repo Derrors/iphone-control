@@ -6,7 +6,7 @@
 
 ### 预编译二进制
 
-发布正式版本后，[Releases](https://github.com/Derrors/iphone-control/releases) 里有 Linux x86_64 和 aarch64 的压缩包（需要 glibc 2.34 以上：Debian 12、Ubuntu 22.04 及更新的发行版）：
+[Releases](https://github.com/Derrors/iphone-control/releases) 里有 Linux x86_64 和 aarch64 的压缩包（需要 glibc 2.34 以上：Debian 12、Ubuntu 22.04 及更新的发行版）：
 
 ```bash
 sudo apt install usbmuxd
@@ -65,6 +65,8 @@ loginctl enable-linger "$USER"                  # 不登录也随开机启动
 :::
 
 ## 升级
+
+升级前先看[更新日志](https://github.com/Derrors/iphone-control/blob/main/CHANGELOG.zh-CN.md)里的升级注意事项。
 
 ```bash
 git pull && cargo install --path apps/iphone-control --locked   # 或换上新版本的二进制

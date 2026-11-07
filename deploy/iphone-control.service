@@ -1,4 +1,4 @@
-# 从源码运行时的 systemd 用户服务（不用 Docker）。安装见 README「从源码运行」。
+# 从源码运行时的 systemd 用户服务（不用 Docker）。安装见 https://derrors.github.io/iphone-control/deploy/source
 #   cp deploy/iphone-control.service ~/.config/systemd/user/
 #   systemctl --user daemon-reload && systemctl --user enable --now iphone-control
 #   loginctl enable-linger "$USER"     # 不登录也随开机启动

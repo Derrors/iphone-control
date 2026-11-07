@@ -7,5 +7,7 @@
 *.mobileprovision
 *.pem
 *.ipa
-!/docs/**
 .env
+# tests/device/run.py 的虚拟环境和真机截图（截图里可能有个人信息）
+.venv/
+shots/

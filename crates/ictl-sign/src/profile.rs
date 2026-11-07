@@ -6,8 +6,6 @@ use std::time::SystemTime;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Profile {
-    pub name: String,
-    pub team_id: String,
     pub expires: SystemTime,
     pub devices: Vec<String>,
     pub get_task_allow: bool,
@@ -25,14 +23,6 @@ impl Profile {
         let d = v.as_dictionary()?;
         let ent = d.get("Entitlements").and_then(|e| e.as_dictionary());
         Some(Self {
-            name: d.get("Name").and_then(|v| v.as_string()).unwrap_or_default().to_owned(),
-            team_id: d
-                .get("TeamIdentifier")
-                .and_then(|v| v.as_array())
-                .and_then(|a| a.first())
-                .and_then(|v| v.as_string())
-                .unwrap_or_default()
-                .to_owned(),
             expires: d.get("ExpirationDate").and_then(|v| v.as_date()).map(SystemTime::from)?,
             devices: d
                 .get("ProvisionedDevices")
@@ -91,7 +81,6 @@ pub(crate) mod tests {
     fn parses_profile_inside_cms_wrapper() {
         let exp = SystemTime::UNIX_EPOCH + Duration::from_secs(2_000_000_000);
         let p = Profile::parse(&fake(exp, &["00000000-AAAA"])).unwrap();
-        assert_eq!(p.team_id, "TEAM000000");
         assert_eq!(p.devices, ["00000000-AAAA"]);
         assert!(p.get_task_allow);
         assert_eq!(p.expires, exp);

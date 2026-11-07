@@ -33,14 +33,15 @@ pub fn pack(root: &Path, out: &Path) -> io::Result<()> {
 /// 文件原样复制压缩数据和权限位，不解压。目录项重新写：Appium 的包里目录项的类型位记成了普通文件
 pub fn from_app_zip(src: &Path, out: &Path) -> io::Result<()> {
     let mut zip = ZipArchive::new(File::open(src)?).map_err(io::Error::other)?;
-    if !zip.file_names().any(|n| n.split('/').next().is_some_and(|top| top.ends_with(".app"))) {
+    // zip 9 起条目名不合法（例如带 `..`）时给的是错误：这种条目不算
+    if !zip.file_names().flatten().any(|n| n.split('/').next().is_some_and(|top| top.ends_with(".app"))) {
         return Err(io::Error::new(io::ErrorKind::NotFound, "zip 根目录下没有 .app"));
     }
     let mut w = ZipWriter::new(File::create(out)?);
     w.add_directory("Payload/", SimpleFileOptions::default().unix_permissions(0o755)).map_err(io::Error::other)?;
     for i in 0..zip.len() {
         let f = zip.by_index_raw(i).map_err(io::Error::other)?;
-        let name = format!("Payload/{}", f.name());
+        let name = format!("Payload/{}", f.name().map_err(io::Error::other)?);
         if f.is_dir() {
             let mode = f.unix_mode().map_or(0o755, |m| m & 0o7777);
             w.add_directory(name, SimpleFileOptions::default().unix_permissions(mode)).map_err(io::Error::other)?;

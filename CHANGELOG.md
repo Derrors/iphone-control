@@ -6,6 +6,31 @@ All notable changes to this project are documented here. The format is based on 
 
 ## [Unreleased]
 
+### Security
+
+- Updated the `zip` crate to 9.4.1 (from 8.6.0, and 2.6.1 in the vendored apple-codesign) for GHSA-m665-v7pm-7grj, GHSA-q7v9-x93c-xqv3, GHSA-hjqx-j4rw-g7xv, GHSA-9hj8-73fh-9963 and GHSA-8hxf-qr8p-62x4. iphone-control only unpacks the checksum-verified WebDriverAgent package from Appium, so the practical exposure was small.
+- The documentation site's build tooling uses vite 6.4.5 and esbuild 0.25 (development dependencies only; the published site was not affected).
+
+### Changed
+
+- `ICTL_DDI_DIR` (a Developer Disk Image directory you extracted yourself) is never downloaded into or deleted from; missing files are reported by name. Only the default `ddi/` cache is cleared and downloaded again, and only after three failed *mounts* (tunnel errors no longer count).
+- The `debug` subcommands are no longer built by default; build with `--features debug-cmds` to get them.
+- Tool descriptions say that screenshots, `iphone_list_elements` and `iphone_wait_for` also unlock the phone when auto-unlock is configured, and that the HID fallback needs iOS 27.
+
+### Fixed
+
+- An action whose WebDriverAgent request was sent but whose connection then dropped, or whose response was incomplete, is no longer repeated over HID (a tap or text could happen twice). It now reports that the phone may already have done it.
+- Calls to usbmuxd, lockdown, AMFI, misagent and installation_proxy have time limits, so a phone or usbmuxd that accepts a connection but never answers can no longer hang the daemon.
+- Re-signing has an overall time limit (15 minutes) instead of staying "in progress" forever when Apple's servers or the install stall, and the Apple ID session check has one too. After the phone reconnects or another device is selected, re-signing is checked within a minute instead of waiting up to `RESIGN_CHECK_HOURS`. Finishing a re-sign for one device no longer tears down the session of a device selected meanwhile.
+- When the phone is locked before its first unlock and WDA can't start, `status` keeps showing that the phone needs unlocking and retries every 20 seconds, instead of flipping back to "starting" and retrying every 10 seconds.
+- A HID session that timed out while opening no longer leaves the screen media stream running on the phone (no auto-lock, icon stuck in the Dynamic Island).
+- Cancelling an MCP call stops it: the remaining `iphone_batch` steps don't run, and a request still waiting for the device is dropped.
+- `iphone_batch` stops if the controlled device changes while it runs (for example, the device is unplugged and another one is picked automatically).
+- A newly started WebDriverAgent is only considered ready after its test plan has started, so a stale WDA still answering on the phone can't make it look ready early.
+- `doctor` counts only iPhones, iPads and iPods as phones on USB; an Apple keyboard no longer passes the check.
+- The system-alert check after an action is no longer skipped when the tapped element's text happens to contain the words "系统弹窗".
+- Auto-unlock now also recognizes leftover WDA wait settings from an interrupted swipe or poll and restores the defaults.
+
 ## [0.1.3] - 2026-11-07
 
 ### Upgrade notes

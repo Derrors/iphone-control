@@ -2,6 +2,7 @@
 //!
 //! 用 idevice 的 `XCUITestService` 跑测试计划；它自己经 usbmuxd 建 CoreDeviceProxy 隧道，和设备层的隧道互不影响。
 //! 就绪判定 = 本进程持有的 runner 任务还活着 **且** `/status` ready（手机上残留的 WDA 在 runner 退出后还会响应几十秒）。
+//! 启动时还要等新 runner 开始执行测试计划后才问 `/status`：在那之前应答的只可能是残留的旧 WDA。
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -21,6 +22,11 @@ pub const WDA_PORT: u16 = 8100;
 
 /// runner 等「Enable UI Automation」密码的时长是 60 秒（runner 自己的超时），多留 5 秒收它的报错
 const AUTOMATION_WAIT: Duration = Duration::from_secs(65);
+/// 连接 installation_proxy、查 runner 的安装信息的时限（idevice 读应答没有超时）
+const LOOKUP_TIMEOUT: Duration = Duration::from_secs(20);
+/// 一直没收到「开始执行测试计划」回调时，过了这么久也开始问 `/status`：
+/// 万一某个 iOS 版本上 idevice 解不出这个回调，不能因此永远起不来
+const PLAN_START_FALLBACK: Duration = Duration::from_secs(30);
 
 /// runner 调试日志里和「Enable UI Automation」相关的信号。
 /// 手机重启后 runner 一启动就进入 `enabling automation mode` 等待（手机上弹密码框），60 秒没输密码报
@@ -66,6 +72,8 @@ fn launch_hint(msg: String) -> String {
 struct Progress {
     errors: Vec<String>,
     automation_wait: Option<tokio::time::Instant>,
+    /// 新 runner 已开始执行测试计划（WDA 的 HTTP 服务在测试里启动，一定晚于它）
+    plan_started: bool,
 }
 
 struct ErrorListener(Arc<Mutex<Progress>>);
@@ -112,6 +120,7 @@ impl XCUITestListener for ErrorListener {
 
     async fn did_begin_executing_test_plan(&mut self) -> std::result::Result<(), IdeviceError> {
         tracing::debug!("xctest: 开始执行测试计划");
+        self.0.lock().unwrap().plan_started = true;
         Ok(())
     }
 
@@ -130,7 +139,6 @@ impl XCUITestListener for ErrorListener {
 }
 
 pub struct WdaRunner {
-    pub bundle_id: String,
     task: JoinHandle<std::result::Result<(), IdeviceError>>,
 }
 
@@ -141,12 +149,17 @@ impl WdaRunner {
         bundle_id: &str,
         timeout: Duration,
     ) -> Result<(Self, WdaClient<DeviceTransport>)> {
-        let mut ip =
-            InstallationProxyClient::connect(&*provider).await.map_err(|e| WdaError::Unavailable(e.to_string()))?;
-        let cfg = TestConfig::from_installation_proxy(&mut ip, bundle_id, None).await.map_err(|e| match e {
-            IdeviceError::AppNotInstalled => WdaError::NotInstalled(bundle_id.to_owned()),
-            other => WdaError::StartFailed(other.to_string()),
-        })?;
+        let lookup = async {
+            let mut ip =
+                InstallationProxyClient::connect(&*provider).await.map_err(|e| WdaError::Unavailable(e.to_string()))?;
+            TestConfig::from_installation_proxy(&mut ip, bundle_id, None).await.map_err(|e| match e {
+                IdeviceError::AppNotInstalled => WdaError::NotInstalled(bundle_id.to_owned()),
+                other => WdaError::StartFailed(other.to_string()),
+            })
+        };
+        let cfg = tokio::time::timeout(LOOKUP_TIMEOUT, lookup)
+            .await
+            .map_err(|_| WdaError::StartFailed(format!("查 WDA 安装信息超时（{} 秒）", LOOKUP_TIMEOUT.as_secs())))??;
 
         let progress = Arc::new(Mutex::new(Progress::default()));
         let task = {
@@ -155,7 +168,7 @@ impl WdaRunner {
                 async move { XCUITestService::new(provider).run(cfg, &mut ErrorListener(progress), None).await },
             )
         };
-        let mut runner = Self { bundle_id: bundle_id.to_owned(), task };
+        let mut runner = Self { task };
         let client = WdaClient::new(DeviceTransport::new(provider, WDA_PORT));
 
         let failure = |extra: Option<String>| {
@@ -171,8 +184,10 @@ impl WdaRunner {
             }
         };
 
-        let mut deadline = tokio::time::Instant::now() + timeout;
+        let t0 = tokio::time::Instant::now();
+        let mut deadline = t0 + timeout;
         let mut announced = false;
+        let mut fallback_logged = false;
         loop {
             // runner 在等手机上输密码：等满它自己的 60 秒，期间输了密码就能直接就绪
             if let Some(since) = progress.lock().unwrap().automation_wait {
@@ -191,7 +206,15 @@ impl WdaRunner {
                 };
                 return Err(failure(Some(msg)));
             }
-            if client.ready().await.unwrap_or(false) {
+            let plan_started = progress.lock().unwrap().plan_started;
+            if !plan_started && t0.elapsed() >= PLAN_START_FALLBACK && !fallback_logged {
+                fallback_logged = true;
+                tracing::info!(
+                    "{} 秒内没收到 runner 开始执行测试计划的回调，改为直接查 /status",
+                    PLAN_START_FALLBACK.as_secs()
+                );
+            }
+            if (plan_started || fallback_logged) && client.ready().await.unwrap_or(false) {
                 return Ok((runner, client));
             }
             if tokio::time::Instant::now() >= deadline {

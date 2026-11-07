@@ -9,8 +9,8 @@
 | `wda/` | Signed WebDriverAgent | Re-signed automatically |
 | `ddi/` | Developer Disk Image cache | Downloaded again |
 | `secrets/passcodes/` | Per-device passcodes (only with auto-unlock) | Run `passcode set` again |
-| `state.json` | State snapshot, last signing result | Rebuilt automatically |
-| `logs/` | Logs | — |
+| `state.json` | Signed WDA details (Team ID, bundle id, profile expiry), selected device, screen size of the most recent device, last signing result | The daemon starts as if WDA isn't signed: run `sign` or `setup` again, and `select` again if you had selected a device |
+| `logs/` | Logs, auto-unlock's stop marker `UNLOCK-DISABLED` | The logs don't matter. Losing the marker removes a safeguard: after a wrong passcode, the same one could be entered again |
 
 Location: `./data` in the repository directory for Docker (owned by root, mode 0700); `~/.local/share/iphone-control` for a source install, with pairing records in the system's `/var/lib/lockdown`. On macOS the data directory is also `~/.local/share/iphone-control`, and the system keeps pairing records in `/var/db/lockdown` (shared with Finder).
 

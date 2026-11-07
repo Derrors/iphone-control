@@ -12,21 +12,21 @@ iphone-control is, by design, a remote control for a phone. Anyone who can talk 
 
 | Asset | Where | Who can reach it |
 |---|---|---|
-| Phone control (taps, typing, screenshots, apps) | Control socket: `/run/iphone-control/ctl.sock` inside the container, `$XDG_RUNTIME_DIR/iphone-control/ctl.sock` for a source install; mode 0600 | Root on the host; anyone who can `docker exec` into the container; the user running a source install |
+| Phone control (taps, typing, screenshots, apps) | Control socket: `/run/iphone-control/ctl.sock` inside the container, `$XDG_RUNTIME_DIR/iphone-control/ctl.sock` for a source install on Linux, `~/.local/share/iphone-control/ctl.sock` on macOS; mode 0600 | Root on the host; anyone who can `docker exec` into the container; the user running a source install or the macOS binary |
 | WebDriverAgent (no authentication) | On the phone, reached through usbmuxd; nothing listens on the network unless you run `wda-bridge` | With `wda-bridge`: **every local user** on the host, because the container uses host networking. Browsers are blocked by a Host-header check (DNS rebinding), other local processes are not |
 | Apple ID session tokens, development signing key and certificate | `account/` in the data directory (0700, key 0600) | Whoever can read the data directory. The Apple ID password itself is never stored |
-| Pairing records | `lockdown/` in the data directory (container) or the system's `/var/lib/lockdown` | Root on the host. A pairing record lets its holder talk to the phone over USB without another *Trust* prompt |
-| Lock-screen passcode | `secrets/passcode` in the data directory (0600), **plain text**, only if you ran `passcode set` | Whoever can read the data directory |
+| Pairing records | `lockdown/` in the data directory (container), the system's `/var/lib/lockdown` (source install on Linux) or `/var/db/lockdown` (macOS, shared with Finder) | Root on the host. A pairing record lets its holder talk to the phone over USB without another *Trust* prompt |
+| Lock-screen passcodes | `secrets/passcodes/<UDID>` in the data directory (0600), one file per device, **plain text**, only if you ran `passcode set`. A `secrets/passcode` file from an older version is moved to the device's file when exactly one device is connected, and stays where it is until then | Whoever can read the data directory |
 | Notification credentials (Bark key, Telegram token) | `.env` or `~/.config/iphone-control/env` | Whoever can read that file |
 
-The data directory is `./data` next to `compose.yaml` for the container (root-owned, mode 0700) and `~/.local/share/iphone-control` for a source install.
+The data directory is `./data` next to `compose.yaml` for the container (root-owned, mode 0700) and `~/.local/share/iphone-control` for a source install and on macOS.
 
 ## Design choices that limit exposure
 
 - No network listener by default. WebDriverAgent is reached through usbmuxd; `wda-bridge` only binds 127.0.0.1, only forwards requests whose Host header is a loopback name, and is meant to be stopped after use.
 - The control socket is a Unix socket with mode 0600, not TCP.
 - The container is not `privileged`: it is only allowed USB character devices (major 189), and the tunnel to the phone uses a user-space TCP stack, so no network interface or routing changes on the host.
-- Auto-unlock is off by default. When enabled, it stops for good after a single wrong attempt (it writes a stop marker before entering the second digit) and sends a notification; it never retries a passcode that might be wrong. It does not work before the first unlock after a reboot (BFU) — that always needs a person.
+- Auto-unlock is off by default. When enabled, it stops for good after a single wrong attempt (it writes a stop marker, `logs/UNLOCK-DISABLED`, before entering the second digit) and sends a notification; it never retries a passcode that might be wrong. The marker is global: a failure on one device stops auto-unlock on all of them until you run `unlock-reset`. It does not work before the first unlock after a reboot (BFU) — that always needs a person.
 - Dependencies are pinned to exact versions, `Cargo.lock` is committed, base images are pinned by digest, and the WebDriverAgent download is checked against a sha256. CI runs gitleaks on every push.
 
 ## Known risks and recommendations

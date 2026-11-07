@@ -3,14 +3,14 @@
 iphone-control also runs directly on a Mac, using the usbmuxd that ships with macOS. No Xcode and no paid developer account. It works like a source install on Linux; the differences are listed under [Known differences](#known-differences).
 
 ::: info Verified
-Fully verified on a MacBook Pro (Apple M3 Pro) / macOS 26.6.2 with an iPhone 15 Pro Max / iOS 27.0.1: the setup wizard, every MCP tool, continuous use with Finder open, one tunnel kept busy for 30 minutes, and recovery after unplugging and phone reboots. Intel Macs are untested. Steps and results: [macOS verification](https://github.com/Derrors/iphone-control/blob/main/docs/dev/macos-verification.md) (in Chinese).
+Verified on a MacBook Pro (Apple M3 Pro) / macOS 26.6.2 with an iPhone 15 Pro Max / iOS 27.0.1: the setup wizard, every MCP tool at that time, continuous use with Finder open, one tunnel kept busy for 30 minutes, and recovery after unplugging and phone reboots. This predates 0.1.3: the multi-device tools (`iphone_list_devices`, `iphone_select_device`) haven't been verified on macOS. Intel Macs are untested. Steps and results: [macOS verification](https://github.com/Derrors/iphone-control/blob/main/docs/dev/macos-verification.md) (in Chinese).
 :::
 
 ## You need
 
 - An Apple Silicon Mac
 - Nothing else for the prebuilt binary; to build from source, the Xcode Command Line Tools and Rust 1.88+. Full Xcode is **not** needed
-- An iPhone on iOS 17+, connected with a cable that carries **data**
+- An iPhone or iPad on iOS 17+, connected with a cable that carries **data**
 - A free Apple ID (a dedicated one is recommended)
 
 ::: warning No Docker
@@ -128,6 +128,8 @@ sudo launchctl kickstart -k system/com.apple.usbmuxd
 
 ## Upgrade
 
+Read the upgrade notes in the [changelog](https://github.com/Derrors/iphone-control/blob/main/CHANGELOG.md) first.
+
 Prebuilt binary: download the new version as under *Install* and replace `~/.local/bin/iphone-control`. From source:
 
 ```bash
@@ -160,4 +162,4 @@ On the phone, delete the WebDriverAgent app; its profile under *VPN & Device Man
 | Pairing records | `/var/lib/lockdown` | `/var/db/lockdown` (shared with Finder) |
 | Docker | Supported | Not supported |
 
-Not yet verified on a Mac: whether Xcode's *Devices and Simulators* window competes for the connection, pairing a phone with the Mac for the first time, and Intel Macs. [Reports](https://github.com/Derrors/iphone-control/issues) are welcome.
+Not yet verified on a Mac: whether Xcode's *Devices and Simulators* window competes for the connection, pairing a phone with the Mac for the first time, iPads, several devices, and Intel Macs. [Reports](https://github.com/Derrors/iphone-control/issues) are welcome.

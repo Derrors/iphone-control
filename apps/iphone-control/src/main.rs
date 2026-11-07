@@ -9,8 +9,10 @@ use std::time::Duration;
 
 use anyhow::{Context, bail};
 use clap::{Parser, Subcommand};
+use ictl_daemon::config::env as env_nonempty;
 use ictl_daemon::protocol::{self, Request, Response};
 
+#[cfg(feature = "debug-cmds")]
 mod debug;
 
 #[derive(Parser)]
@@ -61,7 +63,7 @@ enum Command {
         #[command(subcommand)]
         action: PasscodeAction,
     },
-    /// 自动解锁因输错被停用后，核对密码再恢复
+    /// 解除自动解锁的停用（输错或中途出错后停用）。只删停用标记，不核对密码：先确认保存的密码对，必要时 passcode set 重设
     UnlockReset,
     /// 列出 USB 上接着的设备，标出正在控制哪台
     Devices,
@@ -75,7 +77,8 @@ enum Command {
         #[arg(long, default_value_t = 8100)]
         port: u16,
     },
-    /// 真机诊断（原第 0 步 spike）。`wda`/`e2e`/`hid` 会和守护进程抢 XCTest、HID，先停掉守护进程
+    /// 真机诊断（开发用，要用 `--features debug-cmds` 编译）。`wda`/`e2e`/`hid` 会和守护进程抢 XCTest、HID，先停掉守护进程
+    #[cfg(feature = "debug-cmds")]
     #[command(hide = true)]
     Debug(debug::DebugArgs),
     /// 按已配置的渠道发测试通知：每类事件各一条（标题带「[测试]」），或只发指定的一类
@@ -142,6 +145,7 @@ async fn main() -> anyhow::Result<()> {
         Command::Devices => print_text(&cli.socket, Request::ListDevices).await,
         Command::Select { device } => print_text(&cli.socket, Request::SelectDevice { device }).await,
         Command::WdaBridge { port } => wda_bridge(&cli.socket, port).await,
+        #[cfg(feature = "debug-cmds")]
         Command::Debug(args) => debug::run(env_nonempty("IPHONE_UDID").as_deref(), args).await,
         Command::NotifyTest { event } => notify_test(&cli.data_dir, event.as_deref()).await,
     }
@@ -208,11 +212,6 @@ fn shell_quote(s: &str) -> String {
     } else {
         format!("'{}'", s.replace('\'', r"'\''"))
     }
-}
-
-/// 读环境变量，去掉首尾空白，空值当作没设（.env 里常留着 `KEY=`）
-fn env_nonempty(key: &str) -> Option<String> {
-    std::env::var(key).ok().map(|v| v.trim().to_owned()).filter(|v| !v.is_empty())
 }
 
 async fn ask(socket: &Path, req: Request) -> anyhow::Result<Response> {
@@ -438,9 +437,7 @@ async fn passcode(data_dir: &Path, socket: &Path, action: PasscodeAction) -> any
             if p.len() < 4 || !p.bytes().all(|b| b.is_ascii_digit()) {
                 bail!("只支持 4 位以上的纯数字密码");
             }
-            let dir = path.parent().context("密码文件路径没有上级目录")?;
-            std::fs::create_dir_all(dir)?;
-            std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
+            cfg.ensure_passcodes_dir()?;
             let mut f = std::fs::OpenOptions::new().create(true).write(true).truncate(true).mode(0o600).open(&path)?;
             // mode() 只在新建时生效：已有文件也收紧
             f.set_permissions(std::fs::Permissions::from_mode(0o600))?;

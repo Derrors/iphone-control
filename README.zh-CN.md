@@ -4,14 +4,14 @@
   </a>
 
   <p align="center">
-    让 AI agent 操作一台接在 Linux 或 Mac 上的真实 iPhone：一个 Rust 二进制，不需要 Xcode，不需要付费开发者账号，不越狱。
+    让 AI agent 操作一台接在 Linux 或 Mac 上的真实 iPhone 或 iPad：一个 Rust 二进制，不需要 Xcode，不需要付费开发者账号，不越狱。
   </p>
 
   <p align="center">
     <a href="https://github.com/Derrors/iphone-control/releases/latest"><img src="https://img.shields.io/github/v/release/Derrors/iphone-control?style=flat" alt="Release"></a>
     <img src="https://img.shields.io/badge/iOS-17%2B-black?style=flat&logo=apple" alt="iOS">
     <img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS-0E7490?style=flat" alt="平台：Linux | macOS">
-    <img src="https://img.shields.io/badge/MCP-15%20tools-8A2BE2?style=flat" alt="MCP">
+    <img src="https://img.shields.io/badge/MCP-17%20tools-8A2BE2?style=flat" alt="MCP">
     <a href="Cargo.toml"><img src="https://img.shields.io/badge/Rust-1.88%2B-CE422B?style=flat&logo=rust&logoColor=white" alt="Rust"></a>
     <a href="LICENSE"><img src="https://img.shields.io/github/license/Derrors/iphone-control?style=flat" alt="License"></a>
     <a href="https://m8ven.ai/mcp/derrors-iphone-control-1pcmse?s=readme"><img src="https://m8ven.ai/badge/mcp/derrors-iphone-control-1pcmse?variant=verified" alt="M8ven 已验证"></a>
@@ -43,7 +43,7 @@ iphone-control 在 Linux 或 macOS 上用**一个 Rust 二进制**把这些事�
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="website/public/architecture-dark.svg">
-    <img src="website/public/architecture-light.svg" alt="架构：MCP 客户端经 stdio 调用 iphone-control mcp，再经 Unix socket 交给守护进程；守护进程经 USB 用 WebDriverAgent 操作 iPhone，CoreDevice HID 作为后备" width="900">
+    <img src="website/public/architecture-light.svg" alt="架构：MCP 客户端经 stdio 调用 iphone-control mcp，再经 Unix socket 交给守护进程；守护进程经 USB 用 WebDriverAgent 操作 iPhone 或 iPad，CoreDevice HID 作为后备" width="900">
   </picture>
 </p>
 
@@ -64,7 +64,7 @@ iphone-control 在 Linux 或 macOS 上用**一个 Rust 二进制**把这些事�
 
 ## 快速开始
 
-需要一部 iOS 17 以上的 iPhone 和能**传数据**的线、一个免费 Apple ID（建议专门注册一个），以及一台装了 Docker 的 Linux 主机或一台 Apple Silicon 的 Mac。
+需要一部 iOS 17 以上的 iPhone 或 iPad 和能**传数据**的线、一个免费 Apple ID（建议专门注册一个），以及一台装了 Docker 的 Linux 主机或一台 Apple Silicon 的 Mac。
 
 **Linux（Docker）**
 
@@ -107,8 +107,10 @@ iphone-control mcp-config   # 打印 `claude mcp add` 命令，复制运行
 | `iphone_open_url` | 打开链接或 URL Scheme |
 | `iphone_wait_for` | 等某段文字出现，代替反复截图 |
 | `iphone_batch` | 一次执行最多 20 步，出错就停 |
+| `iphone_list_devices` | 列出 USB 上接着的 iPhone/iPad，标出正在控制哪台 |
+| `iphone_select_device` | 改为控制另一台，或改回自动选 |
 
-操作类工具可以带 `then: "elements" | "screenshot"`，顺带返回操作后的界面。截图的像素就是点击坐标，agent 看到哪里就能点哪里。游戏、地图、视频自己绘制界面，没有元素树，只能看截图按坐标操作。完整参数见 [docs/tools.md](docs/tools.md)。
+操作类工具可以带 `then: "elements" | "screenshot"`，顺带返回操作后的界面。截图的像素就是点击坐标，agent 看到哪里就能点哪里。游戏、地图、视频自己绘制界面，没有元素树，只能看截图按坐标操作。完整参数见 [docs/tools.md](docs/tools.md)（英文）。
 
 ## 常用命令
 
@@ -116,24 +118,31 @@ iphone-control mcp-config   # 打印 `claude mcp add` 命令，复制运行
 
 | 命令 | 作用 |
 | --- | --- |
+| `daemon` | 常驻守护进程：容器的入口；从源码运行和 macOS 上要自己启动 |
+| `mcp` | MCP 服务，由 AI 客户端拉起 |
 | `status` | 守护进程状态、描述文件还剩多久、最近日志 |
 | `doctor` | 逐层诊断，每项失败都给出修复办法 |
 | `setup` | 安装向导，随时可以重新运行 |
 | `login` | Apple ID 会话失效时重新登录 |
+| `sign` | 立即签名并安装 WebDriverAgent |
 | `resign [--force]` | 快过期才重签 WebDriverAgent（或立即重签） |
 | `passcode set\|clear` | 开启或关闭一台设备的自动解锁（密码按设备分开存） |
+| `unlock-reset` | 自动解锁被停用后恢复 |
 | `devices` / `select <UDID\|设备名\|auto>` | 列出接着的设备 / 切换控制哪一台 |
 | `notify-test [事件]` | 发送测试通知 |
 | `mcp-config` | 打印注册 MCP 的命令 |
+| `wda-bridge [--port]` | 把 WebDriverAgent 桥接到 127.0.0.1 给别的工具用，用完就停 |
 
-升级：`git pull && docker compose up -d --build`（用预构建镜像时改为 `docker compose pull`）。配置写在 `.env`，见[配置说明](https://derrors.github.io/iphone-control/guide/configuration)。所有状态都在 `data/`：配对记录、Apple ID 会话和签名私钥，开启自动解锁时还有锁屏密码。**要备份，不要提交或分享。**
+全部命令和参数见[命令行](https://derrors.github.io/iphone-control/guide/cli)。
+
+升级：`git pull && docker compose up -d --build`（用预构建镜像时改为 `docker compose pull && docker compose up -d --no-build`）；二进制和 macOS 见[从源码 / 二进制](https://derrors.github.io/iphone-control/deploy/source#升级)、[macOS](https://derrors.github.io/iphone-control/deploy/macos#升级)。升级前先看[更新日志](CHANGELOG.zh-CN.md)里的升级注意事项。配置写在 `.env`，见[配置说明](https://derrors.github.io/iphone-control/guide/configuration)。所有状态都在 `data/`：配对记录、Apple ID 会话和签名私钥，开启自动解锁时还有锁屏密码。**要备份，不要提交或分享。**
 
 ## 文档
 
 | | |
 | --- | --- |
 | 入门 | [什么是 iphone-control](https://derrors.github.io/iphone-control/guide/what-is-iphone-control) · [限制](https://derrors.github.io/iphone-control/guide/what-is-iphone-control#限制) · [快速开始](https://derrors.github.io/iphone-control/guide/getting-started) · [接入 AI 客户端](https://derrors.github.io/iphone-control/guide/mcp-clients) · [工具一览](https://derrors.github.io/iphone-control/guide/tools) |
-| 使用 | [配置](https://derrors.github.io/iphone-control/guide/configuration) · [通知](https://derrors.github.io/iphone-control/guide/notifications) · [自动解锁](https://derrors.github.io/iphone-control/guide/auto-unlock) |
+| 使用 | [配置](https://derrors.github.io/iphone-control/guide/configuration) · [命令行](https://derrors.github.io/iphone-control/guide/cli) · [多台设备](https://derrors.github.io/iphone-control/guide/multi-device) · [通知](https://derrors.github.io/iphone-control/guide/notifications) · [自动解锁](https://derrors.github.io/iphone-control/guide/auto-unlock) |
 | 安装 | [Docker](https://derrors.github.io/iphone-control/deploy/docker) · [从源码 / 二进制](https://derrors.github.io/iphone-control/deploy/source) · [macOS](https://derrors.github.io/iphone-control/deploy/macos) · [数据与备份](https://derrors.github.io/iphone-control/deploy/backup) |
 | 问题 | [常见问题](https://derrors.github.io/iphone-control/troubleshoot/faq) · [排错（英文）](docs/troubleshooting.md) · [Issues](https://github.com/Derrors/iphone-control/issues) |
 | 安全 | [SECURITY.md](SECURITY.md)：存了什么、谁能访问、怎么报告漏洞 |

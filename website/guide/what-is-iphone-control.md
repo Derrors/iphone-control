@@ -1,6 +1,6 @@
 # 什么是 iphone-control？
 
-iphone-control 让 AI agent（例如 Claude）操作一台用数据线接在 Linux 主机或 Mac 上的真实 iPhone：看屏幕、点按钮、输入文字、打开 App，就像人拿着手机一样。
+iphone-control 让 AI agent（例如 Claude）操作一台用数据线接在 Linux 主机或 Mac 上的真实 iPhone 或 iPad：看屏幕、点按钮、输入文字、打开 App，就像人拿着手机一样。
 
 它以 [MCP](https://modelcontextprotocol.io)（Model Context Protocol）工具的形式提供能力，支持 MCP 的客户端（Claude Code、Claude Desktop、Cursor 等）都能直接用。
 
@@ -12,8 +12,8 @@ iphone-control 让 AI agent（例如 Claude）操作一台用数据线接在 Lin
 
 ## 怎么工作
 
-![架构：MCP 客户端经 stdio 调用 iphone-control mcp，再经 Unix socket 交给守护进程；守护进程经 USB 用 WebDriverAgent 操作 iPhone](/architecture-light.svg){.light-only}
-![架构：MCP 客户端经 stdio 调用 iphone-control mcp，再经 Unix socket 交给守护进程；守护进程经 USB 用 WebDriverAgent 操作 iPhone](/architecture-dark.svg){.dark-only}
+![架构：MCP 客户端经 stdio 调用 iphone-control mcp，再经 Unix socket 交给守护进程；守护进程经 USB 用 WebDriverAgent 操作 iPhone 或 iPad](/architecture-light.svg){.light-only}
+![架构：MCP 客户端经 stdio 调用 iphone-control mcp，再经 Unix socket 交给守护进程；守护进程经 USB 用 WebDriverAgent 操作 iPhone 或 iPad](/architecture-dark.svg){.dark-only}
 
 - **守护进程**常驻，独占手机：配对、挂载开发者镜像、建立隧道，在手机上运行 [WebDriverAgent](https://github.com/appium/WebDriverAgent)（WDA，苹果 XCTest 自动化框架上的代理），用它读界面、点击和输入。
 - **MCP 服务**由 AI 客户端按需拉起，只是把工具调用转给守护进程。
@@ -25,8 +25,8 @@ iphone-control 让 AI agent（例如 Claude）操作一台用数据线接在 Lin
 | | |
 |---|---|
 | 主机 | Linux，x86_64 或 arm64：Docker（Compose v2），或 Rust 1.88+ 从源码编译<br>macOS，Apple Silicon：预编译二进制，或 Rust 1.88+ 从源码编译，见 [macOS](../deploy/macos) |
-| 手机 | iOS 17 及以上；HID 后备路线要 iOS 27 及以上 |
-| 已在真机验证 | iPhone 15 Pro Max，iOS 27.0.1（Linux、macOS）<br>iPhone 12 mini，iOS 26.4.1（Linux） |
+| 手机 | iPhone 或 iPad，iOS 17 及以上；HID 后备路线要 iOS 27 及以上 |
+| 已在真机验证 | iPhone 15 Pro Max，iOS 27.0.1（Linux、macOS）<br>iPhone 12 mini，iOS 26.4.1（Linux）<br>iPad mini 5，iOS 26.6.1（Linux，Docker） |
 | 账号 | 免费 Apple ID 即可，建议专门注册一个 |
 
 其他机型和 iOS 版本应该也能用，但还没测过，欢迎[反馈](https://github.com/Derrors/iphone-control/issues)。
@@ -44,7 +44,7 @@ iphone-control 让 AI agent（例如 Claude）操作一台用数据线接在 Lin
 
 **使用**
 
-- 一台主机接一部手机。不要对同一部手机同时运行两份 iphone-control，也不要同时用其他基于 usbmuxd 的工具。
+- 一台主机可以接多台 iPhone/iPad，但同一时间只控制一台，见[多台设备](./multi-device)。不要让两份 iphone-control 或其他基于 usbmuxd 的工具连同一台。
 - 游戏、地图、视频这类界面没有元素树，agent 只能看截图按坐标操作。
 - HID 后备路线要 iOS 27 及以上；更早的 iOS 全部经 WebDriverAgent 操作，WDA 重启期间操作会失败。
 - 免费 Apple ID 的描述文件 7 天有效。重签是自动的，但 Apple ID 会话失效后要运行 `login` 重新登录。

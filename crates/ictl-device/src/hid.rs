@@ -119,13 +119,14 @@ impl HidSession {
         screen: ScreenSize,
     ) -> Result<Self> {
         let stream = crate::media::start(adapter, handshake, 1).await?;
-        let clients = async {
+        // 时限加在这里而不是外层：外层取消会直接丢掉媒体流，走不到下面的 stop
+        let clients = limit("连接 HID 服务", Duration::from_secs(20), async {
             // backboardd 要一点时间把 HID 设备和刚授权的媒体流对上
             tokio::time::sleep(Duration::from_millis(300)).await;
             let touch = UniversalHidServiceClient::connect_rsd(adapter, handshake).await?;
             let indigo = IndigoHidClient::connect_rsd(adapter, handshake).await?;
             Ok::<_, DeviceError>((touch, indigo))
-        }
+        })
         .await;
         match clients {
             Ok((touch, indigo)) => Ok(Self {

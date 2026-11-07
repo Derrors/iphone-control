@@ -6,7 +6,7 @@ Run it directly as a regular user on Linux, without Docker. You need the system 
 
 ### Prebuilt binary
 
-After a release, [Releases](https://github.com/Derrors/iphone-control/releases) has Linux x86_64 and aarch64 archives (glibc 2.34 or later: Debian 12, Ubuntu 22.04 and newer):
+[Releases](https://github.com/Derrors/iphone-control/releases) has Linux x86_64 and aarch64 archives (glibc 2.34 or later: Debian 12, Ubuntu 22.04 and newer):
 
 ```bash
 sudo apt install usbmuxd
@@ -65,6 +65,8 @@ loginctl enable-linger "$USER"                  # start at boot without logging 
 :::
 
 ## Upgrade
+
+Read the upgrade notes in the [changelog](https://github.com/Derrors/iphone-control/blob/main/CHANGELOG.md) first.
 
 ```bash
 git pull && cargo install --path apps/iphone-control --locked   # or drop in the new binary

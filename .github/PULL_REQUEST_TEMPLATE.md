@@ -4,7 +4,7 @@
 
 ## How it was tested
 
-- [ ] `cargo test --workspace`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo fmt --check` (per package)
+- [ ] `cargo test --workspace --all-features`, `cargo clippy --workspace --all-targets --all-features -- -D warnings`, `cargo fmt --check` (per package)
 - [ ] On a real phone (model, iOS version, what you ran — e.g. `tests/device/run.py`):
 - [ ] Not needed (docs only, or no device-facing change)
 

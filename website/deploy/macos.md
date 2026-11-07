@@ -3,14 +3,14 @@
 iphone-control 也能直接跑在 Mac 上：用 macOS 自带的 usbmuxd，不需要 Xcode，也不需要付费开发者账号。和 Linux 上从源码运行基本一样，区别见文末的[已知差异](#已知差异)。
 
 ::: info 验证情况
-已在 MacBook Pro（Apple M3 Pro）/ macOS 26.6.2 + iPhone 15 Pro Max / iOS 27.0.1 上完整验证：安装向导、全部 MCP 工具、开着 Finder 连续操作、同一条隧道连续 30 分钟、拔插和手机重启后自动恢复。Intel Mac 还没测过。验证步骤和结果见 [macOS 真机验证](https://github.com/Derrors/iphone-control/blob/main/docs/dev/macos-verification.md)。
+已在 MacBook Pro（Apple M3 Pro）/ macOS 26.6.2 + iPhone 15 Pro Max / iOS 27.0.1 上验证：安装向导、当时的全部 MCP 工具、开着 Finder 连续操作、同一条隧道连续 30 分钟、拔插和手机重启后自动恢复。这次验证早于 0.1.3，多设备工具（`iphone_list_devices`、`iphone_select_device`）没有在 macOS 上验证过。Intel Mac 还没测过。验证步骤和结果见 [macOS 真机验证](https://github.com/Derrors/iphone-control/blob/main/docs/dev/macos-verification.md)。
 :::
 
 ## 需要
 
 - Apple Silicon 的 Mac
 - 用预编译二进制什么都不用装；从源码编译要 Xcode 命令行工具和 Rust 1.88 以上。都**不需要**完整的 Xcode
-- 一部 iOS 17 以上的 iPhone，用能**传数据**的线连接
+- 一部 iOS 17 以上的 iPhone 或 iPad，用能**传数据**的线连接
 - 一个免费 Apple ID（建议专门注册一个）
 
 ::: warning 不能用 Docker
@@ -128,6 +128,8 @@ sudo launchctl kickstart -k system/com.apple.usbmuxd
 
 ## 升级
 
+升级前先看[更新日志](https://github.com/Derrors/iphone-control/blob/main/CHANGELOG.zh-CN.md)里的升级注意事项。
+
 预编译二进制：按「安装」一节下载新版本，覆盖 `~/.local/bin/iphone-control`。从源码编译：
 
 ```bash
@@ -160,4 +162,4 @@ rm -rf ~/.local/share/iphone-control ~/.config/iphone-control   # 会删掉 Appl
 | 配对记录 | `/var/lib/lockdown` | `/var/db/lockdown`（和 Finder 共用） |
 | Docker | 支持 | 不支持 |
 
-还没在 Mac 上验证过的：Xcode 的「设备与模拟器」窗口开着时会不会抢连接、手机第一次在这台 Mac 上配对的流程、Intel Mac。遇到问题欢迎[反馈](https://github.com/Derrors/iphone-control/issues)。
+还没在 Mac 上验证过的：Xcode 的「设备与模拟器」窗口开着时会不会抢连接、手机第一次在这台 Mac 上配对的流程、iPad、接多台设备、Intel Mac。遇到问题欢迎[反馈](https://github.com/Derrors/iphone-control/issues)。

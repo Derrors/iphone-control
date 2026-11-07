@@ -9,8 +9,7 @@ pub mod elements;
 pub mod http;
 pub mod runner;
 
-pub use client::{IdleSettings, Launch, LockCheck, PointerStep, WdaClient, actions_body, swipe_steps, tap_steps};
-pub use elements::{Element, Orientation, View};
+pub use client::{IdleSettings, Launch, WdaClient, swipe_steps, tap_steps};
 pub use runner::WdaRunner;
 
 #[derive(Debug, thiserror::Error)]
@@ -21,6 +20,9 @@ pub enum WdaError {
     /// 请求已经发出但没在时限内应答：手机可能还在执行，不能退到 HID 再做一遍
     #[error("WDA 请求超时（请求已发出，手机可能仍在执行，先截图确认）：{0}")]
     Timeout(String),
+    /// 请求已经发出，之后连接断了或响应不完整：手机可能已经执行，同样不能退到 HID 再做一遍
+    #[error("WDA 在请求发出后断开（手机可能已经执行，先截图确认）：{0}")]
+    Interrupted(String),
     /// 手机重启后首次启用 UI 自动化，需要用户在手机上输入锁屏密码
     #[error("WDA 卡在「Enable UI Automation」密码框，请在手机上输入锁屏密码")]
     NeedsAutomationPin,

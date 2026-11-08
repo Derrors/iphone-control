@@ -6,6 +6,10 @@ All notable changes to this project are documented here. The format is based on 
 
 ## [Unreleased]
 
+### Added
+
+- English tool descriptions: with `IPHONE_CONTROL_LANG=en` the MCP server instructions and all tool descriptions are in English. The default stays Simplified Chinese, so nothing changes unless you set it.
+
 ## [0.1.4] - 2026-11-07
 
 ### Security

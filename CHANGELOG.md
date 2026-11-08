@@ -8,7 +8,9 @@ All notable changes to this project are documented here. The format is based on 
 
 ### Added
 
-- English tool descriptions: with `IPHONE_CONTROL_LANG=en` the MCP server instructions and all tool descriptions are in English. The default stays Simplified Chinese, so nothing changes unless you set it.
+- English: `IPHONE_CONTROL_LANG=en` switches the MCP server instructions, tool descriptions and tool results to English. The default stays Simplified Chinese, so nothing changes unless you set it.
+- The MCP server sends its language with each request and the daemon answers in it; requests from older clients carry none and get Chinese as before, so mixed versions during an upgrade keep working.
+- Text responses carry an optional `outcome` (`tapped_nothing`, `alert_reported`), so the MCP server no longer reads result text to stop a batch after a missed tap or to skip the extra alert check. Responses without it (older daemons) are still recognised by their Chinese prefixes.
 
 ## [0.1.4] - 2026-11-07
 

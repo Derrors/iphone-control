@@ -59,8 +59,9 @@ fn automation_signal(msg: &str) -> Option<AutomationSignal> {
 /// 点「信任」之前这样报，之后下一次就能启动），在报错里提示一句
 fn launch_hint(msg: String) -> String {
     if msg.contains("unexpected response") {
-        format!(
-            "{msg}(如果是第一次在这台手机上装 WDA:到 设置 → 通用 → VPN 与设备管理 里信任你的 Apple ID 开发者,需要联网)"
+        ictl_l10n::trf!(
+            "{msg}(如果是第一次在这台手机上装 WDA:到 设置 → 通用 → VPN 与设备管理 里信任你的 Apple ID 开发者,需要联网)",
+            "{msg} (if this is the first WDA install on this phone: trust your Apple ID developer under Settings → General → VPN & Device Management, which needs internet)"
         )
     } else {
         msg
@@ -157,9 +158,13 @@ impl WdaRunner {
                 other => WdaError::StartFailed(other.to_string()),
             })
         };
-        let cfg = tokio::time::timeout(LOOKUP_TIMEOUT, lookup)
-            .await
-            .map_err(|_| WdaError::StartFailed(format!("查 WDA 安装信息超时（{} 秒）", LOOKUP_TIMEOUT.as_secs())))??;
+        let cfg = tokio::time::timeout(LOOKUP_TIMEOUT, lookup).await.map_err(|_| {
+            WdaError::StartFailed(ictl_l10n::trf!(
+                "查 WDA 安装信息超时（{} 秒）",
+                "querying the WDA install info timed out ({} s)",
+                LOOKUP_TIMEOUT.as_secs()
+            ))
+        })??;
 
         let progress = Arc::new(Mutex::new(Progress::default()));
         let task = {
@@ -200,7 +205,7 @@ impl WdaRunner {
             if runner.task.is_finished() {
                 let r = (&mut runner.task).await;
                 let msg = match r {
-                    Ok(Ok(())) => "runner 提前结束".to_owned(),
+                    Ok(Ok(())) => ictl_l10n::tr!("runner 提前结束", "the runner ended early").to_owned(),
                     Ok(Err(e)) => e.to_string(),
                     Err(e) => e.to_string(),
                 };
@@ -219,7 +224,9 @@ impl WdaRunner {
             }
             if tokio::time::Instant::now() >= deadline {
                 runner.task.abort();
-                return Err(failure(Some("WDA 在限定时间内没有就绪".to_owned())));
+                return Err(failure(Some(
+                    ictl_l10n::tr!("WDA 在限定时间内没有就绪", "WDA didn't become ready in time").to_owned(),
+                )));
             }
             tokio::time::sleep(Duration::from_millis(500)).await;
         }

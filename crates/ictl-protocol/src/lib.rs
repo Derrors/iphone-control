@@ -130,6 +130,10 @@ pub enum Request {
 pub enum Response {
     Text {
         text: String,
+        /// What the text reports, as fields, so clients don't have to read the text (which depends on the
+        /// language). Daemons before this field existed don't send it; their text is always Chinese
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        outcome: Option<Outcome>,
     },
     /// JPEG base64 + 说明文字（尺寸、放大倍数、坐标换算式）
     Image {
@@ -141,9 +145,24 @@ pub enum Response {
     },
 }
 
+/// Facts about a [`Response::Text`] that clients act on (see [`tapped_nothing`], [`alert_reported`])
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Outcome {
+    /// `iphone_tap_element` tapped nothing: no match, index out of range, or the element is covered
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub tapped_nothing: bool,
+    /// The text already reports a system alert blocking the screen
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub alert_reported: bool,
+}
+
 impl Response {
     pub fn text(s: impl Into<String>) -> Self {
-        Self::Text { text: s.into() }
+        Self::Text { text: s.into(), outcome: None }
+    }
+    /// Text with its [`Outcome`] (the daemon answers every text request this way)
+    pub fn text_with(s: impl Into<String>, outcome: Outcome) -> Self {
+        Self::Text { text: s.into(), outcome: Some(outcome) }
     }
     pub fn error(s: impl Into<String>) -> Self {
         Self::Error { message: s.into() }
@@ -176,6 +195,23 @@ pub const ALERT_BLOCKING: &str = "屏幕上有系统弹窗";
 /// `iphone_tap_element` 没点到时结果开头的几种写法（不算出错，单独调用时是普通结果；批量里要停下）
 pub const TAP_MISSED: [&str; 3] = ["没找到", "只匹配到", "被挡住"];
 
+/// Did `iphone_tap_element` tap nothing? Daemons that send [`Outcome`] say so there; older ones only write
+/// Chinese text, recognised by its [`TAP_MISSED`] prefix
+pub fn tapped_nothing(text: &str, outcome: Option<Outcome>) -> bool {
+    match outcome {
+        Some(o) => o.tapped_nothing,
+        None => TAP_MISSED.iter().any(|p| text.starts_with(p)),
+    }
+}
+
+/// Does the result already report a blocking system alert? As [`tapped_nothing`], with [`ALERT_BLOCKING`]
+pub fn alert_reported(text: &str, outcome: Option<Outcome>) -> bool {
+    match outcome {
+        Some(o) => o.alert_reported,
+        None => text.contains(ALERT_BLOCKING),
+    }
+}
+
 /// 请求里带上这个键（值为 true）：客户端发完请求不半关闭连接，守护进程据此把「读到 EOF」当成调用方已经走了，
 /// 还在排队等设备的请求就不再执行。旧版本的客户端发完就半关闭、不带这个键，守护进程对它们照旧处理完。
 /// 放在请求对象里而不是改协议格式：旧版本守护进程会忽略这个多出来的键
@@ -184,6 +220,10 @@ pub const CANCEL_ON_CLOSE: &str = "cancel_on_close";
 /// 请求里带上这个键（值为 UDID）：守护进程正在控制的不是这台就不执行。`iphone_batch` 用它防止中途换了设备
 /// （自动选设备时拔掉正在控制的那台，会改控另一台）后，剩下的步骤落到另一台上
 pub const EXPECT_UDID: &str = "expect_udid";
+
+/// Request key carrying the client's language (`zh` / `en`). The daemon answers in it; requests without it
+/// (older clients) get Chinese, as before. Older daemons ignore the extra key
+pub const LANG: &str = "lang";
 
 /// 发一个请求、读一个响应（客户端用）。`timeout` 为 None 时一直等（例如 `sign` 要等签名装完）。
 /// 返回之前被丢掉（超时、调用方取消）时连接随之关闭，守护进程会放弃还在排队的这个请求
@@ -209,6 +249,7 @@ pub async fn call_expecting(
         let mut v = serde_json::to_value(req)?;
         if let Some(o) = v.as_object_mut() {
             o.insert(CANCEL_ON_CLOSE.into(), true.into());
+            o.insert(LANG.into(), ictl_l10n::lang().code().into());
             if let Some(u) = expect_udid {
                 o.insert(EXPECT_UDID.into(), u.into());
             }
@@ -225,7 +266,7 @@ pub async fn call_expecting(
         Some(t) => tokio::time::timeout(t, exchange).await.map_err(|_| {
             std::io::Error::new(
                 std::io::ErrorKind::TimedOut,
-                format!("守护进程 {} 秒内没有应答（可能正忙，例如正在启动 WDA 或重签）", t.as_secs()),
+                ictl_l10n::trf!("守护进程 {} 秒内没有应答（可能正忙，例如正在启动 WDA 或重签）", "The daemon didn't answer within {} seconds (it may be busy, for example starting WDA or re-signing)", t.as_secs()),
             )
         })?,
     }
@@ -245,11 +286,50 @@ mod tests {
         assert_eq!(e, Response::error("x"));
     }
 
-    /// 旧版本守护进程直接反序列化请求：多出来的 cancel_on_close 键不能让它报错（含没有字段的请求）
+    /// Outcome travels as fields; flags that are off and a missing outcome (older daemons) stay off the wire,
+    /// and older clients that don't know the field ignore it
+    #[test]
+    fn outcome_is_optional_on_the_wire() {
+        let s = serde_json::to_string(&Response::text("x")).unwrap();
+        assert_eq!(s, r#"{"kind":"text","text":"x"}"#);
+        let s = serde_json::to_string(&Response::text_with("x", Outcome::default())).unwrap();
+        assert_eq!(s, r#"{"kind":"text","text":"x","outcome":{}}"#);
+        let missed = Response::text_with("Not found", Outcome { tapped_nothing: true, ..Default::default() });
+        let s = serde_json::to_string(&missed).unwrap();
+        assert_eq!(serde_json::from_str::<Response>(&s).unwrap(), missed);
+
+        #[derive(Deserialize)]
+        #[serde(tag = "kind", rename_all = "snake_case")]
+        enum OldResponse {
+            Text { text: String },
+        }
+        let OldResponse::Text { text } = serde_json::from_str(&s).unwrap();
+        assert_eq!(text, "Not found");
+    }
+
+    /// The field decides; without it (older daemon) the Chinese text is read
+    #[test]
+    fn outcome_wins_over_text() {
+        let missed = Outcome { tapped_nothing: true, ..Default::default() };
+        assert!(tapped_nothing("Not found: no element contains \"x\"", Some(missed)));
+        assert!(!tapped_nothing("没找到包含 \"x\" 的元素", Some(Outcome::default())));
+        assert!(tapped_nothing("没找到包含 \"x\" 的元素", None));
+        assert!(tapped_nothing("被挡住:Button \"x\" 整个被「浮层」盖住,没有点", None));
+        assert!(!tapped_nothing("Not found: no element contains \"x\"", None));
+        let alert = Outcome { alert_reported: true, ..Default::default() };
+        assert!(alert_reported("Launched x, but a system alert is on screen: “Allow?”", Some(alert)));
+        assert!(alert_reported("已启动 x,但屏幕上有系统弹窗「允许?」挡着", None));
+        assert!(!alert_reported("Launched x", Some(Outcome::default())));
+    }
+
+    /// 旧版本守护进程直接反序列化请求：多出来的 cancel_on_close、lang 键不能让它报错（含没有字段的请求）
     #[test]
     fn extra_cancel_key_is_ignored_when_parsing() {
-        for s in [r#"{"op":"status","cancel_on_close":true}"#, r#"{"op":"tap","x":1.0,"y":2.0,"cancel_on_close":true}"#]
-        {
+        for s in [
+            r#"{"op":"status","cancel_on_close":true}"#,
+            r#"{"op":"tap","x":1.0,"y":2.0,"cancel_on_close":true}"#,
+            r#"{"op":"status","cancel_on_close":true,"lang":"en"}"#,
+        ] {
             serde_json::from_str::<Request>(s).unwrap_or_else(|e| panic!("{s}: {e}"));
         }
     }

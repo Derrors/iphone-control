@@ -31,7 +31,12 @@ pub fn require_complete(dir: &Path) -> Result<PathBuf> {
     }
     Err(DeviceError::Io(std::io::Error::new(
         std::io::ErrorKind::NotFound,
-        format!("ICTL_DDI_DIR（{}）里缺少 {}", dir.display(), missing.join("、")),
+        ictl_l10n::trf!(
+            "ICTL_DDI_DIR（{}）里缺少 {}",
+            "ICTL_DDI_DIR ({}) is missing {}",
+            dir.display(),
+            missing.join(ictl_l10n::tr!("、", ", "))
+        ),
     )))
 }
 

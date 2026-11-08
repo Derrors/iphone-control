@@ -238,16 +238,30 @@ pub fn device_label(i: &DeviceInfo) -> String {
 pub(crate) fn wda_down(state: &DeviceState, info: Option<&DeviceInfo>) -> String {
     // 没接设备时 WDA 不会自己起来，也没有 HID 后备
     if matches!(state, DeviceState::Absent) {
-        return "WDA 不可用(手机未连接);接上设备后守护进程会自动拉起 WDA".into();
+        return ictl_l10n::tr!(
+            "WDA 不可用(手机未连接);接上设备后守护进程会自动拉起 WDA",
+            "WDA unavailable (phone not connected); the daemon starts WDA once a device is plugged in"
+        )
+        .into();
     }
     let fallback = if hid_supported(info) {
-        "截图/点击/滑动/按键可照常用"
+        ictl_l10n::tr!("截图/点击/滑动/按键可照常用", "screenshots/taps/swipes/buttons still work")
     } else {
-        "这台手机 iOS 低于 27,没有 HID 后备路线,WDA 恢复前截图、点击等操作都用不了"
+        ictl_l10n::tr!(
+            "这台手机 iOS 低于 27,没有 HID 后备路线,WDA 恢复前截图、点击等操作都用不了",
+            "this phone runs iOS below 27 and has no HID fallback, so screenshots, taps etc. don't work until WDA is back"
+        )
     };
     // 状态还是「就绪」：WDA 在两次巡检之间刚掉线，下一轮巡检才会发现并重新拉起
-    let why = if *state == DeviceState::Ready { "刚掉线".to_owned() } else { state.describe() };
-    format!("WDA 不可用({why}),守护进程一般 1~2 分钟内会拉起;{fallback}")
+    let why = if *state == DeviceState::Ready {
+        ictl_l10n::tr!("刚掉线", "just dropped").to_owned()
+    } else {
+        state.describe()
+    };
+    ictl_l10n::trf!(
+        "WDA 不可用({why}),守护进程一般 1~2 分钟内会拉起;{fallback}",
+        "WDA unavailable ({why}), the daemon usually restarts it within 1-2 minutes; {fallback}"
+    )
 }
 
 /// HID 后备路线（免 WDA 截图、点击）只有 iOS 27 起能用；不知道版本时照常尝试
@@ -485,7 +499,7 @@ impl Daemon {
             Some(mut gone) => tokio::select! {
                 biased;
                 g = self.inner.lock() => g,
-                Ok(()) = &mut gone => return Response::error("调用方已取消,请求没有执行"),
+                Ok(()) = &mut gone => return Response::error(ictl_l10n::tr!("调用方已取消,请求没有执行", "The caller cancelled; the request was not carried out")),
             },
             None => self.inner.lock().await,
         };
@@ -493,21 +507,28 @@ impl Daemon {
         if let Some(want) = &ctx.expect_udid {
             let now = g.device.as_ref().map(|d| d.udid.as_str());
             if now != Some(want.as_str()) {
-                return Response::error(format!(
+                return Response::error(ictl_l10n::trf!(
                     "正在控制的设备变了(原来是 {want},现在{}),没有执行;先用 iphone_list_devices 确认",
-                    now.map_or("没有设备".into(), |u| format!("是 {u}"))
+                    "The controlled device changed (it was {want}, now {}); not carried out. Check with iphone_list_devices first",
+                    now.map_or(ictl_l10n::tr!("没有设备", "there is no device").into(), |u| ictl_l10n::trf!(
+                        "是 {u}",
+                        "it is {u}"
+                    ))
                 ));
             }
         }
         if req.is_device_action() && queued_at.elapsed() > STALE {
-            return Response::error(format!(
+            return Response::error(ictl_l10n::trf!(
                 "守护进程正忙,这个操作排队超过 {} 秒,已放弃执行(以免落到已经变化的屏幕上);先截图看看再重试",
+                "The daemon is busy and this action waited in the queue for more than {} seconds, so it was dropped (it could have landed on a changed screen); take a screenshot and try again",
                 STALE.as_secs()
             ));
         }
         // 改变界面的操作做完后缓存的元素树就作废；只有调用方声明「不改变布局」的按名字点击（max_age_ms > 0）保留
         let keeps_cache = matches!(req, Request::TapElement { max_age_ms, .. } if max_age_ms > 0);
         let invalidates = req.is_device_action() && !keeps_cache;
+        // what the text reports, for clients that act on it (Response::Text.outcome)
+        let mut outcome = crate::protocol::Outcome::default();
         let r = match req {
             Request::Status => Ok(self.status_text(g).await),
             Request::Screenshot { region } => {
@@ -520,7 +541,10 @@ impl Daemon {
             }
             Request::Tap { x, y } => self.tap(g, x, y).await,
             Request::TapElement { text, index, max_age_ms } => {
-                self.tap_element(g, &text, index, Duration::from_millis(max_age_ms)).await
+                self.tap_element(g, &text, index, Duration::from_millis(max_age_ms)).await.map(|(t, missed)| {
+                    outcome.tapped_nothing = missed;
+                    t
+                })
             }
             Request::LongPress { x, y, seconds } => self.long_press(g, x, y, seconds).await,
             Request::Swipe { from, to, seconds } => self.swipe(g, from, to, seconds).await,
@@ -530,9 +554,15 @@ impl Daemon {
                 .list_apps(g, include_system)
                 .await
                 .map(|a| a.iter().map(|a| format!("{}\t{}", a.name, a.bundle_id)).collect::<Vec<_>>().join("\n")),
-            Request::LaunchApp { app } => self.launch_app(g, &app).await,
+            Request::LaunchApp { app } => self.launch_app(g, &app).await.map(|(t, alert)| {
+                outcome.alert_reported = alert;
+                t
+            }),
             Request::TerminateApp { app } => self.terminate_app(g, &app).await,
-            Request::OpenUrl { url } => self.open_url(g, &url).await,
+            Request::OpenUrl { url } => self.open_url(g, &url).await.map(|(t, alert)| {
+                outcome.alert_reported = alert;
+                t
+            }),
             Request::Settle { max_ms } => self.settle(g, Duration::from_millis(max_ms)).await,
             Request::AlertCheck => self.alert_check(g).await,
             Request::WaitFor { text, timeout_ms } => self.wait_for(g, &text, Duration::from_millis(timeout_ms)).await,
@@ -540,7 +570,7 @@ impl Daemon {
             Request::UnlockReset => {
                 let _ = std::fs::remove_file(self.cfg.unlock_disabled_flag());
                 g.dedup.clear("unlock");
-                Ok("已恢复自动解锁".into())
+                Ok(ictl_l10n::tr!("已恢复自动解锁", "Auto-unlock re-enabled").into())
             }
             Request::ListDevices => Ok(self.list_devices_text(g)),
             Request::SelectDevice { device } => self.select_device(g, &device).await,
@@ -550,7 +580,7 @@ impl Daemon {
             g.elements_cache = None;
         }
         self.publish(g);
-        r.map(Response::text).unwrap_or_else(Response::error)
+        r.map(|t| Response::text_with(t, outcome)).unwrap_or_else(Response::error)
     }
 
     pub async fn shutdown(&self) {
@@ -567,11 +597,19 @@ impl Daemon {
 /// 参数检查（与设备无关，不必拿锁）
 fn check_request(req: &Request) -> Result<(), String> {
     match req {
-        Request::Settle { max_ms } if *max_ms > MAX_WAIT_MS => return Err(format!("max_ms 不能超过 {MAX_WAIT_MS}")),
-        Request::WaitFor { timeout_ms, .. } if *timeout_ms > MAX_WAIT_MS => {
-            return Err(format!("timeout 不能超过 {} 秒", MAX_WAIT_MS / 1000));
+        Request::Settle { max_ms } if *max_ms > MAX_WAIT_MS => {
+            return Err(ictl_l10n::trf!("max_ms 不能超过 {MAX_WAIT_MS}", "max_ms can't exceed {MAX_WAIT_MS}"));
         }
-        Request::WaitFor { text, .. } if text.is_empty() => return Err("text 不能为空".into()),
+        Request::WaitFor { timeout_ms, .. } if *timeout_ms > MAX_WAIT_MS => {
+            return Err(ictl_l10n::trf!(
+                "timeout 不能超过 {} 秒",
+                "timeout can't exceed {} seconds",
+                MAX_WAIT_MS / 1000
+            ));
+        }
+        Request::WaitFor { text, .. } if text.is_empty() => {
+            return Err(ictl_l10n::tr!("text 不能为空", "text can't be empty").into());
+        }
         _ => {}
     }
     let seconds = match req {
@@ -579,7 +617,10 @@ fn check_request(req: &Request) -> Result<(), String> {
         _ => return Ok(()),
     };
     if !seconds.is_finite() || !(0.0..=MAX_GESTURE_SECONDS).contains(&seconds) {
-        return Err(format!("seconds 要在 0 到 {MAX_GESTURE_SECONDS} 之间"));
+        return Err(ictl_l10n::trf!(
+            "seconds 要在 0 到 {MAX_GESTURE_SECONDS} 之间",
+            "seconds must be between 0 and {MAX_GESTURE_SECONDS}"
+        ));
     }
     Ok(())
 }

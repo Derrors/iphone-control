@@ -231,7 +231,7 @@ async fn ask(socket: &Path, req: Request) -> anyhow::Result<Response> {
 
 async fn print_text(socket: &Path, req: Request) -> anyhow::Result<()> {
     match ask(socket, req).await? {
-        Response::Text { text } => {
+        Response::Text { text, .. } => {
             println!("{text}");
             Ok(())
         }
@@ -245,7 +245,7 @@ async fn print_text(socket: &Path, req: Request) -> anyhow::Result<()> {
 
 async fn snapshot(socket: &Path) -> anyhow::Result<ictl_daemon::Snapshot> {
     match ask(socket, Request::Daemon).await? {
-        Response::Text { text } => Ok(serde_json::from_str(&text)?),
+        Response::Text { text, .. } => Ok(serde_json::from_str(&text)?),
         Response::Error { message } => bail!("{message}"),
         Response::Image { .. } => bail!("守护进程返回了意外的响应"),
     }

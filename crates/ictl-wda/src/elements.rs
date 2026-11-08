@@ -277,7 +277,11 @@ impl Tree {
             .collect();
         let d = |p: &(f64, f64)| (p.0 - center.0).powi(2) + (p.1 - center.1).powi(2);
         points.sort_by(|a, b| d(a).total_cmp(&d(b)));
-        let by = if first.name.is_empty() { "没有文字的浮层".to_owned() } else { first.name.clone() };
+        let by = if first.name.is_empty() {
+            ictl_l10n::tr!("没有文字的浮层", "an overlay without text").to_owned()
+        } else {
+            first.name.clone()
+        };
         match points.into_iter().find(|p| cover(*p).is_none()) {
             Some(p) => TapPoint::Moved { at: (p.0.round(), p.1.round()), by },
             None => TapPoint::Covered { by },
@@ -315,7 +319,11 @@ fn is_scroll_bar(kind: &str, label: &str) -> bool {
 /// 超长文字截断显示（筛选、按名字点仍按全文）
 fn clip(s: &str, max: usize, keep: usize) -> String {
     let n = s.chars().count();
-    if n <= max { s.to_owned() } else { format!("{}…(共 {n} 字)", s.chars().take(keep).collect::<String>()) }
+    if n <= max {
+        s.to_owned()
+    } else {
+        ictl_l10n::trf!("{}…(共 {n} 字)", "{}…({n} characters)", s.chars().take(keep).collect::<String>())
+    }
 }
 
 impl Element {

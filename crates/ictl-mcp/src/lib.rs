@@ -419,30 +419,37 @@ impl Args<'_> {
         self.0.get(k).filter(|v| !v.is_null())
     }
     fn f(&self, k: &str) -> Result<f64, String> {
-        self.opt_f(k)?.ok_or_else(|| format!("缺少数字参数 {k}"))
+        self.opt_f(k)?.ok_or_else(|| ictl_l10n::trf!("缺少数字参数 {k}", "missing number parameter {k}"))
     }
     fn f_or(&self, k: &str, d: f64) -> Result<f64, String> {
         Ok(self.opt_f(k)?.unwrap_or(d))
     }
     fn opt_f(&self, k: &str) -> Result<Option<f64>, String> {
-        self.get(k).map(|v| number(v).ok_or_else(|| format!("参数 {k} 要是数字"))).transpose()
+        self.get(k)
+            .map(|v| number(v).ok_or_else(|| ictl_l10n::trf!("参数 {k} 要是数字", "parameter {k} must be a number")))
+            .transpose()
     }
     fn s(&self, k: &str) -> Result<String, String> {
-        self.get(k).and_then(Value::as_str).map(str::to_owned).ok_or_else(|| format!("缺少文字参数 {k}"))
+        self.get(k)
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+            .ok_or_else(|| ictl_l10n::trf!("缺少文字参数 {k}", "missing text parameter {k}"))
     }
     fn s_or(&self, k: &str, d: &str) -> Result<String, String> {
         match self.get(k) {
             None => Ok(d.to_owned()),
-            Some(v) => v.as_str().map(str::to_owned).ok_or_else(|| format!("参数 {k} 要是文字")),
+            Some(v) => v
+                .as_str()
+                .map(str::to_owned)
+                .ok_or_else(|| ictl_l10n::trf!("参数 {k} 要是文字", "parameter {k} must be text")),
         }
     }
     fn u_or(&self, k: &str, d: usize) -> Result<usize, String> {
         match self.get(k) {
             None => Ok(d),
-            Some(v) => number(v)
-                .filter(|x| *x >= 0.0 && x.fract() == 0.0)
-                .map(|x| x as usize)
-                .ok_or_else(|| format!("参数 {k} 要是非负整数")),
+            Some(v) => number(v).filter(|x| *x >= 0.0 && x.fract() == 0.0).map(|x| x as usize).ok_or_else(|| {
+                ictl_l10n::trf!("参数 {k} 要是非负整数", "parameter {k} must be a non-negative integer")
+            }),
         }
     }
     fn b_or(&self, k: &str, d: bool) -> Result<bool, String> {
@@ -451,7 +458,7 @@ impl Args<'_> {
             Some(Value::Bool(b)) => Ok(*b),
             Some(Value::String(s)) if s.eq_ignore_ascii_case("true") => Ok(true),
             Some(Value::String(s)) if s.eq_ignore_ascii_case("false") => Ok(false),
-            Some(_) => Err(format!("参数 {k} 要是 true 或 false")),
+            Some(_) => Err(ictl_l10n::trf!("参数 {k} 要是 true 或 false", "parameter {k} must be true or false")),
         }
     }
 }
@@ -466,7 +473,13 @@ pub fn to_request(name: &str, args: &Map<String, Value>) -> Result<Request, Stri
             let region = match r {
                 [None, None, None, None] => None,
                 [Some(x), Some(y), Some(w), Some(h)] => Some((x, y, w, h)),
-                _ => return Err("放大区域要同时给出 x、y、width、height".into()),
+                _ => {
+                    return Err(ictl_l10n::tr!(
+                        "放大区域要同时给出 x、y、width、height",
+                        "a zoom region needs all of x, y, width and height"
+                    )
+                    .into());
+                }
             };
             Request::Screenshot { region }
         }
@@ -492,11 +505,13 @@ pub fn to_request(name: &str, args: &Map<String, Value>) -> Result<Request, Stri
         "iphone_wait_for" => {
             let secs = a.f_or("timeout", 5.0)?;
             if !(0.0..=30.0).contains(&secs) {
-                return Err("timeout 要在 0 到 30 秒之间".into());
+                return Err(
+                    ictl_l10n::tr!("timeout 要在 0 到 30 秒之间", "timeout must be between 0 and 30 seconds").into()
+                );
             }
             Request::WaitFor { text: a.s("text")?, timeout_ms: (secs * 1000.0) as u64 }
         }
-        other => return Err(format!("未知工具 {other}")),
+        other => return Err(ictl_l10n::trf!("未知工具 {other}", "unknown tool {other}")),
     })
 }
 
@@ -521,23 +536,35 @@ pub fn parse_then(args: &Map<String, Value>) -> Result<ThenOpts, String> {
         "none" | "" => Then::None,
         "elements" => Then::Elements(a.s_or("then_filter", "")?),
         "screenshot" => {
-            let region = match a.get("then_region") {
-                None => None,
-                Some(v) => {
-                    let xs: Option<Vec<f64>> = v.as_array().map(|arr| arr.iter().filter_map(number).collect());
-                    match xs.as_deref() {
-                        Some([x, y, w, h]) if *w > 0.0 && *h > 0.0 => Some((*x, *y, *w, *h)),
-                        _ => return Err("then_region 要是 [x, y, width, height] 四个数,宽高大于 0".into()),
+            let region =
+                match a.get("then_region") {
+                    None => None,
+                    Some(v) => {
+                        let xs: Option<Vec<f64>> = v.as_array().map(|arr| arr.iter().filter_map(number).collect());
+                        match xs.as_deref() {
+                            Some([x, y, w, h]) if *w > 0.0 && *h > 0.0 => Some((*x, *y, *w, *h)),
+                            _ => return Err(ictl_l10n::tr!(
+                                "then_region 要是 [x, y, width, height] 四个数,宽高大于 0",
+                                "then_region must be four numbers [x, y, width, height], with width and height above 0"
+                            )
+                            .into()),
+                        }
                     }
-                }
-            };
+                };
             Then::Screenshot(region)
         }
-        other => return Err(format!("then 只能是 none / elements / screenshot,不是 {other}")),
+        other => {
+            return Err(ictl_l10n::trf!(
+                "then 只能是 none / elements / screenshot,不是 {other}",
+                "then must be none / elements / screenshot, not {other}"
+            ));
+        }
     };
     let secs = a.f_or("then_settle", THEN_SETTLE_MS as f64 / 1000.0)?;
     if !(0.0..=10.0).contains(&secs) {
-        return Err("then_settle 要在 0 到 10 秒之间".into());
+        return Err(
+            ictl_l10n::tr!("then_settle 要在 0 到 10 秒之间", "then_settle must be between 0 and 10 seconds").into()
+        );
     }
     Ok(ThenOpts { then, settle_ms: (secs * 1000.0) as u64 })
 }
@@ -551,29 +578,47 @@ pub enum Step {
 
 /// 检查并转换批量步骤（一步都不执行就先把参数错误全挡掉）
 pub fn batch_steps(args: &Map<String, Value>) -> Result<Vec<Step>, String> {
-    let steps = args.get("steps").and_then(Value::as_array).ok_or("缺少 steps(数组)")?;
+    let steps = args
+        .get("steps")
+        .and_then(Value::as_array)
+        .ok_or(ictl_l10n::tr!("缺少 steps(数组)", "missing steps (array)"))?;
     let reuse = Args(args).b_or("reuse_elements", false)?;
     if steps.is_empty() || steps.len() > BATCH_MAX_STEPS {
-        return Err(format!("steps 要有 1 到 {BATCH_MAX_STEPS} 步"));
+        return Err(ictl_l10n::trf!(
+            "steps 要有 1 到 {BATCH_MAX_STEPS} 步",
+            "steps must have 1 to {BATCH_MAX_STEPS} steps"
+        ));
     }
     steps
         .iter()
         .enumerate()
         .map(|(i, s)| {
             let n = i + 1;
-            let obj = s.as_object().ok_or_else(|| format!("第 {n} 步不是对象"))?;
-            let tool = obj.get("tool").and_then(Value::as_str).ok_or_else(|| format!("第 {n} 步缺少 tool"))?;
+            let obj = s.as_object().ok_or_else(|| ictl_l10n::trf!("第 {n} 步不是对象", "step {n} is not an object"))?;
+            let tool = obj
+                .get("tool")
+                .and_then(Value::as_str)
+                .ok_or_else(|| ictl_l10n::trf!("第 {n} 步缺少 tool", "step {n} has no tool"))?;
             if !BATCH_TOOLS.contains(&tool) {
-                return Err(format!("第 {n} 步:批量里不能用 {tool},可用:{}", BATCH_TOOLS.join("、")));
+                return Err(ictl_l10n::trf!(
+                    "第 {n} 步:批量里不能用 {tool},可用:{}",
+                    "step {n}: {tool} can't be used in a batch; allowed: {}",
+                    BATCH_TOOLS.join(ictl_l10n::tr!("、", ", "))
+                ));
             }
             if tool == "wait" {
-                let secs = Args(obj).f("seconds").map_err(|e| format!("第 {n} 步:{e}"))?;
+                let secs = Args(obj).f("seconds").map_err(|e| ictl_l10n::trf!("第 {n} 步:{e}", "step {n}: {e}"))?;
                 if !(0.0..=5.0).contains(&secs) {
-                    return Err(format!("第 {n} 步:wait 的 seconds 要在 0 到 5 之间"));
+                    return Err(ictl_l10n::trf!(
+                        "第 {n} 步:wait 的 seconds 要在 0 到 5 之间",
+                        "step {n}: wait's seconds must be between 0 and 5"
+                    ));
                 }
                 return Ok(Step::Wait(std::time::Duration::from_secs_f64(secs)));
             }
-            let req = match to_request(tool, obj).map_err(|e| format!("第 {n} 步({tool}):{e}"))? {
+            let req = match to_request(tool, obj)
+                .map_err(|e| ictl_l10n::trf!("第 {n} 步({tool}):{e}", "step {n} ({tool}): {e}"))?
+            {
                 Request::TapElement { text, index, .. } if reuse => {
                     Request::TapElement { text, index, max_age_ms: BATCH_REUSE_MS }
                 }
@@ -585,8 +630,8 @@ pub fn batch_steps(args: &Map<String, Value>) -> Result<Vec<Step>, String> {
 }
 
 /// tap_element 的结果是不是「没点到」（没找到、index 超出匹配个数、或整个被别的东西盖住）
-pub fn tap_missed(text: &str) -> bool {
-    protocol::TAP_MISSED.iter().any(|p| text.starts_with(p))
+pub fn tap_missed(text: &str, outcome: Option<protocol::Outcome>) -> bool {
+    protocol::tapped_nothing(text, outcome)
 }
 
 /// 不带 then 的操作做完后要不要查系统弹窗（弹窗挡着时操作都落在弹窗上，WDA 照样报成功）。
@@ -600,7 +645,7 @@ pub fn wants_alert_check(req: &Request) -> bool {
 /// 守护进程响应 → MCP 结果。错误走工具错误（is_error），文字原样给客户端
 pub fn to_result(r: Response) -> CallToolResult {
     match r {
-        Response::Text { text } => CallToolResult::success(vec![ContentBlock::text(text)]),
+        Response::Text { text, .. } => CallToolResult::success(vec![ContentBlock::text(text)]),
         Response::Image { jpeg_base64, caption } => {
             CallToolResult::success(vec![ContentBlock::image(jpeg_base64, "image/jpeg"), ContentBlock::text(caption)])
         }
@@ -635,7 +680,7 @@ impl ServerHandler for McpServer {
         // 守护进程那边还在排队的请求随之放弃（protocol::call），iphone_batch 剩下的步骤也不再执行
         tokio::select! {
             r = self.call_tool_inner(request) => r,
-            _ = context.ct.cancelled() => Ok(to_result(Response::error("调用已取消")).into()),
+            _ = context.ct.cancelled() => Ok(to_result(Response::error(ictl_l10n::tr!("调用已取消", "Call cancelled"))).into()),
         }
     }
 }
@@ -657,8 +702,10 @@ impl McpServer {
         // then 只对操作类工具有意义；看界面的工具本身就是返回界面
         let resp = self.call(&req).await;
         Ok(match resp {
-            Response::Text { text } if req.is_device_action() => {
-                self.finish(text, false, then, wants_alert_check(&req)).await
+            Response::Text { text, outcome } if req.is_device_action() => {
+                // 结果里已经说了有弹窗（启动 App 被挡）就不再查
+                let check = wants_alert_check(&req) && !protocol::alert_reported(&text, outcome);
+                self.finish(text, false, then, check).await
             }
             resp => to_result(resp),
         }
@@ -674,8 +721,7 @@ impl McpServer {
         // 守护进程正忙（例如在自动解锁）时会排队；最多等 150 秒，免得 agent 一直挂着
         protocol::call_expecting(&self.socket, req, Some(Duration::from_secs(150)), expect_udid).await.unwrap_or_else(
             |e| {
-                Response::error(format!(
-                    "连不上守护进程({}):{e};确认守护进程在运行(容器部署看 iphone-control 容器)",
+                Response::error(ictl_l10n::trf!("连不上守护进程({}):{e};确认守护进程在运行(容器部署看 iphone-control 容器)", "Can't reach the daemon ({}): {e}; make sure the daemon is running (for a container deployment, check the iphone-control container)",
                     self.socket.display()
                 ))
             },
@@ -690,18 +736,19 @@ impl McpServer {
         };
         let then = opts.then;
         if then == Then::None {
-            // 结果里已经说了有弹窗（启动 App 被挡）就不再查
-            if alert_check
-                && !text.contains(protocol::ALERT_BLOCKING)
-                && let Response::Text { text: t } = self.call(&Request::AlertCheck).await
-            {
+            if alert_check && let Response::Text { text: t, .. } = self.call(&Request::AlertCheck).await {
                 text += &t;
             }
             return done(vec![ContentBlock::text(text)]);
         }
         match self.call(&Request::Settle { max_ms: opts.settle_ms }).await {
-            Response::Text { text: t } => text += &format!("\n{t}"),
-            Response::Error { message } => text += &format!("\n(等界面稳定失败:{message})"),
+            Response::Text { text: t, .. } => text += &format!("\n{t}"),
+            Response::Error { message } => {
+                text += &ictl_l10n::trf!(
+                    "\n(等界面稳定失败:{message})",
+                    "\n(waiting for the screen to settle failed: {message})"
+                )
+            }
             Response::Image { .. } => {}
         }
         match then {
@@ -709,8 +756,13 @@ impl McpServer {
                 // Settle 刚读过元素树，直接用它
                 match self.call(&Request::ListElements { filter, limit: THEN_LIMIT, max_age_ms: THEN_SETTLE_MS }).await
                 {
-                    Response::Text { text: t } => text += &format!("\n--- 操作后的界面 ---\n{t}"),
-                    Response::Error { message } => text += &format!("\n(读界面失败:{message})"),
+                    Response::Text { text: t, .. } => {
+                        text +=
+                            &ictl_l10n::trf!("\n--- 操作后的界面 ---\n{t}", "\n--- Screen after the action ---\n{t}")
+                    }
+                    Response::Error { message } => {
+                        text += &ictl_l10n::trf!("\n(读界面失败:{message})", "\n(reading the screen failed: {message})")
+                    }
                     Response::Image { .. } => {}
                 }
                 done(vec![ContentBlock::text(text)])
@@ -721,8 +773,11 @@ impl McpServer {
                     ContentBlock::image(jpeg_base64, "image/jpeg"),
                     ContentBlock::text(caption),
                 ]),
-                Response::Error { message } => done(vec![ContentBlock::text(format!("{text}\n(截图失败:{message})"))]),
-                Response::Text { text: t } => done(vec![ContentBlock::text(format!("{text}\n{t}"))]),
+                Response::Error { message } => done(vec![ContentBlock::text(ictl_l10n::trf!(
+                    "{text}\n(截图失败:{message})",
+                    "{text}\n(screenshot failed: {message})"
+                ))]),
+                Response::Text { text: t, .. } => done(vec![ContentBlock::text(format!("{text}\n{t}"))]),
             },
             Then::None => unreachable!("上面已返回"),
         }
@@ -730,7 +785,7 @@ impl McpServer {
 
     /// 守护进程正在控制的设备的 UDID；读不到（没接设备、连不上）返回 None
     async fn controlled_udid(&self) -> Option<String> {
-        let Response::Text { text } = self.call(&Request::Daemon).await else { return None };
+        let Response::Text { text, .. } = self.call(&Request::Daemon).await else { return None };
         let v: Value = serde_json::from_str(&text).ok()?;
         v["device"]["udid"].as_str().filter(|u| !u.is_empty()).map(str::to_owned)
     }
@@ -752,26 +807,34 @@ impl McpServer {
             match step {
                 Step::Wait(d) => {
                     tokio::time::sleep(d).await;
-                    lines.push(format!("{n}. wait → 等了 {} 秒", d.as_secs_f64()));
+                    lines.push(ictl_l10n::trf!("{n}. wait → 等了 {} 秒", "{n}. wait → waited {} s", d.as_secs_f64()));
                 }
                 Step::Request { tool, req } => match self.call_on(&req, udid.as_deref()).await {
                     // 按名字没点到（toolkit 兼容：单独调用时是普通结果）在批量里要停下：后面的步骤都建立在它点中的前提上
-                    Response::Text { text } if tool == "iphone_tap_element" && tap_missed(&text) => {
+                    Response::Text { text, outcome } if tool == "iphone_tap_element" && tap_missed(&text, outcome) => {
                         lines.push(format!("{n}. {tool} → {text}"));
                         if n < total {
-                            lines.push(format!("第 {n} 步没点到,后面 {} 步没有执行", total - n));
+                            lines.push(ictl_l10n::trf!(
+                                "第 {n} 步没点到,后面 {} 步没有执行",
+                                "Step {n} tapped nothing, the remaining {} step(s) didn't run",
+                                total - n
+                            ));
                         }
                         return self.finish(lines.join("\n"), true, then, false).await;
                     }
-                    Response::Text { text } => {
+                    Response::Text { text, outcome } => {
+                        check = wants_alert_check(&req) && !protocol::alert_reported(&text, outcome);
                         lines.push(format!("{n}. {tool} → {text}"));
-                        check = wants_alert_check(&req);
                     }
                     Response::Image { caption, .. } => lines.push(format!("{n}. {tool} → {caption}")),
                     Response::Error { message } => {
-                        lines.push(format!("{n}. {tool} → 出错:{message}"));
+                        lines.push(ictl_l10n::trf!("{n}. {tool} → 出错:{message}", "{n}. {tool} → error: {message}"));
                         if n < total {
-                            lines.push(format!("第 {n} 步出错,后面 {} 步没有执行", total - n));
+                            lines.push(ictl_l10n::trf!(
+                                "第 {n} 步出错,后面 {} 步没有执行",
+                                "Step {n} failed, the remaining {} step(s) didn't run",
+                                total - n
+                            ));
                         }
                         return self.finish(lines.join("\n"), true, then, true).await;
                     }
@@ -988,11 +1051,16 @@ mod tests {
 
     #[test]
     fn missed_tap_texts_are_recognised() {
-        assert!(tap_missed("没找到包含 \"x\" 的元素,先用 iphone_list_elements 或截图看看屏幕"));
-        assert!(tap_missed("只匹配到 1 个:\nButton \"x\""));
-        assert!(!tap_missed("已点击 Button \"x\""));
-        assert!(tap_missed("被挡住:Button \"x\" 整个被「浮层」盖住,没有点"));
-        assert!(!tap_missed("已点击 Button \"x\";它的中心被「搜索」盖住,改点没被盖住的 (215,848)"));
+        // 旧版本守护进程：没有 outcome，只能认中文开头
+        assert!(tap_missed("没找到包含 \"x\" 的元素,先用 iphone_list_elements 或截图看看屏幕", None));
+        assert!(tap_missed("只匹配到 1 个:\nButton \"x\"", None));
+        assert!(!tap_missed("已点击 Button \"x\"", None));
+        assert!(tap_missed("被挡住:Button \"x\" 整个被「浮层」盖住,没有点", None));
+        assert!(!tap_missed("已点击 Button \"x\";它的中心被「搜索」盖住,改点没被盖住的 (215,848)", None));
+        // 新版本：看 outcome，与语言无关
+        let missed = protocol::Outcome { tapped_nothing: true, ..Default::default() };
+        assert!(tap_missed("Covered: Button \"x\" is completely covered", Some(missed)));
+        assert!(!tap_missed("Tapped Button \"Not found\"", Some(protocol::Outcome::default())));
     }
 
     #[test]

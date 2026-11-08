@@ -1952,6 +1952,7 @@ dependencies = [
  "anyhow",
  "base64 0.23.1",
  "ictl-device",
+ "ictl-l10n",
  "ictl-protocol",
  "ictl-sign",
  "ictl-unlock",
@@ -1969,6 +1970,7 @@ dependencies = [
 name = "ictl-device"
 version = "0.1.4"
 dependencies = [
+ "ictl-l10n",
  "idevice",
  "plist",
  "reqwest 0.13.5",
@@ -2002,6 +2004,7 @@ dependencies = [
 name = "ictl-protocol"
 version = "0.1.4"
 dependencies = [
+ "ictl-l10n",
  "libc",
  "serde",
  "serde_json",
@@ -2025,6 +2028,7 @@ dependencies = [
 name = "ictl-unlock"
 version = "0.1.4"
 dependencies = [
+ "ictl-l10n",
  "ictl-wda",
  "serde_json",
  "thiserror 2.0.21",
@@ -2039,6 +2043,7 @@ version = "0.1.4"
 dependencies = [
  "base64 0.23.1",
  "ictl-device",
+ "ictl-l10n",
  "idevice",
  "quick-xml",
  "regex",

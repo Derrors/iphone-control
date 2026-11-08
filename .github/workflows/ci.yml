@@ -91,7 +91,7 @@ jobs:
     needs: [rust]
     steps:
       - uses: actions/checkout@v7
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v4
       # 只验证镜像能构建，不推送
       - uses: docker/build-push-action@v6
         with:

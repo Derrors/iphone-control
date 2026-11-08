@@ -2015,6 +2015,7 @@ dependencies = [
 name = "ictl-sign"
 version = "0.1.4"
 dependencies = [
+ "ictl-l10n",
  "plist",
  "plume_core",
  "plume_store",
@@ -2257,6 +2258,7 @@ dependencies = [
  "clap",
  "ictl-daemon",
  "ictl-device",
+ "ictl-l10n",
  "ictl-mcp",
  "ictl-sign",
  "ictl-wda",

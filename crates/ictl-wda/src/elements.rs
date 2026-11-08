@@ -312,8 +312,25 @@ fn looks_like_identifier(s: &str) -> bool {
     s.len() >= 3 && s.is_ascii() && !s.contains(char::is_whitespace) && s.contains(['_', '-', '.', ':'])
 }
 
-fn is_scroll_bar(kind: &str, label: &str) -> bool {
-    kind == "Other" && (label.contains("滚动条") || label.to_lowercase().contains("scroll bar"))
+/// A scroll bar: an `Other` whose value is the scroll position as a percentage and that is a thin strip
+/// (about 30 points across). Its label depends on the system language ("垂直滚动条, 1页",
+/// "Vertikaler Rollbalken, 1 Seite", …), so the label is only an extra hint for Chinese and English
+fn is_scroll_bar(kind: &str, label: &str, value: &str, size: (f64, f64)) -> bool {
+    if kind != "Other" {
+        return false;
+    }
+    if label.contains("滚动条") || label.to_lowercase().contains("scroll bar") {
+        return true;
+    }
+    let thin = size.0.min(size.1);
+    is_percentage(value) && thin > 0.0 && thin <= 32.0
+}
+
+/// "0%", "73 %" (with a no-break space in German and French), "%40" (Turkish)
+fn is_percentage(v: &str) -> bool {
+    let v = v.trim();
+    let n = v.strip_suffix('%').or_else(|| v.strip_prefix('%')).map(str::trim);
+    n.is_some_and(|n| !n.is_empty() && n.chars().all(char::is_numeric))
 }
 
 /// 超长文字截断显示（筛选、按名字点仍按全文）
@@ -468,7 +485,7 @@ pub fn parse_tree(xml: &str, view: impl Into<View>) -> Tree {
         let (vx1, vy1) = (scr.x.max(0.0), scr.y.max(0.0));
         let visible = Rect { x: vx1, y: vy1, w: (scr.x + scr.w).min(sw) - vx1, h: (scr.y + scr.h).min(sh) - vy1 };
         let text = [&label, &name, &value].into_iter().find(|s| !s.is_empty()).cloned();
-        let scroll_bar = is_scroll_bar(&kind, &label);
+        let scroll_bar = is_scroll_bar(&kind, &label, &value, (raw.w, raw.h));
         if kind == "ActivityIndicator" && onscreen {
             tree.loading = true;
         }
@@ -740,6 +757,8 @@ mod tests {
     const HOME_WIDGETS_IOS27: &str = include_str!("../tests/fixtures/home-widgets-ios27.xml");
     const WALLET_IOS27: &str = include_str!("../tests/fixtures/settings-wallet-ios27.xml");
     const IPAD_TOUCHID: &str = include_str!("../tests/fixtures/ipad-touchid-landscape.xml");
+    /// iPhone 15, iOS 27.2, German: Clock → Stopwatch, with four scroll bars labelled "… Rollbalken"
+    const CLOCK_DE_IOS27: &str = include_str!("../tests/fixtures/clock-stopwatch-de-ios27.xml");
     const IPAD_PIN: &str = include_str!("../tests/fixtures/ipad-passcode-landscape.xml");
     const IPAD_LOCK_P: &str = include_str!("../tests/fixtures/ipad-lockscreen-portrait.xml");
     const IPAD_TOUCHID_P: &str = include_str!("../tests/fixtures/ipad-touchid-portrait.xml");
@@ -842,6 +861,30 @@ mod tests {
     fn scroll_bars_are_dropped() {
         assert!(!labels(&home()).iter().any(|l| l.contains("滚动条")));
         assert!(!labels(&parse(SETTINGS_IOS27, SCREEN)).iter().any(|l| l.contains("滚动条")));
+    }
+
+    /// Scroll bars are recognised by shape and value, not by their label, so they are dropped in any
+    /// system language (here German, with "0\u{a0}%" as the value)
+    #[test]
+    fn scroll_bars_are_dropped_in_any_language() {
+        let els = parse(CLOCK_DE_IOS27, ScreenSize { width: 393.0, height: 852.0 });
+        let l = labels(&els);
+        assert!(!l.iter().any(|l| l.contains("Rollbalken")), "{l:?}");
+        assert!(l.iter().any(|l| l == "Stoppuhr") && l.iter().any(|l| l == "Start"), "{l:?}");
+        assert!(els.iter().any(|e| e.kind == "PageIndicator"), "a percentage-free value stays");
+    }
+
+    #[test]
+    fn percentages_in_several_locales() {
+        for v in ["0%", "73%", "100 %", "0\u{a0}%", "0\u{202f}%", "%40"] {
+            assert!(is_percentage(v), "{v:?}");
+        }
+        for v in ["", "%", "1", "Seite 1 von 2", "50% off", "1,5 %"] {
+            assert!(!is_percentage(v), "{v:?}");
+        }
+        assert!(!is_scroll_bar("Other", "Akku", "80 %", (60.0, 120.0)), "too wide for a scroll bar");
+        assert!(!is_scroll_bar("Slider", "Lautstärke", "50 %", (300.0, 30.0)), "only Other");
+        assert!(is_scroll_bar("Other", "Barre de défilement verticale, 1 page", "0\u{202f}%", (30.0, 700.0)));
     }
 
     /// 真机：设置首页往上滑后，「钱包与Apple Pay」那一行（832～886）被底部悬浮搜索栏盖住：

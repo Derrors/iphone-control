@@ -1957,6 +1957,7 @@ dependencies = [
  "ictl-sign",
  "ictl-unlock",
  "ictl-wda",
+ "ictl-webinspector",
  "image",
  "reqwest 0.13.5",
  "serde",
@@ -1971,6 +1972,7 @@ name = "ictl-device"
 version = "0.1.4"
 dependencies = [
  "ictl-l10n",
+ "ictl-webinspector",
  "idevice",
  "plist",
  "reqwest 0.13.5",
@@ -2052,6 +2054,19 @@ dependencies = [
  "thiserror 2.0.21",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "ictl-webinspector"
+version = "0.1.4"
+dependencies = [
+ "idevice",
+ "plist",
+ "serde_json",
+ "thiserror 2.0.21",
+ "tokio",
+ "tracing",
+ "uuid",
 ]
 
 [[package]]

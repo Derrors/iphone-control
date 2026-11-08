@@ -1,0 +1,152 @@
+//! Web Inspector tools (part of the developer tools): list inspectable pages and WebViews, evaluate JavaScript.
+//!
+//! Each request opens its own Web Inspector connection and closes it again, and holds the daemon lock only to
+//! look up the device, so a slow page doesn't hold up taps and screenshots.
+
+use std::time::Duration;
+
+use ictl_webinspector::{App, Eval, Page};
+
+use crate::core::Daemon;
+
+/// How long applications get to report their pages
+const LISTING_WAIT: Duration = Duration::from_secs(3);
+const MAX_RESULT_CHARS: usize = 50_000;
+
+impl Daemon {
+    pub(crate) async fn web_targets(&self) -> Result<String, String> {
+        let mut w = self.open_web_inspector().await?;
+        let (apps, pages) = w.pages(LISTING_WAIT).await.map_err(|e| e.to_string())?;
+        if pages.is_empty() {
+            return Ok(ictl_l10n::tr!(
+                "没有可检查的页面。需要:设置 → Safari → 高级 → 网页检查器 打开;App 里的 WebView 要是调试构建或设了 isInspectable;页面所在的 App 在前台",
+                "No inspectable pages. Needed: Settings → Safari → Advanced → Web Inspector on; WebViews in apps must be debug builds or have isInspectable set; the app showing the page is in the foreground"
+            )
+            .into());
+        }
+        let mut out = ictl_l10n::tr!(
+            "可检查的页面(id 用于 iphone_web_eval 的 target):",
+            "Inspectable pages (pass the id as target to iphone_web_eval):"
+        )
+        .to_owned();
+        for p in &pages {
+            out.push('\n');
+            out += &target_line(p, &apps);
+        }
+        Ok(out)
+    }
+
+    pub(crate) async fn web_eval(&self, target: &str, expression: &str, timeout: Duration) -> Result<String, String> {
+        let mut w = self.open_web_inspector().await?;
+        let (apps, pages) = w.pages(LISTING_WAIT).await.map_err(|e| e.to_string())?;
+        let page = pick(&pages, target).map_err(|e| match e {
+            Pick::None => ictl_l10n::trf!(
+                "没有和「{target}」对应的页面,用 iphone_web_targets 查看",
+                "No page matches “{target}”; see iphone_web_targets"
+            ),
+            Pick::Several(c) => ictl_l10n::trf!(
+                "「{target}」对应多个页面,用 id 指定其中一个:\n{}",
+                "“{target}” matches several pages; pass one id:\n{}",
+                c.iter().map(|p| target_line(p, &apps)).collect::<Vec<_>>().join("\n")
+            ),
+        })?;
+        let r = w.evaluate(page, expression, timeout).await.map_err(|e| e.to_string())?;
+        Ok(match r {
+            Eval::Value(None) => "undefined".into(),
+            Eval::Value(Some(v)) => truncate(v.to_string()),
+            Eval::Thrown(d) => return Err(ictl_l10n::trf!("页面里抛出异常:{d}", "The page threw: {d}")),
+        })
+    }
+
+    async fn open_web_inspector(&self) -> Result<ictl_webinspector::WebInspector, String> {
+        let device =
+            self.inner.lock().await.device.clone().ok_or(ictl_l10n::tr!("手机未连接", "Phone not connected"))?;
+        device.web_inspector().await.map_err(|e| e.to_string())
+    }
+}
+
+/// `PID:812/1  WebPage  Safari (com.apple.mobilesafari)  Title — https://…`
+fn target_line(p: &Page, apps: &[App]) -> String {
+    let app = apps.iter().find(|a| a.id == p.app_id);
+    // a WebContent process stands in for the app that shows the page
+    let shown = app.and_then(|a| a.host.as_deref()).and_then(|h| apps.iter().find(|a| a.id == h)).or(app);
+    let who = shown.map(|a| format!("{} ({})", a.name, a.bundle_id)).unwrap_or_else(|| p.app_id.clone());
+    let busy =
+        if p.in_use { ictl_l10n::tr!(" [另一个调试器已连接]", " [another debugger is attached]") } else { "" };
+    format!("{}/{}  {}  {who}  {} — {}{busy}", p.app_id, p.id, p.kind, p.title, p.url)
+}
+
+enum Pick<'a> {
+    None,
+    Several(Vec<&'a Page>),
+}
+
+/// `target` is an id from the list (`PID:812/1`), or text in the URL or title; empty means the only page there is
+fn pick<'a>(pages: &'a [Page], target: &str) -> Result<&'a Page, Pick<'a>> {
+    if let Some(p) = pages.iter().find(|p| format!("{}/{}", p.app_id, p.id) == target) {
+        return Ok(p);
+    }
+    let t = target.to_lowercase();
+    let hits: Vec<&Page> =
+        pages.iter().filter(|p| p.url.to_lowercase().contains(&t) || p.title.to_lowercase().contains(&t)).collect();
+    match hits.len() {
+        0 => Err(Pick::None),
+        1 => Ok(hits[0]),
+        _ => Err(Pick::Several(hits)),
+    }
+}
+
+fn truncate(s: String) -> String {
+    let n = s.chars().count();
+    if n <= MAX_RESULT_CHARS {
+        return s;
+    }
+    let head: String = s.chars().take(MAX_RESULT_CHARS).collect();
+    head + &ictl_l10n::trf!(
+        "\n…(共 {n} 个字符,只返回前 {MAX_RESULT_CHARS} 个;在表达式里只取需要的部分)",
+        "\n… ({n} characters in total, only the first {MAX_RESULT_CHARS} returned; select just what you need in the expression)"
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn page(app: &str, id: u64, url: &str, title: &str) -> Page {
+        Page { app_id: app.into(), id, kind: "WebPage".into(), title: title.into(), url: url.into(), in_use: false }
+    }
+
+    #[test]
+    fn picks_by_id_or_text() {
+        let pages =
+            [page("PID:1", 1, "capacitor://localhost", "Taulit"), page("PID:2", 4, "https://example.com/a", "Example")];
+        assert_eq!(pick(&pages, "PID:2/4").ok().map(|p| p.id), Some(4));
+        assert_eq!(pick(&pages, "capacitor").ok().map(|p| p.id), Some(1));
+        assert_eq!(pick(&pages, "EXAMPLE").ok().map(|p| p.id), Some(4));
+        assert!(matches!(pick(&pages, ""), Err(Pick::Several(v)) if v.len() == 2));
+        assert!(matches!(pick(&pages, "nothing"), Err(Pick::None)));
+        assert_eq!(pick(&pages[..1], "").ok().map(|p| p.id), Some(1));
+    }
+
+    #[test]
+    fn webcontent_proxies_show_their_host_app() {
+        let apps = [
+            App {
+                id: "PID:640".into(),
+                name: "Taulit".into(),
+                bundle_id: "com.example.taulit".into(),
+                host: None,
+                active: true,
+            },
+            App {
+                id: "PID:812".into(),
+                name: "WebContent".into(),
+                bundle_id: "com.apple.WebKit.WebContent".into(),
+                host: Some("PID:640".into()),
+                active: true,
+            },
+        ];
+        let line = target_line(&page("PID:812", 1, "capacitor://localhost", "Home"), &apps);
+        assert_eq!(line, "PID:812/1  WebPage  Taulit (com.example.taulit)  Home — capacitor://localhost");
+    }
+}

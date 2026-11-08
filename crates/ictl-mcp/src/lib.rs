@@ -119,8 +119,14 @@ fn acting(title: &str, destructive: bool, idempotent: bool) -> ToolAnnotations {
 }
 
 /// Names of the developer tools, listed only with [`dev_tools_enabled`]
-pub const DEV_TOOLS: [&str; 4] =
-    ["iphone_app_logs", "iphone_crash_reports", "iphone_install_app", "iphone_uninstall_app"];
+pub const DEV_TOOLS: [&str; 6] = [
+    "iphone_app_logs",
+    "iphone_crash_reports",
+    "iphone_install_app",
+    "iphone_uninstall_app",
+    "iphone_web_targets",
+    "iphone_web_eval",
+];
 
 /// `IPHONE_CONTROL_DEV_TOOLS=1` (or true/yes/on) adds the developer tools; off by default, so agents that don't
 /// need them don't pay for their descriptions
@@ -207,6 +213,35 @@ fn dev_tools() -> Vec<Tool> {
                 &["app"],
             ),
             acting(ictl_l10n::tr!("卸载 App", "Uninstall app"), true, true),
+        ),
+        t(
+            "iphone_web_targets",
+            ictl_l10n::tr!(
+                "列出可检查的网页和 WebView(Web Inspector):Safari 标签页、App 里可检查的 WebView(Capacitor、Cordova、React Native 等的调试构建)。每行:id、类型、所属 App、标题和网址。\n\n\
+何时用:页面内容在网页里时,用 iphone_web_eval 直接读 DOM,比截图和元素树快、省 token、也更准。需要手机上 设置 → Safari → 高级 → 网页检查器 打开。只读。",
+                "List inspectable web pages and WebViews (Web Inspector): Safari tabs and inspectable WebViews in apps (debug builds of Capacitor, Cordova, React Native and similar). One line each: id, type, app, title and URL.\n\nWhen to use: when the content is a web page, read the DOM with iphone_web_eval instead; that is faster, cheaper in tokens and more accurate than screenshots or the element tree. Needs Settings → Safari → Advanced → Web Inspector on. Read-only."
+            ),
+            schema(json!({}), &[]),
+            looking(ictl_l10n::tr!("列出网页", "List web pages")),
+        ),
+        t(
+            "iphone_web_eval",
+            ictl_l10n::tr!(
+                "在网页或 WebView 里执行 JavaScript,返回结果的 JSON(Promise 会等它完成)。例如 document.title、\
+[...document.querySelectorAll('button')].map(b => b.innerText)、document.querySelector('#email').value = 'a@b.c'。\n\n\
+何时用:读网页内容、表单状态、控制台变量,或直接操作页面。只取需要的部分,结果超过 5 万字会被截断。\
+脚本能改页面(提交表单、发请求),和点击一样要小心。",
+                "Run JavaScript in a web page or WebView and return the result as JSON (a promise is awaited). For example document.title, [...document.querySelectorAll('button')].map(b => b.innerText), document.querySelector('#email').value = 'a@b.c'.\n\nWhen to use: to read page content, form state or JavaScript variables, or to act on the page directly. Select just what you need; results over 50,000 characters are cut. A script can change the page (submit forms, send requests), so take the same care as with taps."
+            ),
+            schema(
+                json!({
+                    "expression": {"type": "string", "description": ictl_l10n::tr!("要执行的 JavaScript 表达式", "the JavaScript expression to run")},
+                    "target": {"type": "string", "default": "", "description": ictl_l10n::tr!("iphone_web_targets 列出的 id,或网址、标题里的一段文字;只有一个页面时可以不填", "an id from iphone_web_targets, or text in the page's URL or title; may be left out when there is only one page")},
+                    "timeout": {"type": "number", "default": 10, "description": ictl_l10n::tr!("最多等多少秒,最多 60", "maximum seconds to wait, at most 60")}
+                }),
+                &["expression"],
+            ),
+            acting(ictl_l10n::tr!("执行 JavaScript", "Run JavaScript"), true, false),
         ),
     ]
 }
@@ -605,6 +640,20 @@ pub fn to_request(name: &str, args: &Map<String, Value>) -> Result<Request, Stri
         "iphone_crash_reports" => Request::CrashReports { filter: a.s_or("filter", "")?, name: a.s_or("name", "")? },
         "iphone_install_app" => Request::InstallApp { path: a.s("path")? },
         "iphone_uninstall_app" => Request::UninstallApp { app: a.s("app")? },
+        "iphone_web_targets" => Request::WebTargets,
+        "iphone_web_eval" => {
+            let secs = a.f_or("timeout", 10.0)?;
+            if !(0.0..=60.0).contains(&secs) {
+                return Err(
+                    ictl_l10n::tr!("timeout 要在 0 到 60 秒之间", "timeout must be between 0 and 60 seconds").into()
+                );
+            }
+            Request::WebEval {
+                target: a.s_or("target", "")?,
+                expression: a.s("expression")?,
+                timeout_ms: (secs * 1000.0) as u64,
+            }
+        }
         "iphone_wait_for" => {
             let secs = a.f_or("timeout", 5.0)?;
             if !(0.0..=30.0).contains(&secs) {

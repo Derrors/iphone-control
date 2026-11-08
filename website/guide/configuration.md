@@ -13,7 +13,7 @@
 |---|---|---|
 | `HTTP_PROXY` / `HTTPS_PROXY` | 直连 | 访问苹果、anisette、开发者镜像、推送通知用的代理 |
 | `IPHONE_CONTROL_LANG` | `zh` | 界面语言：`zh` 或 `en`。工具说明和结果、命令行输出、日志、通知都按它。MCP 和命令行各自按自己的设置请求，守护进程按请求的语言回答；日志和通知按守护进程自己的设置。从源码运行时要在 MCP 配置里也设上（`iphone-control mcp-config` 会带上） |
-| `IPHONE_CONTROL_DEV_TOOLS` | 关 | 设为 `1` 时 MCP 服务多出[开发者工具](./tools)：日志、崩溃报告、安装和卸载 App。从源码运行时要写进 MCP 客户端的配置（设了时 `iphone-control mcp-config` 会带上） |
+| `IPHONE_CONTROL_DEV_TOOLS` | 关 | 设为 `1` 时 MCP 服务多出[开发者工具](./tools)：日志、崩溃报告、安装和卸载 App、Web Inspector（在网页和 WebView 里执行 JavaScript）。从源码运行时要写进 MCP 客户端的配置（设了时 `iphone-control mcp-config` 会带上） |
 | `IPHONE_UDID` | 自动选 | 固定控制哪台设备。不设时自动选：正在控制的那台一直用到它断开；运行中可以用 `select` 命令或 `iphone_select_device` 工具切换。设了就不能切换 |
 | `RESIGN_MIN_DAYS` | `2` | 描述文件剩余不到几天时重签 |
 | `RESIGN_CHECK_HOURS` | `6` | 每隔几小时检查一次；手机重新连上或切换设备后 1 分钟内也查一次 |

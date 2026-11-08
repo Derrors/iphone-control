@@ -1,6 +1,6 @@
 # MCP tools
 
-The MCP server (`iphone-control mcp`) exposes 17 tools (21 with the [developer tools](#developer-tools-opt-in)). The tool descriptions the agent sees, and every result text, are in Simplified Chinese by default, or in English with `IPHONE_CONTROL_LANG=en` (see [configuration](https://derrors.github.io/iphone-control/en/guide/configuration)); this page is the English reference. The definitions live in [`crates/ictl-mcp/src/lib.rs`](../crates/ictl-mcp/src/lib.rs).
+The MCP server (`iphone-control mcp`) exposes 17 tools (23 with the [developer tools](#developer-tools-opt-in)). The tool descriptions the agent sees, and every result text, are in Simplified Chinese by default, or in English with `IPHONE_CONTROL_LANG=en` (see [configuration](https://derrors.github.io/iphone-control/en/guide/configuration)); this page is the English reference. The definitions live in [`crates/ictl-mcp/src/lib.rs`](../crates/ictl-mcp/src/lib.rs).
 
 Coordinates are in **points**, the same unit as the pixels of a full-screen `iphone_screenshot` (for example 430×932 on an iPhone 15 Pro Max), so an agent can read a position off a screenshot and tap it directly. Coordinates follow the current screen orientation: after a rotation the same spot has different coordinates, so take a new screenshot. Screen sizes differ per device (an iPad mini 5 is 768×1024 in portrait); don't assume 430×932.
 
@@ -39,7 +39,7 @@ Only one device is controlled at a time; every other tool acts on it. With one d
 
 ## Developer tools (opt-in)
 
-With `IPHONE_CONTROL_DEV_TOOLS=1` in the MCP server's environment, four more tools are listed. They are off by default, so agents that don't need them don't pay for their descriptions.
+With `IPHONE_CONTROL_DEV_TOOLS=1` in the MCP server's environment, six more tools are listed. They are off by default, so agents that don't need them don't pay for their descriptions.
 
 | Tool | Parameters | Notes |
 |---|---|---|
@@ -47,6 +47,8 @@ With `IPHONE_CONTROL_DEV_TOOLS=1` in the MCP server's environment, four more too
 | `iphone_crash_reports` | `filter`, `name` | Lists crash reports, newest first (at most 50); with `name`, returns that report (`.ips`, cut at 40,000 characters). Read-only |
 | `iphone_install_app` | `path` | Installs a signed `.ipa` or `.app` from a path on the machine that runs the daemon (inside the container for a container deployment). Destructive: it replaces an installed copy of the same app |
 | `iphone_uninstall_app` | `app` | Removes an app and its data. Refuses to remove the WebDriverAgent runner. Destructive |
+| `iphone_web_targets` | — | Inspectable web pages and WebViews over the Web Inspector service: Safari tabs and inspectable WebViews in apps (debug builds of Capacitor, Cordova, React Native…). One line each: id, type, app, title, URL. Only apps in the foreground answer; needs Settings → Safari → Advanced → Web Inspector. Read-only |
+| `iphone_web_eval` | `expression`, `target`, `timeout` (10 s, at most 60) | Runs JavaScript in a page and returns the result as JSON; a promise is awaited, a DOM node comes back as its description (`"<body>"`). `target` is an id from `iphone_web_targets`, or text in the URL or title; it can be left out when there is one page. Not read-only: a script can change the page |
 
 ## Auto-unlock and "read-only" tools
 

@@ -1,0 +1,19 @@
+[package]
+name = "ictl-webinspector"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Client for the iOS Web Inspector service (com.apple.webinspector): list inspectable pages and WebViews, evaluate JavaScript"
+
+[dependencies]
+idevice.workspace = true
+tokio.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+plist.workspace = true
+uuid.workspace = true
+serde_json.workspace = true

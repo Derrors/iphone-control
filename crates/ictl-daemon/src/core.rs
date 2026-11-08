@@ -34,6 +34,8 @@ pub const STALE: Duration = Duration::from_secs(30);
 pub const MAX_GESTURE_SECONDS: f64 = 10.0;
 /// 等界面稳定、等元素出现的上限（毫秒）：持着设备锁等，不能太久
 pub const MAX_WAIT_MS: u64 = 30_000;
+/// Longest a JavaScript evaluation in a page may take (`WebEval`)
+pub const MAX_WEB_EVAL_MS: u64 = 60_000;
 
 /// 持久化到 `state.json` 的状态（不含秘密）
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -540,6 +542,22 @@ impl Daemon {
             Request::Resign { force } => {
                 return self.resign_now(force).await.map(Response::text).unwrap_or_else(Response::error);
             }
+            // Web Inspector requests talk to the page, not to WDA; they only take the lock to find the device
+            Request::WebTargets => return self.web_targets().await.map(Response::text).unwrap_or_else(Response::error),
+            Request::WebEval { target, expression, timeout_ms } => {
+                if expression.trim().is_empty() || timeout_ms > MAX_WEB_EVAL_MS {
+                    return Response::error(ictl_l10n::trf!(
+                        "expression 不能为空,timeout 最多 {} 秒",
+                        "expression can't be empty, and timeout can be at most {} seconds",
+                        MAX_WEB_EVAL_MS / 1000
+                    ));
+                }
+                return self
+                    .web_eval(&target, &expression, Duration::from_millis(timeout_ms))
+                    .await
+                    .map(Response::text)
+                    .unwrap_or_else(Response::error);
+            }
             // an install can take minutes; it doesn't hold the lock meanwhile
             Request::InstallApp { path } => {
                 return self.install_app(&path).await.map(Response::text).unwrap_or_else(Response::error);
@@ -634,7 +652,11 @@ impl Daemon {
             }
             Request::CrashReports { filter, name } => self.crash_reports(g, &filter, &name).await,
             Request::UninstallApp { app } => self.uninstall_app(g, &app).await,
-            Request::Daemon | Request::Resign { .. } | Request::InstallApp { .. } => unreachable!("上面已处理"),
+            Request::Daemon
+            | Request::Resign { .. }
+            | Request::InstallApp { .. }
+            | Request::WebTargets
+            | Request::WebEval { .. } => unreachable!("上面已处理"),
         };
         if invalidates {
             g.elements_cache = None;

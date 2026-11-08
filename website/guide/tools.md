@@ -41,7 +41,7 @@ MCP 服务提供 17 个工具。坐标单位是**点**，和整屏截图的像�
 
 ## 开发者工具（显式开启）
 
-给 MCP 服务设 `IPHONE_CONTROL_DEV_TOOLS=1` 后多出四个工具。默认关闭，用不到的 agent 不必多读这些工具说明。
+给 MCP 服务设 `IPHONE_CONTROL_DEV_TOOLS=1` 后多出六个工具。默认关闭，用不到的 agent 不必多读这些工具说明。
 
 | 工具 | 作用 |
 |---|---|
@@ -49,6 +49,8 @@ MCP 服务提供 17 个工具。坐标单位是**点**，和整屏截图的像�
 | `iphone_crash_reports` | 列出崩溃报告，或读取其中一份 |
 | `iphone_install_app` | 安装签好名的 `.ipa` 或 `.app`（路径在运行守护进程的机器上） |
 | `iphone_uninstall_app` | 卸载 App 及其数据；不会卸载 WebDriverAgent |
+| `iphone_web_targets` | 列出可检查的网页和 WebView（Safari 标签页、混合 App 的调试构建）；页面所在的 App 要在前台 |
+| `iphone_web_eval` | 在页面里执行 JavaScript，以 JSON 返回结果：读网页内容比截图快、省 token、也更准 |
 
 ## 操作后顺带看界面：`then`
 

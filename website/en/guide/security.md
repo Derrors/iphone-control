@@ -15,6 +15,7 @@ iphone-control is a remote control for a phone: whoever can reach it can do anyt
 ## Built-in protections
 
 - **No network ports.** WDA is reached through usbmuxd. `wda-bridge` is an explicit opt-in that binds 127.0.0.1 only — but WDA has no authentication, so every local user can use it; stop it when done.
+- **The viewer is opt-in too.** `iphone-control viewer` binds 127.0.0.1 only and checks the `Host` header like `wda-bridge`. Actions also need an `Origin` of the viewer page itself and a JSON body, so other web pages in your browser can't act through it. It has no login, though: every local user can watch the screen and control the phone through the port, so stop it when done.
 - **Not privileged**: the container only gets USB character devices.
 - **Auto-unlock is off by default** and disables itself after one wrong attempt.
 - Exact dependency versions, base images pinned by digest, and the WebDriverAgent download is sha256-checked.

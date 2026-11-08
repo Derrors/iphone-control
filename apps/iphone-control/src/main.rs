@@ -14,6 +14,7 @@ use ictl_daemon::protocol::{self, Request, Response};
 
 #[cfg(feature = "debug-cmds")]
 mod debug;
+mod viewer;
 
 #[derive(Parser)]
 #[command(name = "iphone-control", version, about = ictl_l10n::tr!("在 Linux 或 macOS 上控制 iPhone，并提供 MCP 工具", "Control an iPhone from Linux or macOS, with MCP tools"))]
@@ -75,6 +76,11 @@ enum Command {
     #[command(about = ictl_l10n::tr!("显式把 WDA 桥接到 127.0.0.1 供外部工具使用（默认不监听任何端口）", "Explicitly expose WDA on 127.0.0.1 for other tools (by default no port is opened)"))]
     WdaBridge {
         #[arg(long, default_value_t = 8100)]
+        port: u16,
+    },
+    #[command(about = ictl_l10n::tr!("在浏览器里看实时画面并操作手机：只开在 127.0.0.1，点击、滑动、输入和按键都经守护进程（默认不监听任何端口）", "Watch and control the phone live in a browser: serves 127.0.0.1 only, taps, swipes, typing and buttons go through the daemon (by default no port is opened)"))]
+    Viewer {
+        #[arg(long, default_value_t = 8200)]
         port: u16,
     },
     #[command(about = ictl_l10n::tr!("真机诊断（开发用，要用 `--features debug-cmds` 编译）。`wda`/`e2e`/`hid` 会和守护进程抢 XCTest、HID，先停掉守护进程", "Real-device diagnostics (for development, build with `--features debug-cmds`). `wda`/`e2e`/`hid` compete with the daemon for XCTest and HID, so stop the daemon first"))]
@@ -145,6 +151,7 @@ async fn main() -> anyhow::Result<()> {
         Command::Devices => print_text(&cli.socket, Request::ListDevices).await,
         Command::Select { device } => print_text(&cli.socket, Request::SelectDevice { device }).await,
         Command::WdaBridge { port } => wda_bridge(&cli.socket, port).await,
+        Command::Viewer { port } => viewer::run(&cli.socket, port).await,
         #[cfg(feature = "debug-cmds")]
         Command::Debug(args) => debug::run(env_nonempty("IPHONE_UDID").as_deref(), args).await,
         Command::NotifyTest { event } => notify_test(&cli.data_dir, event.as_deref()).await,

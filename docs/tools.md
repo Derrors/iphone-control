@@ -1,6 +1,6 @@
 # MCP tools
 
-The MCP server (`iphone-control mcp`) exposes 17 tools. The tool descriptions the agent sees, and every result text, are in Simplified Chinese by default, or in English with `IPHONE_CONTROL_LANG=en` (see [configuration](https://derrors.github.io/iphone-control/en/guide/configuration)); this page is the English reference. The definitions live in [`crates/ictl-mcp/src/lib.rs`](../crates/ictl-mcp/src/lib.rs).
+The MCP server (`iphone-control mcp`) exposes 17 tools (21 with the [developer tools](#developer-tools-opt-in)). The tool descriptions the agent sees, and every result text, are in Simplified Chinese by default, or in English with `IPHONE_CONTROL_LANG=en` (see [configuration](https://derrors.github.io/iphone-control/en/guide/configuration)); this page is the English reference. The definitions live in [`crates/ictl-mcp/src/lib.rs`](../crates/ictl-mcp/src/lib.rs).
 
 Coordinates are in **points**, the same unit as the pixels of a full-screen `iphone_screenshot` (for example 430×932 on an iPhone 15 Pro Max), so an agent can read a position off a screenshot and tap it directly. Coordinates follow the current screen orientation: after a rotation the same spot has different coordinates, so take a new screenshot. Screen sizes differ per device (an iPad mini 5 is 768×1024 in portrait); don't assume 430×932.
 
@@ -36,6 +36,17 @@ Only one device is controlled at a time; every other tool acts on it. With one d
 |---|---|---|
 | `iphone_list_devices` | — | Every iPhone/iPad on USB: name, model, iOS version, UDID; marks the one being controlled and whether it has an auto-unlock passcode |
 | `iphone_select_device` | `device`: UDID, device name, or `auto` | Switches to that device and keeps controlling it, also after a restart. A unique substring of the name works too. `auto` goes back to automatic choice: the controlled device is kept until it disconnects. WDA has to start on the new device (10–60 s). Refused when `IPHONE_UDID` is set |
+
+## Developer tools (opt-in)
+
+With `IPHONE_CONTROL_DEV_TOOLS=1` in the MCP server's environment, four more tools are listed. They are off by default, so agents that don't need them don't pay for their descriptions.
+
+| Tool | Parameters | Notes |
+|---|---|---|
+| `iphone_app_logs` | `process`, `grep`, `since` (60 s), `limit` (100), `errors_only` | The phone's unified log (os_log), one line per entry: seconds ago, `process[pid]`, level, subsystem, message. `process` is an app (name or bundle ID) or a process name. The first call starts recording, so earlier lines aren't available: call it once, reproduce the problem, call it again. Recording keeps the last 20,000 lines and stops after 15 minutes without a call. Read-only |
+| `iphone_crash_reports` | `filter`, `name` | Lists crash reports, newest first (at most 50); with `name`, returns that report (`.ips`, cut at 40,000 characters). Read-only |
+| `iphone_install_app` | `path` | Installs a signed `.ipa` or `.app` from a path on the machine that runs the daemon (inside the container for a container deployment). Destructive: it replaces an installed copy of the same app |
+| `iphone_uninstall_app` | `app` | Removes an app and its data. Refuses to remove the WebDriverAgent runner. Destructive |
 
 ## Auto-unlock and "read-only" tools
 

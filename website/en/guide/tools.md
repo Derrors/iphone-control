@@ -39,6 +39,17 @@ Only one device is controlled at a time; every other tool acts on it. With one d
 
 Details: [Several devices](./multi-device).
 
+## Developer tools (opt-in)
+
+Set `IPHONE_CONTROL_DEV_TOOLS=1` for the MCP server to get four more tools. They are off by default, so agents that don't need them don't pay for their descriptions.
+
+| Tool | What it does |
+|---|---|
+| `iphone_app_logs` | Read the phone's log, filtered by app or process, text and time. Recording starts with the first call: call it, reproduce the problem, call it again |
+| `iphone_crash_reports` | List crash reports, or read one |
+| `iphone_install_app` | Install a signed `.ipa` or `.app` (a path on the machine that runs the daemon) |
+| `iphone_uninstall_app` | Remove an app and its data; never the WebDriverAgent runner |
+
 ## See the screen after an action: `then`
 
 The tools under *Acting* accept `then`: it waits for the screen to settle and returns it, saving a round trip.

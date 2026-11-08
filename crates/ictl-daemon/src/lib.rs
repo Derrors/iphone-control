@@ -8,6 +8,7 @@
 pub mod config;
 pub mod core;
 pub mod devices;
+mod devtools;
 mod doctor;
 pub mod eventlog;
 pub mod imaging;

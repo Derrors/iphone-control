@@ -223,8 +223,9 @@ fn mcp_config(container: Option<String>, socket: &Path) -> anyhow::Result<String
             let exe = std::env::current_exe()
                 .context(ictl_l10n::tr!("找不到本程序的路径", "can't find the path of this program"))?;
             let lang = lang("-e");
+            let dev = if ictl_mcp::dev_tools_enabled() { "-e IPHONE_CONTROL_DEV_TOOLS=1 " } else { "" };
             format!(
-                "claude mcp add iphone -s user {lang}-- {} --socket {} mcp",
+                "claude mcp add iphone -s user {lang}{dev}-- {} --socket {} mcp",
                 shell_quote(&exe.to_string_lossy()),
                 shell_quote(&socket.to_string_lossy())
             )

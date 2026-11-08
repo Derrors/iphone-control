@@ -39,6 +39,17 @@ MCP 服务提供 17 个工具。坐标单位是**点**，和整屏截图的像�
 
 详见[多台设备](./multi-device)。
 
+## 开发者工具（显式开启）
+
+给 MCP 服务设 `IPHONE_CONTROL_DEV_TOOLS=1` 后多出四个工具。默认关闭，用不到的 agent 不必多读这些工具说明。
+
+| 工具 | 作用 |
+|---|---|
+| `iphone_app_logs` | 读手机的系统日志，可按 App 或进程、文字、时间筛选。第一次调用才开始记录：先调一次，复现问题，再调一次 |
+| `iphone_crash_reports` | 列出崩溃报告，或读取其中一份 |
+| `iphone_install_app` | 安装签好名的 `.ipa` 或 `.app`（路径在运行守护进程的机器上） |
+| `iphone_uninstall_app` | 卸载 App 及其数据；不会卸载 WebDriverAgent |
+
 ## 操作后顺带看界面：`then`
 
 上面「操作」一节的工具都可以带 `then`，等界面稳定后顺带返回操作后的样子，省一次往返：

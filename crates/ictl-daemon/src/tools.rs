@@ -726,7 +726,7 @@ impl Daemon {
         Ok(a)
     }
 
-    async fn resolve_app(&self, g: &mut Inner, app: &str) -> Result<String, String> {
+    pub(crate) async fn resolve_app(&self, g: &mut Inner, app: &str) -> Result<String, String> {
         if apps::looks_like_bundle_id(app) {
             return Ok(app.to_owned());
         }

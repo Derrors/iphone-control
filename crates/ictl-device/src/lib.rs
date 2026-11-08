@@ -25,10 +25,12 @@ use idevice::{
     amfi::AmfiClient,
     core_device::{ImageFormat, ScreenCaptureServiceClient},
     core_device_proxy::CoreDeviceProxy,
+    crashreportcopymobile::CrashReportCopyMobileClient,
     cryptexd::{Cryptex1Assets, install_ddi, installed_ddi},
     installation_proxy::InstallationProxyClient,
     lockdown::LockdownClient,
     misagent::MisagentClient,
+    os_trace_relay::{OsTraceRelayClient, OsTraceRelayReceiver},
     provider::{IdeviceProvider, UsbmuxdProvider},
     rsd::RsdHandshake,
     tcp::handle::AdapterHandle,
@@ -37,6 +39,50 @@ use idevice::{
 
 pub use apps::AppInfo;
 pub use hid::{Button, HidSession};
+
+/// A running log stream from the phone; see [`Device::log_stream`]
+pub struct LogStream(OsTraceRelayReceiver);
+
+/// One line of the phone's unified log
+#[derive(Debug, Clone)]
+pub struct LogEntry {
+    pub pid: u32,
+    /// Path of the process' executable
+    pub process: String,
+    pub level: LogLevel,
+    pub subsystem: Option<String>,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LogLevel {
+    Debug,
+    Info,
+    Notice,
+    Error,
+    Fault,
+}
+
+impl LogStream {
+    /// The next entry; an error means the stream is gone (phone unplugged, service stopped)
+    pub async fn next(&mut self) -> Result<LogEntry> {
+        use idevice::os_trace_relay::LogLevel as L;
+        let e = self.0.next().await?;
+        Ok(LogEntry {
+            pid: e.pid,
+            process: e.filename,
+            level: match e.level {
+                L::Debug => LogLevel::Debug,
+                L::Info => LogLevel::Info,
+                L::Notice => LogLevel::Notice,
+                L::Error => LogLevel::Error,
+                L::Fault => LogLevel::Fault,
+            },
+            subsystem: e.label.map(|l| format!("{}:{}", l.subsystem, l.category)),
+            message: e.message,
+        })
+    }
+}
 
 /// 连接标签，出现在设备日志里
 pub const LABEL: &str = "iphone-control";
@@ -411,6 +457,45 @@ impl Device {
             Ok(())
         })
         .await
+    }
+
+    /// Removes an app by bundle ID (installation_proxy)
+    pub async fn uninstall(&self, bundle_id: &str) -> Result<()> {
+        limit(ictl_l10n::tr!("卸载", "uninstall"), Duration::from_secs(120), async {
+            let mut proxy = InstallationProxyClient::connect(&*self.provider).await?;
+            proxy.uninstall(bundle_id, None).await?;
+            Ok(())
+        })
+        .await
+    }
+
+    /// Names of the crash reports in the top directory, after asking the phone to move new ones there
+    pub async fn crash_reports(&self) -> Result<Vec<String>> {
+        limit(ictl_l10n::tr!("列出崩溃报告", "list crash reports"), Duration::from_secs(30), async {
+            // without the flush, reports from the last minutes may not be visible yet; it is only a hint
+            let _ = idevice::crashreportcopymobile::flush_reports(&*self.provider).await;
+            let mut c = CrashReportCopyMobileClient::connect(&*self.provider).await?;
+            Ok(c.ls(None).await?)
+        })
+        .await
+    }
+
+    /// One crash report's content
+    pub async fn crash_report(&self, name: &str) -> Result<Vec<u8>> {
+        limit(ictl_l10n::tr!("读取崩溃报告", "read crash report"), Duration::from_secs(30), async {
+            let mut c = CrashReportCopyMobileClient::connect(&*self.provider).await?;
+            Ok(c.pull(name).await?)
+        })
+        .await
+    }
+
+    /// Starts the phone's unified log stream (os_trace_relay), every process
+    pub async fn log_stream(&self) -> Result<LogStream> {
+        let inner = limit(ictl_l10n::tr!("打开日志流", "open the log stream"), QUERY, async {
+            Ok(OsTraceRelayClient::connect(&*self.provider).await?.start_trace(None).await?)
+        })
+        .await?;
+        Ok(LogStream(inner))
     }
 }
 

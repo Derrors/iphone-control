@@ -242,6 +242,8 @@ pub(crate) struct Inner {
     pub next_resign: Instant,
     pub next_session_check: Instant,
     pub apps: HashMap<bool, Vec<AppInfo>>,
+    /// Log capture for `AppLogs` (developer tools), started by the first request
+    pub log_capture: Option<crate::devtools::Capture>,
 }
 
 pub struct Daemon {
@@ -347,6 +349,7 @@ impl Daemon {
             next_resign: now + Duration::from_secs(60),
             next_session_check: now + Duration::from_secs(90),
             apps: HashMap::new(),
+            log_capture: None,
         };
         let first = Snapshot {
             state: DeviceState::Absent,
@@ -537,6 +540,10 @@ impl Daemon {
             Request::Resign { force } => {
                 return self.resign_now(force).await.map(Response::text).unwrap_or_else(Response::error);
             }
+            // an install can take minutes; it doesn't hold the lock meanwhile
+            Request::InstallApp { path } => {
+                return self.install_app(&path).await.map(Response::text).unwrap_or_else(Response::error);
+            }
             _ => {}
         }
         if let Err(e) = check_request(&req) {
@@ -622,7 +629,12 @@ impl Daemon {
             }
             Request::ListDevices => Ok(self.list_devices_text(g)),
             Request::SelectDevice { device } => self.select_device(g, &device).await,
-            Request::Daemon | Request::Resign { .. } => unreachable!("上面已处理"),
+            Request::AppLogs { process, grep, since_secs, limit, errors_only } => {
+                self.app_logs(g, &process, &grep, Duration::from_secs(since_secs), limit, errors_only).await
+            }
+            Request::CrashReports { filter, name } => self.crash_reports(g, &filter, &name).await,
+            Request::UninstallApp { app } => self.uninstall_app(g, &app).await,
+            Request::Daemon | Request::Resign { .. } | Request::InstallApp { .. } => unreachable!("上面已处理"),
         };
         if invalidates {
             g.elements_cache = None;
@@ -657,6 +669,13 @@ fn check_request(req: &Request) -> Result<(), String> {
         }
         Request::WaitFor { text, .. } if text.is_empty() => {
             return Err(ictl_l10n::tr!("text 不能为空", "text can't be empty").into());
+        }
+        Request::AppLogs { since_secs, limit, .. } if *since_secs > 3600 || *limit == 0 || *limit > 1000 => {
+            return Err(ictl_l10n::tr!(
+                "since 最多 3600 秒,limit 要在 1 到 1000 之间",
+                "since can be at most 3600 seconds, and limit must be between 1 and 1000"
+            )
+            .into());
         }
         _ => {}
     }

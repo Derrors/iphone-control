@@ -698,7 +698,7 @@ impl Daemon {
                 match w.lock().await {
                     Ok(()) => true,
                     Err(e) => {
-                        tracing::info!("WDA 锁屏报错：{e}");
+                        tracing::info!("{}", ictl_l10n::trf!("WDA 锁屏报错：{e}", "WDA lock returned an error: {e}"));
                         w.wda_reports_locked().await.unwrap_or(false)
                     }
                 }
@@ -835,7 +835,13 @@ async fn press_home(w: &mut WdaClient<DeviceTransport>) -> Result<String, WdaErr
             Ok(()) => {}
             Err(e @ WdaError::Unavailable(_)) => return Err(e),
             Err(e) if via_hid => {
-                tracing::info!("经 IOHID 按 Home 报错,改用 XCTest：{e}");
+                tracing::info!(
+                    "{}",
+                    ictl_l10n::trf!(
+                        "经 IOHID 按 Home 报错,改用 XCTest：{e}",
+                        "Pressing Home via IOHID failed, using XCTest: {e}"
+                    )
+                );
                 continue;
             }
             Err(e) => return Err(e),
@@ -852,7 +858,13 @@ async fn press_home(w: &mut WdaClient<DeviceTransport>) -> Result<String, WdaErr
             tokio::time::sleep(Duration::from_millis(150)).await;
         }
         if via_hid {
-            tracing::info!("经 IOHID 按 Home 后前台还是 {app},改用 XCTest 再按一次");
+            tracing::info!(
+                "{}",
+                ictl_l10n::trf!(
+                    "经 IOHID 按 Home 后前台还是 {app},改用 XCTest 再按一次",
+                    "After pressing Home via IOHID the foreground is still {app}, pressing again via XCTest"
+                )
+            );
         }
     }
     Ok(ictl_l10n::trf!(
@@ -865,7 +877,10 @@ async fn press_home(w: &mut WdaClient<DeviceTransport>) -> Result<String, WdaErr
 /// WDA 的 `/wda/lock` 在 iOS 27 以下用 XCTest 的 `pressLockButton`，iPhone 12 mini（iOS 26.4.1）上锁不了屏
 async fn lock_by_power_hid(w: &mut WdaClient<DeviceTransport>) -> bool {
     if let Err(e) = w.press_power_hid().await {
-        tracing::info!("经 IOHID 按电源键报错：{e}");
+        tracing::info!(
+            "{}",
+            ictl_l10n::trf!("经 IOHID 按电源键报错：{e}", "Pressing the power key via IOHID failed: {e}")
+        );
         return false;
     }
     let deadline = Instant::now() + LOCK_WAIT;
@@ -874,7 +889,14 @@ async fn lock_by_power_hid(w: &mut WdaClient<DeviceTransport>) -> bool {
             return true;
         }
         if Instant::now() >= deadline {
-            tracing::info!("经 IOHID 按电源键后 {} 秒还没锁屏,改用 WDA 的锁屏", LOCK_WAIT.as_secs());
+            tracing::info!(
+                "{}",
+                ictl_l10n::trf!(
+                    "经 IOHID 按电源键后 {} 秒还没锁屏,改用 WDA 的锁屏",
+                    "Still not locked {} s after pressing the power key via IOHID, using WDA's lock",
+                    LOCK_WAIT.as_secs()
+                )
+            );
             return false;
         }
         tokio::time::sleep(Duration::from_millis(200)).await;

@@ -224,7 +224,13 @@ impl<T: Transport> WdaClient<T> {
         Ok(match self.orientation().await {
             Ok(o) => elements::View { screen: o.orient(base), orientation: Some(o) },
             Err(e) => {
-                tracing::debug!("读屏幕方向失败，按缓存的屏幕尺寸算：{e}");
+                tracing::debug!(
+                    "{}",
+                    ictl_l10n::trf!(
+                        "读屏幕方向失败，按缓存的屏幕尺寸算：{e}",
+                        "Reading the screen orientation failed, using the cached screen size: {e}"
+                    )
+                );
                 elements::View { screen: base, orientation: None }
             }
         })
@@ -278,7 +284,18 @@ impl<T: Transport> WdaClient<T> {
         let (sheet, tree) = match self.cover_tree().await {
             Ok(x) => x,
             Err(e) => {
-                tracing::debug!("核对锁屏界面失败，按{}处理：{e}", if strict { "锁着" } else { " WDA 的结果" });
+                tracing::debug!(
+                    "{}",
+                    ictl_l10n::trf!(
+                        "核对锁屏界面失败，按{}处理：{e}",
+                        "Checking the lock screen failed, going by {}: {e}",
+                        if strict {
+                            ictl_l10n::tr!("锁着", "locked")
+                        } else {
+                            ictl_l10n::tr!(" WDA 的结果", "what WDA reported")
+                        }
+                    )
+                );
                 return Ok(LockCheck { locked: strict || wda_locked, uncertain: false, tree: None });
             }
         };
@@ -286,7 +303,13 @@ impl<T: Transport> WdaClient<T> {
             (true, elements::CoverSheet::NotificationCenter) => (false, false),
             (true, _) => (true, false),
             (false, elements::CoverSheet::Locked) => {
-                tracing::info!("WDA 报未锁屏，但屏幕上是锁屏界面（WDA 在锁屏时启动，状态未同步）");
+                tracing::info!(
+                    "{}",
+                    ictl_l10n::tr!(
+                        "WDA 报未锁屏，但屏幕上是锁屏界面（WDA 在锁屏时启动，状态未同步）",
+                        "WDA says unlocked, but the screen shows the lock screen (WDA started while locked and its state is stale)"
+                    )
+                );
                 (true, false)
             }
             // 锁屏样式、却没有锁的标记：可能是通知中心，也可能是 Touch ID 机型熄屏、有通知时的锁屏
@@ -388,7 +411,13 @@ impl<T: Transport> WdaClient<T> {
     pub async fn end_polling(&mut self) {
         let b = self.idle_baseline.unwrap_or(IdleSettings::DEFAULT);
         if let Err(e) = self.set_idle_settings(b).await {
-            tracing::warn!("轮询后恢复 WDA 等待设置失败：{e}");
+            tracing::warn!(
+                "{}",
+                ictl_l10n::trf!(
+                    "轮询后恢复 WDA 等待设置失败：{e}",
+                    "Restoring the WDA wait settings after polling failed: {e}"
+                )
+            );
         }
     }
 
@@ -412,7 +441,13 @@ impl<T: Transport> WdaClient<T> {
         self.set_idle_settings(during).await?;
         let r = self.actions(steps).await;
         if let Err(e) = self.set_idle_settings(baseline).await {
-            tracing::warn!("手势后恢复 WDA 等待设置失败：{e}");
+            tracing::warn!(
+                "{}",
+                ictl_l10n::trf!(
+                    "手势后恢复 WDA 等待设置失败：{e}",
+                    "Restoring the WDA wait settings after the gesture failed: {e}"
+                )
+            );
         }
         r
     }

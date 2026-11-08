@@ -830,7 +830,7 @@ async fn wda_bridge(socket: &Path, port: u16) -> anyhow::Result<()> {
         let device = device.clone();
         tokio::spawn(async move {
             if let Err(e) = bridge_conn(client, &device).await {
-                tracing::warn!("桥接连接出错：{e}");
+                tracing::warn!("{}", ictl_l10n::trf!("桥接连接出错：{e}", "Bridge connection error: {e}"));
             }
         });
     }

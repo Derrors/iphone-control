@@ -197,13 +197,20 @@ impl Session {
                 if let (Some(exe), Some(id)) = (b.executable(), b.identifier())
                     && let Err(e) = prov.merge_entitlements(b.dir.join(exe), &id)
                 {
-                    tracing::warn!("合并 {} 的 entitlements 失败，只用描述文件里的：{e}", b.dir.display());
+                    tracing::warn!(
+                        "{}",
+                        ictl_l10n::trf!(
+                            "合并 {} 的 entitlements 失败，只用描述文件里的：{e}",
+                            "Merging the entitlements of {} failed, using only those from the provisioning profile: {e}",
+                            b.dir.display()
+                        )
+                    );
                 }
                 std::fs::write(b.dir.join("embedded.mobileprovision"), &prov.data)?;
                 let xml = String::from_utf8_lossy(&prov.entitlements_as_bytes()?).into_owned();
                 settings.set_entitlements_xml(SettingsScope::Main, xml)?;
             }
-            tracing::info!("签名 {}", b.dir.display());
+            tracing::info!("{}", ictl_l10n::trf!("签名 {}", "Signing {}", b.dir.display()));
             UnifiedSigner::new(settings).sign_path_in_place(&b.dir)?;
         }
         if let Some(key) = &cert.key {

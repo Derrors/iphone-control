@@ -57,7 +57,13 @@ impl Persisted {
         let Ok(bytes) = std::fs::read(path) else { return Self::default() };
         serde_json::from_slice(&bytes).unwrap_or_else(|e| {
             // 损坏时按空状态启动（会显示「WDA 还没签名」），但要留痕
-            tracing::warn!("state.json 解析失败，按空状态启动：{e}");
+            tracing::warn!(
+                "{}",
+                ictl_l10n::trf!(
+                    "state.json 解析失败，按空状态启动：{e}",
+                    "Parsing state.json failed, starting with an empty state: {e}"
+                )
+            );
             Self::default()
         })
     }
@@ -67,7 +73,7 @@ impl Persisted {
         let r = std::fs::write(&tmp, serde_json::to_vec_pretty(self).unwrap_or_default())
             .and_then(|_| std::fs::rename(&tmp, path));
         if let Err(e) = r {
-            tracing::warn!("保存 state.json 失败：{e}");
+            tracing::warn!("{}", ictl_l10n::trf!("保存 state.json 失败：{e}", "Saving state.json failed: {e}"));
         }
     }
 
@@ -365,8 +371,8 @@ impl Daemon {
         }
         let r = self.cfg.ensure_passcodes_dir().and_then(|_| std::fs::rename(&legacy, &dst));
         match r {
-            Ok(()) => self.log.log(&format!("旧的锁屏密码只有一份，USB 上只接着 {}，归到它名下", d.udid)),
-            Err(e) => tracing::warn!("把旧的锁屏密码归到 {} 名下失败：{e}", d.udid),
+            Ok(()) => self.log.log(&ictl_l10n::trf!("旧的锁屏密码只有一份，USB 上只接着 {}，归到它名下", "There is a single passcode saved by an older version and only {} is on USB; assigning it to that device", d.udid)),
+            Err(e) => tracing::warn!("{}", ictl_l10n::trf!("把旧的锁屏密码归到 {} 名下失败：{e}", "Assigning the old passcode to {} failed: {e}", d.udid)),
         }
     }
 
@@ -375,7 +381,7 @@ impl Daemon {
             return;
         }
         let (title, body) = e.title_body();
-        self.log.log(&format!("通知：{title}"));
+        self.log.log(&ictl_l10n::trf!("通知：{title}", "Notification: {title}"));
         let cfg = self.cfg.notify.clone();
         if cfg.any() {
             tokio::spawn(async move {
@@ -386,7 +392,7 @@ impl Daemon {
 
     pub(crate) fn set_state(&self, g: &mut Inner, s: DeviceState) {
         if g.state != s {
-            self.log.log(&format!("状态：{}", s.describe()));
+            self.log.log(&ictl_l10n::trf!("状态：{}", "State: {}", s.describe()));
             g.state = s;
         }
     }
@@ -407,7 +413,13 @@ impl Daemon {
                 None => DeviceProfile::Missing,
             },
             Err(e) => {
-                tracing::warn!("读手机上的描述文件失败，按签名记录算：{e}");
+                tracing::warn!(
+                    "{}",
+                    ictl_l10n::trf!(
+                        "读手机上的描述文件失败，按签名记录算：{e}",
+                        "Reading the provisioning profiles on the phone failed, going by the signing record: {e}"
+                    )
+                );
                 DeviceProfile::Unknown(e.to_string())
             }
         };
@@ -585,7 +597,7 @@ impl Daemon {
 
     pub async fn shutdown(&self) {
         let mut g = self.inner.lock().await;
-        self.log.log("收到停止信号,退出");
+        self.log.log(ictl_l10n::tr!("收到停止信号,退出", "Received stop signal, exiting"));
         // 先停 HID 媒体流、runner（经 usbmuxd），再停 usbmuxd
         self.drop_session(&mut g).await;
         if let Some(mut c) = g.usbmuxd.take() {

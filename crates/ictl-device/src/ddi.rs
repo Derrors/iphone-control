@@ -52,7 +52,13 @@ pub fn invalidate(dir: &Path) {
 pub async fn ensure_cache(dir: &Path, base_url: &str) -> Result<PathBuf> {
     let stamp = std::fs::read_to_string(dir.join(SOURCE_STAMP)).ok();
     if stamp.as_deref().is_some_and(|s| s.trim() != base_url) {
-        tracing::info!("开发者镜像下载地址变了，重新下载");
+        tracing::info!(
+            "{}",
+            ictl_l10n::tr!(
+                "开发者镜像下载地址变了，重新下载",
+                "The developer disk image download URL changed, downloading again"
+            )
+        );
         invalidate(dir);
     }
     if cache_complete(dir) {
@@ -73,7 +79,7 @@ pub async fn ensure_cache(dir: &Path, base_url: &str) -> Result<PathBuf> {
             continue;
         }
         let url = format!("{}/{name}", base_url.trim_end_matches('/'));
-        tracing::info!("下载开发者镜像 {url}");
+        tracing::info!("{}", ictl_l10n::trf!("下载开发者镜像 {url}", "Downloading the developer disk image {url}"));
         let resp = client
             .get(&url)
             .send()

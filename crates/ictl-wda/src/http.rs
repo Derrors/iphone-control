@@ -114,8 +114,22 @@ impl Transport for DeviceTransport {
         // 路径截掉查询串（/source 的排除属性很长）
         let short = path.split('?').next().unwrap_or(path);
         match &r {
-            Ok((status, _)) => tracing::debug!("wda {method} {short} → {status}（{:.2}s）", t0.elapsed().as_secs_f64()),
-            Err(e) => tracing::debug!("wda {method} {short} 失败（{:.2}s）：{e}", t0.elapsed().as_secs_f64()),
+            Ok((status, _)) => tracing::debug!(
+                "{}",
+                ictl_l10n::trf!(
+                    "wda {method} {short} → {status}（{:.2}s）",
+                    "wda {method} {short} → {status} ({:.2}s)",
+                    t0.elapsed().as_secs_f64()
+                )
+            ),
+            Err(e) => tracing::debug!(
+                "{}",
+                ictl_l10n::trf!(
+                    "wda {method} {short} 失败（{:.2}s）：{e}",
+                    "wda {method} {short} failed ({:.2}s): {e}",
+                    t0.elapsed().as_secs_f64()
+                )
+            ),
         }
         r
     }

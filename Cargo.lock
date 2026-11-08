@@ -1980,10 +1980,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "ictl-l10n"
+version = "0.1.4"
+dependencies = [
+ "tokio",
+]
+
+[[package]]
 name = "ictl-mcp"
 version = "0.1.4"
 dependencies = [
  "anyhow",
+ "ictl-l10n",
  "ictl-protocol",
  "rmcp",
  "serde_json",

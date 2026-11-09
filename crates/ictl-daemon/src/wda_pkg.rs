@@ -26,7 +26,7 @@ pub async fn ensure(dest: &Path) -> Result<(), String> {
         .ok_or(ictl_l10n::tr!("WDA 包路径没有上级目录", "the WDA package path has no parent directory"))?;
     std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     let url = url();
-    tracing::info!("下载未签名的 WDA {url}");
+    tracing::info!("{}", ictl_l10n::log_trf!("下载未签名的 WDA {url}", "Downloading the unsigned WDA {url}"));
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(600))
         .build()

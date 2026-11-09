@@ -11,7 +11,9 @@
 //!
 //! The client decides: the MCP server and the CLI send their language with every request, and the daemon
 //! answers that request in it ([`scope`]). Requests from older clients carry no language and get Chinese.
-//! The daemon's own setting only applies to what it writes by itself (event log, notifications).
+//! The daemon's own setting applies to what it writes by itself, the event log, log lines and notifications,
+//! even while it handles a request in another language: write those with [`log_tr!`] / [`log_trf!`]
+//! (or inside [`in_own_lang`]), so the journal and the notifications stay in one language.
 
 use std::cell::Cell;
 use std::sync::atomic::{AtomicU8, Ordering};
@@ -76,6 +78,12 @@ pub fn lang() -> Lang {
     if let Ok(l) = TASK_LANG.try_with(|l| *l) {
         return l;
     }
+    own_lang()
+}
+
+/// The process's own setting (`IPHONE_CONTROL_LANG`, decided on first use), ignoring a request's language
+/// ([`scope`]) and [`with_lang`]
+pub fn own_lang() -> Lang {
     match LANG.load(Ordering::Relaxed) {
         1 => Lang::Zh,
         2 => Lang::En,
@@ -87,18 +95,29 @@ pub fn lang() -> Lang {
     }
 }
 
+/// Run `f` in the process's own language: for text the daemon writes by itself (event log, notifications)
+/// while it handles a request that may be in another language
+pub fn in_own_lang<T>(f: impl FnOnce() -> T) -> T {
+    with_lang(own_lang(), f)
+}
+
 /// Override the language for this process
 pub fn set(l: Lang) {
     LANG.store(encode(l), Ordering::Relaxed);
 }
 
 /// Run `f` with the language set to `l` on this thread only (tests run in parallel and must not
-/// change each other's language)
+/// change each other's language). The previous value comes back even if `f` panics: blocking-pool threads
+/// are reused, and a leftover override would change the language of whatever runs there next
 pub fn with_lang<T>(l: Lang, f: impl FnOnce() -> T) -> T {
-    let prev = OVERRIDE.with(|o| o.replace(encode(l)));
-    let r = f();
-    OVERRIDE.with(|o| o.set(prev));
-    r
+    struct Restore(u8);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            OVERRIDE.with(|o| o.set(self.0));
+        }
+    }
+    let _restore = Restore(OVERRIDE.with(|o| o.replace(encode(l))));
+    f()
 }
 
 pub fn is_en() -> bool {
@@ -131,6 +150,23 @@ macro_rules! trf {
     };
 }
 
+/// [`tr!`] for log lines and the event log: always the process's own language ([`own_lang`]), not the
+/// language of the request being handled
+#[macro_export]
+macro_rules! log_tr {
+    ($zh:literal, $en:literal $(,)?) => {
+        if $crate::own_lang() == $crate::Lang::En { $en } else { $zh }
+    };
+}
+
+/// [`trf!`] for log lines and the event log (see [`log_tr!`])
+#[macro_export]
+macro_rules! log_trf {
+    ($zh:literal, $en:literal $(, $arg:expr)* $(,)?) => {
+        if $crate::own_lang() == $crate::Lang::En { format!($en $(, $arg)*) } else { format!($zh $(, $arg)*) }
+    };
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -156,6 +192,28 @@ mod tests {
         assert_eq!(inner, "en");
         let inner = scope(Lang::Zh, async { with_lang(Lang::En, || tr!("中", "en")) }).await;
         assert_eq!(inner, "en", "with_lang wins over scope");
+    }
+
+    #[test]
+    fn with_lang_restores_after_a_panic() {
+        let before = lang();
+        let other = if before == Lang::En { Lang::Zh } else { Lang::En };
+        let r = std::panic::catch_unwind(|| with_lang(other, || panic!("boom")));
+        assert!(r.is_err());
+        assert_eq!(lang(), before, "the override must not stay on the thread");
+    }
+
+    /// Log lines and the event log stay in the process's language while a request in another language is
+    /// being handled; tool results follow the request
+    #[tokio::test]
+    async fn log_texts_ignore_the_request_language() {
+        let own = own_lang();
+        let other = if own == Lang::En { Lang::Zh } else { Lang::En };
+        let (result, log) = scope(other, async { (tr!("中", "en"), log_tr!("中", "en")) }).await;
+        assert_eq!(result, if other == Lang::En { "en" } else { "中" });
+        assert_eq!(log, if own == Lang::En { "en" } else { "中" });
+        let log = scope(other, async { in_own_lang(|| tr!("中", "en")) }).await;
+        assert_eq!(log, if own == Lang::En { "en" } else { "中" });
     }
 
     #[test]

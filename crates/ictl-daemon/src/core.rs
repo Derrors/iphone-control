@@ -46,18 +46,59 @@ pub struct Persisted {
     pub screen: Option<ScreenSize>,
     /// `screen` 是哪台设备的；换了设备就不能拿来给 HID 换算坐标
     pub screen_udid: Option<String>,
+    /// 上次重签的结果，旧格式：拼好的中文整句。照旧写，旧版本（降级、旧 CLI）还读它；新版本显示时用
+    /// [`Self::resign_result`]
     pub last_resign: Option<String>,
+    /// 上次重签的结果，按看的人的语言显示（[`Self::last_resign_text`]）。旧版本写的 state.json 没有它
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resign_result: Option<ResignRecord>,
     /// 运行中选定要控制的设备（`iphone-control select`、`iphone_select_device`）；None 是自动选。
     /// 设了 `IPHONE_UDID` 时以它为准，这个不起作用
     pub selected_udid: Option<String>,
 }
 
+/// 一次重签的结果
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResignRecord {
+    /// 结束时间（Unix 秒）
+    pub at: u64,
+    /// 失败原因；成功时为 None
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
 impl Persisted {
+    /// 记下这次重签的结果：新字段，加上旧版本认的中文整句
+    pub fn record_resign(&mut self, at: u64, error: Option<String>) {
+        let when = crate::eventlog::format_utc(at);
+        self.last_resign = Some(match &error {
+            None => format!("{when} 成功"),
+            Some(e) => format!("{when} 失败：{e}"),
+        });
+        self.resign_result = Some(ResignRecord { at, error });
+    }
+
+    /// 上次重签的结果，按当前语言；只有旧格式时原样给出
+    pub fn last_resign_text(&self) -> Option<String> {
+        let Some(r) = &self.resign_result else { return self.last_resign.clone() };
+        let when = crate::eventlog::format_utc(r.at);
+        Some(match &r.error {
+            None => ictl_l10n::trf!("{when} 成功", "{when} succeeded"),
+            Some(e) => ictl_l10n::trf!("{when} 失败：{e}", "{when} failed: {e}"),
+        })
+    }
+
     pub fn load(path: &Path) -> Self {
         let Ok(bytes) = std::fs::read(path) else { return Self::default() };
         serde_json::from_slice(&bytes).unwrap_or_else(|e| {
             // 损坏时按空状态启动（会显示「WDA 还没签名」），但要留痕
-            tracing::warn!("state.json 解析失败，按空状态启动：{e}");
+            tracing::warn!(
+                "{}",
+                ictl_l10n::log_trf!(
+                    "state.json 解析失败，按空状态启动：{e}",
+                    "Parsing state.json failed, starting with an empty state: {e}"
+                )
+            );
             Self::default()
         })
     }
@@ -67,7 +108,7 @@ impl Persisted {
         let r = std::fs::write(&tmp, serde_json::to_vec_pretty(self).unwrap_or_default())
             .and_then(|_| std::fs::rename(&tmp, path));
         if let Err(e) = r {
-            tracing::warn!("保存 state.json 失败：{e}");
+            tracing::warn!("{}", ictl_l10n::log_trf!("保存 state.json 失败：{e}", "Saving state.json failed: {e}"));
         }
     }
 
@@ -365,8 +406,8 @@ impl Daemon {
         }
         let r = self.cfg.ensure_passcodes_dir().and_then(|_| std::fs::rename(&legacy, &dst));
         match r {
-            Ok(()) => self.log.log(&format!("旧的锁屏密码只有一份，USB 上只接着 {}，归到它名下", d.udid)),
-            Err(e) => tracing::warn!("把旧的锁屏密码归到 {} 名下失败：{e}", d.udid),
+            Ok(()) => self.log.log(&ictl_l10n::log_trf!("旧的锁屏密码只有一份，USB 上只接着 {}，归到它名下", "There is a single passcode saved by an older version and only {} is on USB; assigning it to that device", d.udid)),
+            Err(e) => tracing::warn!("{}", ictl_l10n::log_trf!("把旧的锁屏密码归到 {} 名下失败：{e}", "Assigning the old passcode to {} failed: {e}", d.udid)),
         }
     }
 
@@ -374,8 +415,9 @@ impl Daemon {
         if !g.dedup.should_send(&e, Instant::now()) {
             return;
         }
-        let (title, body) = e.title_body();
-        self.log.log(&format!("通知：{title}"));
+        // 通知和事件日志按守护进程自己的语言：触发它的可能是另一种语言的请求（例如自动解锁失败）
+        let (title, body) = ictl_l10n::in_own_lang(|| e.title_body());
+        self.log.log(&ictl_l10n::log_trf!("通知：{title}", "Notification: {title}"));
         let cfg = self.cfg.notify.clone();
         if cfg.any() {
             tokio::spawn(async move {
@@ -386,7 +428,7 @@ impl Daemon {
 
     pub(crate) fn set_state(&self, g: &mut Inner, s: DeviceState) {
         if g.state != s {
-            self.log.log(&format!("状态：{}", s.describe()));
+            self.log.log(&ictl_l10n::log_trf!("状态：{}", "State: {}", ictl_l10n::in_own_lang(|| s.describe())));
             g.state = s;
         }
     }
@@ -407,7 +449,13 @@ impl Daemon {
                 None => DeviceProfile::Missing,
             },
             Err(e) => {
-                tracing::warn!("读手机上的描述文件失败，按签名记录算：{e}");
+                tracing::warn!(
+                    "{}",
+                    ictl_l10n::log_trf!(
+                        "读手机上的描述文件失败，按签名记录算：{e}",
+                        "Reading the provisioning profiles on the phone failed, going by the signing record: {e}"
+                    )
+                );
                 DeviceProfile::Unknown(e.to_string())
             }
         };
@@ -585,7 +633,7 @@ impl Daemon {
 
     pub async fn shutdown(&self) {
         let mut g = self.inner.lock().await;
-        self.log.log("收到停止信号,退出");
+        self.log.log(ictl_l10n::log_tr!("收到停止信号,退出", "Received stop signal, exiting"));
         // 先停 HID 媒体流、runner（经 usbmuxd），再停 usbmuxd
         self.drop_session(&mut g).await;
         if let Some(mut c) = g.usbmuxd.take() {
@@ -628,6 +676,31 @@ fn check_request(req: &Request) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 重签结果存成时间和成败，按看的人的语言显示；旧字段照旧写中文整句，旧版本的 state.json 照样读
+    #[test]
+    fn resign_result_is_shown_in_the_reader_language() {
+        use ictl_l10n::{Lang, with_lang};
+        let mut p = Persisted::default();
+        p.record_resign(1_800_000_000, None);
+        assert_eq!(p.last_resign.as_deref(), Some("2027-01-15 08:00:00 成功"));
+        assert_eq!(with_lang(Lang::En, || p.last_resign_text()).as_deref(), Some("2027-01-15 08:00:00 succeeded"));
+        assert_eq!(with_lang(Lang::Zh, || p.last_resign_text()).as_deref(), Some("2027-01-15 08:00:00 成功"));
+        p.record_resign(1_800_000_000, Some("boom".into()));
+        assert_eq!(with_lang(Lang::En, || p.last_resign_text()).as_deref(), Some("2027-01-15 08:00:00 failed: boom"));
+
+        // 旧版本写的：只有中文整句，原样显示
+        let old: Persisted = serde_json::from_str(r#"{"last_resign":"2026-11-07 01:11:54 成功"}"#).unwrap();
+        assert_eq!(with_lang(Lang::En, || old.last_resign_text()).as_deref(), Some("2026-11-07 01:11:54 成功"));
+        // 新版本写的，旧版本读：多出来的字段不影响（这里用只认旧字段的结构模拟）
+        #[derive(serde::Deserialize)]
+        struct OldPersisted {
+            last_resign: Option<String>,
+        }
+        let json = serde_json::to_string(&p).unwrap();
+        let o: OldPersisted = serde_json::from_str(&json).unwrap();
+        assert_eq!(o.last_resign.as_deref(), Some("2027-01-15 08:00:00 失败：boom"));
+    }
 
     fn test_daemon(tag: &str) -> (Arc<Daemon>, std::path::PathBuf) {
         let dir = std::env::temp_dir().join(format!("ictl-core-{tag}-{}", std::process::id()));

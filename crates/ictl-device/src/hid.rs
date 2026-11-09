@@ -225,7 +225,11 @@ impl Drop for HidSession {
     fn drop(&mut self) {
         if self.stream.is_some() {
             tracing::warn!(
-                "HID 会话没有 close() 就被丢掉，手机端的屏幕媒体流会一直挂着（不自动锁屏），需拔插或重开一次 HID 清掉"
+                "{}",
+                ictl_l10n::log_tr!(
+                    "HID 会话没有 close() 就被丢掉，手机端的屏幕媒体流会一直挂着（不自动锁屏），需拔插或重开一次 HID 清掉",
+                    "HID session dropped without close(): the phone keeps its screen media stream open (no auto-lock); replug or open HID once more to clear it"
+                )
             );
         }
     }

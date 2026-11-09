@@ -61,7 +61,7 @@ pub async fn run(cfg: Config) -> anyhow::Result<()> {
 
 async fn serve(cfg: Config, listener: tokio::net::UnixListener) -> anyhow::Result<()> {
     let daemon = Daemon::new(cfg);
-    daemon.log.log("守护进程启动");
+    daemon.log.log(ictl_l10n::log_tr!("守护进程启动", "Daemon started"));
 
     let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
     let mut tick = tokio::time::interval(core::TICK);
@@ -78,7 +78,7 @@ async fn serve(cfg: Config, listener: tokio::net::UnixListener) -> anyhow::Resul
                 Ok((stream, _)) => {
                     conns.spawn_local(serve_conn(daemon.clone(), stream));
                 }
-                Err(e) => tracing::warn!("控制接口 accept 失败：{e}"),
+                Err(e) => tracing::warn!("{}", ictl_l10n::log_trf!("控制接口 accept 失败：{e}", "Accepting on the control socket failed: {e}")),
             },
             Some(_) = conns.join_next(), if !conns.is_empty() => {}
             _ = tick.tick() => {

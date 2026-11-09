@@ -329,7 +329,10 @@ impl Device {
             match lockdown.get_value(Some(key), None).await {
                 Ok(v) => v.as_string().map(str::to_owned).unwrap_or_default(),
                 Err(e) => {
-                    tracing::warn!("读设备信息 {key} 失败：{e}");
+                    tracing::warn!(
+                        "{}",
+                        ictl_l10n::log_trf!("读设备信息 {key} 失败：{e}", "Reading device info {key} failed: {e}")
+                    );
                     String::new()
                 }
             }

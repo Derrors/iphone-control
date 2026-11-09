@@ -105,7 +105,7 @@ impl XCUITestListener for ErrorListener {
     }
 
     async fn did_begin_initializing_for_ui_testing(&mut self) -> std::result::Result<(), IdeviceError> {
-        tracing::debug!("xctest: 开始初始化 UI 测试");
+        tracing::debug!("{}", ictl_l10n::log_tr!("xctest: 开始初始化 UI 测试", "xctest: initializing the UI test"));
         Ok(())
     }
 
@@ -120,7 +120,7 @@ impl XCUITestListener for ErrorListener {
     }
 
     async fn did_begin_executing_test_plan(&mut self) -> std::result::Result<(), IdeviceError> {
-        tracing::debug!("xctest: 开始执行测试计划");
+        tracing::debug!("{}", ictl_l10n::log_tr!("xctest: 开始执行测试计划", "xctest: running the test plan"));
         self.0.lock().unwrap().plan_started = true;
         Ok(())
     }
@@ -199,7 +199,13 @@ impl WdaRunner {
                 deadline = deadline.max(since + AUTOMATION_WAIT);
                 if !announced {
                     announced = true;
-                    tracing::info!("runner 在等手机上的「Enable UI Automation」密码");
+                    tracing::info!(
+                        "{}",
+                        ictl_l10n::log_tr!(
+                            "runner 在等手机上的「Enable UI Automation」密码",
+                            "the runner is waiting for the “Enable UI Automation” passcode on the phone"
+                        )
+                    );
                 }
             }
             if runner.task.is_finished() {
@@ -215,8 +221,12 @@ impl WdaRunner {
             if !plan_started && t0.elapsed() >= PLAN_START_FALLBACK && !fallback_logged {
                 fallback_logged = true;
                 tracing::info!(
-                    "{} 秒内没收到 runner 开始执行测试计划的回调，改为直接查 /status",
-                    PLAN_START_FALLBACK.as_secs()
+                    "{}",
+                    ictl_l10n::log_trf!(
+                        "{} 秒内没收到 runner 开始执行测试计划的回调，改为直接查 /status",
+                        "No callback that the runner started the test plan within {} seconds; querying /status directly",
+                        PLAN_START_FALLBACK.as_secs()
+                    )
                 );
             }
             if (plan_started || fallback_logged) && client.ready().await.unwrap_or(false) {

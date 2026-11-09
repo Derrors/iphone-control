@@ -12,12 +12,8 @@ Everything is configured with environment variables, and all of them are optiona
 | Variable | Default | Meaning |
 |---|---|---|
 | `HTTP_PROXY` / `HTTPS_PROXY` | direct | Proxy for Apple, anisette, Developer Disk Image and notification traffic |
-<<<<<<< HEAD
 | `IPHONE_CONTROL_LANG` | `zh` | Language: `zh` or `en`. Applies to tool descriptions and results, CLI output, logs and notifications. The MCP server and the CLI each send their own setting and the daemon answers in it; logs and notifications follow the daemon's own setting. So for a source install also set it in the MCP client config (`iphone-control mcp-config` includes it) |
-=======
-| `IPHONE_CONTROL_LANG` | `zh` | Language: `zh` or `en`. Applies to tool descriptions and results, CLI output, logs and notifications. The MCP server and the CLI each send their own setting and the daemon answers in it, so for a source install also set it in the MCP client config (`iphone-control mcp-config` includes it) |
 | `IPHONE_CONTROL_DEV_TOOLS` | off | `1` adds the [developer tools](./tools#developer-tools-opt-in) to the MCP server: logs, crash reports, installing and removing apps. For a source install set it in the MCP client config (`iphone-control mcp-config` includes it when set) |
->>>>>>> 9cb44ae (feat(mcp): opt-in developer tools for logs, crash reports and installs)
 | `IPHONE_UDID` | automatic | Pin the device to control. Unset: the controlled device is kept until it disconnects, and you can switch with the `select` command or the `iphone_select_device` tool. When set, switching is refused |
 | `RESIGN_MIN_DAYS` | `2` | Re-sign when fewer days than this remain |
 | `RESIGN_CHECK_HOURS` | `6` | How often to check; it is also checked within a minute after the phone reconnects or you switch devices |

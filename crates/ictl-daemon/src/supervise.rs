@@ -426,19 +426,27 @@ impl Daemon {
                 if g.device_profile == DeviceProfile::Missing {
                     // 自动重签不替没装过的手机注册设备（占 Apple ID 的设备名额），交给用户决定
                     return Ok(
-                        "这台手机上没有装当前 Apple ID 签的 WDA,不自动重签;要装就运行 iphone-control setup".into()
+                        ictl_l10n::tr!("这台手机上没有装当前 Apple ID 签的 WDA,不自动重签;要装就运行 iphone-control setup", "No WDA signed by the current Apple ID on this phone, not re-signing automatically; run iphone-control setup to install it").into()
                     );
                 }
                 if let Some(left) = g.device_profile.left(&g.persisted)
                     && left > self.cfg.resign_min
                 {
-                    return Ok(format!("描述文件还剩 {} 小时,无需重签", left.as_secs() / 3600));
+                    return Ok(ictl_l10n::trf!(
+                        "描述文件还剩 {} 小时,无需重签",
+                        "{} hours left on the provisioning profile, no need to re-sign",
+                        left.as_secs() / 3600
+                    ));
                 }
             }
             if g.resigning {
-                return Ok("正在重签,稍后用 iphone-control status 查看结果".into());
+                return Ok(ictl_l10n::tr!(
+                    "正在重签,稍后用 iphone-control status 查看结果",
+                    "Re-signing, check the result later with iphone-control status"
+                )
+                .into());
             }
-            let device = g.device.clone().ok_or("手机未连接")?;
+            let device = g.device.clone().ok_or(ictl_l10n::tr!("手机未连接", "Phone not connected"))?;
             let name = g
                 .info
                 .as_ref()

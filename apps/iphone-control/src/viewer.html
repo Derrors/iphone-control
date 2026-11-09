@@ -10,7 +10,7 @@
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.4 system-ui, sans-serif; display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 12px; min-height: 100vh; }
   #screen { position: relative; height: min(80vh, 900px); aspect-ratio: 393 / 852; background: #000; border-radius: 28px; overflow: hidden; touch-action: none; user-select: none; }
-  #screen.landscape { height: auto; width: min(95vw, 1000px); aspect-ratio: 852 / 393; }
+  #screen.landscape { height: auto; width: min(95vw, 1000px); }
   #screen img { width: 100%; height: 100%; object-fit: contain; display: block; cursor: crosshair; -webkit-user-drag: none; }
   #screen .msg { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; text-align: center; padding: 24px; color: #d4d4d8; }
   #screen .msg[hidden] { display: none; }
@@ -59,7 +59,9 @@ async function post(action, body) {
 async function loadInfo() {
   try {
     const v = await (await fetch('/api/info')).json();
-    if (v.width && v.height) size = { w: v.width, h: v.height };
+    // a size recorded for another device would put taps in the wrong place: better none
+    size = v.width && v.height ? { w: v.width, h: v.height } : null;
+    if (v.warning) show(v.warning, true);
   } catch (e) { /* retried with the stream */ }
 }
 
@@ -67,7 +69,12 @@ function connect() {
   msg.textContent = 'Connecting…'; msg.hidden = false;
   img.src = '/stream?t=' + Date.now();
 }
-img.onload = () => { msg.hidden = true; screenEl.classList.toggle('landscape', img.naturalWidth > img.naturalHeight); };
+img.onload = () => {
+  msg.hidden = true;
+  // the frame's own shape: iPhone, iPad, portrait or landscape
+  screenEl.style.aspectRatio = img.naturalWidth + ' / ' + img.naturalHeight;
+  screenEl.classList.toggle('landscape', img.naturalWidth > img.naturalHeight);
+};
 img.onerror = () => {
   msg.textContent = 'No picture: the stream comes from WebDriverAgent, which is not running right now. Retrying…';
   msg.hidden = false;
@@ -113,6 +120,8 @@ document.getElementById('type').addEventListener('submit', ev => { ev.preventDef
 document.getElementById('submit').addEventListener('click', () => typeText(true));
 
 loadInfo();
+// keep the size and the device check current (WDA may come up later, the daemon may switch devices)
+setInterval(loadInfo, 10000);
 // the stream may have failed before the handlers above were set
 if (img.complete && !img.naturalWidth) img.onerror();
 </script>

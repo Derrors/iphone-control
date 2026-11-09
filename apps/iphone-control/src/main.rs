@@ -217,13 +217,17 @@ fn mcp_config(container: Option<String>, socket: &Path) -> anyhow::Result<String
     // 英文时把语言写进注册命令：直接调用时 MCP 客户端不带用户 shell 的环境；容器里一般由 .env 继承，
     // 但只给这一次 docker exec 设了语言（.env 里没有）时，不写进去 MCP 就还是中文
     let lang = |flag: &str| if ictl_l10n::is_en() { format!("{flag} {}=en ", ictl_l10n::ENV) } else { String::new() };
+    let dev = || if ictl_mcp::dev_tools_enabled() { "-e IPHONE_CONTROL_DEV_TOOLS=1 " } else { "" };
     Ok(match container {
-        Some(c) => format!("claude mcp add iphone -s user -- docker exec -i {}{c} iphone-control mcp", lang("-e")),
+        // 开发者工具开关同理：只给这次 docker exec 设了、.env 里没有时也要写进去
+        Some(c) => {
+            format!("claude mcp add iphone -s user -- docker exec -i {}{}{c} iphone-control mcp", lang("-e"), dev())
+        }
         None => {
             let exe = std::env::current_exe()
                 .context(ictl_l10n::tr!("找不到本程序的路径", "can't find the path of this program"))?;
             let lang = lang("-e");
-            let dev = if ictl_mcp::dev_tools_enabled() { "-e IPHONE_CONTROL_DEV_TOOLS=1 " } else { "" };
+            let dev = dev();
             format!(
                 "claude mcp add iphone -s user {lang}{dev}-- {} --socket {} mcp",
                 shell_quote(&exe.to_string_lossy()),

@@ -4,8 +4,14 @@
 //!
 //! Logs come from os_trace_relay. It only streams what happens from now on, so the first `AppLogs` request
 //! starts a capture into a ring buffer (at most [`MAX_LINES`]); later requests read from it, which is what makes
-//! `since` work. The capture follows the controlled device and stops by itself after [`IDLE`] without a request,
-//! so a session that used the tool once doesn't keep a log stream running.
+//! `since` work. The capture follows the controlled device: it stops when the daemon switches to another device or
+//! the device goes offline, and by itself after [`IDLE`] without a request, so a session that used the tool once
+//! doesn't keep a log stream running.
+//!
+//! The phone streams every process at every level (the service has no level filter), easily hundreds of lines a
+//! second, so the buffer is bounded by size as well as by count ([`MAX_BYTES`]): messages are cut to
+//! [`MAX_LINE_CHARS`] and processes kept by name only when they arrive. How far back it reaches depends on how busy
+//! the phone is, so every answer says so.
 
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
@@ -17,6 +23,8 @@ use tokio::task::JoinHandle;
 use crate::core::{Daemon, Inner};
 
 const MAX_LINES: usize = 20_000;
+/// Text kept in the buffer (messages, process names, subsystems); the oldest lines go first
+const MAX_BYTES: usize = 8 * 1024 * 1024;
 const IDLE: Duration = Duration::from_secs(15 * 60);
 /// Longest crash report text returned; the start holds the exception, the crashed thread and the app version
 const MAX_REPORT_CHARS: usize = 40_000;
@@ -25,7 +33,7 @@ const MAX_LINE_CHARS: usize = 600;
 pub(crate) struct Capture {
     udid: String,
     started: Instant,
-    buf: Arc<Mutex<VecDeque<(Instant, LogEntry)>>>,
+    buf: Arc<Mutex<Buffer>>,
     last_query: Arc<Mutex<Instant>>,
     task: JoinHandle<()>,
 }
@@ -50,7 +58,7 @@ impl Daemon {
         let running = g.log_capture.as_ref().is_some_and(|c| c.udid == device.udid && !c.task.is_finished());
         if !running {
             let mut stream = device.log_stream().await.map_err(|e| e.to_string())?;
-            let buf = Arc::new(Mutex::new(VecDeque::new()));
+            let buf = Arc::new(Mutex::new(Buffer::default()));
             let last_query = Arc::new(Mutex::new(Instant::now()));
             let (b, q) = (buf.clone(), last_query.clone());
             let task = tokio::spawn(async move {
@@ -59,11 +67,7 @@ impl Daemon {
                     tokio::select! {
                         e = stream.next() => {
                             let Ok(e) = e else { return };
-                            let mut b = b.lock().unwrap_or_else(|p| p.into_inner());
-                            if b.len() == MAX_LINES {
-                                b.pop_front();
-                            }
-                            b.push_back((Instant::now(), e));
+                            b.lock().unwrap_or_else(|p| p.into_inner()).push(Instant::now(), compact(e));
                         }
                         _ = check.tick() => {
                             if q.lock().unwrap_or_else(|p| p.into_inner()).elapsed() > IDLE {
@@ -83,9 +87,10 @@ impl Daemon {
         let c = g.log_capture.as_ref().expect("set above");
         let filter = LogFilter { process: wanted.as_deref(), grep, errors_only };
         let from = Instant::now().checked_sub(since);
-        let lines: Vec<String> = {
+        let (lines, oldest) = {
             let b = c.buf.lock().unwrap_or_else(|p| p.into_inner());
             let mut hits: Vec<String> = b
+                .lines
                 .iter()
                 .rev()
                 .filter(|(t, _)| from.is_none_or(|f| *t >= f))
@@ -94,7 +99,7 @@ impl Daemon {
                 .map(|(t, e)| format_line(t.elapsed(), e))
                 .collect();
             hits.reverse();
-            hits
+            (hits, b.lines.front().map(|(t, _)| t.elapsed().as_secs()))
         };
         let mut out = if running {
             ictl_l10n::trf!(
@@ -113,6 +118,13 @@ impl Daemon {
         };
         if running && lines.is_empty() {
             out += ictl_l10n::tr!(" 没有。", " none.");
+        }
+        // the buffer may reach back less far than `since`: say how far, so a missing line isn't taken as "didn't happen"
+        if running && let Some(o) = oldest.filter(|o| *o < since.as_secs()) {
+            out += &ictl_l10n::trf!(
+                "\n(缓冲里最早一行是 {o} 秒前,更早的已经挤出去了)",
+                "\n(the oldest line in the buffer is from {o} s ago; earlier lines have been dropped)"
+            );
         }
         for l in lines {
             out.push('\n');
@@ -205,6 +217,44 @@ impl Daemon {
     }
 }
 
+/// The captured lines, bounded by [`MAX_LINES`] and [`MAX_BYTES`]
+#[derive(Default)]
+pub(crate) struct Buffer {
+    lines: VecDeque<(Instant, LogEntry)>,
+    bytes: usize,
+}
+
+impl Buffer {
+    fn push(&mut self, at: Instant, e: LogEntry) {
+        self.bytes += size(&e);
+        self.lines.push_back((at, e));
+        while self.lines.len() > MAX_LINES || self.bytes > MAX_BYTES {
+            let Some((_, old)) = self.lines.pop_front() else { break };
+            self.bytes -= size(&old);
+        }
+    }
+}
+
+fn size(e: &LogEntry) -> usize {
+    e.process.len() + e.message.len() + e.subsystem.as_ref().map_or(0, String::len)
+}
+
+/// What the buffer keeps of an entry: the process by name (the filter and the output only use the name) and the
+/// message cut to [`MAX_LINE_CHARS`] (marked with `…`)
+fn compact(mut e: LogEntry) -> LogEntry {
+    if let Some(name) = e.process.rsplit('/').next()
+        && name.len() < e.process.len()
+    {
+        e.process = name.to_owned();
+    }
+    if let Some((i, _)) = e.message.char_indices().nth(MAX_LINE_CHARS) {
+        e.message.truncate(i);
+        e.message.push('…');
+    }
+    e.message.shrink_to_fit();
+    e
+}
+
 /// The WDA runner this daemon signed, or any other WebDriverAgent build
 fn is_wda_runner(bid: &str, signed: Option<&str>) -> bool {
     signed.is_some_and(|s| s.eq_ignore_ascii_case(bid)) || bid.to_ascii_lowercase().contains("webdriveragentrunner")
@@ -250,6 +300,7 @@ fn format_line(age: Duration, e: &LogEntry) -> String {
         LogLevel::Fault => "<Fault> ",
     };
     let sub = e.subsystem.as_deref().map(|s| format!("{s} ")).unwrap_or_default();
+    // already cut when stored (`compact`); cut again for entries that didn't go through it
     let mut msg: String = e.message.chars().take(MAX_LINE_CHARS).collect();
     if msg.len() < e.message.len() {
         msg.push('…');
@@ -327,6 +378,23 @@ mod tests {
         assert_eq!(format_line(Duration::from_millis(1500), &e), "-1.5s backboardd[42] <Fault> com.example:net a ⏎ b");
         let long = entry("/x/P", LogLevel::Notice, &"é".repeat(700));
         assert!(format_line(Duration::ZERO, &long).ends_with("é…"));
+    }
+
+    /// Lines are kept short and the buffer stays within its byte budget, dropping the oldest lines first
+    #[test]
+    fn buffer_is_bounded_by_size() {
+        let e = compact(entry("/private/var/containers/X.app/MyApp", LogLevel::Debug, &"x".repeat(5000)));
+        assert_eq!(e.process, "MyApp");
+        assert_eq!(e.message.chars().count(), MAX_LINE_CHARS + 1);
+        let mut b = Buffer::default();
+        let t = Instant::now();
+        let per = size(&e);
+        for i in 0..(MAX_BYTES / per + 100) {
+            b.push(t + Duration::from_micros(i as u64), e.clone());
+        }
+        assert!(b.bytes <= MAX_BYTES && b.lines.len() <= MAX_LINES, "{} bytes, {} lines", b.bytes, b.lines.len());
+        assert_eq!(b.bytes, b.lines.iter().map(|(_, e)| size(e)).sum::<usize>());
+        assert!(b.lines.front().unwrap().0 > t, "the oldest lines went first");
     }
 
     #[test]

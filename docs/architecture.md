@@ -44,7 +44,7 @@
 
 - MCP 进程由 `docker exec -i`（从源码运行时直接调用二进制）拉起，短命且可能同时有多个；设备连接（尤其是 HID 需要的显示媒体流、WDA 的 XCTest 会话）只能有一个持有者。
 - 不开 TCP 端口，避免重蹈 `ios forward` 监听所有网卡的覆辙。WDA 本身也通过 idevice 的 provider 直连设备端口，**本机不再监听 8100**。如需给外部工具用，`iphone-control wda-bridge` 显式开启，只绑 127.0.0.1，且只转发 Host 头是 `localhost`/`127.0.0.1`/`[::1]` 的请求（挡住 DNS rebinding）。注意容器用 host 网络，**本机的任何用户都能连上 bridge**，而 WDA 没有认证，用完就停。
-- `iphone-control viewer` 同样显式开启、只绑 127.0.0.1、检查 Host 头：页面看 WDA 的 MJPEG 流（手机上的 9100 端口，经 usbmuxd，只读）；点击、滑动、输入、按键是 POST，还要检查 `Origin` 是页面本身、内容类型是 JSON，然后作为普通请求发给守护进程，和 agent 的调用排队、自动解锁。
+- `iphone-control viewer` 同样显式开启、只绑 127.0.0.1、检查 Host 头：页面看 WDA 的 MJPEG 流（手机上的 9100 端口，经 usbmuxd，只读）；点击、滑动、输入、按键是 POST，还要检查 `Origin` 是页面本身、内容类型是 JSON，然后作为普通请求发给守护进程，和 agent 的调用排队、自动解锁。它绑定启动时正在控制的设备：每个操作带上这台的 UDID，守护进程控制的不是这台就拒绝。
 
 ### 并发模型
 
@@ -58,8 +58,11 @@
   - 重签分三段：持锁取参数 → 不持锁签名、安装 → 持锁写结果。
   - Apple ID 会话检查在后台跑。
 - `status`（`Daemon` 请求）读 watch 通道发布的快照，不碰锁。
-- 改变手机状态的请求排队超过 30 秒就放弃，免得点击落到已经变了的屏幕上。
+- 安装（`iphone_install_app`）同样不持设备锁；安装之间互斥（`iphone_install_app`、重签、`sign`，锁在 `Device::install`），因为 idevice 把每个 .ipa 都上传到手机上同一个文件。
+- Web 请求（`iphone_web_targets`、`iphone_web_eval`）用独立的锁，不占设备锁，慢页面不挡点击和截图。
+- 改变手机状态的请求（含 `iphone_web_eval`、`iphone_install_app`）排队超过 30 秒就放弃，免得点击落到已经变了的屏幕上；调用方取消后还在排队的请求也不执行。
 - 停止信号优先处理（`biased` select）：取消排队和执行中的请求、巡检，再停 HID 媒体流、runner、usbmuxd。
+- **卡死兜底**：约 10 分钟没有完成任何巡检或请求（设备锁被占死、运行时卡住）时，守护进程自己退出，交给 systemd 或 Docker 重启，免得一直占着设备又不干活。容器另有 healthcheck 和日志大小限制（`compose.yaml`）。
 
 ## 3. 守护进程状态机
 
@@ -101,17 +104,18 @@
 
 | crate | 职责 | 主要依赖 |
 |---|---|---|
-| `ictl-device` | `Device` 句柄：usbmux 发现与监听、lockdown、配对状态、开发者模式状态、隧道（`Tunnel`，持有 HID 会话和显示媒体流）、开发者镜像（含下载缓存）、截图、App 列表/启动/结束、安装 IPA、卸载、崩溃报告、系统日志流（开发者工具）、打开 Web Inspector；所有设备调用都有时限 | `idevice`（锁上游 git 提交） |
+| `ictl-device` | `Device` 句柄：usbmux 发现与监听、lockdown、配对状态、开发者模式状态、隧道（`Tunnel`，持有 HID 会话和显示媒体流）、开发者镜像（含下载缓存）、截图、App 列表/启动/结束、安装 IPA、卸载、崩溃报告、系统日志流（`oslog`，开发者工具用）、打开 Web Inspector；所有设备调用都有时限 | `idevice`（锁上游 git 提交） |
 | `ictl-wda` | `WdaRunner`（XCUITestService 启动/停止）、`WdaClient`（会话、点击、W3C actions、keys、source、screenshot、appium settings、锁屏核对）、经 usbmuxd 直连设备 8100 端口的 HTTP 传输（区分连不上和请求超时）、元素树解析（纯函数，可单测） | `idevice`（`xctest`）、`quick-xml` |
 | `ictl-webinspector` | Web Inspector 服务（`com.apple.webinspector`，经 lockdown）的客户端：列出可检查的网页和 WebView、在页面里执行 JavaScript（`Target` 域和旧版直接收命令两种都支持，Promise 用 `Runtime.awaitPromise` 等待）。纯协议，消息解析可单测 | `idevice`、`plist` |
+| `ictl-l10n` | 界面文字的语言：取当前语言，`tr!` / `trf!` / `log_tr!` / `log_trf!` 宏（每条文字在代码里原地写成中英一对，见 D12） | 无 |
 | `ictl-protocol` | 控制接口的 `Request`/`Response` 类型和客户端 `call(socket, req, timeout)` | `serde`、`tokio` |
 | `ictl-sign` | Apple ID 登录（含双重认证交互）、会话持久化、注册设备、App ID、描述文件、签名 `.app`/`.ipa`（**包括 `.xctest`**；bundle 逻辑改写自 plume_utils）、签后自检 | vendored 的 `plume_core`/`plume_store`（MPL-2.0/MIT；经 plume_core 用 vendored 的 `omnisette` 和打过补丁的 `apple-codesign`） |
 | `ictl-unlock` | 锁屏密码键盘定位、逐位输入并核对密码栏、从第 2 位起先写停用标记 | `ictl-wda` |
-| `ictl-daemon` | `core`（共享状态、请求分发、快照）、`supervise`（巡检、usbmuxd 看护、后台启动 WDA、重签、会话检查）、`tools`（工具的实现、HID 后备）、`devices`（列出、选择设备）、`doctor`；通知（Bark/Telegram）、截图缩放/裁剪、控制接口服务端 | 以上全部、`tokio`、`reqwest`、`image` |
-| `ictl-mcp` | MCP stdio 服务，17 个 `iphone_*` 工具：toolkit 的 13 个 + `iphone_wait_for`、`iphone_batch`、`iphone_list_devices`、`iphone_select_device`；操作类工具可带 `then` 顺带返回操作后的界面；经控制接口调用守护进程 | `ictl-protocol`、`rmcp`（`server`、`transport-io`） |
-| `apps/iphone-control` | CLI 入口：`daemon`、`mcp`、`mcp-config`、`status`、`doctor`、`setup`、`login`、`sign`、`resign`、`passcode`、`unlock-reset`、`devices`、`select`、`wda-bridge`、`viewer`、`notify-test`；隐藏的 `debug <ddi\|hid\|screenshot\|soak\|wda\|e2e>` 真机诊断（原第 0 步 spike，不经守护进程；feature `debug-cmds`，默认不编译） | `clap` |
+| `ictl-daemon` | `core`（共享状态、请求分发、快照）、`supervise`（巡检、usbmuxd 看护、后台启动 WDA、重签、会话检查）、`tools`（工具的实现、HID 后备）、`devtools`（日志采集、崩溃报告、安装、卸载）、`web`（Web Inspector 工具，保留一条连接复用）、`devices`（列出、选择设备）、`doctor`；通知（Bark/Telegram）、截图缩放/裁剪、控制接口服务端 | 以上全部、`tokio`、`reqwest`、`image` |
+| `ictl-mcp` | MCP stdio 服务，`iphone_*` 工具 17 个，开启开发者工具后 23 个：toolkit 的 13 个 + `iphone_wait_for`、`iphone_batch`、`iphone_list_devices`、`iphone_select_device`，以及 6 个可选的开发者工具（D13）；操作类工具可带 `then` 顺带返回操作后的界面；经控制接口调用守护进程 | `ictl-protocol`、`ictl-l10n`、`rmcp`（`server`、`transport-io`） |
+| `apps/iphone-control` | CLI 入口：`daemon`、`mcp`、`mcp-config`、`status`、`doctor`、`setup`、`login`、`sign`、`resign`、`passcode`、`unlock-reset`、`devices`、`select`、`wda-bridge`、`viewer`（`viewer.rs`：本机网页看实时画面并操作）、`notify-test`；隐藏的 `debug <ddi\|hid\|screenshot\|soak\|wda\|e2e>` 真机诊断（原第 0 步 spike，不经守护进程；feature `debug-cmds`，默认不编译） | `clap` |
 
-依赖方向：`apps` → `ictl-daemon` / `ictl-mcp`；`ictl-daemon` → `ictl-unlock` → `ictl-wda` → `ictl-device`；`ictl-daemon` 还依赖 `ictl-sign` 和 `ictl-protocol`。`ictl-device` 依赖 `ictl-webinspector`。`ictl-mcp` 只依赖 `ictl-protocol`，不依赖守护进程和设备层。`apps` 的 `debug`（feature `debug-cmds`）直接调用 `ictl-device`、`ictl-wda`。
+依赖方向：`apps` → `ictl-daemon` / `ictl-mcp`，还直接依赖 `ictl-device`、`ictl-sign`；`ictl-daemon` → `ictl-unlock` → `ictl-wda` → `ictl-device`；`ictl-daemon` 还直接依赖 `ictl-webinspector`、`ictl-sign` 和 `ictl-protocol`。`ictl-device` 也依赖 `ictl-webinspector`（打开连接）。`ictl-mcp` 只依赖 `ictl-protocol` 和 `ictl-l10n`，不依赖守护进程和设备层。`ictl-l10n` 不依赖其他 crate，除 `ictl-webinspector` 外都用它。`apps` 的 `debug`（feature `debug-cmds`）直接调用 `ictl-device`、`ictl-wda`。
 
 ## 5. 截图与坐标
 
@@ -131,7 +135,7 @@
 | `ddi/` | 开发者镜像缓存（运行时下载的苹果文件）；设了 `ICTL_DDI_DIR` 时用那个目录，不用这里 | 默认 | **否，不得分发** |
 | `wda/` | 当前签好的包 `WDA-signed.ipa`。未签名包在镜像的 `/usr/share/iphone-control/WDA-unsigned.ipa`：构建时下载 Appium 官方的未签名真机包（`WebDriverAgentRunner-Runner.zip` v16.15.3，校验 sha256）重新打包。从源码运行时没有镜像，第一次签名前按同一版本下载、校验，转成 `wda/WDA-unsigned.ipa`（`crates/ictl-daemon/src/wda_pkg.rs`，版本与 Dockerfile 由单测核对）；计划改为本项目 macOS CI 编译。描述文件只嵌在签好的包里，到期时间记在 `state.json` | 默认 | 未签名包进镜像（从源码运行时在本机下载） |
 | `secrets/passcodes/<UDID>` | 各设备的锁屏密码（仅启用自动解锁时）；旧版本的 `secrets/passcode` 在只接着一台时归到那台名下 | 0600 | 否 |
-| `logs/` | 日志，按大小轮转；自动解锁停用标记 `UNLOCK-DISABLED`（与 toolkit 一致，便于人工发现；全局，不分设备） | 默认 | 否 |
+| `logs/` | 事件日志 `daemon.log`（超过 5 MB 轮转成 `.1`）；`usbmuxd.log`（自管 usbmuxd 时的输出，超过一定大小时在启动 usbmuxd 前轮转）；自动解锁停用标记 `UNLOCK-DISABLED`（与 toolkit 一致，便于人工发现；全局，不分设备） | 默认 | 否 |
 | `state.json` | 最近一次签名的 Team ID、WDA Bundle ID、描述文件到期时间；选定的设备；最近一台就绪设备的竖放屏幕尺寸和 UDID；上次重签结果 | 默认 | 否 |
 
 没有配置文件，通知渠道也一样：配置全部来自环境变量（容器里由 `.env` 注入，从源码运行时由 shell 或 systemd 的 `EnvironmentFile` 给，见 `.env.example`、`crates/ictl-daemon/src/config.rs`），都有默认值；秘密只放文件。

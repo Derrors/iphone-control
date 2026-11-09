@@ -24,6 +24,9 @@ pub mod flags {
 
 /// Fixed part of an entry before the strings
 const HEADER: usize = 129;
+/// Longest entry accepted. The phone's entries are a few hundred bytes; a length beyond this means the stream is out
+/// of step, and reading it would allocate up to 4 GB
+const MAX_ENTRY: usize = 1024 * 1024;
 
 /// One raw entry
 #[derive(Debug, Clone)]
@@ -72,6 +75,9 @@ impl OsLogStream {
                 return Err(DeviceError::Idevice("os_trace_relay: unexpected packet start".into()));
             }
             let len = u32::from_le_bytes(be4(&self.0.read_raw(4).await?)?) as usize;
+            if len > MAX_ENTRY {
+                return Err(DeviceError::Idevice(format!("os_trace_relay: entry of {len} bytes, stream out of step")));
+            }
             let packet = self.0.read_raw(len).await?;
             match parse(&packet) {
                 Some(e) => return Ok(e),

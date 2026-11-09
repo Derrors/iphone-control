@@ -16,6 +16,7 @@ pub mod machine;
 pub mod notify;
 mod supervise;
 mod tools;
+mod watchdog;
 mod wda_pkg;
 mod web;
 
@@ -64,6 +65,7 @@ pub async fn run(cfg: Config) -> anyhow::Result<()> {
 async fn serve(cfg: Config, listener: tokio::net::UnixListener) -> anyhow::Result<()> {
     let daemon = Daemon::new(cfg);
     daemon.log.log(ictl_l10n::log_tr!("守护进程启动", "Daemon started"));
+    watchdog::spawn(daemon.heartbeat.clone(), daemon.log.clone());
 
     let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
     let mut tick = tokio::time::interval(core::TICK);
@@ -80,7 +82,11 @@ async fn serve(cfg: Config, listener: tokio::net::UnixListener) -> anyhow::Resul
                 Ok((stream, _)) => {
                     conns.spawn_local(serve_conn(daemon.clone(), stream));
                 }
-                Err(e) => tracing::warn!("{}", ictl_l10n::log_trf!("控制接口 accept 失败：{e}", "Accepting on the control socket failed: {e}")),
+                Err(e) => {
+                    tracing::warn!("{}", ictl_l10n::log_trf!("控制接口 accept 失败：{e}", "Accepting on the control socket failed: {e}"));
+                    // 比如文件描述符用完：立刻重试只会空转
+                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                }
             },
             Some(_) = conns.join_next(), if !conns.is_empty() => {}
             _ = tick.tick() => {

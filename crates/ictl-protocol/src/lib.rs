@@ -207,23 +207,38 @@ impl Response {
 
 impl Request {
     /// 会改变手机状态的操作。守护进程忙时排队太久就放弃，免得点击落到已经变了的屏幕上
+    /// Every variant is listed (no `_`), so a new request type has to be classified here
     pub fn is_device_action(&self) -> bool {
-        matches!(
-            self,
+        match self {
             Self::Tap { .. }
-                | Self::TapElement { .. }
-                | Self::LongPress { .. }
-                | Self::Swipe { .. }
-                | Self::TypeText { .. }
-                | Self::PressButton { .. }
-                | Self::LaunchApp { .. }
-                | Self::TerminateApp { .. }
-                | Self::OpenUrl { .. }
-                | Self::SelectDevice { .. }
-                | Self::InstallApp { .. }
-                | Self::UninstallApp { .. }
-                | Self::WebEval { .. }
-        )
+            | Self::TapElement { .. }
+            | Self::LongPress { .. }
+            | Self::Swipe { .. }
+            | Self::TypeText { .. }
+            | Self::PressButton { .. }
+            | Self::LaunchApp { .. }
+            | Self::TerminateApp { .. }
+            | Self::OpenUrl { .. }
+            | Self::SelectDevice { .. }
+            | Self::InstallApp { .. }
+            | Self::UninstallApp { .. }
+            | Self::WebEval { .. } => true,
+            Self::Status
+            | Self::Screenshot { .. }
+            | Self::ListElements { .. }
+            | Self::ListApps { .. }
+            | Self::Settle { .. }
+            | Self::AlertCheck
+            | Self::WaitFor { .. }
+            | Self::Daemon
+            | Self::Doctor
+            | Self::Resign { .. }
+            | Self::UnlockReset
+            | Self::ListDevices
+            | Self::AppLogs { .. }
+            | Self::CrashReports { .. }
+            | Self::WebTargets => false,
+        }
     }
 }
 

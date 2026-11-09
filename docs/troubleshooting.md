@@ -7,23 +7,11 @@ iphone-control status    # current state, signing info, last log lines
 iphone-control doctor    # checks each layer in order and prints a fix for every failure
 ```
 
-The program's own messages are in Simplified Chinese; the Chinese text is quoted below so you can match it.
+Messages are in Simplified Chinese by default, and in English with `IPHONE_CONTROL_LANG=en`. The default Chinese wording is quoted below so you can match it.
 
 ## States
 
-`status` shows one of these on its first line. The daemon re-checks every 10 seconds and moves on by itself once the cause is fixed.
-
-| State (Chinese text) | Meaning | What to do |
-|---|---|---|
-| 手机未连接 | usbmuxd sees no phone | Check the cable and unlock the phone. Container: make sure no host `usbmuxd` is running (`sudo systemctl mask usbmuxd`). With several devices, a selected device that isn't connected also shows this: check the `选设备` line of `status`, or run `select auto`. See [Phone not detected](#phone-not-detected) |
-| 未配对 | No pairing record | Run `setup` and tap *Trust* on the phone |
-| 开发者模式未打开 | Developer Mode is off | *Settings → Privacy & Security → Developer Mode*. The toggle only appears after the phone has been seen by a developer tool; running `setup` takes care of that |
-| 手机锁屏，隧道建不起来 | The phone has not been unlocked since it restarted (BFU) | Unlock it once by hand. Auto-unlock cannot do this step. The state stays until then and the daemon keeps retrying |
-| WDA 还没签名安装 | WebDriverAgent is not installed | Run `sign` (or `setup`) |
-| 正在启动 WDA | Starting WebDriverAgent (up to about 2 minutes) | Wait. On iOS 27 and later, tools that only need coordinates (tap, swipe, screenshot, buttons) already work through the HID fallback. In landscape a touch needs a WDA orientation from the last 30 seconds and is refused otherwise; if the screen size isn't known, a touch returns an error. On older iOS, actions fail until WDA is up |
-| WDA 卡在手机上的「Enable UI Automation」密码框 | The phone is showing *Enter iPhone passcode for "XCTest"* | Enter the passcode on the phone. This happens after a reboot, and sometimes after the daemon is restarted several times in a row. The daemon retries every 60 seconds and notifies you once |
-| WDA 启动失败，稍后重试：… | WebDriverAgent failed for another reason | Read the error after the colon and run `doctor`. Retries back off up to 5 minutes |
-| 就绪 | Everything works | — |
+`status` shows the state on its first line. What each state means and what to do about it: [FAQ](https://derrors.github.io/iphone-control/en/troubleshoot/faq#states) (English) · [常见问题](https://derrors.github.io/iphone-control/troubleshoot/faq#状态说明) (中文).
 
 ## Phone not detected
 

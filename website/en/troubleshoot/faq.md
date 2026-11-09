@@ -9,19 +9,19 @@ iphone-control doctor    # checks each layer and prints a fix for every failure
 
 ## States
 
-The program's messages are in Chinese; here is what they mean.
+Messages are in Simplified Chinese by default, and in English with `IPHONE_CONTROL_LANG=en`. The table lists both wordings. The daemon re-checks every 10 seconds and moves on by itself once the cause is fixed.
 
 | `status` shows | Meaning | What to do |
 |---|---|---|
-| 手机未连接 | usbmuxd sees no phone | Check the cable and unlock the phone; with a usbmuxd on a Linux host, `sudo systemctl mask usbmuxd`. With several devices, a selected device that isn't connected also shows this: check the `选设备` line of `status`, or run `select auto`; see [Several devices](../guide/multi-device) |
-| 未配对 | Not paired | Run `setup` and tap *Trust* on the phone |
-| 开发者模式未打开 | Developer Mode is off | Run `setup` and follow the prompts |
-| 手机锁屏，隧道建不起来 | Not unlocked since the last reboot | Unlock it once by hand; the state stays until then and the daemon keeps retrying |
-| WDA 还没签名安装 | WDA not installed | Run `sign` or `setup` |
-| 正在启动 WDA | Starting WDA (up to about 2 minutes) | Wait. On iOS 27 and later, taps, swipes and screenshots already work through the HID fallback, but a landscape touch needs an orientation from WDA in the last 30 seconds or it is refused, and an unknown screen size returns an error; see [Tools](../guide/tools#when-wda-is-down-the-hid-fallback). On older iOS, wait for WDA |
-| WDA 卡在手机上的「Enable UI Automation」密码框 | The phone asks for the passcode for "XCTest" | Enter the passcode on the phone |
-| WDA 启动失败，稍后重试：… | Other failure | Read the error after the colon and run `doctor` |
-| 就绪 | Ready | — |
+| 手机未连接<br>Phone not connected | usbmuxd sees no phone | Check the cable and unlock the phone; with a usbmuxd on a Linux host, `sudo systemctl mask usbmuxd`. With several devices, a selected device that isn't connected also shows this: check the `选设备` (`Device`) line of `status`, or run `select auto`; see [Several devices](../guide/multi-device) |
+| 未配对<br>Not paired | No pairing record | Run `setup` and tap *Trust* on the phone |
+| 开发者模式未打开<br>Developer Mode is off | Developer Mode is off | *Settings → Privacy & Security → Developer Mode*. The toggle only appears after the phone has been seen by a developer tool; running `setup` takes care of that |
+| 手机锁屏，隧道建不起来<br>The phone is locked, the tunnel can't be opened | Not unlocked since the last reboot | Unlock it once by hand; the state stays until then and the daemon keeps retrying |
+| WDA 还没签名安装<br>WDA not signed and installed yet | WDA not installed | Run `sign` or `setup` |
+| 正在启动 WDA<br>Starting WDA | Starting WDA (up to about 2 minutes) | Wait. On iOS 27 and later, taps, swipes and screenshots already work through the HID fallback, but a landscape touch needs an orientation from WDA in the last 30 seconds or it is refused, and an unknown screen size returns an error; see [Tools](../guide/tools#when-wda-is-down-the-hid-fallback). On older iOS, wait for WDA |
+| WDA 卡在手机上的「Enable UI Automation」密码框<br>WDA is stuck at the “Enable UI Automation” passcode prompt | The phone asks for the passcode for "XCTest" | Enter the passcode on the phone. This happens after a reboot, and sometimes after the daemon is restarted several times in a row. The daemon retries every 60 seconds and notifies you once |
+| WDA 启动失败，稍后重试：…<br>WDA failed to start, retrying later: … | Other failure | Read the error after the colon and run `doctor`. Retries back off up to 5 minutes |
+| 就绪<br>Ready | Everything works | — |
 
 ## The phone isn't detected
 

@@ -26,10 +26,35 @@ const STEP: Duration = Duration::from_secs(10);
 const CLIENT_SUPPORTED_FEATURES: u64 = 140;
 
 /// 活着的媒体流。两个 UDP 套接字必须一直绑定，丢掉就会解绑端口。
+///
+/// 手机按码率不停地发 RTP 包，jktcp 给每个 UDP 端口的是无界队列：不读的话包一直堆在内存里，HID 会话开多久就
+/// 堆多久。`drain` 任务读出来直接丢掉，随媒体流结束
 pub(crate) struct ScreenMediaStream {
     client: DisplayServiceClient<Box<dyn ReadWrite>>,
-    _audio_udp: UdpSocketHandle,
-    _video_udp: UdpSocketHandle,
+    drain: tokio::task::JoinHandle<()>,
+}
+
+impl Drop for ScreenMediaStream {
+    fn drop(&mut self) {
+        // 任务持有两个套接字：中止后它们随之释放、解绑端口
+        self.drain.abort();
+    }
+}
+
+/// 读走并丢弃两个套接字上的数据，直到它们关闭
+fn drain(audio: UdpSocketHandle, video: UdpSocketHandle) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        loop {
+            // mpsc 的接收可以安全取消：没收完的包留在队列里，下一轮照样读到
+            let r = tokio::select! {
+                r = audio.recv() => r,
+                r = video.recv() => r,
+            };
+            if r.is_err() {
+                return;
+            }
+        }
+    })
 }
 
 impl ScreenMediaStream {
@@ -117,7 +142,7 @@ pub(crate) async fn start(
         return Err(e);
     }
 
-    Ok(ScreenMediaStream { client, _audio_udp: audio_udp, _video_udp: video_udp })
+    Ok(ScreenMediaStream { client, drain: drain(audio_udp, video_udp) })
 }
 
 async fn stop(client: &mut DisplayServiceClient<Box<dyn ReadWrite>>) {

@@ -146,8 +146,6 @@ impl Daemon {
             .find(|d| d.udid == target.udid)
             .cloned()
             .ok_or(ictl_l10n::tr!("设备刚刚断开了", "the device just disconnected"))?;
-        // 上一台的锁屏时间不能拿来等这一台
-        g.last_lock = None;
         self.online(g, &usb).await;
         let pin = if self.cfg.passcode_file_for(&target.udid).is_file() {
             ""

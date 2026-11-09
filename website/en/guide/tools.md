@@ -1,6 +1,6 @@
 # Tools
 
-The MCP server provides 17 tools. Coordinates are in **points**, matching the pixels of a full-screen screenshot (430×932 on an iPhone 15 Pro Max), so the agent can tap what it reads off a screenshot. Coordinates follow the screen orientation: after a rotation the same spot has different coordinates, so take a new screenshot. Screen sizes differ per device; an iPad mini 5 is 768×1024 in portrait.
+The MCP server provides 17 tools, 23 with the [developer tools](#developer-tools-opt-in). Coordinates are in **points**, matching the pixels of a full-screen screenshot (430×932 on an iPhone 15 Pro Max), so the agent can tap what it reads off a screenshot. Coordinates follow the screen orientation: after a rotation the same spot has different coordinates, so take a new screenshot. Screen sizes differ per device; an iPad mini 5 is 768×1024 in portrait.
 
 ## Looking at the screen
 
@@ -45,12 +45,14 @@ Set `IPHONE_CONTROL_DEV_TOOLS=1` for the MCP server to get six more tools. They 
 
 | Tool | What it does |
 |---|---|
-| `iphone_app_logs` | Read the phone's log (default, Error and Fault levels; Debug and Info would slow the phone down), filtered by app or process, text and time. Recording starts with the first call: call it, reproduce the problem, call it again |
+| `iphone_app_logs` | Read the phone's log (default, Error and Fault levels; Debug and Info would slow the phone down), filtered by app or process, text and time. Recording starts with the first call: call it, reproduce the problem, call it again. The buffer is limited, and the result says how far back it reaches |
 | `iphone_crash_reports` | List crash reports, or read one |
 | `iphone_install_app` | Install a signed `.ipa` or `.app` (a path on the machine that runs the daemon) |
-| `iphone_uninstall_app` | Remove an app and its data; never the WebDriverAgent runner |
+| `iphone_uninstall_app` | Remove an app and its data. Takes only a bundle ID or the full display name (case-insensitive); anything else, or a name several apps share, is refused and the candidates are listed. Never the WebDriverAgent runner |
 | `iphone_web_targets` | List inspectable web pages and WebViews (Safari tabs, debug builds of hybrid apps); the app must be in the foreground |
 | `iphone_web_eval` | Run JavaScript in a page and get the result as JSON: faster, cheaper and more accurate than screenshots for web content |
+
+None of these tools unlock the phone. Read [Security](./security) before turning them on.
 
 ## See the screen after an action: `then`
 

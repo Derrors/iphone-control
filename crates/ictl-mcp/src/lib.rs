@@ -24,12 +24,12 @@ pub fn instructions() -> &'static str {
         "控制一台通过 USB 连接的真实 iPhone(或 iPad)。坐标单位是点(pt),与 iphone_screenshot 图像像素一致。\
 操作前先用 iphone_screenshot 或 iphone_list_elements 看清屏幕;能按名字点就优先用 iphone_tap_element。\
 游戏、地图等界面没有元素树,只能看截图按坐标操作;小图标、小字看不清时用 iphone_screenshot 的区域放大。\
-配置了锁屏密码时,截图、读元素在内的各工具都会先自动解锁。每次操作后再截图确认结果。\
+配置了锁屏密码时,截图、读元素和操作类工具会先自动解锁(iphone_status、列 App、列设备、切换设备和开发者工具不会,按 lock 键也不会)。每次操作后再截图确认结果。\
 涉及付款、删除、发送消息、修改账号或隐私设置的操作,先向用户确认。\
 省时间:操作类工具可带 then=elements 或 then=screenshot,等界面稳定后顺带返回操作后的界面,不用再单独调一次;\
 几步确定的连续操作(按键、逐级点菜单、填表)用 iphone_batch 一次发完;等页面加载用 iphone_wait_for,不要反复截图。\
 接着多台 iPhone/iPad 时同一时间只控制一台:用 iphone_list_devices 查看,iphone_select_device 切换。",
-        "Controls a real iPhone (or iPad) connected over USB. Coordinates are in points (pt), the same as the pixels of an iphone_screenshot image. Before acting, look at the screen with iphone_screenshot or iphone_list_elements; prefer iphone_tap_element whenever the target has text. Games, maps and similar screens have no element tree: work from screenshots and coordinates, and zoom into small icons or text with an iphone_screenshot region. If a passcode is configured, the tools (including screenshots and reading elements) unlock the phone first. Check the result with a screenshot after each action. Ask the user before anything that pays, deletes, sends a message, or changes account or privacy settings. Save time: action tools accept then=elements or then=screenshot to return the screen once it has settled, without a separate call; send a few predictable steps in a row (keys, menu levels, forms) as one iphone_batch; wait for a page with iphone_wait_for instead of repeated screenshots. With several iPhones/iPads connected only one is controlled at a time: see them with iphone_list_devices, switch with iphone_select_device."
+        "Controls a real iPhone (or iPad) connected over USB. Coordinates are in points (pt), the same as the pixels of an iphone_screenshot image. Before acting, look at the screen with iphone_screenshot or iphone_list_elements; prefer iphone_tap_element whenever the target has text. Games, maps and similar screens have no element tree: work from screenshots and coordinates, and zoom into small icons or text with an iphone_screenshot region. If a passcode is configured, screenshots, reading elements and the action tools unlock the phone first (iphone_status, listing apps or devices, switching devices and the developer tools don't, nor does pressing lock). Check the result with a screenshot after each action. Ask the user before anything that pays, deletes, sends a message, or changes account or privacy settings. Save time: action tools accept then=elements or then=screenshot to return the screen once it has settled, without a separate call; send a few predictable steps in a row (keys, menu levels, forms) as one iphone_batch; wait for a page with iphone_wait_for instead of repeated screenshots. With several iPhones/iPads connected only one is controlled at a time: see them with iphone_list_devices, switch with iphone_select_device."
     )
 }
 
@@ -788,17 +788,40 @@ pub fn tap_missed(text: &str, outcome: Option<protocol::Outcome>) -> bool {
 
 /// 不带 then 的操作做完后要不要查系统弹窗（弹窗挡着时操作都落在弹窗上，WDA 照样报成功）。
 /// 按键自己处理（Home 先查弹窗；锁屏后不用查），结束 App 后前台是主屏，不会冒出新弹窗
+/// Every variant is listed (no `_`), so a new request type has to be decided here
 pub fn wants_alert_check(req: &Request) -> bool {
-    // 切换设备后新设备的 WDA 还没起来，查不了弹窗
-    req.is_device_action()
-        && !matches!(
-            req,
-            Request::PressButton { .. }
-                | Request::TerminateApp { .. }
-                | Request::SelectDevice { .. }
-                | Request::InstallApp { .. }
-                | Request::UninstallApp { .. }
-        )
+    match req {
+        Request::Tap { .. }
+        | Request::TapElement { .. }
+        | Request::LongPress { .. }
+        | Request::Swipe { .. }
+        | Request::TypeText { .. }
+        | Request::LaunchApp { .. }
+        | Request::OpenUrl { .. } => true,
+        // 按键见 PressButton 自己的弹窗处理；切换设备后新设备的 WDA 还没起来，查不了弹窗；
+        // 安装、卸载、Web Inspector 不碰屏幕（Web Inspector 也不该为它排队等设备锁）
+        Request::PressButton { .. }
+        | Request::TerminateApp { .. }
+        | Request::SelectDevice { .. }
+        | Request::InstallApp { .. }
+        | Request::UninstallApp { .. }
+        | Request::WebEval { .. }
+        | Request::Status
+        | Request::Screenshot { .. }
+        | Request::ListElements { .. }
+        | Request::ListApps { .. }
+        | Request::Settle { .. }
+        | Request::AlertCheck
+        | Request::WaitFor { .. }
+        | Request::Daemon
+        | Request::Doctor
+        | Request::Resign { .. }
+        | Request::UnlockReset
+        | Request::ListDevices
+        | Request::AppLogs { .. }
+        | Request::CrashReports { .. }
+        | Request::WebTargets => false,
+    }
 }
 
 /// 守护进程响应 → MCP 结果。错误走工具错误（is_error），文字原样给客户端

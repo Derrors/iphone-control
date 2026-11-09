@@ -1,6 +1,6 @@
 # macOS 真机验证
 
-> **下面的验证记录早于 0.1.3**：多设备工具（`iphone_list_devices`、`iphone_select_device`，命令 `devices`、`select`）没有在 macOS 上验证过。
+> **下面的验证记录早于 0.1.3**：多设备工具（`iphone_list_devices`、`iphone_select_device`，命令 `devices`、`select`）、实时画面 `viewer`、开发者工具（`IPHONE_CONTROL_DEV_TOOLS`）和英文界面（`IPHONE_CONTROL_LANG=en`）都没有在 macOS 上验证过。
 
 CI 已经确认项目在 macOS（Apple Silicon）上能编译、链接，单元测试全部通过（PR #12），但单元测试不连手机。这份文档是在一台插着 iPhone 的 Mac 上要跑的步骤，换了 macOS、iOS 版本或机型时可以照着重跑一遍。
 

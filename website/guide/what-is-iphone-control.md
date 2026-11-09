@@ -32,7 +32,7 @@ iphone-control 让 AI agent（例如 Claude）操作一台用数据线接在 Lin
 其他机型和 iOS 版本应该也能用，但还没测过，欢迎[反馈](https://github.com/Derrors/iphone-control/issues)。
 
 ::: tip 输出语言
-命令行、`doctor` 的输出和 MCP 工具返回的文字目前都是简体中文。
+命令行、`doctor` 的输出和 MCP 工具返回的文字默认是简体中文，设 `IPHONE_CONTROL_LANG=en` 切换英文，见[配置](./configuration)。
 :::
 
 ## 限制

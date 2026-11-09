@@ -1,6 +1,6 @@
 # CLI
 
-Every command is `iphone-control <command>`. With Docker, prefix it with `docker exec -it iphone-control`; for a source install and on macOS, run it directly. `--help` shows help, `--version` the version. Output is in Simplified Chinese.
+Every command is `iphone-control <command>`. With Docker, prefix it with `docker exec -it iphone-control`; for a source install and on macOS, run it directly. `--help` shows help, `--version` the version. Output is in Simplified Chinese by default; set `IPHONE_CONTROL_LANG=en` for English.
 
 ## Global options
 
@@ -61,12 +61,12 @@ See [Auto-unlock](./auto-unlock). `--device` takes a UDID or name, and the devic
 |---|---|
 | `notify-test [event]` | Send test notifications: one per event type, or one type (`resign`, `session`, `pin`, `pin-recovered`, `unlock`, `offline`, `online`) |
 | `wda-bridge [--port <port>]` | Expose WDA on `127.0.0.1` (default port 8100) for other tools. WDA has no authentication and every local user can reach it, so stop it when done |
-| `viewer [--port <port>]` | Live screen in the browser at `http://127.0.0.1:8200/` (default port): click to tap, drag to swipe, hold to long-press, plus a text field and the hardware buttons. Taps and typing go through the daemon like an MCP call, so they queue with the agent and unlock the phone first. Every local user can reach the port, so stop it when done |
+| `viewer [--port <port>]` | Live screen in the browser at `http://127.0.0.1:8200/` (default port): click to tap, drag to swipe, hold to long-press, plus a text field and the hardware buttons. Taps and typing go through the daemon like an MCP call, so they queue with the agent and unlock the phone first. It belongs to the device controlled when it starts: after switching to another device its actions are refused and you need to run it again. The picture is WDA's MJPEG stream, so there is none until WDA is ready. Every local user can reach the port, so stop it when done |
 
 The `debug` subcommand for diagnostics isn't compiled by default; see the [contributing guide](https://github.com/Derrors/iphone-control/blob/main/CONTRIBUTING.md#testing-on-a-real-phone).
 
 ## Notes
 
-- **Need the daemon running:** `setup`, `status`, `doctor`, `sign`, `resign`, `devices`, `select`, `unlock-reset`, and MCP tool calls.
+- **Need the daemon running:** `setup`, `status`, `doctor`, `sign`, `resign`, `devices`, `select`, `unlock-reset`, `wda-bridge`, `viewer`, and MCP tool calls.
 - **Need an interactive terminal:** `setup`, `login`, `passcode set`; use `-it` with Docker.
-- **Environment variables:** the CLI reads the environment of the current shell. For a source install and on macOS, only the daemon loads `~/.config/iphone-control/env`; before `login`, `setup` (if you set `ICTL_ANISETTE_URL`) or `notify-test`, run `set -a; . ~/.config/iphone-control/env; set +a`.
+- **Environment variables:** the CLI reads the environment of the current shell. For a source install and on macOS, only the daemon loads `~/.config/iphone-control/env`; before `login`, `setup` (if you set `ICTL_ANISETTE_URL`), `notify-test` or `mcp-config`, run `set -a; . ~/.config/iphone-control/env; set +a`.

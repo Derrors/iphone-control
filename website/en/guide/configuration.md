@@ -12,12 +12,21 @@ Everything is configured with environment variables, and all of them are optiona
 | Variable | Default | Meaning |
 |---|---|---|
 | `HTTP_PROXY` / `HTTPS_PROXY` | direct | Proxy for Apple, anisette, Developer Disk Image and notification traffic |
-| `IPHONE_CONTROL_LANG` | `zh` | Language: `zh` or `en`. Applies to tool descriptions and results, CLI output, logs and notifications. The MCP server and the CLI each send their own setting and the daemon answers in it; logs and notifications follow the daemon's own setting. So for a source install also set it in the MCP client config (`iphone-control mcp-config` includes it) |
-| `IPHONE_CONTROL_DEV_TOOLS` | off | `1` adds the [developer tools](./tools#developer-tools-opt-in) to the MCP server: logs, crash reports, installing and removing apps, and Web Inspector (JavaScript in web pages and WebViews). For a source install set it in the MCP client config (`iphone-control mcp-config` includes it when set) |
+| `IPHONE_CONTROL_LANG` | `zh` | Language: `zh` or `en`. Applies to tool descriptions and results, CLI output, logs and notifications. The MCP server and the CLI each send their own setting and the daemon answers in it; logs and notifications follow the daemon's own setting. For a source install, see the note below the table |
+| `IPHONE_CONTROL_DEV_TOOLS` | off | `1` adds the [developer tools](./tools#developer-tools-opt-in) to the MCP server: logs, crash reports, installing and removing apps, and Web Inspector (JavaScript in web pages and WebViews). See [Security](./security) for the risks. For a source install, see the note below the table |
 | `IPHONE_UDID` | automatic | Pin the device to control. Unset: the controlled device is kept until it disconnects, and you can switch with the `select` command or the `iphone_select_device` tool. When set, switching is refused |
 | `RESIGN_MIN_DAYS` | `2` | Re-sign when fewer days than this remain |
 | `RESIGN_CHECK_HOURS` | `6` | How often to check; it is also checked within a minute after the phone reconnects or you switch devices |
 | `OFFLINE_ALERT_MIN` | `10` | Notify after the phone has been offline this many minutes; `0` disables |
+
+For a source install and on macOS, only the daemon loads `~/.config/iphone-control/env`. The AI client starts the MCP server, which never reads that file, so `IPHONE_CONTROL_LANG` and `IPHONE_CONTROL_DEV_TOOLS` have to go into the MCP configuration. `iphone-control mcp-config` reads the environment of the current shell, so load the file first and the registration command it prints will include them:
+
+```bash
+set -a; . ~/.config/iphone-control/env; set +a
+iphone-control mcp-config
+```
+
+For clients configured with JSON, see [Connect an AI Client](./mcp-clients#claude-desktop-cursor-and-others).
 
 Notification variables: see [Notifications](./notifications).
 

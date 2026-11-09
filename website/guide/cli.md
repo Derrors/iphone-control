@@ -61,12 +61,12 @@
 |---|---|
 | `notify-test [事件]` | 发测试通知：每类事件各一条，或只发一类（`resign`、`session`、`pin`、`pin-recovered`、`unlock`、`offline`、`online`） |
 | `wda-bridge [--port <端口>]` | 把 WDA 桥接到 `127.0.0.1`，端口默认 8100，给别的工具用。WDA 没有认证，本机任何用户都能连上，用完就停 |
-| `viewer [--port <端口>]` | 在浏览器里看实时画面，地址 `http://127.0.0.1:8200/`（默认端口）：点一下是点击，拖动是滑动，按住是长按，另有输入框和硬件键。点击、输入和 MCP 调用一样经守护进程，和 agent 的操作排队，并先自动解锁。本机任何用户都能连上这个端口，用完就停 |
+| `viewer [--port <端口>]` | 在浏览器里看实时画面，地址 `http://127.0.0.1:8200/`（默认端口）：点一下是点击，拖动是滑动，按住是长按，另有输入框和硬件键。点击、输入和 MCP 调用一样经守护进程，和 agent 的操作排队，并先自动解锁。绑定启动时正在控制的设备：切换到别的设备后操作会被拒绝，要重新运行。画面来自 WDA 的 MJPEG 流，WDA 没就绪时没有画面。本机任何用户都能连上这个端口，用完就停 |
 
 调试用的 `debug` 子命令默认不编译，见[贡献指南](https://github.com/Derrors/iphone-control/blob/main/CONTRIBUTING.md#testing-on-a-real-phone)。
 
 ## 使用说明
 
-- **要守护进程在运行的：** `setup`、`status`、`doctor`、`sign`、`resign`、`devices`、`select`、`unlock-reset`，以及 MCP 工具调用。
+- **要守护进程在运行的：** `setup`、`status`、`doctor`、`sign`、`resign`、`devices`、`select`、`unlock-reset`、`wda-bridge`、`viewer`，以及 MCP 工具调用。
 - **要在终端里交互运行的：** `setup`、`login`、`passcode set`，Docker 部署要带 `-it`。
-- **环境变量：** 命令行读的是当前 shell 的环境。从源码运行和在 macOS 上，`~/.config/iphone-control/env` 只有守护进程会加载；用 `login`、`setup`（如果配了 `ICTL_ANISETTE_URL`）、`notify-test` 前先运行 `set -a; . ~/.config/iphone-control/env; set +a`。
+- **环境变量：** 命令行读的是当前 shell 的环境。从源码运行和在 macOS 上，`~/.config/iphone-control/env` 只有守护进程会加载；用 `login`、`setup`（如果配了 `ICTL_ANISETTE_URL`）、`notify-test`、`mcp-config` 前先运行 `set -a; . ~/.config/iphone-control/env; set +a`。

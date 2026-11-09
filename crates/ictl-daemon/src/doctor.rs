@@ -120,7 +120,7 @@ impl Daemon {
                 if g.device.is_some() {
                     self.refresh_device_profile(g).await;
                 }
-                let whose = match &g.device_profile {
+                let whose = match &g.dev.device_profile {
                     DeviceProfile::Expires(_) => {
                         ictl_l10n::tr!("这台手机上的描述文件", "The provisioning profile on this phone")
                     }
@@ -130,8 +130,8 @@ impl Daemon {
                     }
                     _ => ictl_l10n::tr!("描述文件", "The provisioning profile"),
                 };
-                match g.device_profile.left(&g.persisted) {
-                    _ if g.device_profile == DeviceProfile::Missing => {
+                match g.dev.device_profile.left(&g.persisted) {
+                    _ if g.dev.device_profile == DeviceProfile::Missing => {
                         out.push(
                             ictl_l10n::tr!("❌ 这台手机上没有装当前 Apple ID 签的 WDA\n     → iphone-control setup(会把这台手机注册到 Apple ID 并装上 WDA)", "❌ No WDA signed by the current Apple ID on this phone\n     → iphone-control setup (registers this phone with the Apple ID and installs WDA)")
                                 .into(),

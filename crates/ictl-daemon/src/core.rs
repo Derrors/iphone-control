@@ -253,6 +253,9 @@ pub struct Daemon {
     pub log: EventLog,
     pub(crate) inner: Mutex<Inner>,
     snap: watch::Sender<Snapshot>,
+    /// The kept Web Inspector connection (developer tools), separate from `inner` so a slow page doesn't hold up
+    /// taps and screenshots; see [`crate::web`]
+    pub(crate) web: Mutex<Option<crate::web::WebConn>>,
 }
 
 /// 停掉 HID 会话（屏幕媒体流），隧道保留。媒体流不停的话手机一直以为「配对的电脑」在看屏幕：
@@ -367,7 +370,7 @@ impl Daemon {
             log_tail: Vec::new(),
         };
         let (snap, _) = watch::channel(first);
-        Arc::new(Self { cfg, log, inner: Mutex::new(inner), snap })
+        Arc::new(Self { cfg, log, inner: Mutex::new(inner), snap, web: Mutex::new(None) })
     }
 
     /// 自动解锁配置：用设备 `udid` 自己的密码。没接设备时密码文件不存在（自动解锁不可用）

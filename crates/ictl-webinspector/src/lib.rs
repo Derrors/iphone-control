@@ -123,12 +123,12 @@ impl WebInspector {
     /// applications that don't answer in time are left out
     pub async fn pages(&mut self, wait: Duration) -> Result<(Vec<App>, Vec<Page>)> {
         let deadline = Instant::now() + wait;
-        if !self.reported {
-            self.send("_rpc_getConnectedApplications:", Dictionary::new()).await?;
-            while !self.reported {
-                if !self.recv_until(deadline).await? {
-                    return Err(Error::Timeout("the list of applications"));
-                }
+        // asked again every time: on a kept connection, applications may have come and gone since
+        self.reported = false;
+        self.send("_rpc_getConnectedApplications:", Dictionary::new()).await?;
+        while !self.reported {
+            if !self.recv_until(deadline).await? {
+                return Err(Error::Timeout("the list of applications"));
             }
         }
         self.listings.clear();
@@ -346,6 +346,10 @@ impl WebInspector {
 fn unchunk_into(partial: &mut Vec<u8>, msg: Dictionary) -> Result<Option<Dictionary>> {
     let arg = msg.get("__argument").and_then(Value::as_dictionary);
     if let Some(part) = arg.and_then(|a| a.get("WIRPartialMessageKey")).and_then(Value::as_data) {
+        if partial.len() + part.len() > MAX_MESSAGE {
+            partial.clear();
+            return Err(Error::Protocol(format!("split message over {MAX_MESSAGE} bytes")));
+        }
         partial.extend_from_slice(part);
         return Ok(None);
     }
@@ -442,6 +446,27 @@ mod tests {
 
     fn dict(v: serde_json::Value) -> Dictionary {
         plist::to_value(&v).unwrap().into_dictionary().unwrap()
+    }
+
+    #[test]
+    fn split_messages_are_capped() {
+        let part = |n: usize| dict(json!({"__argument": {}})).tap_part(n);
+        let mut partial = vec![0u8; MAX_MESSAGE - 10];
+        assert!(unchunk_into(&mut partial, part(20)).is_err());
+        assert!(partial.is_empty(), "the pieces are dropped");
+        assert!(unchunk_into(&mut partial, part(20)).unwrap().is_none(), "a new message can start");
+    }
+
+    trait TapPart {
+        fn tap_part(self, n: usize) -> Dictionary;
+    }
+    impl TapPart for Dictionary {
+        fn tap_part(mut self, n: usize) -> Dictionary {
+            let mut a = Dictionary::new();
+            a.insert("WIRPartialMessageKey".into(), Value::Data(vec![0; n]));
+            self.insert("__argument".into(), Value::Dictionary(a));
+            self
+        }
     }
 
     #[test]

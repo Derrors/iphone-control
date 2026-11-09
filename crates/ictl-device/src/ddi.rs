@@ -54,7 +54,7 @@ pub async fn ensure_cache(dir: &Path, base_url: &str) -> Result<PathBuf> {
     if stamp.as_deref().is_some_and(|s| s.trim() != base_url) {
         tracing::info!(
             "{}",
-            ictl_l10n::tr!(
+            ictl_l10n::log_tr!(
                 "开发者镜像下载地址变了，重新下载",
                 "The developer disk image download URL changed, downloading again"
             )
@@ -79,7 +79,7 @@ pub async fn ensure_cache(dir: &Path, base_url: &str) -> Result<PathBuf> {
             continue;
         }
         let url = format!("{}/{name}", base_url.trim_end_matches('/'));
-        tracing::info!("{}", ictl_l10n::trf!("下载开发者镜像 {url}", "Downloading the developer disk image {url}"));
+        tracing::info!("{}", ictl_l10n::log_trf!("下载开发者镜像 {url}", "Downloading the developer disk image {url}"));
         let resp = client
             .get(&url)
             .send()

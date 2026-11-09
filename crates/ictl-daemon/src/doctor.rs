@@ -177,7 +177,7 @@ impl Daemon {
                 fails += 1;
             }
         }
-        if let Some(r) = &g.persisted.last_resign {
+        if let Some(r) = g.persisted.last_resign_text() {
             out.push(ictl_l10n::trf!("   上次重签：{r}", "   Last re-sign: {r}"));
         }
 

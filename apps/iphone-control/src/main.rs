@@ -207,13 +207,15 @@ fn mcp_config(container: Option<String>, socket: &Path) -> anyhow::Result<String
     let in_container = Path::new("/.dockerenv").exists() || Path::new("/run/.containerenv").exists();
     let container = container
         .or_else(|| in_container.then(|| env_nonempty("CONTAINER_NAME").unwrap_or_else(|| "iphone-control".into())));
+    // 英文时把语言写进注册命令：直接调用时 MCP 客户端不带用户 shell 的环境；容器里一般由 .env 继承，
+    // 但只给这一次 docker exec 设了语言（.env 里没有）时，不写进去 MCP 就还是中文
+    let lang = |flag: &str| if ictl_l10n::is_en() { format!("{flag} {}=en ", ictl_l10n::ENV) } else { String::new() };
     Ok(match container {
-        Some(c) => format!("claude mcp add iphone -s user -- docker exec -i {c} iphone-control mcp"),
+        Some(c) => format!("claude mcp add iphone -s user -- docker exec -i {}{c} iphone-control mcp", lang("-e")),
         None => {
             let exe = std::env::current_exe()
                 .context(ictl_l10n::tr!("找不到本程序的路径", "can't find the path of this program"))?;
-            // 容器里的 MCP 进程继承容器的 .env；直接调用时语言要写进 MCP 配置
-            let lang = if ictl_l10n::is_en() { format!("-e {}=en ", ictl_l10n::ENV) } else { String::new() };
+            let lang = lang("-e");
             format!(
                 "claude mcp add iphone -s user {lang}-- {} --socket {} mcp",
                 shell_quote(&exe.to_string_lossy()),
@@ -348,7 +350,7 @@ async fn status(socket: &Path) -> anyhow::Result<()> {
             }
         }
     }
-    if let Some(r) = &p.last_resign {
+    if let Some(r) = p.last_resign_text() {
         println!("{}", ictl_l10n::trf!("上次重签  {r}", "Re-signed {r}"));
     }
     let unlock = match (s.auto_unlock, s.unlock_disabled) {
@@ -830,7 +832,7 @@ async fn wda_bridge(socket: &Path, port: u16) -> anyhow::Result<()> {
         let device = device.clone();
         tokio::spawn(async move {
             if let Err(e) = bridge_conn(client, &device).await {
-                tracing::warn!("{}", ictl_l10n::trf!("桥接连接出错：{e}", "Bridge connection error: {e}"));
+                tracing::warn!("{}", ictl_l10n::log_trf!("桥接连接出错：{e}", "Bridge connection error: {e}"));
             }
         });
     }
@@ -880,7 +882,20 @@ fn host_is_loopback(head: &[u8]) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::host_is_loopback;
+    use super::{host_is_loopback, mcp_config};
+    use ictl_l10n::{Lang, with_lang};
+    use std::path::Path;
+
+    /// 英文时注册命令带上语言（容器里也带：只给这次 docker exec 设了语言时，.env 里没有）；中文和以前一样
+    #[test]
+    fn mcp_config_carries_english() {
+        let cmd = |l| with_lang(l, || mcp_config(Some("ic".into()), Path::new("/s")).unwrap());
+        assert_eq!(cmd(Lang::Zh), "claude mcp add iphone -s user -- docker exec -i ic iphone-control mcp");
+        assert_eq!(
+            cmd(Lang::En),
+            "claude mcp add iphone -s user -- docker exec -i -e IPHONE_CONTROL_LANG=en ic iphone-control mcp"
+        );
+    }
 
     #[test]
     fn bridge_only_accepts_loopback_host() {

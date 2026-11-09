@@ -125,7 +125,7 @@ pub async fn send(cfg: &NotifyConfig, title: &str, body: &str) -> usize {
         Err(e) => {
             tracing::warn!(
                 "{}",
-                ictl_l10n::trf!("通知客户端创建失败：{e}", "Creating the notification client failed: {e}")
+                ictl_l10n::log_trf!("通知客户端创建失败：{e}", "Creating the notification client failed: {e}")
             );
             return 0;
         }
@@ -142,7 +142,7 @@ pub async fn send(cfg: &NotifyConfig, title: &str, body: &str) -> usize {
             Ok(_) => ok += 1,
             Err(e) => tracing::warn!(
                 "{}",
-                ictl_l10n::trf!("Telegram 发送失败：{}", "Sending via Telegram failed: {}", e.without_url())
+                ictl_l10n::log_trf!("Telegram 发送失败：{}", "Sending via Telegram failed: {}", e.without_url())
             ),
         }
     }
@@ -157,7 +157,7 @@ pub async fn send(cfg: &NotifyConfig, title: &str, body: &str) -> usize {
             Ok(_) => ok += 1,
             Err(e) => tracing::warn!(
                 "{}",
-                ictl_l10n::trf!("Bark 发送失败：{}", "Sending via Bark failed: {}", e.without_url())
+                ictl_l10n::log_trf!("Bark 发送失败：{}", "Sending via Bark failed: {}", e.without_url())
             ),
         }
     }

@@ -126,7 +126,7 @@ async fn stop(client: &mut DisplayServiceClient<Box<dyn ReadWrite>>) {
         Ok(Err(e)) => tracing::debug!("stop_media_stream: {e}"),
         Err(_) => tracing::warn!(
             "{}",
-            ictl_l10n::tr!(
+            ictl_l10n::log_tr!(
                 "停止屏幕媒体流超时，手机上可能还挂着屏幕共享会话",
                 "Stopping the screen media stream timed out; a screen sharing session may still be open on the phone"
             )

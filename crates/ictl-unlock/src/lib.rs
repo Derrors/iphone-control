@@ -132,7 +132,7 @@ pub async fn ensure_unlocked<T: Transport>(wda: &mut WdaClient<T>, cfg: &UnlockC
     if let Err(e) = wda.set_idle_settings(restore).await {
         tracing::warn!(
             "{}",
-            ictl_l10n::trf!("恢复 WDA 等待设置失败：{e}", "Restoring the WDA wait settings failed: {e}")
+            ictl_l10n::log_trf!("恢复 WDA 等待设置失败：{e}", "Restoring the WDA wait settings failed: {e}")
         );
     }
     r
@@ -229,7 +229,10 @@ async fn unlock<T: Transport>(wda: &mut WdaClient<T>, cfg: &UnlockConfig, code: 
             Err(e @ WdaError::Remote { .. }) => {
                 tracing::info!(
                     "{}",
-                    ictl_l10n::trf!("唤醒/上滑失败，重来一轮：{e}", "Wake/swipe up failed, trying another round: {e}")
+                    ictl_l10n::log_trf!(
+                        "唤醒/上滑失败，重来一轮：{e}",
+                        "Wake/swipe up failed, trying another round: {e}"
+                    )
                 );
                 continue;
             }
@@ -298,7 +301,7 @@ async fn unlock<T: Transport>(wda: &mut WdaClient<T>, cfg: &UnlockConfig, code: 
         if let Err(e) = std::fs::remove_file(&cfg.disabled_flag) {
             tracing::warn!(
                 "{}",
-                ictl_l10n::trf!(
+                ictl_l10n::log_trf!(
                     "撤掉停用标记失败，自动解锁保持停用：{e}",
                     "Removing the disabled flag failed, auto-unlock stays disabled: {e}"
                 )
@@ -355,7 +358,7 @@ async fn enter_rest<T: Transport>(
         // 归零、密码栏消失等：可能已经凑满提交了，按提交处理去确认
         tracing::warn!(
             "{}",
-            ictl_l10n::trf!(
+            ictl_l10n::log_trf!(
                 "第 {n} 位按后密码栏变成 {got} 位，可能已提交，确认结果",
                 "After digit {n} the passcode field shows {got} digits; it may have been submitted, checking the result"
             )

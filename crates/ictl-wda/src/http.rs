@@ -116,7 +116,7 @@ impl Transport for DeviceTransport {
         match &r {
             Ok((status, _)) => tracing::debug!(
                 "{}",
-                ictl_l10n::trf!(
+                ictl_l10n::log_trf!(
                     "wda {method} {short} → {status}（{:.2}s）",
                     "wda {method} {short} → {status} ({:.2}s)",
                     t0.elapsed().as_secs_f64()
@@ -124,7 +124,7 @@ impl Transport for DeviceTransport {
             ),
             Err(e) => tracing::debug!(
                 "{}",
-                ictl_l10n::trf!(
+                ictl_l10n::log_trf!(
                     "wda {method} {short} 失败（{:.2}s）：{e}",
                     "wda {method} {short} failed ({:.2}s): {e}",
                     t0.elapsed().as_secs_f64()

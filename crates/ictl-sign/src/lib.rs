@@ -199,7 +199,7 @@ impl Session {
                 {
                     tracing::warn!(
                         "{}",
-                        ictl_l10n::trf!(
+                        ictl_l10n::log_trf!(
                             "合并 {} 的 entitlements 失败，只用描述文件里的：{e}",
                             "Merging the entitlements of {} failed, using only those from the provisioning profile: {e}",
                             b.dir.display()
@@ -210,7 +210,7 @@ impl Session {
                 let xml = String::from_utf8_lossy(&prov.entitlements_as_bytes()?).into_owned();
                 settings.set_entitlements_xml(SettingsScope::Main, xml)?;
             }
-            tracing::info!("{}", ictl_l10n::trf!("签名 {}", "Signing {}", b.dir.display()));
+            tracing::info!("{}", ictl_l10n::log_trf!("签名 {}", "Signing {}", b.dir.display()));
             UnifiedSigner::new(settings).sign_path_in_place(&b.dir)?;
         }
         if let Some(key) = &cert.key {

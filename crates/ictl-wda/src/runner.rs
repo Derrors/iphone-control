@@ -105,7 +105,7 @@ impl XCUITestListener for ErrorListener {
     }
 
     async fn did_begin_initializing_for_ui_testing(&mut self) -> std::result::Result<(), IdeviceError> {
-        tracing::debug!("{}", ictl_l10n::tr!("xctest: 开始初始化 UI 测试", "xctest: initializing the UI test"));
+        tracing::debug!("{}", ictl_l10n::log_tr!("xctest: 开始初始化 UI 测试", "xctest: initializing the UI test"));
         Ok(())
     }
 
@@ -120,7 +120,7 @@ impl XCUITestListener for ErrorListener {
     }
 
     async fn did_begin_executing_test_plan(&mut self) -> std::result::Result<(), IdeviceError> {
-        tracing::debug!("{}", ictl_l10n::tr!("xctest: 开始执行测试计划", "xctest: running the test plan"));
+        tracing::debug!("{}", ictl_l10n::log_tr!("xctest: 开始执行测试计划", "xctest: running the test plan"));
         self.0.lock().unwrap().plan_started = true;
         Ok(())
     }
@@ -201,7 +201,7 @@ impl WdaRunner {
                     announced = true;
                     tracing::info!(
                         "{}",
-                        ictl_l10n::tr!(
+                        ictl_l10n::log_tr!(
                             "runner 在等手机上的「Enable UI Automation」密码",
                             "the runner is waiting for the “Enable UI Automation” passcode on the phone"
                         )
@@ -222,7 +222,7 @@ impl WdaRunner {
                 fallback_logged = true;
                 tracing::info!(
                     "{}",
-                    ictl_l10n::trf!(
+                    ictl_l10n::log_trf!(
                         "{} 秒内没收到 runner 开始执行测试计划的回调，改为直接查 /status",
                         "No callback that the runner started the test plan within {} seconds; querying /status directly",
                         PLAN_START_FALLBACK.as_secs()

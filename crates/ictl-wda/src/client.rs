@@ -226,7 +226,7 @@ impl<T: Transport> WdaClient<T> {
             Err(e) => {
                 tracing::debug!(
                     "{}",
-                    ictl_l10n::trf!(
+                    ictl_l10n::log_trf!(
                         "读屏幕方向失败，按缓存的屏幕尺寸算：{e}",
                         "Reading the screen orientation failed, using the cached screen size: {e}"
                     )
@@ -286,7 +286,7 @@ impl<T: Transport> WdaClient<T> {
             Err(e) => {
                 tracing::debug!(
                     "{}",
-                    ictl_l10n::trf!(
+                    ictl_l10n::log_trf!(
                         "核对锁屏界面失败，按{}处理：{e}",
                         "Checking the lock screen failed, going by {}: {e}",
                         if strict {
@@ -305,7 +305,7 @@ impl<T: Transport> WdaClient<T> {
             (false, elements::CoverSheet::Locked) => {
                 tracing::info!(
                     "{}",
-                    ictl_l10n::tr!(
+                    ictl_l10n::log_tr!(
                         "WDA 报未锁屏，但屏幕上是锁屏界面（WDA 在锁屏时启动，状态未同步）",
                         "WDA says unlocked, but the screen shows the lock screen (WDA started while locked and its state is stale)"
                     )
@@ -413,7 +413,7 @@ impl<T: Transport> WdaClient<T> {
         if let Err(e) = self.set_idle_settings(b).await {
             tracing::warn!(
                 "{}",
-                ictl_l10n::trf!(
+                ictl_l10n::log_trf!(
                     "轮询后恢复 WDA 等待设置失败：{e}",
                     "Restoring the WDA wait settings after polling failed: {e}"
                 )
@@ -443,7 +443,7 @@ impl<T: Transport> WdaClient<T> {
         if let Err(e) = self.set_idle_settings(baseline).await {
             tracing::warn!(
                 "{}",
-                ictl_l10n::trf!(
+                ictl_l10n::log_trf!(
                     "手势后恢复 WDA 等待设置失败：{e}",
                     "Restoring the WDA wait settings after the gesture failed: {e}"
                 )

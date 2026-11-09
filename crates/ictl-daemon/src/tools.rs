@@ -698,7 +698,10 @@ impl Daemon {
                 match w.lock().await {
                     Ok(()) => true,
                     Err(e) => {
-                        tracing::info!("{}", ictl_l10n::trf!("WDA 锁屏报错：{e}", "WDA lock returned an error: {e}"));
+                        tracing::info!(
+                            "{}",
+                            ictl_l10n::log_trf!("WDA 锁屏报错：{e}", "WDA lock returned an error: {e}")
+                        );
                         w.wda_reports_locked().await.unwrap_or(false)
                     }
                 }
@@ -837,7 +840,7 @@ async fn press_home(w: &mut WdaClient<DeviceTransport>) -> Result<String, WdaErr
             Err(e) if via_hid => {
                 tracing::info!(
                     "{}",
-                    ictl_l10n::trf!(
+                    ictl_l10n::log_trf!(
                         "经 IOHID 按 Home 报错,改用 XCTest：{e}",
                         "Pressing Home via IOHID failed, using XCTest: {e}"
                     )
@@ -860,7 +863,7 @@ async fn press_home(w: &mut WdaClient<DeviceTransport>) -> Result<String, WdaErr
         if via_hid {
             tracing::info!(
                 "{}",
-                ictl_l10n::trf!(
+                ictl_l10n::log_trf!(
                     "经 IOHID 按 Home 后前台还是 {app},改用 XCTest 再按一次",
                     "After pressing Home via IOHID the foreground is still {app}, pressing again via XCTest"
                 )
@@ -879,7 +882,7 @@ async fn lock_by_power_hid(w: &mut WdaClient<DeviceTransport>) -> bool {
     if let Err(e) = w.press_power_hid().await {
         tracing::info!(
             "{}",
-            ictl_l10n::trf!("经 IOHID 按电源键报错：{e}", "Pressing the power key via IOHID failed: {e}")
+            ictl_l10n::log_trf!("经 IOHID 按电源键报错：{e}", "Pressing the power key via IOHID failed: {e}")
         );
         return false;
     }
@@ -891,7 +894,7 @@ async fn lock_by_power_hid(w: &mut WdaClient<DeviceTransport>) -> bool {
         if Instant::now() >= deadline {
             tracing::info!(
                 "{}",
-                ictl_l10n::trf!(
+                ictl_l10n::log_trf!(
                     "经 IOHID 按电源键后 {} 秒还没锁屏,改用 WDA 的锁屏",
                     "Still not locked {} s after pressing the power key via IOHID, using WDA's lock",
                     LOCK_WAIT.as_secs()
@@ -986,7 +989,9 @@ async fn poll_stable(
 
 /// 判断画面动没动用的缩略图。解码是 CPU 活，放到阻塞线程
 async fn thumbnail(png: Vec<u8>) -> Result<Vec<u8>, String> {
-    tokio::task::spawn_blocking(move || imaging::thumbnail(&png))
+    // 阻塞线程上没有请求的语言，带过去（解码失败的报错会返回给调用方）
+    let lang = ictl_l10n::lang();
+    tokio::task::spawn_blocking(move || ictl_l10n::with_lang(lang, || imaging::thumbnail(&png)))
         .await
         .map_err(|e| ictl_l10n::trf!("图像处理任务异常：{e}", "Image processing task failed: {e}"))?
 }

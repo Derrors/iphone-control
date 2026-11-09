@@ -331,7 +331,7 @@ impl Device {
                 Err(e) => {
                     tracing::warn!(
                         "{}",
-                        ictl_l10n::trf!("读设备信息 {key} 失败：{e}", "Reading device info {key} failed: {e}")
+                        ictl_l10n::log_trf!("读设备信息 {key} 失败：{e}", "Reading device info {key} failed: {e}")
                     );
                     String::new()
                 }

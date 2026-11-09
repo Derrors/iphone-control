@@ -12,6 +12,10 @@ All notable changes to this project are documented here. The format is based on 
 - The MCP server sends its language with each request and the daemon answers in it; requests from older clients carry none and get Chinese as before, so mixed versions during an upgrade keep working.
 - Text responses carry an optional `outcome` (`tapped_nothing`, `alert_reported`), so the MCP server no longer reads result text to stop a batch after a missed tap or to skip the extra alert check. Responses without it (older daemons) are still recognised by their Chinese prefixes.
 
+### Fixed
+
+- Scroll bars are dropped from element lists in every system language, not only Chinese and English: they are recognised by their percentage value and thin shape instead of their label. On a German iPhone, for example, lines like `Other "Vertikaler Rollbalken, 1 Seite"` no longer appear.
+
 ## [0.1.4] - 2026-11-07
 
 ### Security

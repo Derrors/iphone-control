@@ -44,6 +44,9 @@ idevice = { version = "=0.1.68", default-features = false, features = [
     "installation_proxy",
     "misagent",
     "xctest",
+    # developer tools (IPHONE_CONTROL_DEV_TOOLS): os_trace logs, crash reports
+    "syslog_relay",
+    "crashreportcopymobile",
 ] }
 rmcp = { version = "=3.8.0", features = ["server", "transport-io"] }
 tokio = { version = "=1.54.1", features = ["full"] }

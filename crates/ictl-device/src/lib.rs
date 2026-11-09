@@ -14,6 +14,7 @@ pub mod apps;
 pub mod ddi;
 pub mod hid;
 mod media;
+pub mod oslog;
 
 use std::future::Future;
 use std::path::Path;
@@ -25,6 +26,7 @@ use idevice::{
     amfi::AmfiClient,
     core_device::{ImageFormat, ScreenCaptureServiceClient},
     core_device_proxy::CoreDeviceProxy,
+    crashreportcopymobile::CrashReportCopyMobileClient,
     cryptexd::{Cryptex1Assets, install_ddi, installed_ddi},
     installation_proxy::InstallationProxyClient,
     lockdown::LockdownClient,
@@ -37,6 +39,49 @@ use idevice::{
 
 pub use apps::AppInfo;
 pub use hid::{Button, HidSession};
+
+/// A running log stream from the phone; see [`Device::log_stream`]
+pub struct LogStream(oslog::OsLogStream);
+
+/// One line of the phone's unified log
+#[derive(Debug, Clone)]
+pub struct LogEntry {
+    pub pid: u32,
+    /// Path of the process' executable
+    pub process: String,
+    pub level: LogLevel,
+    pub subsystem: Option<String>,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LogLevel {
+    Debug,
+    Info,
+    Notice,
+    Error,
+    Fault,
+}
+
+impl LogStream {
+    /// The next entry; an error means the stream is gone (phone unplugged, service stopped)
+    pub async fn next(&mut self) -> Result<LogEntry> {
+        let e = self.0.next().await?;
+        Ok(LogEntry {
+            pid: e.pid,
+            process: e.filename,
+            level: match e.level {
+                1 => LogLevel::Info,
+                2 => LogLevel::Debug,
+                0x10 => LogLevel::Error,
+                0x11 => LogLevel::Fault,
+                _ => LogLevel::Notice,
+            },
+            subsystem: e.subsystem.map(|(s, c)| format!("{s}:{c}")),
+            message: e.message,
+        })
+    }
+}
 
 /// 连接标签，出现在设备日志里
 pub const LABEL: &str = "iphone-control";
@@ -411,6 +456,48 @@ impl Device {
             Ok(())
         })
         .await
+    }
+
+    /// Removes an app by bundle ID (installation_proxy)
+    pub async fn uninstall(&self, bundle_id: &str) -> Result<()> {
+        limit(ictl_l10n::tr!("卸载", "uninstall"), Duration::from_secs(120), async {
+            let mut proxy = InstallationProxyClient::connect(&*self.provider).await?;
+            proxy.uninstall(bundle_id, None).await?;
+            Ok(())
+        })
+        .await
+    }
+
+    /// Names of the crash reports in the top directory, after asking the phone to move new ones there
+    pub async fn crash_reports(&self) -> Result<Vec<String>> {
+        limit(ictl_l10n::tr!("列出崩溃报告", "list crash reports"), Duration::from_secs(30), async {
+            // without the flush, reports from the last minutes may not be visible yet; it is only a hint
+            let _ = idevice::crashreportcopymobile::flush_reports(&*self.provider).await;
+            let mut c = CrashReportCopyMobileClient::connect(&*self.provider).await?;
+            Ok(c.ls(None).await?)
+        })
+        .await
+    }
+
+    /// One crash report's content
+    pub async fn crash_report(&self, name: &str) -> Result<Vec<u8>> {
+        limit(ictl_l10n::tr!("读取崩溃报告", "read crash report"), Duration::from_secs(30), async {
+            let mut c = CrashReportCopyMobileClient::connect(&*self.provider).await?;
+            Ok(c.pull(name).await?)
+        })
+        .await
+    }
+
+    /// Starts the phone's unified log stream (os_trace_relay), every process, without debug messages.
+    /// Asking for debug messages (what idevice's `start_trace` does) makes every process on the phone produce them:
+    /// about 650 lines a second instead of about 80 on an idle iPhone 15 Pro Max (iOS 27.0.1), and gestures got
+    /// slower and some failed while the stream ran. Info messages come along with debug, so they are left out too
+    pub async fn log_stream(&self) -> Result<LogStream> {
+        let flags = oslog::flags::IDEVICE_DEFAULT & !oslog::flags::DEBUG;
+        let inner =
+            limit(ictl_l10n::tr!("打开日志流", "open the log stream"), QUERY, oslog::start(&*self.provider, flags))
+                .await?;
+        Ok(LogStream(inner))
     }
 }
 

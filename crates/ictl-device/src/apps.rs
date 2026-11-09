@@ -6,6 +6,8 @@ use std::collections::HashMap;
 pub struct AppInfo {
     pub name: String,
     pub bundle_id: String,
+    /// CFBundleExecutable: the process name the app runs as (for filtering its logs)
+    pub executable: String,
 }
 
 /// 解析 installation_proxy `Lookup` 的结果，按名字排序。
@@ -29,7 +31,8 @@ pub fn parse_apps(lookup: HashMap<String, plist::Value>) -> Vec<AppInfo> {
                 .unwrap_or_default()
                 .to_owned();
             let bundle_id = d.get("CFBundleIdentifier").and_then(|v| v.as_string()).unwrap_or(&bid).to_owned();
-            Some(AppInfo { name, bundle_id })
+            let executable = d.get("CFBundleExecutable").and_then(|v| v.as_string()).unwrap_or_default().to_owned();
+            Some(AppInfo { name, bundle_id, executable })
         })
         .collect();
     out.sort_by(|a, b| a.name.cmp(&b.name).then_with(|| a.bundle_id.cmp(&b.bundle_id)));
@@ -92,7 +95,11 @@ mod tests {
     #[test]
     fn hidden_system_services_are_skipped() {
         let s = system();
-        assert!(s.contains(&AppInfo { name: "设置".into(), bundle_id: "com.apple.Preferences".into() }));
+        assert!(s.contains(&AppInfo {
+            name: "设置".into(),
+            bundle_id: "com.apple.Preferences".into(),
+            executable: String::new()
+        }));
         assert!(s.iter().all(|a| a.bundle_id != "com.apple.NewDeviceSetupUIService"));
         assert_eq!(s.iter().filter(|a| a.name == "设置").count(), 1);
     }

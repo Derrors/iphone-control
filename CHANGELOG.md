@@ -12,6 +12,7 @@ All notable changes to this project are documented here. The format is based on 
 - The MCP server and the CLI send their language with each request and the daemon answers in it; requests from older clients carry none and get Chinese as before, so mixed versions during an upgrade keep working. `mcp-config` includes the setting when English is on.
 - Text responses carry an optional `outcome` (`tapped_nothing`, `alert_reported`), so the MCP server no longer reads result text to stop a batch after a missed tap or to skip the extra alert check. Responses without it (older daemons) are still recognised by their Chinese prefixes.
 - `iphone-control viewer [--port]`: watch and control the phone live in a browser (opt-in, 127.0.0.1:8200 by default). Taps, swipes, long presses, typing and buttons go through the daemon, so they queue with the agent's calls and unlock the phone first. It binds the loopback address only, checks `Host`, and also checks `Origin` on actions; other local users can reach the port, so stop it when done.
+- Developer tools, opt-in with `IPHONE_CONTROL_DEV_TOOLS=1`: `iphone_app_logs` (the phone's unified log, filtered by app or process, text and time), `iphone_crash_reports`, `iphone_install_app` and `iphone_uninstall_app` (both marked destructive; uninstalling the WebDriverAgent runner is refused). Without the switch the tool list is unchanged.
 
 ### Fixed
 

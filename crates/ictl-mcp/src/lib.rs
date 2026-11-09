@@ -118,9 +118,102 @@ fn acting(title: &str, destructive: bool, idempotent: bool) -> ToolAnnotations {
     ToolAnnotations::with_title(title).read_only(false).destructive(destructive).idempotent(idempotent).open_world(true)
 }
 
+/// Names of the developer tools, listed only with [`dev_tools_enabled`]
+pub const DEV_TOOLS: [&str; 4] =
+    ["iphone_app_logs", "iphone_crash_reports", "iphone_install_app", "iphone_uninstall_app"];
+
+/// `IPHONE_CONTROL_DEV_TOOLS=1` (or true/yes/on) adds the developer tools; off by default, so agents that don't
+/// need them don't pay for their descriptions
+pub fn dev_tools_enabled() -> bool {
+    std::env::var("IPHONE_CONTROL_DEV_TOOLS")
+        .is_ok_and(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+}
+
+/// The tools this server lists: the 17 standard ones, plus the developer tools when switched on
+pub fn tools() -> Vec<Tool> {
+    tools_with(dev_tools_enabled())
+}
+
+pub fn tools_with(dev: bool) -> Vec<Tool> {
+    let mut v = standard_tools();
+    if dev {
+        v.extend(dev_tools());
+    }
+    v
+}
+
+fn dev_tools() -> Vec<Tool> {
+    let t = |name: &'static str, desc: &str, s: Map<String, Value>, a: ToolAnnotations| {
+        Tool::new(name, desc.to_owned(), s).with_annotations(a)
+    };
+    vec![
+        t(
+            "iphone_app_logs",
+            ictl_l10n::tr!(
+                "读手机的系统日志(os_log,默认、Error、Fault 级别;Debug、Info 不记录,记录它们会拖慢手机),可按 App 或进程、关键词、时间筛选,每行:多少秒前、进程[pid]、级别、子系统、内容。\n\n\
+何时用:App 崩溃、报错、请求失败、界面没反应时,不靠截图找原因。第一次调用才开始记录(之前的拿不到):先调一次,复现问题,再调一次。\
+记录在 15 分钟没有调用后自动停止。只读。",
+                "Read the phone's system log (os_log, default, Error and Fault levels; Debug and Info aren't recorded, since streaming them slows the phone down), filtered by app or process, keyword and time; one line per entry: seconds ago, process[pid], level, subsystem, message.\n\nWhen to use: when an app crashes, shows an error, a request fails or the UI doesn't respond, to find the cause without screenshots. Recording starts with the first call (earlier lines aren't available): call it once, reproduce the problem, then call it again. Recording stops by itself after 15 minutes without a call. Read-only."
+            ),
+            schema(
+                json!({
+                    "process": {"type": "string", "default": "", "description": ictl_l10n::tr!("App 的显示名或 Bundle ID,或进程名(如 SpringBoard);空为全部", "app display name or bundle ID, or a process name (e.g. SpringBoard); empty for all")},
+                    "grep": {"type": "string", "default": "", "description": ictl_l10n::tr!("只要内容或子系统包含这段文字的行(不分大小写)", "only lines whose message or subsystem contains this text (case-insensitive)")},
+                    "since": {"type": "number", "default": 60, "description": ictl_l10n::tr!("只看最近多少秒,最多 3600", "only the last this many seconds, at most 3600")},
+                    "limit": {"type": "integer", "default": 100, "description": ictl_l10n::tr!("最多返回多少行(最新的),1 到 1000", "at most this many lines (the newest), 1 to 1000")},
+                    "errors_only": {"type": "boolean", "default": false, "description": ictl_l10n::tr!("只看 Error 和 Fault 级别", "only Error and Fault levels")}
+                }),
+                &[],
+            ),
+            looking(ictl_l10n::tr!("读日志", "Read logs")),
+        ),
+        t(
+            "iphone_crash_reports",
+            ictl_l10n::tr!(
+                "列出手机上的崩溃报告(新的在前,最多 50 个),或用 name 读取其中一份(.ips,开头是异常类型、崩溃的线程和 App 版本)。\n\n\
+何时用:App 闪退后找原因。只读。",
+                "List the crash reports on the phone (newest first, at most 50), or read one with name (.ips; the start has the exception type, the crashed thread and the app version).\n\nWhen to use: to find out why an app quit unexpectedly. Read-only."
+            ),
+            schema(
+                json!({
+                    "filter": {"type": "string", "default": "", "description": ictl_l10n::tr!("只列文件名包含这段文字的(如进程名)", "only list file names containing this text (e.g. the process name)")},
+                    "name": {"type": "string", "default": "", "description": ictl_l10n::tr!("要读取的报告文件名(来自列表);给了就返回内容", "file name of the report to read (from the list); if given, returns its content")}
+                }),
+                &[],
+            ),
+            looking(ictl_l10n::tr!("崩溃报告", "Crash reports")),
+        ),
+        t(
+            "iphone_install_app",
+            ictl_l10n::tr!(
+                "安装签好名的 .ipa 或 .app(覆盖已装的同一 App)。path 是运行守护进程的机器上的路径,容器部署时是容器里的路径。\
+大的包要一两分钟。",
+                "Install a signed .ipa or .app (replacing the same app if installed). path is on the machine that runs the daemon; inside the container for a container deployment. Large packages take a minute or two."
+            ),
+            schema(
+                json!({"path": {"type": "string", "description": ictl_l10n::tr!(".ipa 文件或 .app 目录的路径", "path of the .ipa file or .app directory")}}),
+                &["path"],
+            ),
+            acting(ictl_l10n::tr!("安装 App", "Install app"), true, true),
+        ),
+        t(
+            "iphone_uninstall_app",
+            ictl_l10n::tr!(
+                "卸载 App,连同它的数据。不会卸载 WebDriverAgent(iphone-control 靠它控制手机)。卸载前先问用户。",
+                "Uninstall an app, together with its data. Refuses to remove WebDriverAgent, which iphone-control needs to control the phone. Ask the user before uninstalling."
+            ),
+            schema(
+                json!({"app": {"type": "string", "description": ictl_l10n::tr!("Bundle ID 或显示名", "bundle ID or display name")}}),
+                &["app"],
+            ),
+            acting(ictl_l10n::tr!("卸载 App", "Uninstall app"), true, true),
+        ),
+    ]
+}
+
 /// 17 个工具的定义（toolkit 的 13 个 + iphone_wait_for、iphone_batch、iphone_list_devices、iphone_select_device）。
 /// 描述可以改写，但工具名、参数、默认返回不改（docs/decisions.md D10）
-pub fn tools() -> Vec<Tool> {
+fn standard_tools() -> Vec<Tool> {
     let t = |name: &'static str, desc: String, s: Map<String, Value>, a: ToolAnnotations| {
         Tool::new(name, desc, s).with_annotations(a)
     };
@@ -502,6 +595,16 @@ pub fn to_request(name: &str, args: &Map<String, Value>) -> Result<Request, Stri
         "iphone_open_url" => Request::OpenUrl { url: a.s("url")? },
         "iphone_list_devices" => Request::ListDevices,
         "iphone_select_device" => Request::SelectDevice { device: a.s("device")? },
+        "iphone_app_logs" => Request::AppLogs {
+            process: a.s_or("process", "")?,
+            grep: a.s_or("grep", "")?,
+            since_secs: a.u_or("since", 60)? as u64,
+            limit: a.u_or("limit", 100)?,
+            errors_only: a.b_or("errors_only", false)?,
+        },
+        "iphone_crash_reports" => Request::CrashReports { filter: a.s_or("filter", "")?, name: a.s_or("name", "")? },
+        "iphone_install_app" => Request::InstallApp { path: a.s("path")? },
+        "iphone_uninstall_app" => Request::UninstallApp { app: a.s("app")? },
         "iphone_wait_for" => {
             let secs = a.f_or("timeout", 5.0)?;
             if !(0.0..=30.0).contains(&secs) {
@@ -639,7 +742,14 @@ pub fn tap_missed(text: &str, outcome: Option<protocol::Outcome>) -> bool {
 pub fn wants_alert_check(req: &Request) -> bool {
     // 切换设备后新设备的 WDA 还没起来，查不了弹窗
     req.is_device_action()
-        && !matches!(req, Request::PressButton { .. } | Request::TerminateApp { .. } | Request::SelectDevice { .. })
+        && !matches!(
+            req,
+            Request::PressButton { .. }
+                | Request::TerminateApp { .. }
+                | Request::SelectDevice { .. }
+                | Request::InstallApp { .. }
+                | Request::UninstallApp { .. }
+        )
 }
 
 /// 守护进程响应 → MCP 结果。错误走工具错误（is_error），文字原样给客户端
@@ -695,6 +805,14 @@ impl McpServer {
         if request.name == "iphone_batch" {
             return Ok(self.batch(&args, then).await.into());
         }
+        if DEV_TOOLS.contains(&&*request.name) && !dev_tools_enabled() {
+            let name = &request.name;
+            return Ok(to_result(Response::error(ictl_l10n::trf!(
+                "{name} 是开发者工具,要先设 IPHONE_CONTROL_DEV_TOOLS=1",
+                "{name} is a developer tool; set IPHONE_CONTROL_DEV_TOOLS=1 first"
+            )))
+            .into());
+        }
         let req = match to_request(&request.name, &args) {
             Ok(r) => r,
             Err(e) => return Ok(to_result(Response::error(e)).into()),
@@ -718,8 +836,10 @@ impl McpServer {
 
     /// `expect_udid`：守护进程正在控制的不是这台就不执行（见 [`protocol::EXPECT_UDID`]）
     async fn call_on(&self, req: &Request, expect_udid: Option<&str>) -> Response {
-        // 守护进程正忙（例如在自动解锁）时会排队；最多等 150 秒，免得 agent 一直挂着
-        protocol::call_expecting(&self.socket, req, Some(Duration::from_secs(150)), expect_udid).await.unwrap_or_else(
+        // 守护进程正忙（例如在自动解锁）时会排队；最多等 150 秒，免得 agent 一直挂着。An install uploads the package and
+        // can take several minutes on its own
+        let wait = if matches!(req, Request::InstallApp { .. }) { 660 } else { 150 };
+        protocol::call_expecting(&self.socket, req, Some(Duration::from_secs(wait)), expect_udid).await.unwrap_or_else(
             |e| {
                 Response::error(ictl_l10n::trf!("连不上守护进程({}):{e};确认守护进程在运行(容器部署看 iphone-control 容器)", "Can't reach the daemon ({}): {e}; make sure the daemon is running (for a container deployment, check the iphone-control container)",
                     self.socket.display()
@@ -871,7 +991,7 @@ mod tests {
         use ictl_l10n::{Lang, with_lang};
         with_lang(Lang::En, || {
             assert!(!has_cjk(instructions()), "{}", instructions());
-            for t in tools() {
+            for t in tools_with(true) {
                 let json = serde_json::to_string(&t).unwrap();
                 assert!(!has_cjk(&json), "{}: {json}", t.name);
             }
@@ -892,6 +1012,10 @@ mod tests {
     fn toolkit_tools_plus_wait_for_batch_and_devices() {
         let names: Vec<_> = tools().iter().map(|t| t.name.to_string()).collect();
         assert_eq!(names.len(), 17);
+        // the developer tools only with IPHONE_CONTROL_DEV_TOOLS
+        let dev: Vec<_> = tools_with(true).iter().skip(17).map(|t| t.name.to_string()).collect();
+        assert_eq!(dev, DEV_TOOLS);
+        assert_eq!(tools_with(false).len(), 17);
         for n in [
             "iphone_status",
             "iphone_screenshot",
@@ -902,7 +1026,7 @@ mod tests {
         ] {
             assert!(names.contains(&n.to_owned()), "{n}");
         }
-        for t in tools().into_iter().filter(|t| t.name != "iphone_batch") {
+        for t in tools_with(true).into_iter().filter(|t| t.name != "iphone_batch") {
             let no_required = t.input_schema.get("required").unwrap().as_array().unwrap().is_empty();
             assert_eq!(to_request(&t.name, &Map::new()).is_ok(), no_required, "{}", t.name);
         }
@@ -911,7 +1035,7 @@ mod tests {
     /// 注解与工具实际行为一致：看界面的只读，改界面的不是；每个参数都有说明
     #[test]
     fn annotations_and_param_docs() {
-        for t in tools() {
+        for t in tools_with(true) {
             let a = t.annotations.as_ref().unwrap_or_else(|| panic!("{} 没有注解", t.name));
             assert!(a.title.is_some(), "{}", t.name);
             let probe = || {

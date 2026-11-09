@@ -10,7 +10,7 @@
 
 | 依赖 | 用途 | 许可证 | 使用方式 | 义务 |
 |---|---|---|---|---|
-| idevice（上游 master `89702099`） | 设备通讯 | MIT | git 依赖（`[patch.crates-io]`，0.1.68 之后未发版的修复）；`ictl-device/src/media.rs` 与 HID 键码表改写自它的 tools（MIT） | 保留版权声明 |
+| idevice（上游 master `89702099`） | 设备通讯 | MIT | git 依赖（`[patch.crates-io]`，0.1.68 之后未发版的修复）；`ictl-device/src/media.rs` 与 HID 键码表改写自它的 tools、`oslog.rs` 的日志条目格式取自它的 os_trace_relay（MIT） | 保留版权声明 |
 | jktcp 0.1.8 | 用户态 TCP（idevice 间接依赖） | MIT | 间接依赖 | 同上 |
 | plume_core（Impactor） | Apple ID、开发者 API、描述文件、证书 | **MPL-2.0**（目录内 LICENSE） | vendor 到 `vendor/plume_core`，源码未改，只改了 Cargo.toml（workspace 继承、reqwest 不带 aws-lc-rs、omnisette 只开远程 anisette） | 以 MPL-2.0 随仓库提供源码；文件头保留 |
 | plume_store（Impactor） | 账号会话存储 | MIT（Impactor 根 LICENSE） | vendor 到 `vendor/plume_store`，源码未改 | 保留版权声明（`vendor/plume_store/LICENSE-MIT-Impactor`） |

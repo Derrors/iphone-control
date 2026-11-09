@@ -205,6 +205,8 @@ impl Daemon {
             self.drop_session(g).await;
             g.offline_since = Some(now);
             g.apps.clear();
+            // 日志采集属于那台设备：不再控制它就停掉，不让旧设备的日志流再跑到闲置超时
+            g.log_capture = None;
         }
         self.set_state(g, DeviceState::Absent);
         let since = *g.offline_since.get_or_insert(now);
@@ -237,6 +239,8 @@ impl Daemon {
             g.device_profile = DeviceProfile::NotChecked;
             // App 列表是上一台的（同一台重新接入也重读，便宜）
             g.apps.clear();
+            // 日志采集属于那台设备：不再控制它就停掉，不让旧设备的日志流再跑到闲置超时
+            g.log_capture = None;
             g.wda_rotation = None;
             let d = Device::from_usb(seen);
             g.info = d.info().await.ok();

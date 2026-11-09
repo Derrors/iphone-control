@@ -12,6 +12,7 @@
 - MCP 和命令行在每个请求里带上自己的语言，守护进程按它回答；旧版本客户端的请求不带语言，照旧用中文，升级过程中新旧版本混用也不受影响。开着英文时 `mcp-config` 会把这个设置带上。
 - 文字响应带可选的 `outcome`（`tapped_nothing`、`alert_reported`），MCP 端据此在没点到时停下批量、跳过多余的弹窗检查，不再从结果文字里认；没有这个字段的响应（旧版本守护进程）照旧按中文开头认。
 - `iphone-control viewer [--port]`：在浏览器里看实时画面并操作手机（默认 127.0.0.1:8200，显式开启）。点击、滑动、长按、输入和按键都经守护进程，和 agent 的调用排队，并先自动解锁。只绑本机回环地址，检查 `Host`，操作还检查 `Origin`；本机其他用户能连上这个端口，用完就停。
+- 开发者工具，设 `IPHONE_CONTROL_DEV_TOOLS=1` 开启：`iphone_app_logs`（手机的系统日志，可按 App 或进程、文字、时间筛选）、`iphone_crash_reports`、`iphone_install_app` 和 `iphone_uninstall_app`（后两个标为破坏性操作；拒绝卸载 WebDriverAgent）。不设就和原来一样，工具列表不变。
 
 ### 修复
 

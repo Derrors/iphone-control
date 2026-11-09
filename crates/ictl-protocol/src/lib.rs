@@ -123,6 +123,33 @@ pub enum Request {
     SelectDevice {
         device: String,
     },
+    /// Developer tools: the phone's unified log. `process` is an app (name or bundle ID) or a process name, empty for
+    /// all; `grep` matches message or subsystem; only lines from the last `since_secs` seconds
+    AppLogs {
+        #[serde(default)]
+        process: String,
+        #[serde(default)]
+        grep: String,
+        since_secs: u64,
+        limit: usize,
+        #[serde(default)]
+        errors_only: bool,
+    },
+    /// Developer tools: list crash reports (filtered by `filter`), or return the one called `name`
+    CrashReports {
+        #[serde(default)]
+        filter: String,
+        #[serde(default)]
+        name: String,
+    },
+    /// Developer tools: install a signed .ipa or .app from a path on the daemon's machine
+    InstallApp {
+        path: String,
+    },
+    /// Developer tools: remove an app (never the WebDriverAgent runner)
+    UninstallApp {
+        app: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -184,6 +211,8 @@ impl Request {
                 | Self::TerminateApp { .. }
                 | Self::OpenUrl { .. }
                 | Self::SelectDevice { .. }
+                | Self::InstallApp { .. }
+                | Self::UninstallApp { .. }
         )
     }
 }

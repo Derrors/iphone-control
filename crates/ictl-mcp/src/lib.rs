@@ -150,10 +150,10 @@ fn dev_tools() -> Vec<Tool> {
         t(
             "iphone_app_logs",
             ictl_l10n::tr!(
-                "读手机的系统日志(os_log),可按 App 或进程、关键词、时间筛选,每行:多少秒前、进程[pid]、级别、子系统、内容。\n\n\
+                "读手机的系统日志(os_log,默认、Error、Fault 级别;Debug、Info 不记录,记录它们会拖慢手机),可按 App 或进程、关键词、时间筛选,每行:多少秒前、进程[pid]、级别、子系统、内容。\n\n\
 何时用:App 崩溃、报错、请求失败、界面没反应时,不靠截图找原因。第一次调用才开始记录(之前的拿不到):先调一次,复现问题,再调一次。\
 记录在 15 分钟没有调用后自动停止。只读。",
-                "Read the phone's system log (os_log), filtered by app or process, keyword and time; one line per entry: seconds ago, process[pid], level, subsystem, message.\n\nWhen to use: when an app crashes, shows an error, a request fails or the UI doesn't respond, to find the cause without screenshots. Recording starts with the first call (earlier lines aren't available): call it once, reproduce the problem, then call it again. Recording stops by itself after 15 minutes without a call. Read-only."
+                "Read the phone's system log (os_log, default, Error and Fault levels; Debug and Info aren't recorded, since streaming them slows the phone down), filtered by app or process, keyword and time; one line per entry: seconds ago, process[pid], level, subsystem, message.\n\nWhen to use: when an app crashes, shows an error, a request fails or the UI doesn't respond, to find the cause without screenshots. Recording starts with the first call (earlier lines aren't available): call it once, reproduce the problem, then call it again. Recording stops by itself after 15 minutes without a call. Read-only."
             ),
             schema(
                 json!({

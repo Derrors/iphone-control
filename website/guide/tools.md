@@ -45,7 +45,7 @@ MCP 服务提供 17 个工具。坐标单位是**点**，和整屏截图的像�
 
 | 工具 | 作用 |
 |---|---|
-| `iphone_app_logs` | 读手机的系统日志，可按 App 或进程、文字、时间筛选。第一次调用才开始记录：先调一次，复现问题，再调一次 |
+| `iphone_app_logs` | 读手机的系统日志（默认、Error、Fault 级别；Debug、Info 会拖慢手机，不记录），可按 App 或进程、文字、时间筛选。第一次调用才开始记录：先调一次，复现问题，再调一次 |
 | `iphone_crash_reports` | 列出崩溃报告，或读取其中一份 |
 | `iphone_install_app` | 安装签好名的 `.ipa` 或 `.app`（路径在运行守护进程的机器上） |
 | `iphone_uninstall_app` | 卸载 App 及其数据；不会卸载 WebDriverAgent |

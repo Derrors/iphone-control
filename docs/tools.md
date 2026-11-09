@@ -43,7 +43,7 @@ With `IPHONE_CONTROL_DEV_TOOLS=1` in the MCP server's environment, four more too
 
 | Tool | Parameters | Notes |
 |---|---|---|
-| `iphone_app_logs` | `process`, `grep`, `since` (60 s), `limit` (100), `errors_only` | The phone's unified log (os_log), one line per entry: seconds ago, `process[pid]`, level, subsystem, message. `process` is an app (name or bundle ID) or a process name. The first call starts recording, so earlier lines aren't available: call it once, reproduce the problem, call it again. Recording keeps the last 20,000 lines and stops after 15 minutes without a call. Read-only |
+| `iphone_app_logs` | `process`, `grep`, `since` (60 s), `limit` (100), `errors_only` | The phone's unified log (os_log) at the default, Error and Fault levels, one line per entry (Debug and Info are left out: streaming them makes every process on the phone produce them and slows it down): seconds ago, `process[pid]`, level, subsystem, message. `process` is an app (name or bundle ID) or a process name. The first call starts recording, so earlier lines aren't available: call it once, reproduce the problem, call it again. Recording keeps the last 20,000 lines and stops after 15 minutes without a call. Read-only |
 | `iphone_crash_reports` | `filter`, `name` | Lists crash reports, newest first (at most 50); with `name`, returns that report (`.ips`, cut at 40,000 characters). Read-only |
 | `iphone_install_app` | `path` | Installs a signed `.ipa` or `.app` from a path on the machine that runs the daemon (inside the container for a container deployment). Destructive: it replaces an installed copy of the same app |
 | `iphone_uninstall_app` | `app` | Removes an app and its data. Refuses to remove the WebDriverAgent runner. Destructive |

@@ -8,8 +8,9 @@
 //! the device goes offline, and by itself after [`IDLE`] without a request, so a session that used the tool once
 //! doesn't keep a log stream running.
 //!
-//! The phone streams every process at every level (the service has no level filter), easily hundreds of lines a
-//! second, so the buffer is bounded by size as well as by count ([`MAX_BYTES`]): messages are cut to
+//! The stream leaves out debug and info messages (see `ictl_device::Device::log_stream`: asking for them slows the
+//! phone). It is still every process, tens of lines a second, so the buffer is bounded by size as well as by count
+//! ([`MAX_BYTES`]): messages are cut to
 //! [`MAX_LINE_CHARS`] and processes kept by name only when they arrive. How far back it reaches depends on how busy
 //! the phone is, so every answer says so.
 

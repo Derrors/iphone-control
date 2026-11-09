@@ -13,6 +13,7 @@
 | Impactor `omnisette` | 同上 | MPL-2.0 | `vendor/omnisette` | `src/lib.rs` 加了 `anisette_url_v3()`/`set_anisette_url_v3()`（原来 v3 地址没有 setter，自建 anisette 服务配不进去；改动处有注释，文件仍是 MPL-2.0）；Cargo.toml 展开 workspace 继承；reqwest 用 `rustls-no-provider`；本地 anisette（StoreServicesCore，要苹果 Android 版的 `libstoreservicescore.so` 和没有许可证声明的 git 依赖 `android-loader`）改成可选 feature `local-anisette`，默认 feature 里保留与上游一致，本项目不启用（只用远程 anisette v3） |
 | Impactor `plume_utils` | 同上 | MIT | 未 vendor；`crates/ictl-sign/src/bundle.rs` 改写自其 `bundle.rs` | 增加 `BundleType::XCTest`，修复 `.xctest` 漏签 |
 | idevice tools | v0.1.68 | MIT | `crates/ictl-device/src/media.rs`、`hid.rs` 的按键/键码表改写自 `tools/src/coredevice_stream.rs`、`hid.rs` | 去掉日志、改错误类型 |
+| idevice os_trace_relay | 上游 master `89702099` | MIT | `crates/ictl-device/src/oslog.rs` 的日志条目格式取自 `idevice/src/services/os_trace_relay.rs` | 请求里去掉 Debug 位，解析加越界检查 |
 | [WebDriverAgent](https://github.com/appium/WebDriverAgent) | v16.15.3（Appium 官方构建，sha256 2176793538d9…） | BSD-3-Clause | 镜像构建时下载校验，打成未签名 IPA；计划改为本项目 macOS CI 编译 | 不嵌入苹果框架 |
 | [usbmuxd](https://github.com/libimobiledevice/usbmuxd) | Debian 包 | GPL-3.0 | 独立进程，不链接 | 无 |
 

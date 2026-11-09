@@ -45,7 +45,7 @@ Set `IPHONE_CONTROL_DEV_TOOLS=1` for the MCP server to get four more tools. They
 
 | Tool | What it does |
 |---|---|
-| `iphone_app_logs` | Read the phone's log, filtered by app or process, text and time. Recording starts with the first call: call it, reproduce the problem, call it again |
+| `iphone_app_logs` | Read the phone's log (default, Error and Fault levels; Debug and Info would slow the phone down), filtered by app or process, text and time. Recording starts with the first call: call it, reproduce the problem, call it again |
 | `iphone_crash_reports` | List crash reports, or read one |
 | `iphone_install_app` | Install a signed `.ipa` or `.app` (a path on the machine that runs the daemon) |
 | `iphone_uninstall_app` | Remove an app and its data; never the WebDriverAgent runner |

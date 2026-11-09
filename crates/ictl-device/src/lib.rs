@@ -14,6 +14,7 @@ pub mod apps;
 pub mod ddi;
 pub mod hid;
 mod media;
+pub mod oslog;
 
 use std::future::Future;
 use std::path::Path;
@@ -30,7 +31,6 @@ use idevice::{
     installation_proxy::InstallationProxyClient,
     lockdown::LockdownClient,
     misagent::MisagentClient,
-    os_trace_relay::{OsTraceRelayClient, OsTraceRelayReceiver},
     provider::{IdeviceProvider, UsbmuxdProvider},
     rsd::RsdHandshake,
     tcp::handle::AdapterHandle,
@@ -41,7 +41,7 @@ pub use apps::AppInfo;
 pub use hid::{Button, HidSession};
 
 /// A running log stream from the phone; see [`Device::log_stream`]
-pub struct LogStream(OsTraceRelayReceiver);
+pub struct LogStream(oslog::OsLogStream);
 
 /// One line of the phone's unified log
 #[derive(Debug, Clone)]
@@ -66,19 +66,18 @@ pub enum LogLevel {
 impl LogStream {
     /// The next entry; an error means the stream is gone (phone unplugged, service stopped)
     pub async fn next(&mut self) -> Result<LogEntry> {
-        use idevice::os_trace_relay::LogLevel as L;
         let e = self.0.next().await?;
         Ok(LogEntry {
             pid: e.pid,
             process: e.filename,
             level: match e.level {
-                L::Debug => LogLevel::Debug,
-                L::Info => LogLevel::Info,
-                L::Notice => LogLevel::Notice,
-                L::Error => LogLevel::Error,
-                L::Fault => LogLevel::Fault,
+                1 => LogLevel::Info,
+                2 => LogLevel::Debug,
+                0x10 => LogLevel::Error,
+                0x11 => LogLevel::Fault,
+                _ => LogLevel::Notice,
             },
-            subsystem: e.label.map(|l| format!("{}:{}", l.subsystem, l.category)),
+            subsystem: e.subsystem.map(|(s, c)| format!("{s}:{c}")),
             message: e.message,
         })
     }
@@ -489,12 +488,15 @@ impl Device {
         .await
     }
 
-    /// Starts the phone's unified log stream (os_trace_relay), every process
+    /// Starts the phone's unified log stream (os_trace_relay), every process, without debug messages.
+    /// Asking for debug messages (what idevice's `start_trace` does) makes every process on the phone produce them:
+    /// about 650 lines a second instead of about 80 on an idle iPhone 15 Pro Max (iOS 27.0.1), and gestures got
+    /// slower and some failed while the stream ran. Info messages come along with debug, so they are left out too
     pub async fn log_stream(&self) -> Result<LogStream> {
-        let inner = limit(ictl_l10n::tr!("打开日志流", "open the log stream"), QUERY, async {
-            Ok(OsTraceRelayClient::connect(&*self.provider).await?.start_trace(None).await?)
-        })
-        .await?;
+        let flags = oslog::flags::IDEVICE_DEFAULT & !oslog::flags::DEBUG;
+        let inner =
+            limit(ictl_l10n::tr!("打开日志流", "open the log stream"), QUERY, oslog::start(&*self.provider, flags))
+                .await?;
         Ok(LogStream(inner))
     }
 }

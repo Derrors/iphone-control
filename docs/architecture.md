@@ -44,6 +44,7 @@
 
 - MCP 进程由 `docker exec -i`（从源码运行时直接调用二进制）拉起，短命且可能同时有多个；设备连接（尤其是 HID 需要的显示媒体流、WDA 的 XCTest 会话）只能有一个持有者。
 - 不开 TCP 端口，避免重蹈 `ios forward` 监听所有网卡的覆辙。WDA 本身也通过 idevice 的 provider 直连设备端口，**本机不再监听 8100**。如需给外部工具用，`iphone-control wda-bridge` 显式开启，只绑 127.0.0.1，且只转发 Host 头是 `localhost`/`127.0.0.1`/`[::1]` 的请求（挡住 DNS rebinding）。注意容器用 host 网络，**本机的任何用户都能连上 bridge**，而 WDA 没有认证，用完就停。
+- `iphone-control viewer` 同样显式开启、只绑 127.0.0.1、检查 Host 头：页面看 WDA 的 MJPEG 流（手机上的 9100 端口，经 usbmuxd，只读）；点击、滑动、输入、按键是 POST，还要检查 `Origin` 是页面本身、内容类型是 JSON，然后作为普通请求发给守护进程，和 agent 的调用排队、自动解锁。
 
 ### 并发模型
 
@@ -107,7 +108,7 @@
 | `ictl-unlock` | 锁屏密码键盘定位、逐位输入并核对密码栏、从第 2 位起先写停用标记 | `ictl-wda` |
 | `ictl-daemon` | `core`（共享状态、请求分发、快照）、`supervise`（巡检、usbmuxd 看护、后台启动 WDA、重签、会话检查）、`tools`（工具的实现、HID 后备）、`devices`（列出、选择设备）、`doctor`；通知（Bark/Telegram）、截图缩放/裁剪、控制接口服务端 | 以上全部、`tokio`、`reqwest`、`image` |
 | `ictl-mcp` | MCP stdio 服务，17 个 `iphone_*` 工具：toolkit 的 13 个 + `iphone_wait_for`、`iphone_batch`、`iphone_list_devices`、`iphone_select_device`；操作类工具可带 `then` 顺带返回操作后的界面；经控制接口调用守护进程 | `ictl-protocol`、`rmcp`（`server`、`transport-io`） |
-| `apps/iphone-control` | CLI 入口：`daemon`、`mcp`、`mcp-config`、`status`、`doctor`、`setup`、`login`、`sign`、`resign`、`passcode`、`unlock-reset`、`devices`、`select`、`wda-bridge`、`notify-test`；隐藏的 `debug <ddi\|hid\|screenshot\|soak\|wda\|e2e>` 真机诊断（原第 0 步 spike，不经守护进程；feature `debug-cmds`，默认不编译） | `clap` |
+| `apps/iphone-control` | CLI 入口：`daemon`、`mcp`、`mcp-config`、`status`、`doctor`、`setup`、`login`、`sign`、`resign`、`passcode`、`unlock-reset`、`devices`、`select`、`wda-bridge`、`viewer`、`notify-test`；隐藏的 `debug <ddi\|hid\|screenshot\|soak\|wda\|e2e>` 真机诊断（原第 0 步 spike，不经守护进程；feature `debug-cmds`，默认不编译） | `clap` |
 
 依赖方向：`apps` → `ictl-daemon` / `ictl-mcp`；`ictl-daemon` → `ictl-unlock` → `ictl-wda` → `ictl-device`；`ictl-daemon` 还依赖 `ictl-sign` 和 `ictl-protocol`。`ictl-mcp` 只依赖 `ictl-protocol`，不依赖守护进程和设备层。`apps` 的 `debug`（feature `debug-cmds`）直接调用 `ictl-device`、`ictl-wda`。
 

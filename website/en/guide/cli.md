@@ -61,6 +61,7 @@ See [Auto-unlock](./auto-unlock). `--device` takes a UDID or name, and the devic
 |---|---|
 | `notify-test [event]` | Send test notifications: one per event type, or one type (`resign`, `session`, `pin`, `pin-recovered`, `unlock`, `offline`, `online`) |
 | `wda-bridge [--port <port>]` | Expose WDA on `127.0.0.1` (default port 8100) for other tools. WDA has no authentication and every local user can reach it, so stop it when done |
+| `viewer [--port <port>]` | Live screen in the browser at `http://127.0.0.1:8200/` (default port): click to tap, drag to swipe, hold to long-press, plus a text field and the hardware buttons. Taps and typing go through the daemon like an MCP call, so they queue with the agent and unlock the phone first. Every local user can reach the port, so stop it when done |
 
 The `debug` subcommand for diagnostics isn't compiled by default; see the [contributing guide](https://github.com/Derrors/iphone-control/blob/main/CONTRIBUTING.md#testing-on-a-real-phone).
 

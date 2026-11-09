@@ -61,6 +61,7 @@
 |---|---|
 | `notify-test [事件]` | 发测试通知：每类事件各一条，或只发一类（`resign`、`session`、`pin`、`pin-recovered`、`unlock`、`offline`、`online`） |
 | `wda-bridge [--port <端口>]` | 把 WDA 桥接到 `127.0.0.1`，端口默认 8100，给别的工具用。WDA 没有认证，本机任何用户都能连上，用完就停 |
+| `viewer [--port <端口>]` | 在浏览器里看实时画面，地址 `http://127.0.0.1:8200/`（默认端口）：点一下是点击，拖动是滑动，按住是长按，另有输入框和硬件键。点击、输入和 MCP 调用一样经守护进程，和 agent 的操作排队，并先自动解锁。本机任何用户都能连上这个端口，用完就停 |
 
 调试用的 `debug` 子命令默认不编译，见[贡献指南](https://github.com/Derrors/iphone-control/blob/main/CONTRIBUTING.md#testing-on-a-real-phone)。
 

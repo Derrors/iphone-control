@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>iphone-control viewer</title>
+<style>
+  :root { color-scheme: light dark; --bg: #f4f4f5; --fg: #18181b; --muted: #71717a; --panel: #fff; --line: #d4d4d8; --err: #b91c1c; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #18181b; --fg: #f4f4f5; --muted: #a1a1aa; --panel: #27272a; --line: #3f3f46; --err: #f87171; } }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.4 system-ui, sans-serif; display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 12px; min-height: 100vh; }
+  #screen { position: relative; height: min(80vh, 900px); aspect-ratio: 393 / 852; background: #000; border-radius: 28px; overflow: hidden; touch-action: none; user-select: none; }
+  #screen.landscape { height: auto; width: min(95vw, 1000px); }
+  #screen img { width: 100%; height: 100%; object-fit: contain; display: block; cursor: crosshair; -webkit-user-drag: none; }
+  #screen .msg { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; text-align: center; padding: 24px; color: #d4d4d8; }
+  #screen .msg[hidden] { display: none; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; width: min(100%, 520px); }
+  button, input { font: inherit; color: inherit; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 6px 12px; }
+  button { cursor: pointer; }
+  button:disabled { opacity: .5; cursor: default; }
+  input { flex: 1; min-width: 0; }
+  #status { color: var(--muted); min-height: 1.4em; max-width: 520px; text-align: center; white-space: pre-wrap; }
+  #status.err { color: var(--err); }
+</style>
+</head>
+<body>
+<div id="screen">
+  <img id="img" src="/stream" alt="Live screen of the phone" draggable="false">
+  <div class="msg" id="msg">Connecting…</div>
+</div>
+<div class="row">
+  <button data-button="home">Home</button>
+  <button data-button="lock">Lock</button>
+  <button data-button="volume_down">Vol −</button>
+  <button data-button="volume_up">Vol +</button>
+</div>
+<form class="row" id="type">
+  <input id="text" placeholder="Text to type on the phone" autocomplete="off">
+  <button type="submit">Type</button>
+  <button type="button" id="submit">Type + Return</button>
+</form>
+<div id="status">Click to tap, drag to swipe, hold to long-press.</div>
+<script>
+const img = document.getElementById('img'), screenEl = document.getElementById('screen');
+const msg = document.getElementById('msg'), statusEl = document.getElementById('status');
+let size = null; // screen size in points, portrait
+
+function show(text, err) { statusEl.textContent = text; statusEl.classList.toggle('err', !!err); }
+
+async function post(action, body) {
+  try {
+    const r = await fetch('/api/' + action, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const v = await r.json();
+    show(v.message || (v.ok ? 'OK' : 'Failed'), !v.ok);
+    return v.ok;
+  } catch (e) { show(String(e), true); return false; }
+}
+
+async function loadInfo() {
+  try {
+    const v = await (await fetch('/api/info')).json();
+    // a size recorded for another device would put taps in the wrong place: better none
+    size = v.width && v.height ? { w: v.width, h: v.height } : null;
+    if (v.warning) show(v.warning, true);
+  } catch (e) { /* retried with the stream */ }
+}
+
+function connect() {
+  msg.textContent = 'Connecting…'; msg.hidden = false;
+  img.src = '/stream?t=' + Date.now();
+}
+img.onload = () => {
+  msg.hidden = true;
+  // the frame's own shape: iPhone, iPad, portrait or landscape
+  screenEl.style.aspectRatio = img.naturalWidth + ' / ' + img.naturalHeight;
+  screenEl.classList.toggle('landscape', img.naturalWidth > img.naturalHeight);
+};
+img.onerror = () => {
+  msg.textContent = 'No picture: the stream comes from WebDriverAgent, which is not running right now. Retrying…';
+  msg.hidden = false;
+  setTimeout(() => { loadInfo(); connect(); }, 3000);
+};
+
+// Picture position → points on the phone, in the current orientation
+function toPoints(ev) {
+  if (!size || !img.naturalWidth) return null;
+  const r = img.getBoundingClientRect();
+  const scale = Math.min(r.width / img.naturalWidth, r.height / img.naturalHeight);
+  const w = img.naturalWidth * scale, h = img.naturalHeight * scale;
+  const fx = (ev.clientX - r.left - (r.width - w) / 2) / w, fy = (ev.clientY - r.top - (r.height - h) / 2) / h;
+  if (fx < 0 || fx > 1 || fy < 0 || fy > 1) return null;
+  const land = img.naturalWidth > img.naturalHeight;
+  const W = land ? size.h : size.w, H = land ? size.w : size.h;
+  return { x: Math.round(fx * W * 10) / 10, y: Math.round(fy * H * 10) / 10 };
+}
+
+let down = null;
+img.addEventListener('pointerdown', ev => { img.setPointerCapture(ev.pointerId); down = { p: toPoints(ev), t: performance.now(), cx: ev.clientX, cy: ev.clientY }; });
+img.addEventListener('pointerup', ev => {
+  if (!down) return;
+  const start = down; down = null;
+  const end = toPoints(ev), held = (performance.now() - start.t) / 1000;
+  if (!start.p) { show(size ? 'Outside the screen' : 'Screen size not known yet', true); return; }
+  if (Math.hypot(ev.clientX - start.cx, ev.clientY - start.cy) < 8) {
+    if (held < 0.5) post('tap', start.p); else post('long_press', { ...start.p, seconds: held });
+  } else if (end) {
+    post('swipe', { x1: start.p.x, y1: start.p.y, x2: end.x, y2: end.y, seconds: Math.max(held, 0.1) });
+  }
+});
+img.addEventListener('pointercancel', () => { down = null; });
+
+document.querySelectorAll('[data-button]').forEach(b => b.addEventListener('click', () => post('button', { button: b.dataset.button })));
+
+const text = document.getElementById('text');
+async function typeText(submit) {
+  if (!text.value && !submit) return;
+  if (await post('type', { text: text.value, submit })) text.value = '';
+}
+document.getElementById('type').addEventListener('submit', ev => { ev.preventDefault(); typeText(false); });
+document.getElementById('submit').addEventListener('click', () => typeText(true));
+
+loadInfo();
+// keep the size and the device check current (WDA may come up later, the daemon may switch devices)
+setInterval(loadInfo, 10000);
+// the stream may have failed before the handlers above were set
+if (img.complete && !img.naturalWidth) img.onerror();
+</script>
+</body>
+</html>

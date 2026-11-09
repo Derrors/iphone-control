@@ -13,7 +13,7 @@ No need to clone the repository — the least effort. Create a directory (e.g. `
 ```yaml
 services:
   iphone:
-    image: ghcr.io/derrors/iphone-control:latest   # or pin a version, e.g. :0.1.4
+    image: ghcr.io/derrors/iphone-control:latest   # or pin a version, e.g. :0.1.5
     container_name: iphone-control
     # USB character devices only; no privileged needed
     device_cgroup_rules:
@@ -57,7 +57,7 @@ docker compose up -d --build
 Images are published at `ghcr.io/derrors/iphone-control` (amd64, arm64). In `.env`:
 
 ```ini
-IMAGE=ghcr.io/derrors/iphone-control:latest   # or pin a version, e.g. :0.1.4
+IMAGE=ghcr.io/derrors/iphone-control:latest   # or pin a version, e.g. :0.1.5
 ```
 
 Then:

@@ -17,7 +17,7 @@ members = [
 exclude = ["vendor"]
 
 [workspace.package]
-version = "0.1.4"
+version = "0.1.5"
 edition = "2024"
 # rmcp 3.8 要求 1.88；Impactor/idevice 用 edition 2024
 rust-version = "1.88"

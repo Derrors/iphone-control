@@ -13,7 +13,7 @@
 ```yaml
 services:
   iphone:
-    image: ghcr.io/derrors/iphone-control:latest   # 或固定版本，例如 :0.1.4
+    image: ghcr.io/derrors/iphone-control:latest   # 或固定版本，例如 :0.1.5
     container_name: iphone-control
     # 只开放 USB 字符设备，不需要 privileged
     device_cgroup_rules:
@@ -57,7 +57,7 @@ docker compose up -d --build
 镜像在 `ghcr.io/derrors/iphone-control`（amd64、arm64）。在 `.env` 里设：
 
 ```ini
-IMAGE=ghcr.io/derrors/iphone-control:latest   # 或固定版本，例如 :0.1.4
+IMAGE=ghcr.io/derrors/iphone-control:latest   # 或固定版本，例如 :0.1.5
 ```
 
 然后：

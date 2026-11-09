@@ -6,6 +6,8 @@
 
 ## [Unreleased]
 
+## [0.1.5] - 2026-11-10
+
 ### 新增
 
 - 英文界面：设 `IPHONE_CONTROL_LANG=en` 后，工具说明和结果、命令行输出和帮助、`status`/`doctor`、日志、通知都改成英文。默认仍是简体中文，旧版本客户端照旧得到中文。
@@ -115,7 +117,8 @@
 - `setup`、`doctor`、`status`、`mcp-config`、`wda-bridge`、`notify-test` 命令。
 - Docker 镜像（非 privileged，linux/amd64、linux/arm64）；也可不用 Docker，从源码或预编译二进制以普通用户运行，附 systemd 用户服务。
 
-[Unreleased]: https://github.com/Derrors/iphone-control/compare/v0.1.4...HEAD
+[Unreleased]: https://github.com/Derrors/iphone-control/compare/v0.1.5...HEAD
+[0.1.5]: https://github.com/Derrors/iphone-control/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/Derrors/iphone-control/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/Derrors/iphone-control/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/Derrors/iphone-control/compare/v0.1.1...v0.1.2

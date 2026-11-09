@@ -39,7 +39,7 @@ body:
     id: version
     attributes:
       label: Version or commit / 版本或提交
-      placeholder: v0.1.4, or the output of `git rev-parse --short HEAD`
+      placeholder: v0.1.5, or the output of `git rev-parse --short HEAD`
   - type: textarea
     id: doctor
     attributes:

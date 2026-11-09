@@ -34,6 +34,8 @@ pub const STALE: Duration = Duration::from_secs(30);
 pub const MAX_GESTURE_SECONDS: f64 = 10.0;
 /// 等界面稳定、等元素出现的上限（毫秒）：持着设备锁等，不能太久
 pub const MAX_WAIT_MS: u64 = 30_000;
+/// Longest a JavaScript evaluation in a page may take (`WebEval`)
+pub const MAX_WEB_EVAL_MS: u64 = 60_000;
 
 /// 持久化到 `state.json` 的状态（不含秘密）
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -251,6 +253,9 @@ pub struct Daemon {
     pub log: EventLog,
     pub(crate) inner: Mutex<Inner>,
     snap: watch::Sender<Snapshot>,
+    /// The kept Web Inspector connection (developer tools), separate from `inner` so a slow page doesn't hold up
+    /// taps and screenshots; see [`crate::web`]
+    pub(crate) web: Mutex<Option<crate::web::WebConn>>,
 }
 
 /// 停掉 HID 会话（屏幕媒体流），隧道保留。媒体流不停的话手机一直以为「配对的电脑」在看屏幕：
@@ -365,7 +370,7 @@ impl Daemon {
             log_tail: Vec::new(),
         };
         let (snap, _) = watch::channel(first);
-        Arc::new(Self { cfg, log, inner: Mutex::new(inner), snap })
+        Arc::new(Self { cfg, log, inner: Mutex::new(inner), snap, web: Mutex::new(None) })
     }
 
     /// 自动解锁配置：用设备 `udid` 自己的密码。没接设备时密码文件不存在（自动解锁不可用）
@@ -540,6 +545,22 @@ impl Daemon {
             Request::Resign { force } => {
                 return self.resign_now(force).await.map(Response::text).unwrap_or_else(Response::error);
             }
+            // Web Inspector requests talk to the page, not to WDA; they only take the lock to find the device
+            Request::WebTargets => return self.web_targets().await.map(Response::text).unwrap_or_else(Response::error),
+            Request::WebEval { target, expression, timeout_ms } => {
+                if expression.trim().is_empty() || timeout_ms > MAX_WEB_EVAL_MS {
+                    return Response::error(ictl_l10n::trf!(
+                        "expression 不能为空,timeout 最多 {} 秒",
+                        "expression can't be empty, and timeout can be at most {} seconds",
+                        MAX_WEB_EVAL_MS / 1000
+                    ));
+                }
+                return self
+                    .web_eval(&target, &expression, Duration::from_millis(timeout_ms))
+                    .await
+                    .map(Response::text)
+                    .unwrap_or_else(Response::error);
+            }
             // an install can take minutes; it doesn't hold the lock meanwhile
             Request::InstallApp { path } => {
                 return self.install_app(&path).await.map(Response::text).unwrap_or_else(Response::error);
@@ -634,7 +655,11 @@ impl Daemon {
             }
             Request::CrashReports { filter, name } => self.crash_reports(g, &filter, &name).await,
             Request::UninstallApp { app } => self.uninstall_app(g, &app).await,
-            Request::Daemon | Request::Resign { .. } | Request::InstallApp { .. } => unreachable!("上面已处理"),
+            Request::Daemon
+            | Request::Resign { .. }
+            | Request::InstallApp { .. }
+            | Request::WebTargets
+            | Request::WebEval { .. } => unreachable!("上面已处理"),
         };
         if invalidates {
             g.elements_cache = None;

@@ -150,6 +150,15 @@ pub enum Request {
     UninstallApp {
         app: String,
     },
+    /// Developer tools: inspectable pages and WebViews (Web Inspector)
+    WebTargets,
+    /// Developer tools: evaluate JavaScript in a page. `target` is an id from `WebTargets`, or text in its URL or title
+    WebEval {
+        #[serde(default)]
+        target: String,
+        expression: String,
+        timeout_ms: u64,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -213,6 +222,7 @@ impl Request {
                 | Self::SelectDevice { .. }
                 | Self::InstallApp { .. }
                 | Self::UninstallApp { .. }
+                | Self::WebEval { .. }
         )
     }
 }

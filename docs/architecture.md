@@ -101,8 +101,9 @@
 
 | crate | 职责 | 主要依赖 |
 |---|---|---|
-| `ictl-device` | `Device` 句柄：usbmux 发现与监听、lockdown、配对状态、开发者模式状态、隧道（`Tunnel`，持有 HID 会话和显示媒体流）、开发者镜像（含下载缓存）、截图、App 列表/启动/结束、安装 IPA；所有设备调用都有时限 | `idevice`（锁上游 git 提交） |
+| `ictl-device` | `Device` 句柄：usbmux 发现与监听、lockdown、配对状态、开发者模式状态、隧道（`Tunnel`，持有 HID 会话和显示媒体流）、开发者镜像（含下载缓存）、截图、App 列表/启动/结束、安装 IPA、卸载、崩溃报告、系统日志流（开发者工具）、打开 Web Inspector；所有设备调用都有时限 | `idevice`（锁上游 git 提交） |
 | `ictl-wda` | `WdaRunner`（XCUITestService 启动/停止）、`WdaClient`（会话、点击、W3C actions、keys、source、screenshot、appium settings、锁屏核对）、经 usbmuxd 直连设备 8100 端口的 HTTP 传输（区分连不上和请求超时）、元素树解析（纯函数，可单测） | `idevice`（`xctest`）、`quick-xml` |
+| `ictl-webinspector` | Web Inspector 服务（`com.apple.webinspector`，经 lockdown）的客户端：列出可检查的网页和 WebView、在页面里执行 JavaScript（`Target` 域和旧版直接收命令两种都支持，Promise 用 `Runtime.awaitPromise` 等待）。纯协议，消息解析可单测 | `idevice`、`plist` |
 | `ictl-protocol` | 控制接口的 `Request`/`Response` 类型和客户端 `call(socket, req, timeout)` | `serde`、`tokio` |
 | `ictl-sign` | Apple ID 登录（含双重认证交互）、会话持久化、注册设备、App ID、描述文件、签名 `.app`/`.ipa`（**包括 `.xctest`**；bundle 逻辑改写自 plume_utils）、签后自检 | vendored 的 `plume_core`/`plume_store`（MPL-2.0/MIT；经 plume_core 用 vendored 的 `omnisette` 和打过补丁的 `apple-codesign`） |
 | `ictl-unlock` | 锁屏密码键盘定位、逐位输入并核对密码栏、从第 2 位起先写停用标记 | `ictl-wda` |
@@ -110,7 +111,7 @@
 | `ictl-mcp` | MCP stdio 服务，17 个 `iphone_*` 工具：toolkit 的 13 个 + `iphone_wait_for`、`iphone_batch`、`iphone_list_devices`、`iphone_select_device`；操作类工具可带 `then` 顺带返回操作后的界面；经控制接口调用守护进程 | `ictl-protocol`、`rmcp`（`server`、`transport-io`） |
 | `apps/iphone-control` | CLI 入口：`daemon`、`mcp`、`mcp-config`、`status`、`doctor`、`setup`、`login`、`sign`、`resign`、`passcode`、`unlock-reset`、`devices`、`select`、`wda-bridge`、`viewer`、`notify-test`；隐藏的 `debug <ddi\|hid\|screenshot\|soak\|wda\|e2e>` 真机诊断（原第 0 步 spike，不经守护进程；feature `debug-cmds`，默认不编译） | `clap` |
 
-依赖方向：`apps` → `ictl-daemon` / `ictl-mcp`；`ictl-daemon` → `ictl-unlock` → `ictl-wda` → `ictl-device`；`ictl-daemon` 还依赖 `ictl-sign` 和 `ictl-protocol`。`ictl-mcp` 只依赖 `ictl-protocol`，不依赖守护进程和设备层。`apps` 的 `debug`（feature `debug-cmds`）直接调用 `ictl-device`、`ictl-wda`。
+依赖方向：`apps` → `ictl-daemon` / `ictl-mcp`；`ictl-daemon` → `ictl-unlock` → `ictl-wda` → `ictl-device`；`ictl-daemon` 还依赖 `ictl-sign` 和 `ictl-protocol`。`ictl-device` 依赖 `ictl-webinspector`。`ictl-mcp` 只依赖 `ictl-protocol`，不依赖守护进程和设备层。`apps` 的 `debug`（feature `debug-cmds`）直接调用 `ictl-device`、`ictl-wda`。
 
 ## 5. 截图与坐标
 

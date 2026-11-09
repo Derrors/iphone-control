@@ -41,7 +41,7 @@ Details: [Several devices](./multi-device).
 
 ## Developer tools (opt-in)
 
-Set `IPHONE_CONTROL_DEV_TOOLS=1` for the MCP server to get four more tools. They are off by default, so agents that don't need them don't pay for their descriptions.
+Set `IPHONE_CONTROL_DEV_TOOLS=1` for the MCP server to get six more tools. They are off by default, so agents that don't need them don't pay for their descriptions.
 
 | Tool | What it does |
 |---|---|
@@ -49,6 +49,8 @@ Set `IPHONE_CONTROL_DEV_TOOLS=1` for the MCP server to get four more tools. They
 | `iphone_crash_reports` | List crash reports, or read one |
 | `iphone_install_app` | Install a signed `.ipa` or `.app` (a path on the machine that runs the daemon) |
 | `iphone_uninstall_app` | Remove an app and its data; never the WebDriverAgent runner |
+| `iphone_web_targets` | List inspectable web pages and WebViews (Safari tabs, debug builds of hybrid apps); the app must be in the foreground |
+| `iphone_web_eval` | Run JavaScript in a page and get the result as JSON: faster, cheaper and more accurate than screenshots for web content |
 
 ## See the screen after an action: `then`
 

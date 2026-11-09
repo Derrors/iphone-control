@@ -191,6 +191,7 @@ impl Daemon {
             g.next_session_check = now + self.cfg.session_check;
             tokio::task::spawn_local(self.clone().check_session());
         }
+        self.web_housekeeping(g.device.as_ref().map(|d| d.udid.as_str()));
         self.publish(g);
     }
 

@@ -488,6 +488,17 @@ impl Device {
         .await
     }
 
+    /// Opens the Web Inspector service (inspectable pages and WebViews)
+    pub async fn web_inspector(&self) -> Result<ictl_webinspector::WebInspector> {
+        limit(ictl_l10n::tr!("打开 Web Inspector", "open the Web Inspector"), QUERY, async {
+            ictl_webinspector::WebInspector::open(&*self.provider).await.map_err(|e| match e {
+                ictl_webinspector::Error::Device(e) => e.into(),
+                e => DeviceError::Idevice(e.to_string()),
+            })
+        })
+        .await
+    }
+
     /// Starts the phone's unified log stream (os_trace_relay), every process, without debug messages.
     /// Asking for debug messages (what idevice's `start_trace` does) makes every process on the phone produce them:
     /// about 650 lines a second instead of about 80 on an idle iPhone 15 Pro Max (iOS 27.0.1), and gestures got

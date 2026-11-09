@@ -24,7 +24,7 @@ Docker Desktop 在 Mac 上把容器跑在 Linux 虚拟机里，不支持 USB 直
 从 0.1.2 起，[Releases](https://github.com/Derrors/iphone-control/releases) 里有 macOS（Apple Silicon，macOS 11 以上）的压缩包 `iphone-control-<版本>-macos-arm64.tar.gz`。在终端里下载安装（把 `V` 换成最新版本号）：
 
 ```bash
-V=v0.1.4
+V=v0.1.5
 curl -fsSLO https://github.com/Derrors/iphone-control/releases/download/$V/iphone-control-$V-macos-arm64.tar.gz
 curl -fsSLO https://github.com/Derrors/iphone-control/releases/download/$V/iphone-control-$V-macos-arm64.tar.gz.sha256
 shasum -a 256 -c iphone-control-$V-macos-arm64.tar.gz.sha256   # 应显示 OK

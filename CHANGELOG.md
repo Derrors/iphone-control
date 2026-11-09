@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format is based on 
 
 ## [Unreleased]
 
+## [0.1.5] - 2026-11-10
+
 ### Added
 
 - English: `IPHONE_CONTROL_LANG=en` switches tool descriptions and results, CLI output and help, `status`/`doctor`, logs and notifications to English. The default stays Simplified Chinese, and older clients still get Chinese.
@@ -117,7 +119,8 @@ First public release.
 - Docker image (single binary plus Debian's usbmuxd, not privileged) with a generated third-party license list, published to `ghcr.io/derrors/iphone-control` for linux/amd64 and linux/arm64.
 - Running without Docker, from source or from the prebuilt Linux binaries (x86_64, aarch64): as a regular user with the system usbmuxd, XDG data and socket paths, the unsigned WebDriverAgent downloaded and checksum-verified before the first signing, `mcp-config` printing a direct command, and a systemd user service.
 
-[Unreleased]: https://github.com/Derrors/iphone-control/compare/v0.1.4...HEAD
+[Unreleased]: https://github.com/Derrors/iphone-control/compare/v0.1.5...HEAD
+[0.1.5]: https://github.com/Derrors/iphone-control/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/Derrors/iphone-control/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/Derrors/iphone-control/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/Derrors/iphone-control/compare/v0.1.1...v0.1.2

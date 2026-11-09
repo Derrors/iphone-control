@@ -79,7 +79,7 @@ claude mcp add iphone -s user -- docker exec -i iphone-control iphone-control mc
 **macOS**（Mac 上的 Docker 不能直通 USB，直接运行二进制）
 
 ```bash
-V=v0.1.4   # 最新版本号
+V=v0.1.5   # 最新版本号
 curl -fsSL https://github.com/Derrors/iphone-control/releases/download/$V/iphone-control-$V-macos-arm64.tar.gz | tar xz
 mkdir -p ~/.local/bin && install -m 755 iphone-control-$V-macos-arm64/iphone-control ~/.local/bin/
 echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zprofile && source ~/.zprofile

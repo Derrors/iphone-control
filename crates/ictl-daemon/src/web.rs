@@ -13,6 +13,8 @@ use std::time::{Duration, Instant};
 
 use ictl_webinspector::{App, Eval, Page, WebInspector};
 
+use ictl_device::Device;
+
 use crate::core::Daemon;
 
 /// A kept connection is closed after this long without a request
@@ -30,9 +32,9 @@ const LISTING_WAIT: Duration = Duration::from_secs(3);
 const MAX_RESULT_CHARS: usize = 50_000;
 
 impl Daemon {
-    pub(crate) async fn web_targets(&self) -> Result<String, String> {
-        let mut slot = self.web.lock().await;
-        let (apps, pages) = self.web_pages(&mut slot).await?;
+    /// `slot` is [`Daemon::web`], already locked by the caller (see `Daemon::handle`)
+    pub(crate) async fn web_targets(&self, slot: &mut Option<WebConn>, device: &Device) -> Result<String, String> {
+        let (apps, pages) = web_pages(slot, device).await?;
         if pages.is_empty() {
             return Ok(ictl_l10n::tr!(
                 "没有可检查的页面。需要:设置 → Safari → 高级 → 网页检查器 打开;App 里的 WebView 要是调试构建或设了 isInspectable;页面所在的 App 在前台(刚打开的 App 等几秒再试)",
@@ -52,9 +54,15 @@ impl Daemon {
         Ok(out)
     }
 
-    pub(crate) async fn web_eval(&self, target: &str, expression: &str, timeout: Duration) -> Result<String, String> {
-        let mut slot = self.web.lock().await;
-        let (apps, pages) = self.web_pages(&mut slot).await?;
+    pub(crate) async fn web_eval(
+        &self,
+        slot: &mut Option<WebConn>,
+        device: &Device,
+        target: &str,
+        expression: &str,
+        timeout: Duration,
+    ) -> Result<String, String> {
+        let (apps, pages) = web_pages(slot, device).await?;
         let page = pick(&pages, target).map_err(|e| match e {
             Pick::None => ictl_l10n::trf!(
                 "没有和「{target}」对应的页面,用 iphone_web_targets 查看",
@@ -75,7 +83,7 @@ impl Daemon {
                 if breaks_connection(&e) {
                     *slot = None;
                 }
-                return Err(e.to_string());
+                return Err(page_error(&e));
             }
         };
         Ok(match r {
@@ -83,36 +91,6 @@ impl Daemon {
             Eval::Value(Some(v)) => truncate(v.to_string()),
             Eval::Thrown(d) => return Err(ictl_l10n::trf!("页面里抛出异常:{d}", "The page threw: {d}")),
         })
-    }
-
-    /// The pages, on the kept connection (opened if there is none, or it belongs to another device). A connection
-    /// that turns out to be broken is replaced once: listing pages changes nothing on the phone
-    async fn web_pages(&self, slot: &mut Option<WebConn>) -> Result<(Vec<App>, Vec<Page>), String> {
-        let device =
-            self.inner.lock().await.device.clone().ok_or(ictl_l10n::tr!("手机未连接", "Phone not connected"))?;
-        if slot.as_ref().is_some_and(|c| c.udid != device.udid) {
-            *slot = None;
-        }
-        for attempt in 0..2 {
-            if slot.is_none() {
-                let w = device.web_inspector().await.map_err(|e| e.to_string())?;
-                *slot = Some(WebConn { udid: device.udid.clone(), w, used: Instant::now() });
-            }
-            let conn = slot.as_mut().ok_or("Web Inspector")?;
-            conn.used = Instant::now();
-            match conn.w.pages(LISTING_WAIT).await {
-                Ok(r) => return Ok(r),
-                Err(e) if breaks_connection(&e) => {
-                    *slot = None;
-                    if attempt == 1 {
-                        return Err(e.to_string());
-                    }
-                    tracing::debug!("Web Inspector connection broken, opening a new one: {e}");
-                }
-                Err(e) => return Err(e.to_string()),
-            }
-        }
-        unreachable!("the second attempt returns")
     }
 
     /// Closes the kept connection after [`WEB_IDLE`], or when the daemon no longer controls its device. Called from
@@ -126,10 +104,49 @@ impl Daemon {
     }
 }
 
-/// Errors after which the connection can't be trusted to be in step: everything except a page that didn't answer
-/// in time (the session is closed and late answers for it are dropped)
+/// The pages, on the kept connection (opened if there is none, or it belongs to another device). A connection that
+/// turns out to be broken is replaced once: listing pages changes nothing on the phone
+async fn web_pages(slot: &mut Option<WebConn>, device: &Device) -> Result<(Vec<App>, Vec<Page>), String> {
+    if slot.as_ref().is_some_and(|c| c.udid != device.udid) {
+        *slot = None;
+    }
+    for attempt in 0..2 {
+        if slot.is_none() {
+            let w = device.web_inspector().await.map_err(|e| e.to_string())?;
+            *slot = Some(WebConn { udid: device.udid.clone(), w, used: Instant::now() });
+        }
+        let conn = slot.as_mut().ok_or("Web Inspector")?;
+        conn.used = Instant::now();
+        match conn.w.pages(LISTING_WAIT).await {
+            Ok(r) => return Ok(r),
+            Err(e) if breaks_connection(&e) => {
+                *slot = None;
+                if attempt == 1 {
+                    return Err(page_error(&e));
+                }
+                tracing::debug!("Web Inspector connection broken, opening a new one: {e}");
+            }
+            Err(e) => return Err(page_error(&e)),
+        }
+    }
+    unreachable!("the second attempt returns")
+}
+
+/// The Web Inspector's own errors are in English; the one an agent or user meets in normal use follows the language
+fn page_error(e: &ictl_webinspector::Error) -> String {
+    match e {
+        ictl_webinspector::Error::Timeout(_) => {
+            ictl_l10n::tr!("等待页面回应超时", "timed out waiting for the page to answer").into()
+        }
+        e => e.to_string(),
+    }
+}
+
+/// Errors after which the connection can't be trusted: everything except a page that didn't answer in time or
+/// refused a command (reads are cancel-safe and late answers for a closed session are dropped). Reopening costs
+/// about 8 seconds, and repeated reopening made the phone stop reporting Safari, so only reopen when needed
 fn breaks_connection(e: &ictl_webinspector::Error) -> bool {
-    !matches!(e, ictl_webinspector::Error::Timeout(_))
+    !matches!(e, ictl_webinspector::Error::Timeout(_) | ictl_webinspector::Error::Command(_))
 }
 
 /// `PID:812/1  WebPage  Safari (com.apple.mobilesafari)  Title — https://…`
@@ -187,6 +204,7 @@ mod tests {
     fn only_a_page_timeout_keeps_the_connection() {
         use ictl_webinspector::Error;
         assert!(!breaks_connection(&Error::Timeout("the page to answer")));
+        assert!(!breaks_connection(&Error::Command("Missing injected script for given objectId".into())));
         assert!(breaks_connection(&Error::Protocol("x".into())));
         assert!(breaks_connection(&Error::Io(std::io::Error::other("closed"))));
     }

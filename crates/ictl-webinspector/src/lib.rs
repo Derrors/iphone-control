@@ -15,7 +15,7 @@
 //!    (`Target.sendMessageToTarget` / `Target.dispatchMessageFromTarget`); older versions take commands directly.
 //! 4. `_rpc_forwardDidClose:` detaches.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::time::Duration;
 
 use idevice::{Idevice, IdeviceError, IdeviceService, ReadWrite, provider::IdeviceProvider};
@@ -26,6 +26,8 @@ use tokio::time::Instant;
 
 /// Messages larger than this are refused (a listing or an evaluation result is far smaller)
 const MAX_MESSAGE: usize = 64 * 1024 * 1024;
+/// Writing one message; a phone that stops reading must not hold the caller forever
+const SEND_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -37,8 +39,14 @@ pub enum Error {
     Plist(#[from] plist::Error),
     #[error("Web Inspector: {0}")]
     Protocol(String),
+    /// The page didn't answer in time. The connection stays usable: reads are cancel-safe and late answers for the
+    /// closed session are dropped
     #[error("timed out waiting for {0}")]
     Timeout(&'static str),
+    /// The page refused a command (for example an object that went away when the page navigated). The connection
+    /// stays usable
+    #[error("Web Inspector: {0}")]
+    Command(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -83,6 +91,10 @@ pub struct WebInspector {
     listings: HashMap<String, Vec<Page>>,
     /// Inspector protocol messages that arrived for a session, by sender ID
     data: HashMap<String, Vec<serde_json::Value>>,
+    /// Senders of the sessions open right now; data for any other sender (a late answer after a timeout) is dropped
+    open_sessions: HashSet<String>,
+    /// Bytes read but not yet a whole message: reading appends here, so a read cancelled by a timeout loses nothing
+    rbuf: Vec<u8>,
     /// Pieces of a message the phone split up (`WIRPartialMessageKey`)
     partial: Vec<u8>,
     reported: bool,
@@ -101,6 +113,8 @@ impl IdeviceService for WebInspector {
             apps: BTreeMap::new(),
             listings: HashMap::new(),
             data: HashMap::new(),
+            open_sessions: HashSet::new(),
+            rbuf: Vec::new(),
             partial: Vec::new(),
             reported: false,
         })
@@ -128,7 +142,8 @@ impl WebInspector {
         self.send("_rpc_getConnectedApplications:", Dictionary::new()).await?;
         while !self.reported {
             if !self.recv_until(deadline).await? {
-                return Err(Error::Timeout("the list of applications"));
+                // unlike a slow page, a phone that doesn't report its applications means the connection is stuck
+                return Err(Error::Protocol("the phone didn't report its applications in time".into()));
             }
         }
         self.listings.clear();
@@ -157,6 +172,7 @@ impl WebInspector {
     pub async fn evaluate(&mut self, page: &Page, expression: &str, timeout: Duration) -> Result<Eval> {
         let deadline = Instant::now() + timeout;
         let sender = uuid::Uuid::new_v4().to_string().to_uppercase();
+        self.open_sessions.insert(sender.clone());
         let mut setup = self.page_args(page);
         setup.insert("WIRSenderKey".into(), sender.clone().into());
         setup.insert("WIRMessageDataTypeChunkSupportedKey".into(), 0.into());
@@ -183,6 +199,7 @@ impl WebInspector {
         close.insert("WIRSenderKey".into(), session.sender.clone().into());
         let _ = self.send("_rpc_forwardDidClose:", close).await;
         self.data.remove(&session.sender);
+        self.open_sessions.remove(&session.sender);
         result
     }
 
@@ -263,8 +280,14 @@ impl WebInspector {
         plist::to_writer_binary(&mut body, &Value::Dictionary(msg))?;
         let mut framed = (body.len() as u32).to_be_bytes().to_vec();
         framed.extend_from_slice(&body);
-        self.socket.write_all(&framed).await?;
-        self.socket.flush().await?;
+        let write = async {
+            self.socket.write_all(&framed).await?;
+            self.socket.flush().await
+        };
+        // a write cut off half-way leaves the stream out of step: report it as a broken connection (Io)
+        tokio::time::timeout(SEND_TIMEOUT, write).await.map_err(|_| {
+            std::io::Error::new(std::io::ErrorKind::TimedOut, "the phone stopped reading Web Inspector messages")
+        })??;
         Ok(())
     }
 
@@ -280,16 +303,20 @@ impl WebInspector {
         Ok(true)
     }
 
+    /// Reads one message. Cancel-safe: bytes go into [`Self::rbuf`] first, and a single `read` call loses nothing when
+    /// it is cancelled, so a timeout around this never leaves the stream out of step
     async fn read_message(&mut self) -> Result<Dictionary> {
-        let mut len = [0u8; 4];
-        self.socket.read_exact(&mut len).await?;
-        let len = u32::from_be_bytes(len) as usize;
-        if len > MAX_MESSAGE {
-            return Err(Error::Protocol(format!("message of {len} bytes")));
+        loop {
+            if let Some(body) = take_frame(&mut self.rbuf)? {
+                return Ok(plist::from_bytes(&body)?);
+            }
+            let mut chunk = [0u8; 64 * 1024];
+            let n = self.socket.read(&mut chunk).await?;
+            if n == 0 {
+                return Err(std::io::Error::from(std::io::ErrorKind::UnexpectedEof).into());
+            }
+            self.rbuf.extend_from_slice(&chunk[..n]);
         }
-        let mut body = vec![0u8; len];
-        self.socket.read_exact(&mut body).await?;
-        Ok(plist::from_bytes(&body)?)
     }
 
     fn unchunk(&mut self, msg: Dictionary) -> Result<Option<Dictionary>> {
@@ -332,6 +359,7 @@ impl WebInspector {
                 let dest = arg.get("WIRDestinationKey").and_then(Value::as_string);
                 let data = arg.get("WIRMessageDataKey").and_then(Value::as_data);
                 if let (Some(dest), Some(data)) = (dest, data)
+                    && self.open_sessions.contains(dest)
                     && let Ok(v) = serde_json::from_slice::<serde_json::Value>(data)
                 {
                     self.data.entry(dest.to_owned()).or_default().push(v);
@@ -340,6 +368,22 @@ impl WebInspector {
             other => tracing::trace!("webinspector: {other}"),
         }
     }
+}
+
+/// One whole frame (4-byte big-endian length, then the body) from the front of `buf`, if it has arrived
+fn take_frame(buf: &mut Vec<u8>) -> Result<Option<Vec<u8>>> {
+    let Some(len) = buf.get(..4).map(|b| u32::from_be_bytes([b[0], b[1], b[2], b[3]]) as usize) else {
+        return Ok(None);
+    };
+    if len > MAX_MESSAGE {
+        return Err(Error::Protocol(format!("message of {len} bytes")));
+    }
+    if buf.len() < 4 + len {
+        return Ok(None);
+    }
+    let body = buf[4..4 + len].to_vec();
+    buf.drain(..4 + len);
+    Ok(Some(body))
 }
 
 /// Puts split messages back together: parts come as `WIRPartialMessageKey`, the last as `WIRFinalMessageKey`
@@ -420,7 +464,7 @@ fn response_for(m: &serde_json::Value, id: u64) -> Option<Result<serde_json::Val
         return None;
     }
     Some(match m.get("error") {
-        Some(e) => Err(Error::Protocol(e["message"].as_str().unwrap_or("command failed").to_owned())),
+        Some(e) => Err(Error::Command(e["message"].as_str().unwrap_or("command failed").to_owned())),
         None => Ok(m["result"].clone()),
     })
 }
@@ -446,6 +490,25 @@ mod tests {
 
     fn dict(v: serde_json::Value) -> Dictionary {
         plist::to_value(&v).unwrap().into_dictionary().unwrap()
+    }
+
+    /// Frames come out whole however the bytes arrive, so a read cut off by a timeout loses nothing
+    #[test]
+    fn frames_survive_partial_reads() {
+        let frame = |body: &[u8]| [(body.len() as u32).to_be_bytes().to_vec(), body.to_vec()].concat();
+        let stream = [frame(b"hello"), frame(b""), frame(b"world!")].concat();
+        let mut buf = Vec::new();
+        let mut out = Vec::new();
+        for byte in stream {
+            buf.push(byte);
+            while let Some(f) = take_frame(&mut buf).unwrap() {
+                out.push(f);
+            }
+        }
+        assert_eq!(out, [b"hello".to_vec(), Vec::new(), b"world!".to_vec()]);
+        assert!(buf.is_empty());
+        let mut huge = (u32::MAX).to_be_bytes().to_vec();
+        assert!(take_frame(&mut huge).is_err());
     }
 
     #[test]
@@ -498,7 +561,7 @@ mod tests {
         assert_eq!(eval_result(&r), Eval::Value(Some(json!(2))));
         assert!(response_for(&wrapped, 4).is_none());
         let direct = json!({"id": 1, "error": {"message": "no such method"}});
-        assert!(matches!(response_for(&direct, 1), Some(Err(Error::Protocol(m))) if m == "no such method"));
+        assert!(matches!(response_for(&direct, 1), Some(Err(Error::Command(m))) if m == "no such method"));
     }
 
     #[test]

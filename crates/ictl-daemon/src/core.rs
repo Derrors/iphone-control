@@ -26,6 +26,7 @@ use crate::machine::{Backoff, DeviceState, Misses, MuxWatch};
 use crate::notify::{self, Dedup, Event};
 use crate::protocol::{Request, Response};
 use crate::supervise::StartOutcome;
+use crate::watchdog::Heartbeat;
 
 pub const TICK: Duration = Duration::from_secs(10);
 /// 改变手机状态的请求排队超过这么久就放弃
@@ -106,8 +107,14 @@ impl Persisted {
     }
 
     pub(crate) fn save(&self, path: &Path) {
+        use std::io::Write;
         let tmp = path.with_extension("json.tmp");
-        let r = std::fs::write(&tmp, serde_json::to_vec_pretty(self).unwrap_or_default())
+        // sync before the rename, or a power cut can leave state.json empty
+        let r = std::fs::File::create(&tmp)
+            .and_then(|mut f| {
+                f.write_all(&serde_json::to_vec_pretty(self).unwrap_or_default())?;
+                f.sync_all()
+            })
             .and_then(|_| std::fs::rename(&tmp, path));
         if let Err(e) = r {
             tracing::warn!("{}", ictl_l10n::log_trf!("保存 state.json 失败：{e}", "Saving state.json failed: {e}"));
@@ -201,10 +208,26 @@ pub struct Snapshot {
     pub log_tail: Vec<String>,
 }
 
+/// What is known about the device being controlled. Replaced as a whole when that device goes away or changes
+/// ([`Daemon::forget_device`]), so a new field can't be left holding the previous device's value
+#[derive(Default)]
+pub(crate) struct PerDevice {
+    /// 这台手机上的 WDA 描述文件
+    pub device_profile: DeviceProfile,
+    /// WDA 最近一次报的界面旋转及读取时间。只在短暂掉线时给 HID 使用，不持久化
+    pub wda_rotation: Option<(Instant, Rotation)>,
+    /// 开发者镜像连续挂载失败次数，到 3 次清缓存重新下载
+    pub ddi_failures: u32,
+    /// 最近一次经本进程锁屏的时间（自动解锁要等锁屏过渡走完，见 [`crate::tools::LOCK_SETTLE`]）
+    pub last_lock: Option<Instant>,
+    pub apps: HashMap<bool, Vec<AppInfo>>,
+    /// Log capture for `AppLogs` (developer tools), started by the first request
+    pub log_capture: Option<crate::devtools::Capture>,
+}
+
 pub(crate) struct Inner {
     pub persisted: Persisted,
-    /// 当前这台手机上的 WDA 描述文件；换连接、离线时清成 NotChecked
-    pub device_profile: DeviceProfile,
+    pub dev: PerDevice,
     pub state: DeviceState,
     pub device: Option<Device>,
     pub info: Option<DeviceInfo>,
@@ -214,14 +237,10 @@ pub(crate) struct Inner {
     pub infos: HashMap<String, DeviceInfo>,
     /// HID 和截图用的隧道（HID 会话归它所有）
     pub tunnel: Option<Tunnel>,
-    /// WDA 最近一次报的界面旋转及读取时间。只在短暂掉线时给 HID 使用，不持久化；换设备时清掉
-    pub wda_rotation: Option<(Instant, Rotation)>,
     pub runner: Option<WdaRunner>,
     pub wda: Option<WdaClient<DeviceTransport>>,
     /// 后台启动 WDA 的任务（含挂开发者镜像），巡检里收结果
     pub starting: Option<JoinHandle<StartOutcome>>,
-    /// 开发者镜像连续挂载失败次数，到 3 次清缓存重新下载
-    pub ddi_failures: u32,
     pub resigning: bool,
     pub wda_misses: Misses,
     pub backoff: Backoff,
@@ -234,18 +253,15 @@ pub(crate) struct Inner {
     /// 连续列不出设备的次数（usbmuxd 抖一下不立刻当成离线）
     pub list_errors: u32,
     pub offline_since: Option<Instant>,
-    /// 最近一次经本进程锁屏的时间（自动解锁要等锁屏过渡走完，见 [`crate::tools::LOCK_SETTLE`]）
-    pub last_lock: Option<Instant>,
     /// HID 会话最近一次使用的时间；空闲超过 [`crate::supervise::HID_IDLE`] 就关掉（它持有屏幕媒体流）
     pub hid_used: Option<Instant>,
     /// 最近一次读到的元素树。只在调用方允许（max_age_ms）时复用；改变界面的操作做完就清掉
     pub elements_cache: Option<(Instant, ictl_wda::elements::Tree)>,
+    /// 滑动等列表停下时最后读到的树（[`crate::tools`] 的 `settle` 拿来当比较的起点）
+    pub swiped_tree: Option<(Instant, ictl_wda::elements::Tree)>,
     pub dedup: Dedup,
     pub next_resign: Instant,
     pub next_session_check: Instant,
-    pub apps: HashMap<bool, Vec<AppInfo>>,
-    /// Log capture for `AppLogs` (developer tools), started by the first request
-    pub log_capture: Option<crate::devtools::Capture>,
 }
 
 pub struct Daemon {
@@ -256,6 +272,7 @@ pub struct Daemon {
     /// The kept Web Inspector connection (developer tools), separate from `inner` so a slow page doesn't hold up
     /// taps and screenshots; see [`crate::web`]
     pub(crate) web: Mutex<Option<crate::web::WebConn>>,
+    pub(crate) heartbeat: crate::watchdog::Heartbeat,
 }
 
 /// 停掉 HID 会话（屏幕媒体流），隧道保留。媒体流不停的话手机一直以为「配对的电脑」在看屏幕：
@@ -324,18 +341,16 @@ impl Daemon {
         let now = Instant::now();
         let inner = Inner {
             persisted,
-            device_profile: DeviceProfile::NotChecked,
+            dev: PerDevice::default(),
             state: DeviceState::Absent,
             device: None,
             info: None,
             connected: Vec::new(),
             infos: HashMap::new(),
             tunnel: None,
-            wda_rotation: None,
             runner: None,
             wda: None,
             starting: None,
-            ddi_failures: 0,
             resigning: false,
             wda_misses: Misses::default(),
             backoff: Backoff::default(),
@@ -346,15 +361,13 @@ impl Daemon {
             usbmuxd_delay: Duration::ZERO,
             list_errors: 0,
             offline_since: Some(now),
-            last_lock: None,
             hid_used: None,
             elements_cache: None,
+            swiped_tree: None,
             dedup: Dedup::default(),
             // 启动一分钟后再做第一次重签检查和会话验证，先让设备就绪
             next_resign: now + Duration::from_secs(60),
             next_session_check: now + Duration::from_secs(90),
-            apps: HashMap::new(),
-            log_capture: None,
         };
         let first = Snapshot {
             state: DeviceState::Absent,
@@ -370,7 +383,7 @@ impl Daemon {
             log_tail: Vec::new(),
         };
         let (snap, _) = watch::channel(first);
-        Arc::new(Self { cfg, log, inner: Mutex::new(inner), snap, web: Mutex::new(None) })
+        Arc::new(Self { cfg, log, inner: Mutex::new(inner), snap, web: Mutex::new(None), heartbeat: Heartbeat::new() })
     }
 
     /// 自动解锁配置：用设备 `udid` 自己的密码。没接设备时密码文件不存在（自动解锁不可用）
@@ -444,14 +457,14 @@ impl Daemon {
     /// 重读这台手机上的 WDA 描述文件（misagent，一次约几十毫秒）
     pub(crate) async fn refresh_device_profile(&self, g: &mut Inner) {
         let Some(d) = g.device.clone() else {
-            g.device_profile = DeviceProfile::NotChecked;
+            g.dev.device_profile = DeviceProfile::NotChecked;
             return;
         };
         let Some(bundle) = g.persisted.wda_bundle.clone() else {
-            g.device_profile = DeviceProfile::Missing;
+            g.dev.device_profile = DeviceProfile::Missing;
             return;
         };
-        g.device_profile = match d.installed_profiles().await {
+        g.dev.device_profile = match d.installed_profiles().await {
             Ok(ps) => match wda_profile_expiry(&ps, g.persisted.team_id.as_deref(), &bundle, &d.udid) {
                 Some(t) => DeviceProfile::Expires(t.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs()),
                 None => DeviceProfile::Missing,
@@ -479,6 +492,7 @@ impl Daemon {
         }
         g.wda = None;
         g.elements_cache = None;
+        g.swiped_tree = None;
         drop_tunnel(g).await;
         g.wda_misses.reset();
     }
@@ -492,6 +506,12 @@ impl Daemon {
             g.tunnel = Some(device.open_tunnel().await?);
         }
         Ok(g.tunnel.as_mut().expect("刚建好"))
+    }
+
+    /// 不再控制当前这台（断开、重新接入、换设备）：停掉它的会话，清掉关于它的一切
+    pub(crate) async fn forget_device(&self, g: &mut Inner) {
+        self.drop_session(g).await;
+        g.dev = PerDevice::default();
     }
 
     /// WDA 可用就返回客户端（本进程 runner 存活）
@@ -510,6 +530,7 @@ impl Daemon {
 
     /// 发布快照给不拿锁的读者（`status`）。日志尾巴在读的时候再取
     pub(crate) fn publish(&self, g: &Inner) {
+        self.heartbeat.beat();
         let unlock = self.unlock_cfg(g.device.as_ref().map(|d| d.udid.as_str()));
         let pinned = self.pinned(g);
         self.snap.send_replace(Snapshot {
@@ -519,7 +540,7 @@ impl Daemon {
             pinned,
             pinned_by_env: self.cfg.udid.is_some(),
             persisted: g.persisted.clone(),
-            device_profile: g.device_profile.clone(),
+            device_profile: g.dev.device_profile.clone(),
             auto_unlock: unlock.enabled(),
             unlock_disabled: unlock.disabled_by_failure(),
             notify_configured: self.cfg.notify.any(),
@@ -530,75 +551,79 @@ impl Daemon {
     // ------------------------------------------------------------------ 请求处理
 
     /// 处理一个控制请求。`queued_at`：请求到达的时间，用来放弃排队太久的操作
-    pub async fn handle(self: &Arc<Self>, req: Request, queued_at: Instant, ctx: CallCtx) -> Response {
+    pub async fn handle(self: &Arc<Self>, req: Request, queued_at: Instant, mut ctx: CallCtx) -> Response {
         // 不需要设备锁的请求
-        match req {
-            Request::Daemon => {
-                let mut s = self.snap.borrow().clone();
-                let unlock = self.unlock_cfg(s.device.as_ref().map(|d| d.udid.as_str()));
-                s.unlock_disabled = unlock.disabled_by_failure();
-                s.auto_unlock = unlock.enabled();
-                s.log_tail = self.log.tail(15);
-                return Response::text(serde_json::to_string_pretty(&s).unwrap_or_default());
-            }
-            // 重签自己分段持锁：签名、安装要几十秒，期间不挡住别的请求
-            Request::Resign { force } => {
-                return self.resign_now(force).await.map(Response::text).unwrap_or_else(Response::error);
-            }
-            // Web Inspector requests talk to the page, not to WDA; they only take the lock to find the device
-            Request::WebTargets => return self.web_targets().await.map(Response::text).unwrap_or_else(Response::error),
-            Request::WebEval { target, expression, timeout_ms } => {
-                if expression.trim().is_empty() || timeout_ms > MAX_WEB_EVAL_MS {
-                    return Response::error(ictl_l10n::trf!(
-                        "expression 不能为空,timeout 最多 {} 秒",
-                        "expression can't be empty, and timeout can be at most {} seconds",
-                        MAX_WEB_EVAL_MS / 1000
-                    ));
-                }
-                return self
-                    .web_eval(&target, &expression, Duration::from_millis(timeout_ms))
-                    .await
-                    .map(Response::text)
-                    .unwrap_or_else(Response::error);
-            }
-            // an install can take minutes; it doesn't hold the lock meanwhile
-            Request::InstallApp { path } => {
-                return self.install_app(&path).await.map(Response::text).unwrap_or_else(Response::error);
-            }
-            _ => {}
+        if matches!(req, Request::Daemon) {
+            let mut s = self.snap.borrow().clone();
+            let unlock = self.unlock_cfg(s.device.as_ref().map(|d| d.udid.as_str()));
+            s.unlock_disabled = unlock.disabled_by_failure();
+            s.auto_unlock = unlock.enabled();
+            s.log_tail = self.log.tail(15);
+            return Response::text(serde_json::to_string_pretty(&s).unwrap_or_default());
         }
         if let Err(e) = check_request(&req) {
             return Response::error(e);
         }
+        let text = |r: Result<String, String>| {
+            r.map(|t| Response::text_with(t, crate::protocol::Outcome::default())).unwrap_or_else(Response::error)
+        };
+        match lane(&req) {
+            Lane::Snapshot => unreachable!("handled above"),
+            // 重签自己分段持锁：签名、安装要几十秒，期间不挡住别的请求
+            Lane::Resign => {
+                let Request::Resign { force } = req else { unreachable!("lane") };
+                return self.resign_now(force).await.map(Response::text).unwrap_or_else(Response::error);
+            }
+            // Web Inspector talks to the page, not to WDA: its own lock, the device lock only to look up the device
+            Lane::Web => {
+                let mut slot = match acquire(&self.web, &mut ctx.gone).await {
+                    Ok(s) => s,
+                    Err(r) => return r,
+                };
+                let device = self.inner.lock().await.device.clone();
+                if let Err(r) = admit(&req, queued_at, &ctx, device.as_ref().map(|d| d.udid.as_str())) {
+                    return r;
+                }
+                let Some(device) = device else {
+                    return Response::error(ictl_l10n::tr!("手机未连接", "Phone not connected"));
+                };
+                return text(match req {
+                    Request::WebTargets => self.web_targets(&mut slot, &device).await,
+                    Request::WebEval { target, expression, timeout_ms } => {
+                        self.web_eval(&mut slot, &device, &target, &expression, Duration::from_millis(timeout_ms)).await
+                    }
+                    _ => unreachable!("lane"),
+                });
+            }
+            // an install can take minutes and doesn't hold the device lock; installs queue among themselves
+            Lane::Install => {
+                if ctx.gone.as_mut().is_some_and(|g| g.try_recv().is_ok()) {
+                    return cancelled();
+                }
+                let device = self.inner.lock().await.device.clone();
+                if let Err(r) = admit(&req, queued_at, &ctx, device.as_ref().map(|d| d.udid.as_str())) {
+                    return r;
+                }
+                let Some(device) = device else {
+                    return Response::error(ictl_l10n::tr!("手机未连接", "Phone not connected"));
+                };
+                let Request::InstallApp { path } = req else { unreachable!("lane") };
+                let r = self.install_app(&device, &path).await;
+                if r.is_ok() {
+                    self.inner.lock().await.dev.apps.clear();
+                }
+                return text(r);
+            }
+            Lane::Device => {}
+        }
 
-        let mut g = match ctx.gone {
-            Some(mut gone) => tokio::select! {
-                biased;
-                g = self.inner.lock() => g,
-                Ok(()) = &mut gone => return Response::error(ictl_l10n::tr!("调用方已取消,请求没有执行", "The caller cancelled; the request was not carried out")),
-            },
-            None => self.inner.lock().await,
+        let mut g = match acquire(&self.inner, &mut ctx.gone).await {
+            Ok(g) => g,
+            Err(r) => return r,
         };
         let g = &mut *g;
-        if let Some(want) = &ctx.expect_udid {
-            let now = g.device.as_ref().map(|d| d.udid.as_str());
-            if now != Some(want.as_str()) {
-                return Response::error(ictl_l10n::trf!(
-                    "正在控制的设备变了(原来是 {want},现在{}),没有执行;先用 iphone_list_devices 确认",
-                    "The controlled device changed (it was {want}, now {}); not carried out. Check with iphone_list_devices first",
-                    now.map_or(ictl_l10n::tr!("没有设备", "there is no device").into(), |u| ictl_l10n::trf!(
-                        "是 {u}",
-                        "it is {u}"
-                    ))
-                ));
-            }
-        }
-        if req.is_device_action() && queued_at.elapsed() > STALE {
-            return Response::error(ictl_l10n::trf!(
-                "守护进程正忙,这个操作排队超过 {} 秒,已放弃执行(以免落到已经变化的屏幕上);先截图看看再重试",
-                "The daemon is busy and this action waited in the queue for more than {} seconds, so it was dropped (it could have landed on a changed screen); take a screenshot and try again",
-                STALE.as_secs()
-            ));
+        if let Err(r) = admit(&req, queued_at, &ctx, g.device.as_ref().map(|d| d.udid.as_str())) {
+            return r;
         }
         // 改变界面的操作做完后缓存的元素树就作废；只有调用方声明「不改变布局」的按名字点击（max_age_ms > 0）保留
         let keeps_cache = matches!(req, Request::TapElement { max_age_ms, .. } if max_age_ms > 0);
@@ -659,7 +684,7 @@ impl Daemon {
             | Request::Resign { .. }
             | Request::InstallApp { .. }
             | Request::WebTargets
-            | Request::WebEval { .. } => unreachable!("上面已处理"),
+            | Request::WebEval { .. } => unreachable!("other lanes"),
         };
         if invalidates {
             g.elements_cache = None;
@@ -674,14 +699,125 @@ impl Daemon {
         // 先停 HID 媒体流、runner（经 usbmuxd），再停 usbmuxd
         self.drop_session(&mut g).await;
         if let Some(mut c) = g.usbmuxd.take() {
-            let _ = c.kill().await;
+            stop_child(&mut c).await;
         }
     }
 }
 
+/// Kills a child and waits for it, but not forever: a process stuck in the kernel (a USB call that never returns)
+/// doesn't exit on SIGKILL, and whoever is stopping it holds the device lock
+pub(crate) async fn stop_child(child: &mut tokio::process::Child) {
+    let _ = child.start_kill();
+    let _ = tokio::time::timeout(Duration::from_secs(5), child.wait()).await;
+}
+
 /// 参数检查（与设备无关，不必拿锁）
+/// Which path a request takes through [`Daemon::handle`]. Every variant is listed (no `_`), so a new request type
+/// doesn't compile until it is given a lane; a lane decides the lock, and every lane but the snapshot and re-signing
+/// goes through [`admit`] (cancelled callers, stale actions, the expected device)
+enum Lane {
+    /// `status`'s snapshot: no lock
+    Snapshot,
+    /// re-signing takes the device lock in short steps
+    Resign,
+    /// the Web Inspector connection's own lock
+    Web,
+    /// no device lock; installs queue among themselves
+    Install,
+    /// the device lock
+    Device,
+}
+
+fn lane(req: &Request) -> Lane {
+    match req {
+        Request::Daemon => Lane::Snapshot,
+        Request::Resign { .. } => Lane::Resign,
+        Request::WebTargets | Request::WebEval { .. } => Lane::Web,
+        Request::InstallApp { .. } => Lane::Install,
+        Request::Status
+        | Request::Screenshot { .. }
+        | Request::ListElements { .. }
+        | Request::Tap { .. }
+        | Request::TapElement { .. }
+        | Request::LongPress { .. }
+        | Request::Swipe { .. }
+        | Request::TypeText { .. }
+        | Request::PressButton { .. }
+        | Request::ListApps { .. }
+        | Request::LaunchApp { .. }
+        | Request::TerminateApp { .. }
+        | Request::OpenUrl { .. }
+        | Request::Settle { .. }
+        | Request::AlertCheck
+        | Request::WaitFor { .. }
+        | Request::Doctor
+        | Request::UnlockReset
+        | Request::ListDevices
+        | Request::SelectDevice { .. }
+        | Request::AppLogs { .. }
+        | Request::CrashReports { .. }
+        | Request::UninstallApp { .. } => Lane::Device,
+    }
+}
+
+fn cancelled() -> Response {
+    Response::error(ictl_l10n::tr!(
+        "调用方已取消,请求没有执行",
+        "The caller cancelled; the request was not carried out"
+    ))
+}
+
+/// Takes `lock`, unless the caller goes away first (see [`CallCtx::gone`])
+async fn acquire<'a, T>(
+    lock: &'a Mutex<T>,
+    gone: &mut Option<tokio::sync::oneshot::Receiver<()>>,
+) -> Result<tokio::sync::MutexGuard<'a, T>, Response> {
+    match gone {
+        Some(gone) => tokio::select! {
+            biased;
+            g = lock.lock() => Ok(g),
+            Ok(()) = &mut *gone => Err(cancelled()),
+        },
+        None => Ok(lock.lock().await),
+    }
+}
+
+/// Checks done once a request got its lock: the caller's expected device ([`CallCtx::expect_udid`]) and, for actions,
+/// how long it queued ([`STALE`])
+fn admit(req: &Request, queued_at: Instant, ctx: &CallCtx, controlled: Option<&str>) -> Result<(), Response> {
+    if let Some(want) = &ctx.expect_udid
+        && controlled != Some(want.as_str())
+    {
+        return Err(Response::error(ictl_l10n::trf!(
+            "正在控制的设备变了(原来是 {want},现在{}),没有执行;先用 iphone_list_devices 确认",
+            "The controlled device changed (it was {want}, now {}); not carried out. Check with iphone_list_devices first",
+            controlled.map_or(ictl_l10n::tr!("没有设备", "there is no device").into(), |u| ictl_l10n::trf!(
+                "是 {u}",
+                "it is {u}"
+            ))
+        )));
+    }
+    if req.is_device_action() && queued_at.elapsed() > STALE {
+        return Err(Response::error(ictl_l10n::trf!(
+            "守护进程正忙,这个操作排队超过 {} 秒,已放弃执行(以免落到已经变化的屏幕上);先截图看看再重试",
+            "The daemon is busy and this action waited in the queue for more than {} seconds, so it was dropped (it could have landed on a changed screen); take a screenshot and try again",
+            STALE.as_secs()
+        )));
+    }
+    Ok(())
+}
+
 fn check_request(req: &Request) -> Result<(), String> {
     match req {
+        Request::WebEval { expression, timeout_ms, .. }
+            if expression.trim().is_empty() || *timeout_ms > MAX_WEB_EVAL_MS =>
+        {
+            return Err(ictl_l10n::trf!(
+                "expression 不能为空,timeout 最多 {} 秒",
+                "expression can't be empty, and timeout can be at most {} seconds",
+                MAX_WEB_EVAL_MS / 1000
+            ));
+        }
         Request::Settle { max_ms } if *max_ms > MAX_WAIT_MS => {
             return Err(ictl_l10n::trf!("max_ms 不能超过 {MAX_WAIT_MS}", "max_ms can't exceed {MAX_WAIT_MS}"));
         }

@@ -20,6 +20,19 @@ services:
     # WDA 经 usbmuxd 直连手机，本机不监听任何端口；host 网络只为了用宿主机上的代理
     network_mode: host
     restart: unless-stopped
+    # status 连不上控制接口就算不健康；卡死时守护进程自己退出，由上面的 restart 拉起
+    healthcheck:
+      test: ["CMD", "iphone-control", "status"]
+      interval: 60s
+      timeout: 15s
+      retries: 3
+      start_period: 30s
+    # stdout/stderr 的上限；logs 目录里的日志由守护进程自己轮转
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
     env_file:
       - path: .env
         required: false

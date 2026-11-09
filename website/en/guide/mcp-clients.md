@@ -38,6 +38,8 @@ For a source install, use the command that `mcp-config` prints, for example:
 }
 ```
 
+To turn on the [developer tools](./tools#developer-tools-opt-in) or English: when running the binary directly, add `"env": {"IPHONE_CONTROL_DEV_TOOLS": "1", "IPHONE_CONTROL_LANG": "en"}` to the `iphone` entry; with Docker, add `"-e", "IPHONE_CONTROL_DEV_TOOLS=1"` after `"-i"` in `args` (and `"-e", "IPHONE_CONTROL_LANG=en"` for the language).
+
 macOS has no `XDG_RUNTIME_DIR`, so the socket is `~/.local/share/iphone-control/ctl.sock`; again, use what `mcp-config` prints. Claude Desktop's configuration file is `~/Library/Application Support/Claude/claude_desktop_config.json`.
 
 ::: warning Client and daemon on the same machine

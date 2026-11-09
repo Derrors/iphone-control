@@ -5,8 +5,11 @@
 //! Logs come from os_trace_relay. It only streams what happens from now on, so the first `AppLogs` request
 //! starts a capture into a ring buffer (at most [`MAX_LINES`]); later requests read from it, which is what makes
 //! `since` work. The capture follows the controlled device: it stops when the daemon switches to another device or
-//! the device goes offline, and by itself after [`IDLE`] without a request, so a session that used the tool once
-//! doesn't keep a log stream running.
+//! the device goes offline, and after [`IDLE`] without a request (checked by the health check, see
+//! [`Daemon::log_housekeeping`]), so a session that used the tool once doesn't keep a log stream running.
+//!
+//! The reader task only ever awaits the next entry: an entry is several reads, and cancelling one half-way (as a
+//! `select!` against a timer would) leaves the stream out of step.
 //!
 //! The stream leaves out debug and info messages (see `ictl_device::Device::log_stream`: asking for them slows the
 //! phone). It is still every process, tens of lines a second, so the buffer is bounded by size as well as by count
@@ -18,7 +21,7 @@ use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use ictl_device::{LogEntry, LogLevel};
+use ictl_device::{AppInfo, LogEntry, LogLevel};
 use tokio::task::JoinHandle;
 
 use crate::core::{Daemon, Inner};
@@ -30,12 +33,14 @@ const IDLE: Duration = Duration::from_secs(15 * 60);
 /// Longest crash report text returned; the start holds the exception, the crashed thread and the app version
 const MAX_REPORT_CHARS: usize = 40_000;
 const MAX_LINE_CHARS: usize = 600;
+/// The first line arrives a moment after recording starts; a gap larger than this means older lines were dropped
+const DROPPED_MARGIN: u64 = 3;
 
 pub(crate) struct Capture {
     udid: String,
     started: Instant,
     buf: Arc<Mutex<Buffer>>,
-    last_query: Arc<Mutex<Instant>>,
+    last_query: Instant,
     task: JoinHandle<()>,
 }
 
@@ -56,36 +61,27 @@ impl Daemon {
         errors_only: bool,
     ) -> Result<String, String> {
         let device = g.device.clone().ok_or(ictl_l10n::tr!("手机未连接", "Phone not connected"))?;
-        let running = g.log_capture.as_ref().is_some_and(|c| c.udid == device.udid && !c.task.is_finished());
+        let running = g.dev.log_capture.as_ref().is_some_and(|c| c.udid == device.udid && !c.task.is_finished());
         if !running {
             let mut stream = device.log_stream().await.map_err(|e| e.to_string())?;
             let buf = Arc::new(Mutex::new(Buffer::default()));
-            let last_query = Arc::new(Mutex::new(Instant::now()));
-            let (b, q) = (buf.clone(), last_query.clone());
+            let b = buf.clone();
             let task = tokio::spawn(async move {
-                let mut check = tokio::time::interval(Duration::from_secs(30));
-                loop {
-                    tokio::select! {
-                        e = stream.next() => {
-                            let Ok(e) = e else { return };
-                            b.lock().unwrap_or_else(|p| p.into_inner()).push(Instant::now(), compact(e));
-                        }
-                        _ = check.tick() => {
-                            if q.lock().unwrap_or_else(|p| p.into_inner()).elapsed() > IDLE {
-                                return;
-                            }
-                        }
-                    }
+                // never cancelled mid-entry (see the module docs); stopped by aborting the task
+                while let Ok(e) = stream.next().await {
+                    b.lock().unwrap_or_else(|p| p.into_inner()).push(Instant::now(), compact(e));
                 }
             });
-            g.log_capture = Some(Capture { udid: device.udid.clone(), started: Instant::now(), buf, last_query, task });
+            let now = Instant::now();
+            g.dev.log_capture = Some(Capture { udid: device.udid.clone(), started: now, buf, last_query: now, task });
         }
-        let c = g.log_capture.as_ref().expect("set above");
-        *c.last_query.lock().unwrap_or_else(|p| p.into_inner()) = Instant::now();
+        if let Some(c) = g.dev.log_capture.as_mut() {
+            c.last_query = Instant::now();
+        }
 
         // an app's name or bundle ID → the process it runs as; anything else is taken as a process name
         let wanted = if process.is_empty() { None } else { Some(self.process_name(g, process).await) };
-        let c = g.log_capture.as_ref().expect("set above");
+        let c = g.dev.log_capture.as_ref().expect("set above");
         let filter = LogFilter { process: wanted.as_deref(), grep, errors_only };
         let from = Instant::now().checked_sub(since);
         let (lines, oldest) = {
@@ -121,7 +117,9 @@ impl Daemon {
             out += ictl_l10n::tr!(" 没有。", " none.");
         }
         // the buffer may reach back less far than `since`: say how far, so a missing line isn't taken as "didn't happen"
-        if running && let Some(o) = oldest.filter(|o| *o < since.as_secs()) {
+        // (only when lines were really dropped: right after the start the first sentence already says how far it goes)
+        let recording_for = c.started.elapsed().as_secs();
+        if running && let Some(o) = oldest.filter(|o| *o < since.as_secs() && o + DROPPED_MARGIN < recording_for) {
             out += &ictl_l10n::trf!(
                 "\n(缓冲里最早一行是 {o} 秒前,更早的已经挤出去了)",
                 "\n(the oldest line in the buffer is from {o} s ago; earlier lines have been dropped)"
@@ -132,6 +130,14 @@ impl Daemon {
             out += &l;
         }
         Ok(out)
+    }
+
+    /// Stops the log capture after [`IDLE`] without a request, or once its stream has ended. Called from the health
+    /// check, which holds the daemon lock
+    pub(crate) fn log_housekeeping(g: &mut Inner) {
+        if g.dev.log_capture.as_ref().is_some_and(|c| c.last_query.elapsed() > IDLE || c.task.is_finished()) {
+            g.dev.log_capture = None;
+        }
     }
 
     /// The executable name of an installed app given by name or bundle ID, or `process` itself
@@ -188,9 +194,8 @@ impl Daemon {
     }
 
     /// Runs without holding the daemon lock (an install can take minutes), like re-signing
-    pub(crate) async fn install_app(&self, path: &str) -> Result<String, String> {
-        let device =
-            self.inner.lock().await.device.clone().ok_or(ictl_l10n::tr!("手机未连接", "Phone not connected"))?;
+    /// Installs are queued one at a time inside `Device::install` (they share one upload path on the phone)
+    pub(crate) async fn install_app(&self, device: &ictl_device::Device, path: &str) -> Result<String, String> {
         let p = std::path::Path::new(path);
         if !p.exists() {
             return Err(ictl_l10n::trf!(
@@ -199,12 +204,17 @@ impl Daemon {
             ));
         }
         device.install(p).await.map_err(|e| e.to_string())?;
-        self.inner.lock().await.apps.clear();
+        self.inner.lock().await.dev.apps.clear();
         Ok(ictl_l10n::trf!("已安装 {path}", "Installed {path}"))
     }
 
+    /// Uninstalling deletes the app's data, so unlike launching, the name must match exactly: a bundle ID or the
+    /// whole display name. The app lists are read again first, so an app installed a moment ago is found
     pub(crate) async fn uninstall_app(&self, g: &mut Inner, app: &str) -> Result<String, String> {
-        let bid = self.resolve_app(g, app).await?;
+        g.dev.apps.clear();
+        let mut all = self.list_apps(g, false).await?;
+        all.extend(self.list_apps(g, true).await?);
+        let bid = uninstall_target(app, &all)?;
         if is_wda_runner(&bid, g.persisted.wda_bundle.as_deref()) {
             return Err(ictl_l10n::trf!(
                 "{bid} 是 WebDriverAgent,iphone-control 靠它控制手机,不能卸载",
@@ -213,7 +223,7 @@ impl Daemon {
         }
         let device = g.device.clone().ok_or(ictl_l10n::tr!("手机未连接", "Phone not connected"))?;
         device.uninstall(&bid).await.map_err(|e| e.to_string())?;
-        g.apps.clear();
+        g.dev.apps.clear();
         Ok(ictl_l10n::trf!("已卸载 {bid}", "Uninstalled {bid}"))
     }
 }
@@ -254,6 +264,46 @@ fn compact(mut e: LogEntry) -> LogEntry {
     }
     e.message.shrink_to_fit();
     e
+}
+
+/// The bundle ID to uninstall: `app` is an installed bundle ID, or exactly one app's display name (ignoring case).
+/// Anything else is refused, listing similar names, since a wrong guess deletes an app with its data
+fn uninstall_target(app: &str, apps: &[AppInfo]) -> Result<String, String> {
+    let app = app.trim();
+    if app.is_empty() {
+        return Err(ictl_l10n::tr!("app 不能为空", "app can't be empty").into());
+    }
+    if let Some(a) = apps.iter().find(|a| a.bundle_id.eq_ignore_ascii_case(app)) {
+        return Ok(a.bundle_id.clone());
+    }
+    let exact: Vec<&AppInfo> = apps.iter().filter(|a| a.name.eq_ignore_ascii_case(app)).collect();
+    let line = |a: &&AppInfo| format!("{}\t{}", a.name, a.bundle_id);
+    match exact.as_slice() {
+        [one] => Ok(one.bundle_id.clone()),
+        [] => {
+            let needle = app.to_lowercase();
+            let similar: Vec<String> =
+                apps.iter().filter(|a| a.name.to_lowercase().contains(&needle)).take(5).map(|a| line(&a)).collect();
+            Err(if similar.is_empty() {
+                ictl_l10n::trf!(
+                    "没有装 \"{app}\"(卸载要用 Bundle ID 或完整的 App 名字),用 iphone_list_apps 查看",
+                    "\"{app}\" is not installed (uninstalling needs the bundle ID or the full app name); see iphone_list_apps"
+                )
+            } else {
+                ictl_l10n::trf!(
+                    "没有名字正好是 \"{app}\" 的 App,没有卸载;卸载要用 Bundle ID 或完整的名字。相近的:\n{}",
+                    "No app is named exactly \"{app}\", nothing uninstalled; uninstalling needs the bundle ID or the full name. Similar:\n{}",
+                    similar.join("\n")
+                )
+            })
+        }
+        many => Err(ictl_l10n::trf!(
+            "有 {} 个 App 叫 \"{app}\",没有卸载;用 Bundle ID 指定:\n{}",
+            "{} apps are named \"{app}\", nothing uninstalled; pass the bundle ID:\n{}",
+            many.len(),
+            many.iter().map(line).collect::<Vec<_>>().join("\n")
+        )),
+    }
 }
 
 /// The WDA runner this daemon signed, or any other WebDriverAgent build
@@ -322,20 +372,23 @@ fn crash_list(names: Vec<String>, filter: &str) -> Vec<String> {
     v
 }
 
-/// `MyApp-2026-11-08-120000.ips` → `2026-11-08-120000`, for sorting by date across apps
+/// `MyApp-2026-11-08-120000.ips` → `2026-11-08-120000`, for sorting by date across apps. Searched in the whole name:
+/// process names can contain dots (`com.apple.WebKit.WebContent-2026-….ips`, `Foo.cpu_resource-….ips`)
 fn report_date(name: &str) -> &str {
-    let stem = name.split('.').next().unwrap_or(name);
-    let b = stem.as_bytes();
+    let b = name.as_bytes();
+    let digits = |r: std::ops::Range<usize>| b[r].iter().all(u8::is_ascii_digit);
     (0..b.len().saturating_sub(16))
         .rev()
         .find(|&i| {
-            b[i..].len() >= 17
-                && b[i..i + 4].iter().all(u8::is_ascii_digit)
+            digits(i..i + 4)
                 && b[i + 4] == b'-'
+                && digits(i + 5..i + 7)
                 && b[i + 7] == b'-'
+                && digits(i + 8..i + 10)
                 && b[i + 10] == b'-'
+                && digits(i + 11..i + 17)
         })
-        .map_or("", |i| &stem[i..])
+        .map_or("", |i| &name[i..i + 17])
 }
 
 #[cfg(test)]
@@ -350,6 +403,25 @@ mod tests {
             subsystem: Some("com.example:net".into()),
             message: msg.into(),
         }
+    }
+
+    #[test]
+    fn uninstall_needs_an_exact_name() {
+        let app = |n: &str, b: &str| AppInfo { name: n.into(), bundle_id: b.into(), executable: String::new() };
+        let apps = [
+            app("Test Flight", "com.apple.TestFlight"),
+            app("MyTest", "com.example.mytest"),
+            app("Notes", "com.apple.mobilenotes"),
+            app("Notes", "com.other.notes"),
+        ];
+        assert!(uninstall_target("", &apps).is_err(), "empty must not match the first app");
+        assert!(uninstall_target("  ", &apps).is_err());
+        assert_eq!(uninstall_target("com.example.MyTest", &apps).as_deref(), Ok("com.example.mytest"));
+        assert_eq!(uninstall_target("mytest", &apps).as_deref(), Ok("com.example.mytest"));
+        let e = uninstall_target("Test", &apps).unwrap_err();
+        assert!(e.contains("com.apple.TestFlight") && e.contains("com.example.mytest"), "{e}");
+        assert!(uninstall_target("Notes", &apps).unwrap_err().contains("com.other.notes"), "ambiguous");
+        assert!(uninstall_target("com.not.installed", &apps).is_err());
     }
 
     #[test]
@@ -413,5 +485,10 @@ mod tests {
         assert_eq!(crash_list(names, "myapp").len(), 2);
         assert_eq!(report_date("JetsamEvent-2026-11-08-101500.ips"), "2026-11-08-101500");
         assert_eq!(report_date("weird.ips"), "");
+        assert_eq!(report_date("com.apple.WebKit.WebContent-2026-11-09-101500.ips"), "2026-11-09-101500");
+        assert_eq!(report_date("Foo.cpu_resource-2026-11-01-080000.ips.synced"), "2026-11-01-080000");
+        let names =
+            vec!["Old-2026-11-01-080000.ips".into(), "com.apple.WebKit.WebContent-2026-11-09-101500.ips".into()];
+        assert_eq!(crash_list(names, "")[0], "com.apple.WebKit.WebContent-2026-11-09-101500.ips");
     }
 }

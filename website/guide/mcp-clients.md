@@ -38,6 +38,8 @@ claude mcp add iphone -s user -- docker exec -i iphone-control iphone-control mc
 }
 ```
 
+要开启[开发者工具](./tools#开发者工具-显式开启)或英文界面：直接运行时在 `iphone` 这一项里加 `"env": {"IPHONE_CONTROL_DEV_TOOLS": "1", "IPHONE_CONTROL_LANG": "en"}`；Docker 部署时在 `args` 的 `"-i"` 后面加 `"-e", "IPHONE_CONTROL_DEV_TOOLS=1"`（语言同样是 `"-e", "IPHONE_CONTROL_LANG=en"`）。
+
 macOS 上没有 `XDG_RUNTIME_DIR`，socket 在 `~/.local/share/iphone-control/ctl.sock`，同样以 `mcp-config` 打印的为准。Claude Desktop 的配置文件在 `~/Library/Application Support/Claude/claude_desktop_config.json`。
 
 ::: warning 客户端和守护进程要在同一台机器上

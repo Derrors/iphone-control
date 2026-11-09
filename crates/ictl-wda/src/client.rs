@@ -112,11 +112,22 @@ pub struct WdaClient<T> {
     lock_state_trusted: bool,
     /// 点击前后要恢复的等待设置（第一次点击时读一次）
     idle_baseline: Option<IdleSettings>,
+    /// What WDA has now, as far as we know: sending the same again is a wasted round trip
+    idle_current: Option<IdleSettings>,
+    upright_stream: bool,
 }
 
 impl<T: Transport> WdaClient<T> {
     pub fn new(transport: T) -> Self {
-        Self { transport, session: None, screen: None, lock_state_trusted: false, idle_baseline: None }
+        Self {
+            transport,
+            session: None,
+            screen: None,
+            lock_state_trusted: false,
+            idle_baseline: None,
+            idle_current: None,
+            upright_stream: false,
+        }
     }
 
     async fn call(&self, method: &str, path: &str, body: Option<Value>, timeout: Duration) -> Result<Value> {
@@ -166,6 +177,14 @@ impl<T: Transport> WdaClient<T> {
             })?
             .to_owned();
         self.session = Some(id.clone());
+        self.idle_current = None;
+        if self.upright_stream {
+            let body = json!({"settings": {"mjpegFixOrientation": true}});
+            let path = format!("/session/{id}/appium/settings");
+            if let Err(e) = self.call("POST", &path, Some(body), DEFAULT_TIMEOUT).await {
+                tracing::debug!("mjpegFixOrientation: {e}");
+            }
+        }
         Ok(id)
     }
 
@@ -401,6 +420,24 @@ impl<T: Transport> WdaClient<T> {
         self.quick_gesture(&swipe_steps(from, to, ms), IdleSettings::NO_COOL_OFF).await
     }
 
+    /// Ask WDA to turn the MJPEG frames with the interface, set with each new session. On an iPhone they otherwise stay
+    /// portrait with sideways content when the screen is landscape, so the live viewer shows them wrong
+    pub fn keep_stream_upright(&mut self) {
+        self.upright_stream = true;
+    }
+
+    /// Swipes and stays in polling mode for the caller, who ends it with [`Self::end_polling`]: restoring the settings
+    /// only to change them again right after would cost two round trips
+    pub async fn swipe_into_polling(&mut self, from: (f64, f64), to: (f64, f64), ms: u64) -> Result<()> {
+        self.baseline().await?;
+        self.set_idle_settings(IdleSettings::NO_COOL_OFF).await?;
+        let r = self.actions(&swipe_steps(from, to, ms)).await;
+        if r.is_err() {
+            self.end_polling().await;
+        }
+        r
+    }
+
     /// 开始轮询界面：读元素树时不等界面空闲、动画冷却（约 0.2 秒一次），由调用方比较前后两次判断稳定。
     /// 用完调 [`Self::end_polling`] 恢复
     pub async fn begin_polling(&mut self) -> Result<()> {
@@ -616,8 +653,15 @@ impl<T: Transport> WdaClient<T> {
     }
 
     pub async fn set_idle_settings(&mut self, s: IdleSettings) -> Result<()> {
+        if self.idle_current == Some(s) {
+            return Ok(());
+        }
+        // not known if this fails
+        self.idle_current = None;
         let body = json!({"settings": {"waitForIdleTimeout": s.wait_for_idle_timeout, "animationCoolOffTimeout": s.animation_cool_off_timeout}});
-        self.post("/appium/settings", body).await.map(drop)
+        self.post("/appium/settings", body).await?;
+        self.idle_current = Some(s);
+        Ok(())
     }
 
     /// 锁屏密码栏的 (总位数, 已输入位数)；找不到密码栏返回 None

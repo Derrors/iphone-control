@@ -8,16 +8,18 @@ All notable changes to this project are documented here. The format is based on 
 
 ### Added
 
-- English: `IPHONE_CONTROL_LANG=en` switches tool descriptions, tool results, CLI output and help, `status`/`doctor`, logs and notifications to English. The default stays Simplified Chinese, so nothing changes unless you set it.
-- The MCP server and the CLI send their language with each request and the daemon answers in it; requests from older clients carry none and get Chinese as before, so mixed versions during an upgrade keep working. `mcp-config` includes the setting when English is on.
-- Text responses carry an optional `outcome` (`tapped_nothing`, `alert_reported`), so the MCP server no longer reads result text to stop a batch after a missed tap or to skip the extra alert check. Responses without it (older daemons) are still recognised by their Chinese prefixes.
-- `iphone-control viewer [--port]`: watch and control the phone live in a browser (opt-in, 127.0.0.1:8200 by default). Taps, swipes, long presses, typing and buttons go through the daemon, so they queue with the agent's calls and unlock the phone first. It binds the loopback address only, checks `Host`, and also checks `Origin` on actions; other local users can reach the port, so stop it when done.
-- Developer tools, opt-in with `IPHONE_CONTROL_DEV_TOOLS=1`: `iphone_app_logs` (the phone's unified log, filtered by app or process, text and time), `iphone_crash_reports`, `iphone_install_app` and `iphone_uninstall_app` (both marked destructive; uninstalling the WebDriverAgent runner is refused). Without the switch the tool list is unchanged.
-- Web Inspector, part of the developer tools: `iphone_web_targets` lists inspectable web pages and WebViews (Safari tabs, debug builds of hybrid apps), and `iphone_web_eval` runs JavaScript in one and returns the result as JSON. A new crate, `ictl-webinspector`, implements the client for the phone's Web Inspector service.
+- English: `IPHONE_CONTROL_LANG=en` switches tool descriptions and results, CLI output and help, `status`/`doctor`, logs and notifications to English. The default stays Simplified Chinese, and older clients still get Chinese.
+- `iphone-control viewer [--port]`: watch and control the phone live in a browser (opt-in, 127.0.0.1:8200 by default). Other local users can reach the port, so stop it when done.
+- Developer tools, opt-in with `IPHONE_CONTROL_DEV_TOOLS=1`: `iphone_app_logs`, `iphone_crash_reports`, `iphone_install_app`, `iphone_uninstall_app`, `iphone_web_targets` and `iphone_web_eval`. Without the switch the tool list is unchanged.
 
 ### Fixed
 
-- Scroll bars are dropped from element lists in every system language, not only Chinese and English: they are recognised by their percentage value and thin shape instead of their label. On a German iPhone, for example, lines like `Other "Vertikaler Rollbalken, 1 Seite"` no longer appear.
+- Scroll bars are dropped from element lists in every system language, not only Chinese and English.
+- `iphone_uninstall_app` only accepts a bundle ID or the full display name; empty, partial or ambiguous names are refused and the candidates are listed.
+- App installs and re-signing wait for each other instead of uploading to the phone at the same time.
+- A daemon that gets stuck exits by itself, so systemd or Docker can restart it.
+- Memory no longer grows while the HID fallback is in use.
+- `usbmuxd.log` is rotated when it gets too large.
 
 ## [0.1.4] - 2026-11-07
 

@@ -110,6 +110,8 @@ More: [step-by-step guide](https://derrors.github.io/iphone-control/en/guide/get
 | `iphone_list_devices` | Every iPhone/iPad on USB; marks the one being controlled |
 | `iphone_select_device` | Switch to another device, or back to automatic choice |
 
+`IPHONE_CONTROL_DEV_TOOLS=1` adds six opt-in [developer tools](docs/tools.md#developer-tools-opt-in): logs, crash reports, installing and removing apps, and two for Web Inspector (list web pages, run JavaScript in them). They are off by default; read the [security notes](SECURITY.md#developer-tools) before turning them on.
+
 Action tools accept `then: "elements" | "screenshot"` to return the screen after the action. Screenshot pixels are tap coordinates, so the agent can tap what it sees. Games, maps and video players draw their own UI and have no element tree — use screenshots and coordinates there. Full parameters: [docs/tools.md](docs/tools.md).
 
 Tool texts, results, CLI output and logs are in Simplified Chinese by default; set `IPHONE_CONTROL_LANG=en` for English ([configuration](https://derrors.github.io/iphone-control/en/guide/configuration)).

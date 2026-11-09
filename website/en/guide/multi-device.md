@@ -16,6 +16,7 @@ Agents use `iphone_list_devices` and `iphone_select_device`, which do the same.
 
 - Only devices connected over USB can be selected. It tries the UDID, then the device name, then a part of the name that matches exactly one device. If it matches several, you get an error and need the UDID.
 - WDA takes 10–60 seconds to start after switching; check with `status` (or `iphone_status`) that it's ready. A device that has never had WDA needs [installing](#install-on-a-new-device) first.
+- `iphone-control viewer` belongs to the device controlled when it starts: after switching to another device its actions are refused, so run it again to watch and control the new one.
 
 ## Which device is controlled
 

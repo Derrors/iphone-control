@@ -115,6 +115,9 @@ pub enum DeviceError {
     InvalidInput(String),
 }
 
+/// 同一时间只装一个包，见 [`Device::install`]
+static INSTALLING: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 /// usbmuxd、lockdown 这类一问一答的查询的时限。idevice 读应答没有超时，对方接了连接不应答会一直等
 const QUERY: Duration = Duration::from_secs(15);
 
@@ -450,6 +453,9 @@ impl Device {
 
     /// 上传并安装 .ipa 或 .app 目录
     pub async fn install(&self, package: &Path) -> Result<()> {
+        // idevice 把每个 .ipa 都上传到手机上同一个文件（PublicStaging/idevice.ipa）：同时装两个会互相覆盖
+        // （重签和 iphone_install_app 撞上、两个会话同时安装）。排队等的时间不算进下面的时限
+        let _one_at_a_time = INSTALLING.lock().await;
         // 含上传几十 MB 的包，USB 2 上也就一两分钟
         limit(ictl_l10n::tr!("安装", "install"), Duration::from_secs(600), async {
             idevice::utils::installation::install_package(&*self.provider, package, None).await?;

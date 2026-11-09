@@ -32,7 +32,7 @@ It works as a set of [MCP](https://modelcontextprotocol.io) (Model Context Proto
 Other models and iOS versions should work but are untested — [reports](https://github.com/Derrors/iphone-control/issues) are welcome.
 
 ::: tip Output language
-The CLI, `doctor` output and MCP tool results are currently in Simplified Chinese. Agents handle this fine.
+The CLI, `doctor` output and MCP tool results are in Simplified Chinese by default; set `IPHONE_CONTROL_LANG=en` for English, see [Configuration](./configuration).
 :::
 
 ## Limitations

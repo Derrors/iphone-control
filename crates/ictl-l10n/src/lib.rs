@@ -163,7 +163,10 @@ macro_rules! log_tr {
 #[macro_export]
 macro_rules! log_trf {
     ($zh:literal, $en:literal $(, $arg:expr)* $(,)?) => {
-        if $crate::own_lang() == $crate::Lang::En { format!($en $(, $arg)*) } else { format!($zh $(, $arg)*) }
+        // args that render through tr! (errors) follow the log's language too, not the request's
+        $crate::in_own_lang(|| {
+            if $crate::own_lang() == $crate::Lang::En { format!($en $(, $arg)*) } else { format!($zh $(, $arg)*) }
+        })
     };
 }
 

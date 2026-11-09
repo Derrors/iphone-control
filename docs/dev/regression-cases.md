@@ -1,6 +1,6 @@
 # 必须覆盖的回归用例
 
-#1～#34 来自 toolkit 和本项目早期实际踩过的坑，#35 起是多设备和 HID 横屏。能单测的写单测，不能单测的进真机回归清单：改了设备、时序、WDA 相关的代码，要在真机上重跑相关的用例，并在 PR 里写明跑了哪些、用什么设备和 iOS 版本。
+#1～#34 来自 toolkit 和本项目早期实际踩过的坑，#35～#45 是多设备和 HID 横屏，#46 起是实时画面、开发者工具和英文界面。能单测的写单测，不能单测的进真机回归清单：改了设备、时序、WDA 相关的代码，要在真机上重跑相关的用例，并在 PR 里写明跑了哪些、用什么设备和 iOS 版本。
 
 | # | 坑 | 正确行为 | 测试方式 |
 |---|---|---|---|
@@ -49,3 +49,16 @@
 | 43 | Apple 键盘等配件被当成手机：`doctor` 误报 USB 上有设备，usbmuxd 被反复重启 | 只算 iPhone/iPad/iPod（厂商号 05ac 且产品名匹配） | 单测 + 真机 |
 | 44 | 横屏时 WDA 掉线，HID 触摸按竖屏坐标换算，点错位置 | 每次 HID 触摸前重新截图核对横竖；横屏要有 30 秒内且匹配的 WDA 旋转角才发送，否则拒绝，不猜方向；截图和按键不受影响 | 单测（`hid_rotation_requires_fresh_matching_landscape`）+ 真机（iOS 27 横屏下让 WDA 掉线，点击落点正确；守护进程重启后横屏触摸被拒绝） |
 | 45 | WDA 在横屏时就绪，记下的是横屏尺寸，之后 HID 换算错 | state.json 只存竖放尺寸和对应的 UDID，换算时再按当前方向转 | 真机（iOS 27，横屏下启动 WDA，再让它掉线后点击） |
+| 46 | 浏览器里的其他网页向 `viewer` 发请求，借它操作手机 | 操作要求 `Origin` 是页面本身、内容类型是 JSON；`Host` 必须是回环地址 | 单测（`actions_need_own_origin_and_json`） |
+| 47 | `viewer` 开着时 `select` 到别的设备，点击落到用户没在看的手机上 | 每个操作带启动时的 UDID，守护进程控制的不是这台就拒绝 | 单测（`request_for_another_device_is_refused`）+ 真机（`viewer` 开着时 `select` 另一台，再点击） |
+| 48 | 不需要开发者工具的 agent 多读工具说明，或没开时也能调用 | 开关关闭时工具列表还是 17 个，调用这些工具报错并说明要设 `IPHONE_CONTROL_DEV_TOOLS=1` | 单测（工具列表：`toolkit_tools_plus_wait_for_batch_and_devices`）；调用被拒：代码审查（`call_tool` 里的判断，还没有单测） |
+| 49 | os_log 开着 Debug 时手机上每个进程都产生 Debug 消息（约 650 行/秒），手势变慢、失败 | 只要默认、Error、Fault 级别（约 80 行/秒） | 真机（`iphone_app_logs` 采集时跑回归脚本默认步骤，和不采集时对比耗时） |
+| 50 | 日志采集的缓冲把内存撑大（全部进程，每秒几十行） | 行数和总量都封顶（20,000 行、8 MB），单行截断，结果说明最早一行是多久前 | 单测（`buffer_is_bounded_by_size`） |
+| 51 | 每次调用重开 Web Inspector 连接：约 8 秒一次，几轮后手机不再报告 Safari，要重启 Safari | 复用一条连接；只有连接层的错误才重开，页面超时或页面报错不断开 | 单测（`only_a_page_timeout_keeps_the_connection`）+ 真机（连续多次 `iphone_web_targets`、`iphone_web_eval` 都快且找得到页面；重启 Safari 后仍能找到） |
+| 52 | `iphone_web_eval` 失败后换新连接重试，脚本执行两遍 | 只有列页面（不改手机状态）时才换连接重试，执行脚本不重试 | 代码审查（`web_eval`） |
+| 53 | 卸载 App 按模糊匹配，删错 App 连同数据；卸载 WDA 后无法再控制手机 | 只接受 Bundle ID 或完整显示名（不分大小写），空的、部分匹配、同名多个都拒绝并列出候选；拒绝卸载 WDA | 单测（`uninstall_needs_an_exact_name`、`wda_runner_cannot_be_uninstalled`） |
+| 54 | 滚动条的标签随系统语言变化，只认中英文时其他语言的滚动条出现在元素列表里 | 按百分比的值和细长的形状认，不看标签 | 单测（`scroll_bars_are_dropped_in_any_language`） |
+| 55 | 升级时新旧版本混用：旧客户端按中文开头认结果，旧守护进程不带 `outcome` | 不带语言的请求照旧回中文；`outcome` 可选，没有时按中文开头认 | 单测（`outcome_is_optional_on_the_wire`） |
+| 56 | 安装和重签同时进行：idevice 把每个 .ipa 上传到手机上同一个文件（`PublicStaging/idevice.ipa`），互相覆盖 | 安装（`iphone_install_app`、重签、`sign`）互相排队 | 真机（安装和重签同时进行，两个都成功） |
+| 57 | iPhone 横屏时 viewer 画面还是竖的、内容是歪的，点击也错位 | iPhone 上 WDA 每个会话开 `mjpegFixOrientation`，帧随界面转正 | 真机：Safari 转横屏，`/stream` 的帧是 2796×1290 且内容正立 |
+| 58 | 持设备锁的调用不返回：之后的请求全部排队到过期，进程却还活着，服务管理器不会重启 | 完成巡检或请求时记心跳，约 10 分钟没有心跳就退出（`watchdog.rs`），巡检因为锁被占而跳过时不算 | 单测 a_beat_ends_the_silence |

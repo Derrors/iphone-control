@@ -83,9 +83,11 @@ impl Daemon {
         // 经旧 usbmuxd 建立的连接（隧道、runner、WDA）都要失效：先停 HID 媒体流（还要经它），再停它
         self.drop_session(g).await;
         if let Some(mut c) = g.usbmuxd.take() {
-            let _ = c.kill().await;
+            crate::core::stop_child(&mut c).await;
         }
-        let log = std::fs::OpenOptions::new().create(true).append(true).open(self.cfg.logs().join("usbmuxd.log"));
+        let log_path = self.cfg.logs().join("usbmuxd.log");
+        rotate_before_append(&log_path, crate::eventlog::MAX_BYTES);
+        let log = std::fs::OpenOptions::new().create(true).append(true).open(log_path);
         let mut cmd = tokio::process::Command::new(&self.cfg.usbmuxd_bin);
         cmd.args(["-U", "root", "-f"]).kill_on_drop(true);
         if let Ok(f) = log
@@ -192,22 +194,18 @@ impl Daemon {
             tokio::task::spawn_local(self.clone().check_session());
         }
         self.web_housekeeping(g.device.as_ref().map(|d| d.udid.as_str()));
+        Self::log_housekeeping(g);
         self.publish(g);
     }
 
     async fn offline(&self, g: &mut Inner) {
         let now = Instant::now();
-        g.device_profile = DeviceProfile::NotChecked;
-        g.wda_rotation = None;
         if g.device.take().is_some() {
             self.log.log(ictl_l10n::log_tr!("手机离线", "Phone offline"));
             // 名字、型号、iOS 版本是这台的：留着的话状态、提示文字会把它当成还在控制的设备
             g.info = None;
-            self.drop_session(g).await;
+            self.forget_device(g).await;
             g.offline_since = Some(now);
-            g.apps.clear();
-            // 日志采集属于那台设备：不再控制它就停掉，不让旧设备的日志流再跑到闲置超时
-            g.log_capture = None;
         }
         self.set_state(g, DeviceState::Absent);
         let since = *g.offline_since.get_or_insert(now);
@@ -236,13 +234,8 @@ impl Daemon {
                 )),
                 None => {}
             }
-            self.drop_session(g).await;
-            g.device_profile = DeviceProfile::NotChecked;
-            // App 列表是上一台的（同一台重新接入也重读，便宜）
-            g.apps.clear();
-            // 日志采集属于那台设备：不再控制它就停掉，不让旧设备的日志流再跑到闲置超时
-            g.log_capture = None;
-            g.wda_rotation = None;
+            // 同一台重新接入也清（App 列表重读很便宜，日志流经的旧连接已经断了）
+            self.forget_device(g).await;
             let d = Device::from_usb(seen);
             g.info = d.info().await.ok();
             if let Some(i) = &g.info {
@@ -265,7 +258,7 @@ impl Daemon {
 
         match device.paired().await {
             Ok(true) => {
-                if g.device_profile == DeviceProfile::NotChecked {
+                if g.dev.device_profile == DeviceProfile::NotChecked {
                     self.refresh_device_profile(g).await;
                 }
             }
@@ -379,12 +372,16 @@ impl Daemon {
             StartOutcome::Wda(WdaError::StartFailed(ictl_l10n::trf!("启动任务异常：{e}", "Start task failed: {e}")))
         });
         match outcome {
-            StartOutcome::Ready { runner, client, mounted } => {
+            StartOutcome::Ready { runner, mut client, mounted } => {
                 if let Some(v) = mounted {
                     self.log.log(&ictl_l10n::log_trf!("开发者镜像已挂载 {v}", "Developer disk image mounted {v}"));
                 }
-                g.ddi_failures = 0;
+                g.dev.ddi_failures = 0;
                 g.runner = Some(runner);
+                // verified on an iPhone only; iPads keep what they did
+                if g.info.as_ref().is_some_and(|i| i.product_type.starts_with("iPhone")) {
+                    client.keep_stream_upright();
+                }
                 g.wda = Some(client);
                 // 状态在下面 online() 的健康检查里变成 Ready
             }
@@ -396,11 +393,11 @@ impl Daemon {
             StartOutcome::Ddi { error: e, mount_failed } => {
                 // 只有挂载失败才可能是缓存坏了；ICTL_DDI_DIR 是用户自己的文件，从不删
                 if mount_failed && self.cfg.ddi_dir.is_none() {
-                    g.ddi_failures += 1;
-                    if g.ddi_failures >= DDI_FAILURES_INVALIDATE {
-                        self.log.log(&ictl_l10n::log_trf!("开发者镜像连续 {} 次挂载失败，清掉缓存，下次重新下载", "Mounting the developer disk image failed {} times in a row, clearing the cache to download it again", g.ddi_failures));
+                    g.dev.ddi_failures += 1;
+                    if g.dev.ddi_failures >= DDI_FAILURES_INVALIDATE {
+                        self.log.log(&ictl_l10n::log_trf!("开发者镜像连续 {} 次挂载失败，清掉缓存，下次重新下载", "Mounting the developer disk image failed {} times in a row, clearing the cache to download it again", g.dev.ddi_failures));
                         ictl_device::ddi::invalidate(&self.cfg.ddi_cache());
-                        g.ddi_failures = 0;
+                        g.dev.ddi_failures = 0;
                     }
                 }
                 g.backoff.failed(Instant::now());
@@ -465,13 +462,13 @@ impl Daemon {
             // 看这台手机上装的那份，不看最近一次签名：给别的手机签过之后，这台装的还是更早签的、更早到期
             if !force && g.persisted.wda_bundle.is_some() {
                 self.refresh_device_profile(g).await;
-                if g.device_profile == DeviceProfile::Missing {
+                if g.dev.device_profile == DeviceProfile::Missing {
                     // 自动重签不替没装过的手机注册设备（占 Apple ID 的设备名额），交给用户决定
                     return Ok(
                         ictl_l10n::tr!("这台手机上没有装当前 Apple ID 签的 WDA,不自动重签;要装就运行 iphone-control setup", "No WDA signed by the current Apple ID on this phone, not re-signing automatically; run iphone-control setup to install it").into()
                     );
                 }
-                if let Some(left) = g.device_profile.left(&g.persisted)
+                if let Some(left) = g.dev.device_profile.left(&g.persisted)
                     && left > self.cfg.resign_min
                 {
                     return Ok(ictl_l10n::trf!(
@@ -581,6 +578,13 @@ impl Daemon {
         };
         self.publish(g);
         r
+    }
+}
+
+/// Keeps a log that a child appends to from growing without end. Only safe while nothing has it open
+fn rotate_before_append(path: &Path, max: u64) {
+    if std::fs::metadata(path).is_ok_and(|m| m.len() >= max) {
+        let _ = std::fs::rename(path, path.with_extension("log.1"));
     }
 }
 

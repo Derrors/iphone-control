@@ -9,8 +9,16 @@
 //! - 点击中心取元素在屏幕内的部分；中心被后面（上层）的东西盖住时另找没被盖住的点（[`Tree::tap_point`]）
 //! - 锁屏密码键盘的 `Key` 元素不显示时也在树里，**不能**据此判断键盘已出现
 
+use std::sync::LazyLock;
+
 use ictl_device::ScreenSize;
 use quick_xml::{XmlVersion, events::Event};
+use regex::Regex;
+
+/// The patterns are compile-time constants, only checked by the tests that use them
+fn regex(pattern: &str) -> Regex {
+    Regex::new(pattern).expect("valid pattern")
+}
 
 /// `/source?format=xml&excluded_attributes=` 要排除的属性
 pub const SOURCE_EXCLUDED: &str =
@@ -138,10 +146,10 @@ impl Rotate {
 
     /// 树里第一个 StatusBar 的原始坐标（不管嵌在哪层，状态栏都是整屏坐标）
     fn status_bar(xml: &str) -> Option<Rect> {
-        let tag = regex::Regex::new(r"<XCUIElementTypeStatusBar\b[^>]*>").ok()?.find(xml)?.as_str();
-        let attr = |k: &str| -> Option<f64> {
-            regex::Regex::new(&format!(r#"\b{k}="([^"]*)""#)).ok()?.captures(tag)?[1].parse().ok()
-        };
+        static TAG: LazyLock<Regex> = LazyLock::new(|| regex(r"<XCUIElementTypeStatusBar\b[^>]*>"));
+        static ATTR: LazyLock<Regex> = LazyLock::new(|| regex(r#"\b(x|y|width|height)="([^"]*)""#));
+        let tag = TAG.find(xml)?.as_str();
+        let attr = |k: &str| -> Option<f64> { ATTR.captures_iter(tag).find(|c| &c[1] == k)?[2].parse().ok() };
         Some(Rect { x: attr("x")?, y: attr("y")?, w: attr("width")?, h: attr("height")? })
     }
 
@@ -318,18 +326,21 @@ fn looks_like_identifier(s: &str) -> bool {
     s.len() >= 3 && s.is_ascii() && !s.contains(char::is_whitespace) && s.contains(['_', '-', '.', ':'])
 }
 
-/// A scroll bar: an `Other` whose value is the scroll position as a percentage and that is a thin strip
-/// (about 30 points across). Its label depends on the system language ("垂直滚动条, 1页",
-/// "Vertikaler Rollbalken, 1 Seite", …), so the label is only an extra hint for Chinese and English
-fn is_scroll_bar(kind: &str, label: &str, value: &str, size: (f64, f64)) -> bool {
+/// A scroll bar: an `Other` whose value is the scroll position as a percentage, about 30 points across and running
+/// most of the way along what it scrolls (`within`: the scroll view's visible size, or the screen when there is none,
+/// as on the home screen). In the device samples the bars are 25-31 points thick and at least 68% as long as that, but
+/// aren't flush with its edge. A custom progress strip reporting a percentage is thinner or shorter, so it stays.
+/// The label depends on the system language ("垂直滚动条, 1页", "Vertikaler Rollbalken, 1 Seite", …), so it is only an
+/// extra hint for Chinese and English
+fn is_scroll_bar(kind: &str, label: &str, value: &str, size: (f64, f64), within: (f64, f64)) -> bool {
     if kind != "Other" {
         return false;
     }
     if label.contains("滚动条") || label.to_lowercase().contains("scroll bar") {
         return true;
     }
-    let thin = size.0.min(size.1);
-    is_percentage(value) && thin > 0.0 && thin <= 32.0
+    let (thick, long, room) = if size.1 >= size.0 { (size.0, size.1, within.1) } else { (size.1, size.0, within.0) };
+    is_percentage(value) && (24.0..=32.0).contains(&thick) && long >= room * 0.6
 }
 
 /// "0%", "73 %" (with a no-break space in German and French), "%40" (Turkish)
@@ -498,7 +509,8 @@ pub fn parse_tree(xml: &str, view: impl Into<View>) -> Tree {
         let (vx1, vy1) = (scr.x.max(0.0), scr.y.max(0.0));
         let visible = Rect { x: vx1, y: vy1, w: (scr.x + scr.w).min(sw) - vx1, h: (scr.y + scr.h).min(sh) - vy1 };
         let text = [&label, &name, &value].into_iter().find(|s| !s.is_empty()).cloned();
-        let scroll_bar = is_scroll_bar(&kind, &label, &value, (raw.w, raw.h));
+        let scroll_area = parent.and_then(|p| p.scroller).map_or((sw, sh), |s| (s.w, s.h));
+        let scroll_bar = is_scroll_bar(&kind, &label, &value, (scr.w, scr.h), scroll_area);
         if kind == "ActivityIndicator" && onscreen {
             tree.loading = true;
         }
@@ -722,8 +734,8 @@ pub fn passcode_field(elements: &[Element]) -> Option<(u32, u32)> {
 
 /// 锁屏密码栏的值形如「共6位数，已输入2位」或英文「6-digit passcode, 2 entered」，返回 (总位数, 已输入位数)
 pub fn parse_passcode_value(value: &str) -> Option<(u32, u32)> {
-    let nums: Vec<u32> =
-        regex::Regex::new(r"\d+").ok()?.find_iter(value).filter_map(|m| m.as_str().parse().ok()).collect();
+    static DIGITS: LazyLock<Regex> = LazyLock::new(|| regex(r"\d+"));
+    let nums: Vec<u32> = DIGITS.find_iter(value).filter_map(|m| m.as_str().parse().ok()).collect();
     match nums[..] {
         [total, entered] => Some((total, entered)),
         _ => None,
@@ -749,9 +761,9 @@ pub fn cover_sheet(xml: &str) -> CoverSheet {
             .iter()
             .any(|m| xml.contains(m));
     let use_passcode = USE_PASSCODE_LABELS.iter().any(|l| xml.contains(&format!("label=\"{l}\"")));
-    let passcode_field = regex::Regex::new(r#"<XCUIElementTypeSecureTextField [^>]*value="([^"]*)""#)
-        .ok()
-        .is_some_and(|re| re.captures_iter(xml).any(|c| parse_passcode_value(&c[1]).is_some()));
+    static PASSCODE: LazyLock<Regex> =
+        LazyLock::new(|| regex(r#"<XCUIElementTypeSecureTextField [^>]*value="([^"]*)""#));
+    let passcode_field = PASSCODE.captures_iter(xml).any(|c| parse_passcode_value(&c[1]).is_some());
     if lock_glyph || use_passcode || passcode_field {
         CoverSheet::Locked
     } else if xml.contains("\"lockscreen-date-view\"") {
@@ -901,9 +913,12 @@ mod tests {
         for v in ["", "%", "1", "Seite 1 von 2", "50% off", "1,5 %"] {
             assert!(!is_percentage(v), "{v:?}");
         }
-        assert!(!is_scroll_bar("Other", "Akku", "80 %", (60.0, 120.0)), "too wide for a scroll bar");
-        assert!(!is_scroll_bar("Slider", "Lautstärke", "50 %", (300.0, 30.0)), "only Other");
-        assert!(is_scroll_bar("Other", "Barre de défilement verticale, 1 page", "0\u{202f}%", (30.0, 700.0)));
+        let screen = (393.0, 852.0);
+        assert!(!is_scroll_bar("Other", "Akku", "80 %", (60.0, 120.0), screen), "too wide for a scroll bar");
+        assert!(!is_scroll_bar("Slider", "Lautstärke", "50 %", (300.0, 30.0), screen), "only Other");
+        assert!(is_scroll_bar("Other", "Barre de défilement verticale, 1 page", "0\u{202f}%", (30.0, 700.0), screen));
+        assert!(!is_scroll_bar("Other", "Download", "40 %", (350.0, 6.0), screen), "a thin progress strip stays");
+        assert!(!is_scroll_bar("Other", "Download", "40 %", (120.0, 30.0), screen), "a short one too");
     }
 
     /// 真机：设置首页往上滑后，「钱包与Apple Pay」那一行（832～886）被底部悬浮搜索栏盖住：

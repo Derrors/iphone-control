@@ -26,7 +26,7 @@ Coordinates are in **points**, the same unit as the pixels of a full-screen `iph
 | `iphone_press_button` | `button`: `home`, `volume_up`, `volume_down`, `lock` | `home` refuses to act while a system alert is on screen (it would have no effect). `home` is sent as an IOHID AC Home event and waits until the home screen is in front; `lock` presses the power key over IOHID. Each falls back to the XCTest/WebDriverAgent way if it had no effect |
 | `iphone_launch_app` | `app` (bundle id or display name, e.g. `设置`) | Cold-launches the app, or brings it back to where it was if it is already running. Waits until it is in the foreground; returns early and says so if a system alert is blocking it |
 | `iphone_terminate_app` | `app` | Force-quits, like swiping it away in the app switcher; unsaved input is lost. No error if it wasn't running |
-| `iphone_open_url` | `url` | Web pages open in Safari; URL schemes open their app |
+| `iphone_open_url` | `url` | Web pages open in the default browser; URL schemes open their app |
 
 ## Several devices
 
@@ -43,18 +43,27 @@ With `IPHONE_CONTROL_DEV_TOOLS=1` in the MCP server's environment, six more tool
 
 | Tool | Parameters | Notes |
 |---|---|---|
-| `iphone_app_logs` | `process`, `grep`, `since` (60 s), `limit` (100), `errors_only` | The phone's unified log (os_log) at the default, Error and Fault levels, one line per entry (Debug and Info are left out: streaming them makes every process on the phone produce them and slows it down): seconds ago, `process[pid]`, level, subsystem, message. `process` is an app (name or bundle ID) or a process name. The first call starts recording, so earlier lines aren't available: call it once, reproduce the problem, call it again. Recording keeps the last 20,000 lines and stops after 15 minutes without a call. Read-only |
+| `iphone_app_logs` | `process`, `grep`, `since` (seconds, default 60, at most 3600), `limit` (default 100, 1 to 1000), `errors_only` | The phone's unified log (os_log) at the default, Error and Fault levels, one line per entry: seconds ago, `process[pid]`, level, subsystem, message. `process` is an app (name or bundle ID) or a process name. Read-only. See the recording notes below the table |
 | `iphone_crash_reports` | `filter`, `name` | Lists crash reports, newest first (at most 50); with `name`, returns that report (`.ips`, cut at 40,000 characters). Read-only |
 | `iphone_install_app` | `path` | Installs a signed `.ipa` or `.app` from a path on the machine that runs the daemon (inside the container for a container deployment). Destructive: it replaces an installed copy of the same app |
-| `iphone_uninstall_app` | `app` | Removes an app and its data. Refuses to remove the WebDriverAgent runner. Destructive |
+| `iphone_uninstall_app` | `app` | Removes an app and its data. `app` must be a bundle ID or the full display name (case-insensitive); an empty, partial or ambiguous name is refused and the candidates are listed. Refuses to remove the WebDriverAgent runner. Destructive |
 | `iphone_web_targets` | — | Inspectable web pages and WebViews over the Web Inspector service: Safari tabs and inspectable WebViews in apps (debug builds of Capacitor, Cordova, React Native…). One line each: id, type, app, title, URL. Only apps in the foreground answer; needs Settings → Safari → Advanced → Web Inspector. Read-only |
-| `iphone_web_eval` | `expression`, `target`, `timeout` (10 s, at most 60) | Runs JavaScript in a page and returns the result as JSON; a promise is awaited, a DOM node comes back as its description (`"<body>"`). `target` is an id from `iphone_web_targets`, or text in the URL or title; it can be left out when there is one page. Not read-only: a script can change the page |
+| `iphone_web_eval` | `expression`, `target`, `timeout` (10 s, at most 60) | Runs JavaScript in a page and returns the result as JSON; a promise is awaited, a DOM node comes back as its description (`"<body>"`). `target` is an id from `iphone_web_targets`, or text in the URL or title; it can be left out when there is one page. Destructive: a script can change the page, submit forms and send requests |
+
+How `iphone_app_logs` records:
+
+- The first call starts recording, so earlier lines aren't available: call it once, reproduce the problem, call it again.
+- Debug and Info messages are left out, because streaming them makes every process on the phone produce them and slows it down.
+- The buffer keeps the last 20,000 lines and at most 8 MB of text, and each message is cut to 600 characters. When it doesn't reach back as far as `since`, the result says how old its oldest line is.
+- Recording stops after 15 minutes without a call, when the daemon switches to another device, and when the device goes offline.
+
+See [SECURITY.md](../SECURITY.md#developer-tools) before turning these tools on.
 
 ## Auto-unlock and "read-only" tools
 
-When auto-unlock is configured for the controlled device, a locked phone is unlocked first by the action tools and by `iphone_screenshot`, `iphone_list_elements` and `iphone_wait_for`. `iphone_status`, `iphone_list_apps`, `iphone_list_devices`, `iphone_select_device` and `iphone_press_button` with `lock` never unlock it. While WDA is unavailable nothing is unlocked.
+When auto-unlock is configured for the controlled device, a locked phone is unlocked first by the action tools and by `iphone_screenshot`, `iphone_list_elements` and `iphone_wait_for`. `iphone_status`, `iphone_list_apps`, `iphone_list_devices`, `iphone_select_device`, the developer tools and `iphone_press_button` with `lock` never unlock it. While WDA is unavailable nothing is unlocked.
 
-Every tool carries MCP annotations: the six read-only tools (`iphone_status`, `iphone_screenshot`, `iphone_list_elements`, `iphone_list_apps`, `iphone_wait_for`, `iphone_list_devices`) are `readOnlyHint: true`. "Read-only" means they don't change what's on screen; with auto-unlock on, the three above still unlock the phone first. The action tools are not read-only, and taps, long-presses, `iphone_terminate_app` and `iphone_batch` are also marked `destructiveHint: true`, since what they hit on screen can delete or send things.
+Every tool carries MCP annotations: the six read-only tools (`iphone_status`, `iphone_screenshot`, `iphone_list_elements`, `iphone_list_apps`, `iphone_wait_for`, `iphone_list_devices`) are `readOnlyHint: true`, and with the developer tools on so are `iphone_app_logs`, `iphone_crash_reports` and `iphone_web_targets`, nine in all. "Read-only" means they don't change what's on screen; with auto-unlock on, `iphone_screenshot`, `iphone_list_elements` and `iphone_wait_for` still unlock the phone first. The action tools are not read-only, and taps, long-presses, `iphone_terminate_app` and `iphone_batch` are also marked `destructiveHint: true`, since what they hit on screen can delete or send things. So are `iphone_web_eval`, `iphone_install_app` and `iphone_uninstall_app`.
 
 ## Returning the screen after an action: `then`
 
@@ -92,13 +101,7 @@ If the MCP client cancels the call, the remaining steps don't run; a request sti
 
 ## HID fallback
 
-Screenshots, taps, swipes and buttons fall back to CoreDevice HID only when WDA can't be reached, and only on iOS 27 or later. If a WDA request was already sent and the connection then drops or the response is incomplete, nothing is redone over HID, because the action may already have happened: the tool returns an error, and the agent should take a screenshot before trying again.
-
-Touches over HID need the screen size. If WDA is down and the size of this device isn't known (WDA has never run on it, or the last record is for another device), the tool returns an error unless `SCREEN_W`/`SCREEN_H` are set.
-
-HID taps and swipes convert screen coordinates back to native portrait coordinates. Before each touch, the daemon captures a fresh screenshot and checks its orientation. Landscape touches additionally require a matching WDA rotation sample from the last 30 seconds. Without one — notably after restarting the daemon — the touch is refused rather than guessed. Screenshots and hardware keys remain available.
-
-During a WDA outage, keep the device in the same landscape direction: both sides produce the same screenshot dimensions, so a 180° flip cannot be detected without WDA. Wait for WDA to recover before changing sides and touching again.
+When WDA can't be reached, screenshots, taps, swipes and buttons fall back to CoreDevice HID (iOS 27 or later). The limits on landscape, screen size and redoing an action are in the [Tools guide](https://derrors.github.io/iphone-control/en/guide/tools#when-wda-is-down-the-hid-fallback).
 
 ## Tips for agents
 

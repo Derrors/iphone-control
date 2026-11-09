@@ -28,6 +28,8 @@ const LOCAL_MOTION: f64 = 4.0;
 const STILL_TOLERANCE: i64 = 3;
 /// 滑动后最多等这么久让列表停下（快速滑动的惯性滚动约 2 秒）
 const SCROLL_SETTLE: Duration = Duration::from_millis(2500);
+/// 滑动时读到的树这么久之内还能当 settle 比较的起点
+const SWIPED_TREE_FRESH: Duration = Duration::from_secs(1);
 /// WDA 不可用时 status 里说明哪些功能用不了
 const NEEDS_WDA: &str = "读界面元素、按名字点击、启动 App、输入中文要等 WDA 恢复";
 const NEEDS_WDA_EN: &str =
@@ -41,7 +43,7 @@ impl Daemon {
     /// 配置了密码就在锁屏时自动解锁；没配置而手机锁着则报错（与 toolkit 一致）
     pub(crate) async fn ensure_unlocked(&self, g: &mut Inner) -> Result<(), String> {
         let cfg = self.unlock_cfg(g.device.as_ref().map(|d| d.udid.as_str()));
-        if let Some(left) = g.last_lock.and_then(|t| LOCK_SETTLE.checked_sub(t.elapsed())) {
+        if let Some(left) = g.dev.last_lock.and_then(|t| LOCK_SETTLE.checked_sub(t.elapsed())) {
             tokio::time::sleep(left).await;
         }
         let Some(wda) = self.wda(g) else { return Ok(()) };
@@ -84,7 +86,7 @@ impl Daemon {
         if let Some(w) = self.wda(g)
             && let Ok(r) = w.rotation().await
         {
-            g.wda_rotation = Some((Instant::now(), r));
+            g.dev.wda_rotation = Some((Instant::now(), r));
         }
     }
 
@@ -100,7 +102,7 @@ impl Daemon {
         })?;
         let (w, h) = imaging::png_size(&png)
             .ok_or(ictl_l10n::tr!("无法读取截图尺寸，没有发送触摸", "Can't read the screenshot size, no touch sent"))?;
-        let known = g.wda_rotation.map(|(at, r)| (at.elapsed(), r));
+        let known = g.dev.wda_rotation.map(|(at, r)| (at.elapsed(), r));
         hid_rotation(w, h, known)
     }
 
@@ -335,30 +337,28 @@ impl Daemon {
     /// 屏幕上有弹窗时在结果里提醒（读树时顺带看，不多花时间）
     pub(crate) async fn settle(&self, g: &mut Inner, max: Duration) -> Result<String, String> {
         let t0 = Instant::now();
+        // 刚滑完读到的树：只作比较的起点，是不是真稳定还要看下一次读到的
+        let seed = g.swiped_tree.take().filter(|(at, _)| at.elapsed() < SWIPED_TREE_FRESH).map(|(_, t)| t);
         let Some(w) = self.wda(g) else {
             tokio::time::sleep(max.min(Duration::from_millis(500))).await;
             return Ok(ictl_l10n::tr!("WDA 不可用,等了 0.5 秒", "WDA unavailable, waited 0.5 s").into());
         };
         w.begin_polling().await.map_err(|e| e.to_string())?;
-        let r = poll_stable(w, t0, max).await;
+        let r = poll_stable(w, t0, max, seed).await;
         w.end_polling().await;
-        let (first, polled) = r?;
-        let Some((msg, tree)) = polled else {
-            // 元素很少：改看画面
-            let note = alert_note(&first);
-            return Ok(self.settle_visually(g, t0, max).await? + &note);
+        let (msg, settled, tree) = match r? {
+            Polled::FewElements(first) => {
+                // 元素很少：改看画面
+                let note = alert_note(&first);
+                return Ok(self.settle_visually(g, t0, max).await? + &note);
+            }
+            Polled::Done { msg, settled, tree } => (msg, settled, tree),
         };
         let note = alert_note(&tree);
         // 自己画的加载圈（不是 ActivityIndicator）不在树里，树稳定了页面可能还在加载。
         // 加载中的页面中间是空的：只在这种时候多看一眼画面（约 0.5 秒），平常不多花时间
         let screen = self.screen(g).await?;
-        let msg = if msg.starts_with(ictl_l10n::tr!("界面已稳定", "Screen settled"))
-            && middle_is_empty(&tree, screen.height)
-        {
-            msg + &self.motion_note(g).await
-        } else {
-            msg
-        };
+        let msg = if settled && middle_is_empty(&tree, screen.height) { msg + &self.motion_note(g).await } else { msg };
         // 紧接着的 then=elements 直接用这棵树
         g.elements_cache = Some((Instant::now(), tree));
         Ok(msg + &note)
@@ -566,12 +566,14 @@ impl Daemon {
         self.ensure_unlocked(g).await?;
         let desc = format!("({},{}) → ({},{})", fmt_g(from.0), fmt_g(from.1), fmt_g(to.0), fmt_g(to.1));
         if let Some(w) = self.wda(g) {
-            match w.swipe(from, to, (seconds * 1000.0) as u64).await {
+            match w.swipe_into_polling(from, to, (seconds * 1000.0) as u64).await {
                 // 滑动请求不等惯性滚动（等的话设置不对能卡十几秒），这里等列表停下再返回：
                 // 列表还在滚时下一次点击只会让它停住，点不到东西
                 Ok(()) => {
                     let vertical = (to.1 - from.1).abs() >= (to.0 - from.0).abs();
-                    return Ok(ictl_l10n::trf!("已滑动 {desc}{}", "Swiped {desc}{}", wait_scrolled(w, vertical).await));
+                    let (note, tree) = wait_scrolled(w, vertical).await;
+                    g.swiped_tree = tree.map(|t| (Instant::now(), t));
+                    return Ok(ictl_l10n::trf!("已滑动 {desc}{note}", "Swiped {desc}{note}"));
                 }
                 Err(WdaError::Unavailable(_)) => {}
                 Err(e) => return Err(e.to_string()),
@@ -707,22 +709,22 @@ impl Daemon {
                 }
             };
             if locked {
-                g.last_lock = Some(Instant::now());
+                g.dev.last_lock = Some(Instant::now());
                 return Ok(ictl_l10n::tr!("已锁屏", "Locked").into());
             }
         }
         self.hid_do(g, |h| Box::pin(h.press(Button::Lock))).await?;
-        g.last_lock = Some(Instant::now());
+        g.dev.last_lock = Some(Instant::now());
         Ok(ictl_l10n::tr!("已锁屏", "Locked").into())
     }
 
     pub(crate) async fn list_apps(&self, g: &mut Inner, include_system: bool) -> Result<Vec<AppInfo>, String> {
-        if let Some(a) = g.apps.get(&include_system) {
+        if let Some(a) = g.dev.apps.get(&include_system) {
             return Ok(a.clone());
         }
         let device = g.device.clone().ok_or(ictl_l10n::tr!("手机未连接", "Phone not connected"))?;
         let a = device.list_apps(include_system).await.map_err(|e| e.to_string())?;
-        g.apps.insert(include_system, a.clone());
+        g.dev.apps.insert(include_system, a.clone());
         Ok(a)
     }
 
@@ -734,7 +736,7 @@ impl Daemon {
             return Ok(b);
         }
         // 守护进程启动后新装的 App 不在缓存里：刷新一次再找
-        g.apps.clear();
+        g.dev.apps.clear();
         self.resolve_cached(g, app).await?.ok_or_else(|| {
             ictl_l10n::trf!(
                 "找不到名为 \"{app}\" 的 App,用 iphone_list_apps 查看",
@@ -913,36 +915,39 @@ fn middle_is_empty(tree: &Tree, screen_h: f64) -> bool {
 }
 
 /// 滑动后等列表停下（最多 [`SCROLL_SETTLE`]）：沿滑动方向的位置连续两次差不超过 [`STILL_TOLERANCE`]。
-/// 没停下返回提醒；元素很少（游戏、地图）看不出来，不等
-async fn wait_scrolled(w: &mut WdaClient<DeviceTransport>, vertical: bool) -> String {
-    if w.begin_polling().await.is_err() {
-        return String::new();
-    }
+/// 没停下返回提醒；元素很少（游戏、地图）看不出来，不等。
+/// 同时返回停下时读到的树，紧接着的 settle（then=…）从它开始比较，少读一次（[`Daemon::settle`]）。
+/// 调用前已在轮询模式（[`WdaClient::swipe_into_polling`]）
+async fn wait_scrolled(w: &mut WdaClient<DeviceTransport>, vertical: bool) -> (String, Option<Tree>) {
     let t0 = Instant::now();
-    let r: Result<bool, WdaError> = async {
+    let r: Result<(bool, Tree), WdaError> = async {
         let mut prev = w.tree().await?;
         if prev.elements.len() < VISUAL_SETTLE_BELOW {
-            return Ok(true);
+            return Ok((true, prev));
         }
         while t0.elapsed() < SCROLL_SETTLE {
             tokio::time::sleep(Duration::from_millis(30)).await;
             let cur = w.tree().await?;
             if cur.still_along(&prev, vertical, STILL_TOLERANCE) {
-                return Ok(true);
+                return Ok((true, cur));
             }
             prev = cur;
         }
-        Ok(false)
+        Ok((false, prev))
     }
     .await;
     w.end_polling().await;
     match r {
-        Ok(false) => ictl_l10n::trf!(
-            "({:.1} 秒后列表还在动,可能还在滚动)",
-            " (the list was still moving after {:.1} s, it may still be scrolling)",
-            SCROLL_SETTLE.as_secs_f64()
+        Ok((true, tree)) => (String::new(), Some(tree)),
+        Ok((false, _)) => (
+            ictl_l10n::trf!(
+                "({:.1} 秒后列表还在动,可能还在滚动)",
+                " (the list was still moving after {:.1} s, it may still be scrolling)",
+                SCROLL_SETTLE.as_secs_f64()
+            ),
+            None,
         ),
-        _ => String::new(),
+        Err(_) => (String::new(), None),
     }
 }
 
@@ -953,15 +958,19 @@ async fn poll_stable(
     w: &mut WdaClient<DeviceTransport>,
     t0: Instant,
     max: Duration,
-) -> Result<(Tree, Option<(String, Tree)>), String> {
-    let first = w.tree().await.map_err(|e| e.to_string())?;
+    seed: Option<Tree>,
+) -> Result<Polled, String> {
+    let first = match seed {
+        Some(t) => t,
+        None => w.tree().await.map_err(|e| e.to_string())?,
+    };
     if first.elements.len() < VISUAL_SETTLE_BELOW {
-        return Ok((first, None));
+        return Ok(Polled::FewElements(first));
     }
-    let mut prev = first.clone();
-    let msg = loop {
+    let mut prev = first;
+    let (msg, settled) = loop {
         if t0.elapsed() >= max {
-            break if prev.loading {
+            let msg = if prev.loading {
                 ictl_l10n::trf!(
                     "{:.1} 秒内页面一直在加载(有加载圈),按最后的状态返回;要等结果出来用 iphone_wait_for",
                     "The page kept loading for {:.1} s (spinner shown), returning the last state; to wait for the result use iphone_wait_for",
@@ -974,6 +983,7 @@ async fn poll_stable(
                     max.as_secs_f64()
                 )
             };
+            break (msg, false);
         }
         // 一次读树本身约 0.2 秒，两次之间不用再多等
         tokio::time::sleep(Duration::from_millis(30)).await;
@@ -981,10 +991,23 @@ async fn poll_stable(
         let same = cur.close_to(&prev, STILL_TOLERANCE);
         prev = cur;
         if same && !prev.loading {
-            break ictl_l10n::trf!("界面已稳定({:.1} 秒)", "Screen settled ({:.1} s)", t0.elapsed().as_secs_f64());
+            let msg = ictl_l10n::trf!("界面已稳定({:.1} 秒)", "Screen settled ({:.1} s)", t0.elapsed().as_secs_f64());
+            break (msg, true);
         }
     };
-    Ok((first, Some((msg, prev))))
+    Ok(Polled::Done { msg, settled, tree: prev })
+}
+
+/// 轮询元素树的结果
+enum Polled {
+    /// 元素太少（游戏、地图），元素树看不出界面变化，要改看画面
+    FewElements(Tree),
+    Done {
+        msg: String,
+        /// 真的稳定了（不是等到上限）
+        settled: bool,
+        tree: Tree,
+    },
 }
 
 /// 判断画面动没动用的缩略图。解码是 CPU 活，放到阻塞线程

@@ -28,12 +28,7 @@ use tokio::net::TcpStream;
 const PAGE: &str = include_str!("viewer.html");
 /// WDA's MJPEG server on the phone
 const MJPEG_PORT: u16 = 9100;
-const MAX_HEAD: usize = 16 * 1024;
 const MAX_BODY: usize = 16 * 1024;
-/// How long a client may take to send the request head or body
-const READ_TIMEOUT: Duration = Duration::from_secs(10);
-/// Connections served at once (a stream holds one for as long as the page is open)
-const MAX_CONNECTIONS: usize = 16;
 
 pub async fn run(socket: &Path, port: u16) -> anyhow::Result<()> {
     let udid = crate::target_device(socket, None).await?.udid;
@@ -54,7 +49,7 @@ pub async fn run(socket: &Path, port: u16) -> anyhow::Result<()> {
             "Note: every user on this machine can watch and control the phone through this port; stop it when you are done."
         )
     );
-    let slots = std::sync::Arc::new(tokio::sync::Semaphore::new(MAX_CONNECTIONS));
+    let slots = std::sync::Arc::new(tokio::sync::Semaphore::new(crate::MAX_CONNECTIONS));
     loop {
         let (client, _) = listener.accept().await?;
         // too many open connections (for example many tabs): drop the new one
@@ -71,7 +66,7 @@ pub async fn run(socket: &Path, port: u16) -> anyhow::Result<()> {
 
 /// One request per connection (`Connection: close`), which keeps the parser small
 async fn serve(mut client: TcpStream, udid: &str, socket: &Path, port: u16) -> anyhow::Result<()> {
-    let (head, mut body) = read_head(&mut client).await?;
+    let (head, mut body) = crate::read_head(&mut client).await?;
     let Some(req) = Head::parse(&head) else {
         return reply(&mut client, 400, "text/plain", b"bad request").await;
     };
@@ -106,7 +101,7 @@ async fn serve(mut client: TcpStream, udid: &str, socket: &Path, port: u16) -> a
             }
             while body.len() < len {
                 let mut buf = [0u8; 4096];
-                let n = tokio::time::timeout(READ_TIMEOUT, client.read(&mut buf)).await??;
+                let n = tokio::time::timeout(crate::READ_TIMEOUT, client.read(&mut buf)).await??;
                 if n == 0 {
                     bail!("body cut off");
                 }
@@ -120,26 +115,6 @@ async fn serve(mut client: TcpStream, udid: &str, socket: &Path, port: u16) -> a
             reply(&mut client, 200, "application/json", v.to_string().as_bytes()).await
         }
         _ => reply(&mut client, 404, "text/plain", b"not found").await,
-    }
-}
-
-/// Reads up to the end of the request head; returns the head and whatever of the body came with it
-async fn read_head(client: &mut TcpStream) -> anyhow::Result<(Vec<u8>, Vec<u8>)> {
-    let mut data = Vec::new();
-    let mut buf = [0u8; 4096];
-    loop {
-        if let Some(i) = data.windows(4).position(|w| w == b"\r\n\r\n") {
-            let body = data.split_off(i + 4);
-            return Ok((data, body));
-        }
-        if data.len() > MAX_HEAD {
-            bail!("request head too long");
-        }
-        let n = tokio::time::timeout(READ_TIMEOUT, client.read(&mut buf)).await??;
-        if n == 0 {
-            bail!("connection closed");
-        }
-        data.extend_from_slice(&buf[..n]);
     }
 }
 

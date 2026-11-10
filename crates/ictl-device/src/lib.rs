@@ -499,6 +499,8 @@ impl Device {
         limit(ictl_l10n::tr!("打开 Web Inspector", "open the Web Inspector"), QUERY, async {
             ictl_webinspector::WebInspector::open(&*self.provider).await.map_err(|e| match e {
                 ictl_webinspector::Error::Device(e) => e.into(),
+                // kept as I/O so the caller can tell the phone closed the connection (Web Inspector off)
+                ictl_webinspector::Error::Io(e) => DeviceError::Io(e),
                 e => DeviceError::Idevice(e.to_string()),
             })
         })
@@ -508,7 +510,8 @@ impl Device {
     /// Starts the phone's unified log stream (os_trace_relay), every process, without debug messages.
     /// Asking for debug messages (what idevice's `start_trace` does) makes every process on the phone produce them:
     /// about 650 lines a second instead of about 80 on an idle iPhone 15 Pro Max (iOS 27.0.1), and gestures got
-    /// slower and some failed while the stream ran. Info messages come along with debug, so they are left out too
+    /// slower and some failed while the stream ran. Most info messages go with them, but some processes still send
+    /// Info entries (MobileTimer on iOS 27.2.1); callers that promise default, Error and Fault only drop those
     pub async fn log_stream(&self) -> Result<LogStream> {
         let flags = oslog::flags::IDEVICE_DEFAULT & !oslog::flags::DEBUG;
         let inner =

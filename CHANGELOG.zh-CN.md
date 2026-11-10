@@ -6,6 +6,15 @@
 
 ## [Unreleased]
 
+### 修复
+
+- 新款 iPhone 上 `lock` 不再要 10 秒左右：电源键改为按 0.1 秒，不再按住 0.5 秒。iPhone 18 Pro Max（iOS 27.2.1）不认按住，每次锁屏都退到 WebDriverAgent 较慢的锁屏，还在日志里记一次超时。
+- 不认 IOHID Home 事件的设备（iPhone 18 Pro Max，iOS 27.2.1）上 `home` 从约 3.7 秒变为约 1.3 秒：只有 XCTest 的按法有效时，守护进程按设备记住，之后先用它。只认 IOHID 按法的设备（iPhone 12 mini）顺序不变。
+- 界面上一直有动画时，点击和长按不再要 26 秒左右（iPhone 18 Pro Max、iOS 27.2.1 上，键盘弹着时在设置里点搜索结果每次都这样）：和滑动一样，不再等 WebDriverAgent 的动画冷却。同一个点击现在约 1.4 秒。
+- 手机断开 Web Inspector 连接时，`iphone_web_targets`、`iphone_web_eval` 提示去打开 设置 → Safari → 高级 → 网页检查器，不再只给一句 TLS 错误。
+- `iphone_app_logs` 不再返回 Info 级别的行，和工具说明一致（不带调试消息的日志流里，有些进程仍会发 Info）。
+- 英文的设备说明在括号前、逗号后加了空格：`name (model iOS version, UDID)`。
+
 ## [0.1.5] - 2026-11-10
 
 ### 新增

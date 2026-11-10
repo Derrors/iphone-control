@@ -1,6 +1,6 @@
 # 必须覆盖的回归用例
 
-#1～#34 来自 toolkit 和本项目早期实际踩过的坑，#35～#45 是多设备和 HID 横屏，#46 起是实时画面、开发者工具和英文界面。能单测的写单测，不能单测的进真机回归清单：改了设备、时序、WDA 相关的代码，要在真机上重跑相关的用例，并在 PR 里写明跑了哪些、用什么设备和 iOS 版本。
+#1～#34 来自 toolkit 和本项目早期实际踩过的坑，#35～#45 是多设备和 HID 横屏，#46～#58 是实时画面、开发者工具和英文界面，#59 起是 iPhone 18 Pro Max（iOS 27.2.1）真机全量测试发现的问题。能单测的写单测，不能单测的进真机回归清单：改了设备、时序、WDA 相关的代码，要在真机上重跑相关的用例，并在 PR 里写明跑了哪些、用什么设备和 iOS 版本。
 
 | # | 坑 | 正确行为 | 测试方式 |
 |---|---|---|---|
@@ -62,3 +62,8 @@
 | 56 | 安装和重签同时进行：idevice 把每个 .ipa 上传到手机上同一个文件（`PublicStaging/idevice.ipa`），互相覆盖 | 安装（`iphone_install_app`、重签、`sign`）互相排队 | 真机（安装和重签同时进行，两个都成功） |
 | 57 | iPhone 横屏时 viewer 画面还是竖的、内容是歪的，点击也错位 | iPhone 上 WDA 每个会话开 `mjpegFixOrientation`，帧随界面转正 | 真机：Safari 转横屏，`/stream` 的帧是 2796×1290 且内容正立 |
 | 58 | 持设备锁的调用不返回：之后的请求全部排队到过期，进程却还活着，服务管理器不会重启 | 完成巡检或请求时记心跳，约 10 分钟没有心跳就退出（`watchdog.rs`），巡检因为锁被占而跳过时不算 | 单测 a_beat_ends_the_silence |
+| 59 | iPhone 18 Pro Max（iOS 27.2.1）上按住 0.5 秒的 IOHID 电源键没反应，每次锁屏都退到 WDA 的锁屏：约 10 秒，日志里还记一次超时 | 电源键按 0.1 秒（0.05～0.15 秒都约 0.7 秒锁屏） | 单测（`hid_buttons_send_consumer_page_events`）+ 真机计时（锁屏约 0.9 秒） |
+| 60 | IOHID 的 AC Home 在 iPhone 18 Pro Max（iOS 27.2.1）上基本不起作用，按住多久都一样；XCTest 的 home 在 iPhone 12 mini 上不起作用，正相反。只按固定顺序的话，前者每次 Home 都先白等 2 秒 | 按设备记住上次让主屏回到前台的按法，下次先用它；不起作用再换另一种，换成功了就改记 | 真机计时（iPhone 18 Pro Max：第一次约 3.7 秒，之后约 1.3 秒）；iPhone 12 mini 待复测 |
+| 61 | 点击、长按用 0.2 秒的动画冷却：界面上一直有动画时（键盘弹着）WDA 要约 26 秒才返回（同 `NO_COOL_OFF` 注释里滑动的情况） | 点击、长按和滑动一样用冷却 0（`IdleSettings::NO_COOL_OFF`）；解锁仍用 `QUICK` | 单测（`tap_is_one_gesture_with_quick_waits_then_restores_baseline`）+ 真机计时（设置里搜索后点结果：26 秒 → 1.4 秒；主屏点图标、App 里切标签不变慢） |
+| 62 | 网页检查器没开时手机直接断开 Web Inspector 连接，工具只报一句 TLS 错误 | 连接被手机断开时提示打开 设置 → Safari → 高级 → 网页检查器 | 单测（`a_closed_connection_points_at_the_web_inspector_setting`）+ 真机（开关关着时调 `iphone_web_targets`） |
+| 63 | 不带调试消息的日志流里仍有 Info 级别的条目，和 `iphone_app_logs` 的说明不符 | 采集时丢掉 Info、Debug | 单测（`info_and_debug_entries_are_not_kept`）+ 真机 |

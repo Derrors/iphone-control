@@ -62,7 +62,7 @@ pub struct IdleSettings {
 impl IdleSettings {
     /// WDA 的默认值
     pub const DEFAULT: Self = Self { wait_for_idle_timeout: 10.0, animation_cool_off_timeout: 2.0 };
-    /// 临时调小的值（0 会导致锁屏唤醒失败，所以不是 0）
+    /// 锁屏解锁期间临时调小的值（0 会导致锁屏唤醒失败，所以不是 0）。点击、长按不用它，见 [`WdaClient::tap`]
     pub const QUICK: Self = Self { wait_for_idle_timeout: 1.0, animation_cool_off_timeout: 0.2 };
     /// 不等动画冷却：滑动、以及「等界面稳定」时轮询元素树用（由调用方比较前后两次判断稳定）。真机（iOS 27，设置列表）：
     /// - 上下滑 0.3 秒：冷却 0 约 1.0 秒；默认 2 秒约 3 秒；0.2～1.5 秒反而要 18～19 秒（惯性滚动期间一直等）
@@ -402,16 +402,19 @@ impl<T: Transport> WdaClient<T> {
     /// - `/wda/tap` 先等界面空闲：主屏点图标约 1.7 秒（调小等待也没用），App 里约 0.6 秒，锁屏上约 2.9 秒
     /// - actions 手势做完要等动画冷却（`animationCoolOffTimeout`，默认 2 秒）：App 里切标签约 1.9 秒
     /// - actions + 临时调小等待：App 里约 0.7 秒，主屏点图标约 0.9 秒
+    /// - 冷却不能是 0.2 秒（[`IdleSettings::QUICK`]）：界面上一直有动画时（键盘弹着、光标在闪）要等约 26 秒才返回，
+    ///   iPhone 18 Pro Max（iOS 27.2.1）在设置里点搜索结果每次都这样；冷却 0 约 0.4 秒。和滑动一样用
+    ///   [`IdleSettings::NO_COOL_OFF`]
     ///
     /// 和 `/wda/tap` 一样不等点击引起的动画结束，调用方要看结果就再截图
     pub async fn tap(&mut self, x: f64, y: f64) -> Result<()> {
-        self.quick_gesture(&tap_steps(x, y, TAP_PRESS_MS), IdleSettings::QUICK).await
+        self.quick_gesture(&tap_steps(x, y, TAP_PRESS_MS), IdleSettings::NO_COOL_OFF).await
     }
 
     /// 长按：按下、停 `seconds` 秒、抬起，一个 actions 手势。`/wda/touchAndHold` 前后都等界面空闲，
-    /// 真机上主屏长按图标 1.2 秒要约 12 秒才返回
+    /// 真机上主屏长按图标 1.2 秒要约 12 秒才返回。等待设置同 [`Self::tap`]
     pub async fn touch_and_hold(&mut self, x: f64, y: f64, seconds: f64) -> Result<()> {
-        self.quick_gesture(&tap_steps(x, y, (seconds * 1000.0) as u64), IdleSettings::QUICK).await
+        self.quick_gesture(&tap_steps(x, y, (seconds * 1000.0) as u64), IdleSettings::NO_COOL_OFF).await
     }
 
     /// 滑动：一个 actions 手势，期间用 [`IdleSettings::NO_COOL_OFF`]。做完时列表可能还在惯性滚动，
@@ -532,11 +535,12 @@ impl<T: Transport> WdaClient<T> {
         self.hid_event(HID_PAGE_CONSUMER, HID_AC_HOME, 0.05).await
     }
 
-    /// 经 IOHID 按电源键（按住 0.5 秒）。WDA 自己的 `/wda/lock` 在 iOS 27 上也是这么做的，
-    /// iOS 27 以下仍用 XCTest 的 `pressLockButton`，iPhone 12 mini（iOS 26.4.1）上锁不了屏。
+    /// 经 IOHID 短按电源键（0.1 秒，和手指按一下差不多）。WDA 自己的 `/wda/lock` 在 iOS 27 上按住 0.5 秒，
+    /// iOS 27 以下用 XCTest 的 `pressLockButton`，iPhone 12 mini（iOS 26.4.1）上锁不了屏。
+    /// 不能按住久：iPhone 18 Pro Max（iOS 27.2.1）上按住 0.5 秒完全没反应（当成了长按），0.05～0.15 秒约 0.7 秒锁屏。
     /// 屏幕已熄灭时按它会把屏幕点亮，调用方要先确认没锁屏
     pub async fn press_power_hid(&mut self) -> Result<()> {
-        self.hid_event(HID_PAGE_CONSUMER, HID_POWER, 0.5).await
+        self.hid_event(HID_PAGE_CONSUMER, HID_POWER, 0.1).await
     }
 
     pub async fn lock(&mut self) -> Result<()> {
@@ -741,7 +745,7 @@ mod tests {
         let body = |i: usize| serde_json::from_str::<Value>(seen[i].2.as_deref().unwrap()).unwrap();
         assert_eq!((body(1)["page"].as_u64(), body(1)["usage"].as_u64()), (Some(0x0C), Some(0x223)));
         assert_eq!((body(2)["page"].as_u64(), body(2)["usage"].as_u64()), (Some(0x0C), Some(0x30)));
-        assert_eq!(body(2)["duration"], 0.5);
+        assert_eq!(body(2)["duration"], 0.1);
     }
 
     #[tokio::test]
@@ -777,7 +781,7 @@ mod tests {
             ]
         );
         let body = |i: usize| serde_json::from_str::<Value>(seen[i].2.as_deref().unwrap()).unwrap();
-        assert_eq!(body(2)["settings"]["animationCoolOffTimeout"], 0.2);
+        assert_eq!(body(2)["settings"]["animationCoolOffTimeout"], 0.0);
         assert_eq!(body(4)["settings"]["animationCoolOffTimeout"], 2.0);
         let a = body(3);
         let steps = a["actions"][0]["actions"].as_array().unwrap();

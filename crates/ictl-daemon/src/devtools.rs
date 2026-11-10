@@ -11,11 +11,11 @@
 //! The reader task only ever awaits the next entry: an entry is several reads, and cancelling one half-way (as a
 //! `select!` against a timer would) leaves the stream out of step.
 //!
-//! The stream leaves out debug and info messages (see `ictl_device::Device::log_stream`: asking for them slows the
-//! phone). It is still every process, tens of lines a second, so the buffer is bounded by size as well as by count
-//! ([`MAX_BYTES`]): messages are cut to
-//! [`MAX_LINE_CHARS`] and processes kept by name only when they arrive. How far back it reaches depends on how busy
-//! the phone is, so every answer says so.
+//! The stream leaves out debug messages (see `ictl_device::Device::log_stream`: asking for them slows the phone), and
+//! the info ones that still arrive are dropped ([`kept`]). It is still every process, tens of lines a second, so the
+//! buffer is bounded by size as well as by count ([`MAX_BYTES`]): messages are cut to [`MAX_LINE_CHARS`] and processes
+//! kept by name only when they arrive. How far back it reaches depends on how busy the phone is, so every answer says
+//! so.
 
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
@@ -69,7 +69,9 @@ impl Daemon {
             let task = tokio::spawn(async move {
                 // never cancelled mid-entry (see the module docs); stopped by aborting the task
                 while let Ok(e) = stream.next().await {
-                    b.lock().unwrap_or_else(|p| p.into_inner()).push(Instant::now(), compact(e));
+                    if kept(&e) {
+                        b.lock().unwrap_or_else(|p| p.into_inner()).push(Instant::now(), compact(e));
+                    }
                 }
             });
             let now = Instant::now();
@@ -248,6 +250,13 @@ impl Buffer {
 
 fn size(e: &LogEntry) -> usize {
     e.process.len() + e.message.len() + e.subsystem.as_ref().map_or(0, String::len)
+}
+
+/// Only the default (Notice), Error and Fault levels are kept. The stream is started without debug messages, but some
+/// processes still send Info ones (seen from MobileTimer on iOS 27.2.1); they are dropped here so the tool returns
+/// what it says, and they don't take room in the buffer
+fn kept(e: &LogEntry) -> bool {
+    !matches!(e.level, LogLevel::Debug | LogLevel::Info)
 }
 
 /// What the buffer keeps of an entry: the process by name (the filter and the output only use the name) and the
@@ -468,6 +477,13 @@ mod tests {
         assert!(b.bytes <= MAX_BYTES && b.lines.len() <= MAX_LINES, "{} bytes, {} lines", b.bytes, b.lines.len());
         assert_eq!(b.bytes, b.lines.iter().map(|(_, e)| size(e)).sum::<usize>());
         assert!(b.lines.front().unwrap().0 > t, "the oldest lines went first");
+    }
+
+    #[test]
+    fn info_and_debug_entries_are_not_kept() {
+        let level = |l| kept(&entry("/x/P", l, "m"));
+        assert!(!level(LogLevel::Debug) && !level(LogLevel::Info));
+        assert!(level(LogLevel::Notice) && level(LogLevel::Error) && level(LogLevel::Fault));
     }
 
     #[test]

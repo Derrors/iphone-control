@@ -220,6 +220,9 @@ pub(crate) struct PerDevice {
     pub ddi_failures: u32,
     /// 最近一次经本进程锁屏的时间（自动解锁要等锁屏过渡走完，见 [`crate::tools::LOCK_SETTLE`]）
     pub last_lock: Option<Instant>,
+    /// 这台手机上 Home 先用 XCTest 的：上一次 IOHID 的没回到主屏、XCTest 的回到了（iPhone 18 Pro Max /
+    /// iOS 27.2.1 上 IOHID 的 Home 基本不起作用）。iPhone 12 mini 正相反，所以按设备记，见 `tools::press_home`
+    pub home_via_xctest: bool,
     pub apps: HashMap<bool, Vec<AppInfo>>,
     /// Log capture for `AppLogs` (developer tools), started by the first request
     pub log_capture: Option<crate::devtools::Capture>,
@@ -290,12 +293,13 @@ pub(crate) async fn drop_tunnel(g: &mut Inner) {
     }
 }
 
-/// 一台设备的简短说明：`名字(型号 iOS 版本,UDID)`；读不到名字时只有 UDID
+/// 一台设备的简短说明：`名字(型号 iOS 版本,UDID)`，英文是 `name (model iOS version, UDID)`；读不到名字时只有 UDID
 pub fn device_label(i: &DeviceInfo) -> String {
     if i.name.is_empty() && i.product_type.is_empty() {
         i.udid.clone()
     } else {
-        format!("{}({} iOS {},{})", i.name, i.product_type, i.product_version, i.udid)
+        let (name, model, version, udid) = (&i.name, &i.product_type, &i.product_version, &i.udid);
+        ictl_l10n::trf!("{name}({model} iOS {version},{udid})", "{name} ({model} iOS {version}, {udid})")
     }
 }
 

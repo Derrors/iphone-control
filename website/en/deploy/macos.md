@@ -20,7 +20,7 @@ Verified on a MacBook Pro (Apple M3 Pro) / macOS 26.6.2 with an iPhone 15 Pro Ma
 curl -fsSL https://raw.githubusercontent.com/Derrors/iphone-control/main/install.sh | sh
 ```
 
-It downloads the latest release, checks its sha256, installs `~/.local/bin/iphone-control` and a launchd user service (`~/Library/LaunchAgents/io.github.derrors.iphone-control.plist`) that starts the daemon at login, restarts it after a crash, reads `~/.config/iphone-control/env` and logs to `~/Library/Logs/iphone-control/daemon.log`. Options go after `sh -s --`: `--version v0.1.5`, `--prefix DIR` (installs into `DIR/bin`), `--no-service` (only the binary, no service).
+It downloads the latest release, checks its sha256, installs `~/.local/bin/iphone-control` and a launchd user service (`~/Library/LaunchAgents/io.github.derrors.iphone-control.plist`) that starts the daemon at login, restarts it after a crash, reads `~/.config/iphone-control/env` and logs to `~/Library/Logs/iphone-control/daemon.log`. Options go after `sh -s --`: `--version v0.2.0`, `--prefix DIR` (installs into `DIR/bin`), `--no-service` (only the binary, no service).
 
 ### Homebrew
 

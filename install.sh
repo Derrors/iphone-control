@@ -2,7 +2,7 @@
 # iphone-control installer for macOS (Apple Silicon) and Linux (x86_64, aarch64).
 #
 #   curl -fsSL https://raw.githubusercontent.com/Derrors/iphone-control/main/install.sh | sh
-#   curl -fsSL https://raw.githubusercontent.com/Derrors/iphone-control/main/install.sh | sh -s -- --version v0.1.5
+#   curl -fsSL https://raw.githubusercontent.com/Derrors/iphone-control/main/install.sh | sh -s -- --version v0.2.0
 #
 # Downloads the release archive for this machine, checks its sha256, installs the binary into ~/.local/bin and
 # sets up the daemon as a per-user service (launchd on macOS, systemd --user on Linux) that starts at login and

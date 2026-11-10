@@ -6,6 +6,15 @@ All notable changes to this project are documented here. The format is based on 
 
 ## [Unreleased]
 
+### Fixed
+
+- `lock` no longer takes about 10 seconds on newer iPhones: the power key is pressed for 0.1 s instead of held for 0.5 s, which an iPhone 18 Pro Max (iOS 27.2.1) ignored, so every lock fell through to WebDriverAgent's slower lock and logged a timeout.
+- `home` takes about 1.3 seconds instead of 3.7 on devices that ignore the IOHID Home event (iPhone 18 Pro Max, iOS 27.2.1): when only the XCTest press works, the daemon remembers that for the device and uses it first. Devices where only the IOHID press works (iPhone 12 mini) keep their order.
+- Taps and long presses no longer take about 26 seconds while something on screen keeps animating (seen tapping a search result in Settings with the keyboard up, iPhone 18 Pro Max, iOS 27.2.1): like swipes, they no longer wait for WebDriverAgent's animation cool-off. The result came back in about 1.4 seconds.
+- `iphone_web_targets` and `iphone_web_eval` say to turn on Settings → Safari → Advanced → Web Inspector when the phone closes the connection, instead of only showing a TLS error.
+- `iphone_app_logs` no longer returns Info lines, matching its description (some processes still send them on a stream without debug messages).
+- English device descriptions have a space before the parenthesis and after the comma: `name (model iOS version, UDID)`.
+
 ## [0.1.5] - 2026-11-10
 
 ### Added

@@ -112,7 +112,10 @@ async fn web_pages(slot: &mut Option<WebConn>, device: &Device) -> Result<(Vec<A
     }
     for attempt in 0..2 {
         if slot.is_none() {
-            let w = device.web_inspector().await.map_err(|e| e.to_string())?;
+            let w = device.web_inspector().await.map_err(|e| match e {
+                ictl_device::DeviceError::Io(e) => closed_by_phone(&e),
+                e => e.to_string(),
+            })?;
             *slot = Some(WebConn { udid: device.udid.clone(), w, used: Instant::now() });
         }
         let conn = slot.as_mut().ok_or("Web Inspector")?;
@@ -138,8 +141,19 @@ fn page_error(e: &ictl_webinspector::Error) -> String {
         ictl_webinspector::Error::Timeout(_) => {
             ictl_l10n::tr!("等待页面回应超时", "timed out waiting for the page to answer").into()
         }
+        ictl_webinspector::Error::Io(e) => closed_by_phone(e),
         e => e.to_string(),
     }
+}
+
+/// The phone closes the Web Inspector connection right away when Settings → Safari → Advanced → Web Inspector is
+/// off (seen on iOS 27.2.1: `peer closed connection without sending TLS close_notify`); the raw I/O error doesn't
+/// say that
+fn closed_by_phone(e: &std::io::Error) -> String {
+    ictl_l10n::trf!(
+        "手机断开了 Web Inspector 连接({e})。多半是没打开 设置 → Safari → 高级 → 网页检查器,打开后重试",
+        "The phone closed the Web Inspector connection ({e}). Usually Settings → Safari → Advanced → Web Inspector is off; turn it on and retry"
+    )
 }
 
 /// Errors after which the connection can't be trusted: everything except a page that didn't answer in time or
@@ -207,6 +221,16 @@ mod tests {
         assert!(!breaks_connection(&Error::Command("Missing injected script for given objectId".into())));
         assert!(breaks_connection(&Error::Protocol("x".into())));
         assert!(breaks_connection(&Error::Io(std::io::Error::other("closed"))));
+    }
+
+    #[test]
+    fn a_closed_connection_points_at_the_web_inspector_setting() {
+        use ictl_webinspector::Error;
+        let eof = || std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "peer closed connection");
+        let msg = page_error(&Error::Io(eof()));
+        assert!(msg.contains("网页检查器") && msg.contains("peer closed connection"), "{msg}");
+        assert_eq!(closed_by_phone(&eof()), msg);
+        assert!(!page_error(&Error::Protocol("x".into())).contains("网页检查器"));
     }
 
     #[test]

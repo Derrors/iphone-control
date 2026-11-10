@@ -665,6 +665,7 @@ impl Daemon {
             Button::VolumeDown => "volumeDown",
         };
         self.ensure_unlocked(g).await?;
+        let xctest_first = g.dev.home_via_xctest;
         if let Some(w) = self.wda(g) {
             // Home 在系统弹窗（定位、通知权限等）挡着时不生效，WDA 却照样返回成功。弹窗属于 SpringBoard，
             // 看前台 App 发现不了，要单独查；按之前查（App 静止时约 0.4 秒，按下后动画中查要好几秒）
@@ -677,11 +678,18 @@ impl Daemon {
                     blocking(&text)
                 ));
             }
+            let mut home_worked = None;
             let r = if hid_button == Button::Home {
-                press_home(w).await
+                press_home(w, xctest_first).await.map(|(text, worked)| {
+                    home_worked = worked;
+                    text
+                })
             } else {
                 w.press_button(wda_name).await.map(|()| ictl_l10n::trf!("已按 {button}", "Pressed {button}"))
             };
+            if let Some(via_xctest) = home_worked {
+                g.dev.home_via_xctest = via_xctest;
+            }
             match r {
                 Ok(text) => return Ok(text),
                 Err(WdaError::Unavailable(_)) => {}
@@ -830,21 +838,29 @@ pub(crate) fn hid_rotation(w: u32, h: u32, known: Option<(Duration, Rotation)>) 
 }
 
 /// 按 Home，等主屏真的到前台再说「已按」（紧接着查状态时前台不再是旧 App）。
-/// 先经 IOHID 按（XCTest 的 home 在 iPhone 12 mini / iOS 26.4.1 上不起作用却报成功），
-/// [`HOME_SETTLE`] 内没回到主屏再用 XCTest 的 home 补一次；IOHID 这一下报错也改用 XCTest 的
-async fn press_home(w: &mut WdaClient<DeviceTransport>) -> Result<String, WdaError> {
+/// 两种按法各有设备不认：XCTest 的 home 在 iPhone 12 mini / iOS 26.4.1 上不起作用却报成功；IOHID 的 AC Home
+/// 在 iPhone 18 Pro Max / iOS 27.2.1 上基本不起作用（按住 0.05～0.5 秒都一样）。所以默认先 IOHID，
+/// `xctest_first` 时先 XCTest；[`HOME_SETTLE`] 内没回到主屏（或这一下报错）再换另一种补一次。
+/// 同时返回回到主屏的是不是 XCTest 那一下（都没回到为 `None`），调用方记下来，这台设备下次先用它
+async fn press_home(
+    w: &mut WdaClient<DeviceTransport>,
+    xctest_first: bool,
+) -> Result<(String, Option<bool>), WdaError> {
     let mut app = String::new();
-    for via_hid in [true, false] {
+    let order = if xctest_first { [false, true] } else { [true, false] };
+    for (i, via_hid) in order.into_iter().enumerate() {
+        let last = i == 1;
         let sent = if via_hid { w.press_home_hid().await } else { w.press_button("home").await };
+        let (way, other) = if via_hid { ("IOHID", "XCTest") } else { ("XCTest", "IOHID") };
         match sent {
             Ok(()) => {}
             Err(e @ WdaError::Unavailable(_)) => return Err(e),
-            Err(e) if via_hid => {
+            Err(e) if !last => {
                 tracing::info!(
                     "{}",
                     ictl_l10n::log_trf!(
-                        "经 IOHID 按 Home 报错,改用 XCTest：{e}",
-                        "Pressing Home via IOHID failed, using XCTest: {e}"
+                        "经 {way} 按 Home 报错,改用 {other}：{e}",
+                        "Pressing Home via {way} failed, using {other}: {e}"
                     )
                 );
                 continue;
@@ -855,26 +871,29 @@ async fn press_home(w: &mut WdaClient<DeviceTransport>) -> Result<String, WdaErr
         loop {
             app = w.active_app().await.unwrap_or_default();
             if app == SPRINGBOARD {
-                return Ok(ictl_l10n::tr!("已按 home", "Pressed home").into());
+                return Ok((ictl_l10n::tr!("已按 home", "Pressed home").into(), Some(!via_hid)));
             }
             if Instant::now() >= deadline {
                 break;
             }
             tokio::time::sleep(Duration::from_millis(150)).await;
         }
-        if via_hid {
+        if !last {
             tracing::info!(
                 "{}",
                 ictl_l10n::log_trf!(
-                    "经 IOHID 按 Home 后前台还是 {app},改用 XCTest 再按一次",
-                    "After pressing Home via IOHID the foreground is still {app}, pressing again via XCTest"
+                    "经 {way} 按 Home 后前台还是 {app},改用 {other} 再按一次",
+                    "After pressing Home via {way} the foreground is still {app}, pressing again via {other}"
                 )
             );
         }
     }
-    Ok(ictl_l10n::trf!(
-        "已按 home,但前台还是 {app},先截图看看",
-        "Pressed home, but the foreground is still {app}; take a screenshot"
+    Ok((
+        ictl_l10n::trf!(
+            "已按 home,但前台还是 {app},先截图看看",
+            "Pressed home, but the foreground is still {app}; take a screenshot"
+        ),
+        None,
     ))
 }
 

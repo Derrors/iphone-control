@@ -40,7 +40,7 @@ features:
     details: WDA 经 usbmuxd 直连手机，本机不监听任何网络端口；自动解锁默认关闭
   - icon: 📦
     title: 一个二进制
-    details: Rust 编写，Linux 上 Docker 一条命令部署，也可以从源码或预编译二进制运行；Mac 上直接运行预编译二进制
+    details: Rust 编写。一行命令、Homebrew 或 deb 包安装，运行 iphone-control 一步步带你设置好；也可以从源码编译
   - icon: 🧭
     title: 省往返
     details: 操作可以顺带返回操作后的界面，自动等界面稳定、识别加载中和挡路的弹窗

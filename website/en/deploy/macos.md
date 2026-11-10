@@ -1,6 +1,6 @@
 # macOS
 
-iphone-control also runs directly on a Mac, using the usbmuxd that ships with macOS. No Xcode and no paid developer account. It works like a source install on Linux; the differences are listed under [Known differences](#known-differences).
+iphone-control also runs directly on a Mac, using the usbmuxd that ships with macOS. No Xcode and no paid developer account. It works much like on Linux; the differences are listed under [Known differences](#known-differences).
 
 ::: info Verified
 Verified on a MacBook Pro (Apple M3 Pro) / macOS 26.6.2 with an iPhone 15 Pro Max / iOS 27.0.1: the setup wizard, every MCP tool at that time, continuous use with Finder open, one tunnel kept busy for 30 minutes, and recovery after unplugging and phone reboots. This predates 0.1.3: the multi-device tools (`iphone_list_devices`, `iphone_select_device`) haven't been verified on macOS. Intel Macs are untested. Steps and results: [macOS verification](https://github.com/Derrors/iphone-control/blob/main/docs/dev/macos-verification.md) (in Chinese).
@@ -8,43 +8,30 @@ Verified on a MacBook Pro (Apple M3 Pro) / macOS 26.6.2 with an iPhone 15 Pro Ma
 
 ## You need
 
-- An Apple Silicon Mac
-- Nothing else for the prebuilt binary; to build from source, the Xcode Command Line Tools and Rust 1.88+. Full Xcode is **not** needed
+- An Apple Silicon Mac: the one command and Homebrew install the built program, nothing else needed. Intel Macs have no prebuilt package and build from source (Xcode Command Line Tools and Rust 1.88+). Full Xcode is **not** needed
 - An iPhone or iPad on iOS 17+, connected with a cable that carries **data**
 - A free Apple ID (a dedicated one is recommended)
 
-::: warning No Docker
-Docker Desktop on a Mac runs containers in a Linux VM without USB passthrough, so a container can't see the phone. Run the program directly.
-:::
-
 ## Install
 
-### Prebuilt binary
-
-Since 0.1.2, [Releases](https://github.com/Derrors/iphone-control/releases) has a macOS archive (Apple Silicon, macOS 11+): `iphone-control-<version>-macos-arm64.tar.gz`. Download and install it from a terminal (set `V` to the latest version):
+### One command (recommended)
 
 ```bash
-V=v0.1.5
-curl -fsSLO https://github.com/Derrors/iphone-control/releases/download/$V/iphone-control-$V-macos-arm64.tar.gz
-curl -fsSLO https://github.com/Derrors/iphone-control/releases/download/$V/iphone-control-$V-macos-arm64.tar.gz.sha256
-shasum -a 256 -c iphone-control-$V-macos-arm64.tar.gz.sha256   # should print OK
-tar xzf iphone-control-$V-macos-arm64.tar.gz
-mkdir -p ~/.local/bin && install -m 755 iphone-control-$V-macos-arm64/iphone-control ~/.local/bin/
-echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zprofile && source ~/.zprofile   # once
-iphone-control --version
+curl -fsSL https://raw.githubusercontent.com/Derrors/iphone-control/main/install.sh | sh
 ```
 
-::: tip "Developer cannot be verified"
-The binary isn't notarized by Apple (that needs a paid developer account). Downloaded with `curl` as above it runs as is; downloaded with a browser it carries a quarantine flag and Gatekeeper blocks the first run. Remove the flag:
+It downloads the latest release, checks its sha256, installs `~/.local/bin/iphone-control` and a launchd user service (`~/Library/LaunchAgents/io.github.derrors.iphone-control.plist`) that starts the daemon at login, restarts it after a crash, reads `~/.config/iphone-control/env` and logs to `~/Library/Logs/iphone-control/daemon.log`. Options go after `sh -s --`: `--version v0.2.0`, `--prefix DIR` (installs into `DIR/bin`), `--no-service` (only the binary, no service).
+
+### Homebrew
 
 ```bash
-xattr -d com.apple.quarantine ~/.local/bin/iphone-control
+brew install derrors/tap/iphone-control
+brew services start iphone-control      # the daemon runs now and after each login
 ```
 
-or click *Open Anyway* under *System Settings → Privacy & Security*.
-:::
+This service also reads `~/.config/iphone-control/env` and logs to `$(brew --prefix)/var/log/iphone-control.log`. The settings template is `$(brew --prefix)/opt/iphone-control/share/iphone-control/env.example`.
 
-### Build from source
+### Build from source (Intel Macs)
 
 You need the Xcode Command Line Tools and Rust 1.88+; about 2½ minutes on an M3 Pro:
 
@@ -56,52 +43,46 @@ cargo install --path apps/iphone-control --locked              # installs ~/.car
 iphone-control --version
 ```
 
+The setup guide below sets up the background service.
+
 ## Run
 
-**Run everything as your regular user, never with sudo.** macOS's own usbmuxd is always running and the daemon uses it. As root, the daemon would start a second usbmuxd that fights the system one, and would switch to Linux system paths (`/var/lib`, `/run`) for its data and control socket.
+**Run everything as your regular user, never with sudo.** macOS's own usbmuxd is always running and the daemon uses it. As root, the daemon would switch to Linux system paths (`/var/lib`, `/run`) for its data and control socket, and the install script refuses to run as root.
 
-In one terminal, start the daemon; its log prints there:
-
-```bash
-iphone-control daemon
-```
-
-In a second terminal, run the setup wizard:
+Connect the phone with a cable, then:
 
 ```bash
-iphone-control setup
+iphone-control
 ```
 
-The six steps are the same as on Linux; what to do on the phone is in [Getting Started](../guide/getting-started#_2-run-the-setup-wizard). If the phone already trusts this Mac (from Finder), the pairing step just says it is paired.
+The first run walks you through setup step by step: language, proxy, background service, pairing, Developer Mode, Apple ID, signing and installing WDA, auto-unlock and notifications (optional), and registering with Claude Code and Codex. What to do on the phone is in [Getting Started](../guide/getting-started#first-run). If the phone already trusts this Mac (from Finder), the pairing step just says it is paired. Once set up, running `iphone-control` again only shows the status.
 
-When the wizard says WDA is ready (WDA 就绪), connect your AI client:
+### Doing it by hand
+
+Each thing the guide does can be done on its own:
 
 ```bash
-iphone-control mcp-config    # prints the registration command; run it
+iphone-control daemon        # the daemon in the foreground, in one terminal (without the service)
+iphone-control setup         # in a second terminal: the guide again, done steps skipped
+iphone-control mcp-config    # prints the MCP registration command; run it
 ```
 
-It prints something like `claude mcp add iphone -s user -- /Users/you/.cargo/bin/iphone-control --socket /Users/you/.local/share/iphone-control/ctl.sock mcp`. Other clients: [Connect an AI Client](../guide/mcp-clients).
+`mcp-config` prints something like `claude mcp add iphone -s user -- /Users/you/.local/bin/iphone-control --socket /Users/you/.local/share/iphone-control/ctl.sock mcp`. With Homebrew the program path is `/opt/homebrew/opt/iphone-control/bin/iphone-control`, which stays the same across upgrades. Other clients: [Connect an AI Client](../guide/mcp-clients).
 
 ### Configuration
 
-Settings go in `~/.config/iphone-control/env` (same format as `.env.example` in the repository). Load it before starting the daemon:
-
-```bash
-mkdir -p ~/.config/iphone-control
-cp .env.example ~/.config/iphone-control/env    # proxy, notifications, … (env.example in the prebuilt archive)
-set -a; . ~/.config/iphone-control/env; set +a
-iphone-control daemon
-```
-
-Restart the daemon (Ctrl-C, then run it again) after changing settings. The variables are listed in [Configuration](../guide/configuration).
+Settings are in `~/.config/iphone-control/env`; the guide and `iphone-control setup --reconfigure` write it. After editing it by hand, run `iphone-control service restart`. The variables are listed in [Configuration](../guide/configuration#settings-file).
 
 ### Keep it running
 
-There is no launchd configuration yet, so keep the daemon in a terminal (or tmux). It pauses while the Mac sleeps; for long unattended runs, keep the Mac awake with `caffeinate`:
+The background service set up by the one command, Homebrew or the guide starts the daemon when you log in; nothing else to do:
 
 ```bash
-caffeinate -i iphone-control daemon
+iphone-control service status     # whether the service and the daemon run
+iphone-control service restart    # restart, e.g. after changing settings
 ```
+
+The daemon pauses while the Mac sleeps. For long unattended runs, run `caffeinate -i` in a terminal and leave it open to keep the Mac awake.
 
 ## Keep the USB connection stable
 
@@ -110,8 +91,6 @@ caffeinate -i iphone-control daemon
 - Finder can stay open on the phone's page; it doesn't take the connection away.
 
 ## Everyday commands
-
-Same as on Linux, run directly without `docker exec`:
 
 ```bash
 iphone-control status    # state, signing time left, recent log
@@ -130,21 +109,21 @@ sudo launchctl kickstart -k system/com.apple.usbmuxd
 
 Read the upgrade notes in the [changelog](https://github.com/Derrors/iphone-control/blob/main/CHANGELOG.md) first.
 
-Prebuilt binary: download the new version as under *Install* and replace `~/.local/bin/iphone-control`. From source:
+Installed with the one command: run it again; it stops the service, replaces the binary and starts it again. Homebrew: `brew upgrade iphone-control && brew services restart iphone-control`. From source:
 
 ```bash
 cd iphone-control && git pull
 cargo install --path apps/iphone-control --locked
+iphone-control service restart
 ```
-
-Then restart the daemon.
 
 ## Uninstall
 
-Stop the daemon with Ctrl-C in its terminal, then:
+Installed with the one command: `curl -fsSL https://raw.githubusercontent.com/Derrors/iphone-control/main/install.sh | sh -s -- --uninstall`. Homebrew: `brew services stop iphone-control && brew uninstall iphone-control`. From source: `iphone-control service uninstall && cargo uninstall iphone-control`.
+
+All of them keep your data and settings. To remove them too:
 
 ```bash
-rm -f ~/.local/bin/iphone-control      # prebuilt binary; for a source build: cargo uninstall iphone-control
 rm -rf ~/.local/share/iphone-control ~/.config/iphone-control   # deletes the Apple ID session and signed WDA
 ```
 
@@ -152,14 +131,13 @@ On the phone, delete the WebDriverAgent app; its profile under *VPN & Device Man
 
 ## Known differences
 
-| | Linux (source install) | macOS |
+| | Linux | macOS |
 |---|---|---|
-| Install | Prebuilt binary or build from source | Same (Apple Silicon archive only) |
-| Keep running | systemd user service | No launchd configuration yet; run in a terminal |
+| Install | One command, Homebrew, .deb or build from source | One command, Homebrew or build from source (packages for Apple Silicon only) |
+| Keep running | systemd user service | launchd user service |
 | usbmuxd | System package, started by udev on plug-in | Built into macOS, always running |
 | Data directory | `~/.local/share/iphone-control` | Same (not the usual `~/Library/Application Support`) |
 | Control socket | `$XDG_RUNTIME_DIR/iphone-control/ctl.sock` | `~/.local/share/iphone-control/ctl.sock` |
 | Pairing records | `/var/lib/lockdown` | `/var/db/lockdown` (shared with Finder) |
-| Docker | Supported | Not supported |
 
 Not yet verified on a Mac: whether Xcode's *Devices and Simulators* window competes for the connection, pairing a phone with the Mac for the first time, iPads, several devices, and Intel Macs. [Reports](https://github.com/Derrors/iphone-control/issues) are welcome.

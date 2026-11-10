@@ -1,0 +1,14 @@
+#!/bin/sh
+# What to do next. A user service is each user's own to turn on, so the package doesn't start it
+set -e
+if [ "$1" = configure ]; then
+  cat <<'MSG'
+
+iphone-control is installed. As your regular user (not root), connect the iPhone and run
+  iphone-control
+It starts the daemon as a user service and walks you through setup.
+安装完成。以普通用户（不是 root）接好 iPhone 后运行 iphone-control，它会启动后台服务并一步步带你完成设置。
+
+MSG
+fi
+exit 0

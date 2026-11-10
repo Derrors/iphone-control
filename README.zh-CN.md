@@ -64,33 +64,41 @@ iphone-control 在 Linux 或 macOS 上用**一个 Rust 二进制**把这些事�
 
 ## 快速开始
 
-需要一部 iOS 17 以上的 iPhone 或 iPad 和能**传数据**的线、一个免费 Apple ID（建议专门注册一个），以及一台装了 Docker 的 Linux 主机或一台 Apple Silicon 的 Mac。
+需要一部 iOS 17 以上的 iPhone 或 iPad 和能**传数据**的线、一个免费 Apple ID（建议专门注册一个），以及一台 Apple Silicon 的 Mac 或一台 Linux 机器。
 
-**Linux（Docker）**
-
-```bash
-git clone https://github.com/Derrors/iphone-control.git && cd iphone-control
-cp .env.example .env                                  # 可选：代理、通知；国内网络一般要配代理
-docker compose up -d --build                          # 首次构建需要几分钟
-docker exec -it iphone-control iphone-control setup   # 安装向导，可重复运行
-claude mcp add iphone -s user -- docker exec -i iphone-control iphone-control mcp
-```
-
-**macOS**（Mac 上的 Docker 不能直通 USB，直接运行二进制）
+**macOS 或 Linux，一行命令安装**
 
 ```bash
-V=v0.1.5   # 最新版本号
-curl -fsSL https://github.com/Derrors/iphone-control/releases/download/$V/iphone-control-$V-macos-arm64.tar.gz | tar xz
-mkdir -p ~/.local/bin && install -m 755 iphone-control-$V-macos-arm64/iphone-control ~/.local/bin/
-echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zprofile && source ~/.zprofile
-iphone-control daemon       # 这个终端保持开着
-iphone-control setup        # 在另一个终端运行
-iphone-control mcp-config   # 打印 `claude mcp add` 命令，复制运行
+curl -fsSL https://raw.githubusercontent.com/Derrors/iphone-control/main/install.sh | sh
 ```
 
-`setup` 会引导完成配对、开发者模式、登录 Apple ID、安装 WebDriverAgent，按提示在手机上操作即可。然后打开一个新的 Claude Code 会话，试着说：「打开时钟，切到秒表并启动」。
+它会下载适合这台机器的版本、校验 sha256，把 `iphone-control` 装到 `~/.local/bin`，并把守护进程装成登录后自动启动的用户服务（macOS 用 launchd，Linux 用 systemd）。它不会以 root 运行。再运行一次就是升级；`… | sh -s -- --uninstall` 卸载，数据保留。国内网络下载 Release 慢的话，先在终端里设好 `HTTPS_PROXY` 再运行。
 
-更多：[分步指南](https://derrors.github.io/iphone-control/guide/getting-started) · [预构建镜像](https://derrors.github.io/iphone-control/deploy/docker) · [二进制 / 源码](https://derrors.github.io/iphone-control/deploy/source) · [macOS 指南](https://derrors.github.io/iphone-control/deploy/macos) · [其他 MCP 客户端](https://derrors.github.io/iphone-control/guide/mcp-clients)
+**或者用包管理器**
+
+```bash
+# macOS 或 Linux（Homebrew）
+brew install derrors/tap/iphone-control && brew services start iphone-control
+
+# Debian 12+ / Ubuntu 22.04+：从 Releases 下载 .deb（amd64 或 arm64），会自动装上 usbmuxd
+sudo apt install ./iphone-control_<版本>_amd64.deb && systemctl --user enable --now iphone-control
+```
+
+Linux 上要用系统的 usbmuxd（`sudo apt install usbmuxd`，.deb 会自动装上）。Intel 芯片的 Mac 请从源码编译。
+
+**装好以后，各系统都一样**
+
+用数据线接好手机，运行：
+
+```bash
+iphone-control
+```
+
+第一次运行时，它在终端里一步步带你完成设置：语言、代理、后台服务、配对、开发者模式、Apple ID、签名并安装 WebDriverAgent，可选的自动解锁和通知，最后注册到 Claude Code 和 Codex。按提示在手机上操作即可。做过的步骤会跳过；设置好以后再运行 `iphone-control` 只显示状态。
+
+然后打开一个新的 Claude Code 或 Codex 会话，试着说：「打开时钟，切到秒表并启动」。也可以运行 `iphone-control viewer` 打开浏览器里的控制台（http://127.0.0.1:8200），在实时画面上直接操作，或把任务交给本机的 Claude Code 或 Codex。
+
+更多：[分步指南](https://derrors.github.io/iphone-control/guide/getting-started) · [从源码编译](https://derrors.github.io/iphone-control/deploy/source) · [macOS 指南](https://derrors.github.io/iphone-control/deploy/macos) · [其他 MCP 客户端](https://derrors.github.io/iphone-control/guide/mcp-clients)
 
 ## MCP 工具
 
@@ -118,15 +126,15 @@ iphone-control mcp-config   # 打印 `claude mcp add` 命令，复制运行
 
 ## 常用命令
 
-用 `docker exec -it iphone-control iphone-control <命令>` 运行；从源码运行和在 macOS 上直接调用。
-
 | 命令 | 作用 |
 | --- | --- |
-| `daemon` | 常驻守护进程：容器的入口；从源码运行和 macOS 上要自己启动 |
+| （不带命令） | 第一次是设置引导；设置好以后显示状态（后台服务没在运行时先启动它） |
+| `setup [--reconfigure]` | 重新走一遍设置引导；`--reconfigure` 只改其中一项（语言、代理、后台服务、Apple ID、手机、自动解锁、通知、注册 MCP） |
+| `service install\|uninstall\|start\|stop\|restart\|status` | 后台服务（macOS 是 launchd，Linux 是 systemd 用户服务） |
+| `daemon` | 常驻守护进程；由后台服务运行，也可以手动启动 |
 | `mcp` | MCP 服务，由 AI 客户端拉起 |
 | `status` | 守护进程状态、描述文件还剩多久、最近日志 |
 | `doctor` | 逐层诊断，每项失败都给出修复办法 |
-| `setup` | 安装向导，随时可以重新运行 |
 | `login` | Apple ID 会话失效时重新登录 |
 | `sign` | 立即签名并安装 WebDriverAgent |
 | `resign [--force]` | 快过期才重签 WebDriverAgent（或立即重签） |
@@ -136,11 +144,11 @@ iphone-control mcp-config   # 打印 `claude mcp add` 命令，复制运行
 | `notify-test [事件]` | 发送测试通知 |
 | `mcp-config` | 打印注册 MCP 的命令 |
 | `wda-bridge [--port]` | 把 WebDriverAgent 桥接到 127.0.0.1 给别的工具用，用完就停 |
-| `viewer [--port]` | 在浏览器里看实时画面，并点击、滑动、输入，地址 127.0.0.1:8200；用完就停 |
+| `viewer [--port]` | 控制台页面，地址 127.0.0.1:8200：实时画面可直接点击、滑动、输入，设备面板，还能把任务交给本机的 Claude Code 或 Codex 执行；用完就停 |
 
 全部命令和参数见[命令行](https://derrors.github.io/iphone-control/guide/cli)。
 
-升级：`git pull && docker compose up -d --build`（用预构建镜像时改为 `docker compose pull && docker compose up -d --no-build`）；二进制和 macOS 见[从源码 / 二进制](https://derrors.github.io/iphone-control/deploy/source#升级)、[macOS](https://derrors.github.io/iphone-control/deploy/macos#升级)。升级前先看[更新日志](CHANGELOG.zh-CN.md)里的升级注意事项。配置写在 `.env`，见[配置说明](https://derrors.github.io/iphone-control/guide/configuration)。所有状态都在 `data/`：配对记录、Apple ID 会话和签名私钥，开启自动解锁时还有锁屏密码。**要备份，不要提交或分享。**
+升级：再运行一次 `install.sh`、`brew upgrade iphone-control`，或装上新的 `.deb`；从源码编译的见[从源码编译](https://derrors.github.io/iphone-control/deploy/source)。升级前先看[更新日志](CHANGELOG.zh-CN.md)里的升级注意事项。卸载：`install.sh --uninstall`、`brew uninstall iphone-control` 或 `sudo apt remove iphone-control`，数据保留。设置在 `~/.config/iphone-control/env`，由设置引导写好；手改后运行 `iphone-control service restart`，见[配置说明](https://derrors.github.io/iphone-control/guide/configuration)。所有状态都在 `~/.local/share/iphone-control`：Apple ID 会话和签名私钥，开启自动解锁时还有锁屏密码。**要备份，不要提交或分享。**
 
 ## 文档
 
@@ -148,7 +156,7 @@ iphone-control mcp-config   # 打印 `claude mcp add` 命令，复制运行
 | --- | --- |
 | 入门 | [什么是 iphone-control](https://derrors.github.io/iphone-control/guide/what-is-iphone-control) · [限制](https://derrors.github.io/iphone-control/guide/what-is-iphone-control#限制) · [快速开始](https://derrors.github.io/iphone-control/guide/getting-started) · [接入 AI 客户端](https://derrors.github.io/iphone-control/guide/mcp-clients) · [工具一览](https://derrors.github.io/iphone-control/guide/tools) |
 | 使用 | [配置](https://derrors.github.io/iphone-control/guide/configuration) · [命令行](https://derrors.github.io/iphone-control/guide/cli) · [多台设备](https://derrors.github.io/iphone-control/guide/multi-device) · [通知](https://derrors.github.io/iphone-control/guide/notifications) · [自动解锁](https://derrors.github.io/iphone-control/guide/auto-unlock) |
-| 安装 | [Docker](https://derrors.github.io/iphone-control/deploy/docker) · [从源码 / 二进制](https://derrors.github.io/iphone-control/deploy/source) · [macOS](https://derrors.github.io/iphone-control/deploy/macos) · [数据与备份](https://derrors.github.io/iphone-control/deploy/backup) |
+| 安装 | [安装](https://derrors.github.io/iphone-control/guide/getting-started#install) · [从源码编译](https://derrors.github.io/iphone-control/deploy/source) · [macOS](https://derrors.github.io/iphone-control/deploy/macos) · [数据与备份](https://derrors.github.io/iphone-control/deploy/backup) |
 | 问题 | [常见问题](https://derrors.github.io/iphone-control/troubleshoot/faq) · [排错（英文）](docs/troubleshooting.md) · [Issues](https://github.com/Derrors/iphone-control/issues) |
 | 安全 | [SECURITY.md](SECURITY.md)：存了什么、谁能访问、怎么报告漏洞 |
 | 开发 | [贡献指南](CONTRIBUTING.md) · [架构](docs/architecture.md) · [关键取舍](docs/decisions.md) · [更新日志](CHANGELOG.zh-CN.md) |

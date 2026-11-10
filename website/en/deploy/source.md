@@ -1,67 +1,46 @@
-# Source / Binary
+# Build from Source
 
-Run it directly as a regular user on Linux, without Docker. You need the system usbmuxd (udev starts it when the phone is plugged in). On a Mac, see [macOS](./macos).
+Usually you don't need this: the one-line installer, Homebrew and the .deb all install the program built for the release; see [Getting Started](../guide/getting-started#install). Build from source on machines without a prebuilt package (Intel Macs) and for development. On a Mac, see [macOS](./macos).
 
-## Install
+## Requirements
 
-### Prebuilt binary
+- Rust 1.88+ ([rustup](https://rustup.rs)) and a C compiler
+- On Linux, the system usbmuxd (udev starts it when the phone is plugged in). The daemon doesn't start usbmuxd itself
 
-[Releases](https://github.com/Derrors/iphone-control/releases) has Linux x86_64 and aarch64 archives (glibc 2.34 or later: Debian 12, Ubuntu 22.04 and newer):
-
-```bash
-sudo apt install usbmuxd
-tar xzf iphone-control-v*-x86_64*.tar.gz   # on ARM, aarch64 instead of x86_64 (see uname -m)
-install -Dm755 iphone-control-*/iphone-control ~/.cargo/bin/iphone-control
-```
-
-`~/.cargo/bin` matches the systemd unit below; if you put it elsewhere, change `ExecStart` in the unit too.
-
-### Build from source
-
-You need Rust 1.88+ ([rustup](https://rustup.rs)) and a C compiler:
+## Build and install
 
 ```bash
-sudo apt install build-essential git usbmuxd
+sudo apt install build-essential git usbmuxd     # or your distribution's package manager
 git clone https://github.com/Derrors/iphone-control && cd iphone-control
 cargo install --path apps/iphone-control --locked   # installs ~/.cargo/bin/iphone-control
 ```
 
 ## Run
 
-```bash
-iphone-control daemon       # in the foreground
-iphone-control setup        # setup wizard, in a second terminal
-iphone-control mcp-config   # prints the MCP registration command
-```
-
-Only the systemd service below reads `~/.config/iphone-control/env`. In the foreground, load it first: `set -a; . ~/.config/iphone-control/env; set +a`.
-
-### Keep it running: systemd user service
-
-The unit is `deploy/iphone-control.service` in the repository (also included in the binary archives):
+Run it as your regular user, not with sudo. Connect the phone with a cable, then:
 
 ```bash
-mkdir -p ~/.config/systemd/user ~/.config/iphone-control
-cp deploy/iphone-control.service ~/.config/systemd/user/
-cp .env.example ~/.config/iphone-control/env    # proxy, notifications, … (env.example in the binary archive)
-systemctl --user daemon-reload && systemctl --user enable --now iphone-control
-loginctl enable-linger "$USER"                  # start at boot without logging in
+iphone-control
 ```
 
-## Differences from Docker
+The first run is the setup guide, the same as for a packaged install; see [Getting Started](../guide/getting-started#first-run). Its "Background service" step sets up a systemd user service (`~/.config/systemd/user/iphone-control.service`, reading `~/.config/iphone-control/env`), so the daemon starts when you log in. You can also set it up on its own:
 
-| | Docker | Source (regular user) |
-|---|---|---|
-| Data directory | `./data` | `~/.local/share/iphone-control` |
-| Control socket | `/run/iphone-control/ctl.sock` in the container | `$XDG_RUNTIME_DIR/iphone-control/ctl.sock` |
-| usbmuxd | started by the daemon | the system service |
-| Pairing records | `lockdown/` in the data directory | the system's `/var/lib/lockdown` |
-| Unsigned WDA | shipped in the image | downloaded before the first signing (sha256-checked) |
-| Configuration | `.env` | `~/.config/iphone-control/env` |
+```bash
+iphone-control service install
+sudo loginctl enable-linger "$USER"   # start at boot without logging in
+```
+
+For development you can skip the service and run the daemon in the foreground in a terminal, with its log printed there:
+
+```bash
+iphone-control daemon
+```
+
+Every command reads `~/.config/iphone-control/env` when it starts; a variable already in the environment wins. See [Configuration](../guide/configuration#settings-file).
 
 ::: warning
 - Run the daemon, the CLI and the MCP server as the same user.
-- Don't run it alongside the Docker version against the same phone. With a system usbmuxd installed, `sudo systemctl mask usbmuxd` before going back to Docker.
+- One copy per phone: don't run two copies of iphone-control (for example the service plus one in the foreground), or other usbmuxd-based tools (go-ios, pymobiledevice3, …).
 :::
 
 ## Upgrade
@@ -69,6 +48,15 @@ loginctl enable-linger "$USER"                  # start at boot without logging 
 Read the upgrade notes in the [changelog](https://github.com/Derrors/iphone-control/blob/main/CHANGELOG.md) first.
 
 ```bash
-git pull && cargo install --path apps/iphone-control --locked   # or drop in the new binary
-systemctl --user restart iphone-control
+git pull && cargo install --path apps/iphone-control --locked
+iphone-control service restart
 ```
+
+## Uninstall
+
+```bash
+iphone-control service uninstall    # stop and remove the background service
+cargo uninstall iphone-control
+```
+
+The data directory `~/.local/share/iphone-control` and the settings in `~/.config/iphone-control` are kept; see [Data and Backups](./backup).

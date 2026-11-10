@@ -18,6 +18,8 @@ use rmcp::{
 };
 use serde_json::{Map, Value, json};
 
+pub mod gate;
+
 /// 服务说明（发给客户端的 instructions）：toolkit 的那段，加上自动解锁范围、多设备的说明
 pub fn instructions() -> &'static str {
     ictl_l10n::tr!(
@@ -148,6 +150,28 @@ pub fn tools_with(dev: bool) -> Vec<Tool> {
     v
 }
 
+/// [`gate::CONFIRM_TOOL`], listed only for a task started from the web viewer
+pub fn confirm_tool() -> Tool {
+    Tool::new(
+        gate::CONFIRM_TOOL,
+        ictl_l10n::tr!(
+            "请用户在网页上确认一步操作,一直等到用户回答。\n\n何时用:付款、购买、下单、转账;删除或清空数据;发送消息、邮件、评论、帖子;\
+修改账号、密码、隐私或安全设置;其他不可撤销的操作。在真正点下那一步之前调用。\n\n\
+返回:用户同意时是普通结果,接着执行;用户拒绝时是错误结果,这时不要执行这一步,也不要换个方式绕过,停下来说明情况。",
+            "Ask the user on the web page to confirm one action, and wait for the answer.\n\nWhen to use: payments, purchases, orders, transfers; deleting or clearing data; sending messages, emails, comments, posts; changing account, password, privacy or security settings; anything else that can't be undone. Call it right before the step that does it.\n\nReturns: a normal result when the user approves, then go ahead; an error when the user rejects, then don't do that step or work around it: stop and explain."
+        )
+        .to_owned(),
+        schema(
+            json!({
+                "action": {"type": "string", "description": ictl_l10n::tr!("要做的事,一句话,例如「发送消息」「删除照片」", "what is about to happen, in a few words, e.g. “Send message”, “Delete photo”")},
+                "detail": {"type": "string", "description": ictl_l10n::tr!("具体内容:发给谁、发什么、删哪几项、付多少钱", "the specifics: to whom, what, which items, how much")}
+            }),
+            &["action", "detail"],
+        ),
+    )
+    .with_annotations(ToolAnnotations::with_title(ictl_l10n::tr!("请用户确认", "Ask the user")).read_only(true).open_world(false))
+}
+
 fn dev_tools() -> Vec<Tool> {
     let t = |name: &'static str, desc: &str, s: Map<String, Value>, a: ToolAnnotations| {
         Tool::new(name, desc.to_owned(), s).with_annotations(a)
@@ -192,9 +216,9 @@ fn dev_tools() -> Vec<Tool> {
         t(
             "iphone_install_app",
             ictl_l10n::tr!(
-                "安装签好名的 .ipa 或 .app(覆盖已装的同一 App)。path 是运行守护进程的机器上的路径,容器部署时是容器里的路径。\
+                "安装签好名的 .ipa 或 .app(覆盖已装的同一 App)。path 是运行守护进程的机器上的路径。\
 大的包要一两分钟。",
-                "Install a signed .ipa or .app (replacing the same app if installed). path is on the machine that runs the daemon; inside the container for a container deployment. Large packages take a minute or two."
+                "Install a signed .ipa or .app (replacing the same app if installed). path is on the machine that runs the daemon. Large packages take a minute or two."
             ),
             schema(
                 json!({"path": {"type": "string", "description": ictl_l10n::tr!(".ipa 文件或 .app 目录的路径", "path of the .ipa file or .app directory")}}),
@@ -800,7 +824,9 @@ pub fn wants_alert_check(req: &Request) -> bool {
         | Request::OpenUrl { .. } => true,
         // 按键见 PressButton 自己的弹窗处理；切换设备后新设备的 WDA 还没起来，查不了弹窗；
         // 安装、卸载、Web Inspector 不碰屏幕（Web Inspector 也不该为它排队等设备锁）
+        // the web viewer's finger isn't an MCP tool; the person watching sees any alert
         Request::PressButton { .. }
+        | Request::Touch { .. }
         | Request::TerminateApp { .. }
         | Request::SelectDevice { .. }
         | Request::InstallApp { .. }
@@ -838,6 +864,8 @@ pub fn to_result(r: Response) -> CallToolResult {
 #[derive(Debug, Clone)]
 pub struct McpServer {
     pub socket: PathBuf,
+    /// Set for a task started from the web viewer (see [`gate`])
+    pub gate: Option<gate::Gate>,
 }
 
 impl ServerHandler for McpServer {
@@ -850,13 +878,54 @@ impl ServerHandler for McpServer {
         _request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, ErrorData> {
-        Ok(ListToolsResult::with_all_items(tools()))
+        let mut t = tools();
+        if self.gate.is_some() {
+            t.push(confirm_tool());
+        }
+        Ok(ListToolsResult::with_all_items(t))
     }
 
     async fn call_tool(
         &self,
         request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
+    ) -> Result<CallToolResponse, ErrorData> {
+        let Some(gate) = &self.gate else { return self.call_tool_cancellable(request, &context).await };
+        // a task from the web viewer: the viewer sees every call and can hold or refuse it (see `gate`)
+        let args = request.arguments.clone().unwrap_or_default();
+        let work = async {
+            if request.name == gate::CONFIRM_TOOL {
+                let r = match gate.confirm(&args).await {
+                    Ok(m) => CallToolResult::success(vec![ContentBlock::text(m)]),
+                    Err(m) => CallToolResult::error(vec![ContentBlock::text(m)]),
+                };
+                return Ok(r.into());
+            }
+            match gate.before(&request.name, &args).await {
+                gate::Before::Go(step) => {
+                    let t0 = std::time::Instant::now();
+                    let r = self.call_tool_inner(request).await;
+                    if let Ok(CallToolResponse::Complete(c)) = &r {
+                        let v = serde_json::to_value(c).unwrap_or_default();
+                        gate.after(step, &v, t0.elapsed().as_millis() as u64).await;
+                    }
+                    r
+                }
+                gate::Before::Refuse(m) => Ok(CallToolResult::error(vec![ContentBlock::text(m)]).into()),
+            }
+        };
+        tokio::select! {
+            r = work => r,
+            _ = context.ct.cancelled() => Ok(to_result(Response::error(ictl_l10n::tr!("调用已取消", "Call cancelled"))).into()),
+        }
+    }
+}
+
+impl McpServer {
+    async fn call_tool_cancellable(
+        &self,
+        request: CallToolRequestParams,
+        context: &RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, ErrorData> {
         // rmcp 收到取消通知只是置这个令牌，不会中止处理：自己停下。丢掉进行中的调用会断开到守护进程的连接，
         // 守护进程那边还在排队的请求随之放弃（protocol::call），iphone_batch 剩下的步骤也不再执行
@@ -865,9 +934,7 @@ impl ServerHandler for McpServer {
             _ = context.ct.cancelled() => Ok(to_result(Response::error(ictl_l10n::tr!("调用已取消", "Call cancelled"))).into()),
         }
     }
-}
 
-impl McpServer {
     async fn call_tool_inner(&self, request: CallToolRequestParams) -> Result<CallToolResponse, ErrorData> {
         let args = request.arguments.unwrap_or_default();
         let then = match parse_then(&args) {
@@ -913,7 +980,9 @@ impl McpServer {
         let wait = if matches!(req, Request::InstallApp { .. }) { 660 } else { 150 };
         protocol::call_expecting(&self.socket, req, Some(Duration::from_secs(wait)), expect_udid).await.unwrap_or_else(
             |e| {
-                Response::error(ictl_l10n::trf!("连不上守护进程({}):{e};确认守护进程在运行(容器部署看 iphone-control 容器)", "Can't reach the daemon ({}): {e}; make sure the daemon is running (for a container deployment, check the iphone-control container)",
+                Response::error(ictl_l10n::trf!(
+                    "连不上守护进程({}):{e};确认守护进程在运行(iphone-control status)",
+                    "Can't reach the daemon ({}): {e}; make sure the daemon is running (iphone-control status)",
                     self.socket.display()
                 ))
             },
@@ -1039,7 +1108,7 @@ impl McpServer {
 
 /// 在 stdin/stdout 上运行 MCP 服务直到客户端断开
 pub async fn serve_stdio(socket: PathBuf) -> anyhow::Result<()> {
-    let running = McpServer { socket }.serve(rmcp::transport::stdio()).await?;
+    let running = McpServer { socket, gate: gate::Gate::from_env() }.serve(rmcp::transport::stdio()).await?;
     running.waiting().await?;
     Ok(())
 }

@@ -8,15 +8,17 @@
 
 ## 开启
 
+首次运行 `iphone-control` 的引导里会问要不要设（可选），以后可以运行 `iphone-control setup --reconfigure` 选「自动解锁密码」。也可以直接用命令：
+
 ```bash
-docker exec -it iphone-control iphone-control passcode set
+iphone-control passcode set
 ```
 
 密码存给守护进程正在控制的那台设备；要给别的设备设，加 `--device <UDID 或设备名>`。只支持 4 位以上的纯数字密码。关闭：
 
 ```bash
-docker exec -it iphone-control iphone-control passcode clear           # 正在控制的那台；别的设备加 --device
-docker exec -it iphone-control iphone-control passcode clear --all     # 所有设备
+iphone-control passcode clear           # 正在控制的那台；别的设备加 --device
+iphone-control passcode clear --all     # 所有设备
 ```
 
 ## 多台设备
@@ -39,8 +41,8 @@ docker exec -it iphone-control iphone-control passcode clear --all     # 所有�
 先人工解锁手机。如果是密码错了（例如你改了锁屏密码），先更新密码，再恢复：
 
 ```bash
-docker exec -it iphone-control iphone-control passcode set
-docker exec -it iphone-control iphone-control unlock-reset
+iphone-control passcode set
+iphone-control unlock-reset
 ```
 
 如果是输入中途出错、进程被杀，密码本身可能没错，确认无误后只运行 `unlock-reset` 就行。`unlock-reset` 不会核对密码，`passcode set`、`passcode clear` 也不会解除停用。不要靠删除 `logs/` 来恢复，那会撤掉这层保护。

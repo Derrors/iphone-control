@@ -59,10 +59,7 @@ iphone-control --version
 
 ### 注意事项
 
-- **全程用普通用户运行，不要 sudo。** 以 root 运行时，守护进程会自己启动一个 usbmuxd，和系统的冲突。保险起见，每个终端先执行：
-  ```bash
-  export ICTL_MANAGE_USBMUXD=0
-  ```
+- **全程用普通用户运行，不要 sudo。** 以 root 运行时，守护进程改用 Linux 的系统路径（`/var/lib/iphone-control`、`/run/iphone-control`）。
 - 数据目录是 `~/.local/share/iphone-control`，控制接口在 `~/.local/share/iphone-control/ctl.sock`（macOS 没有 `XDG_RUNTIME_DIR`）。
 - 同一时间只能有一个程序控制手机：守护进程、`iphone-control debug …`、Xcode 的 UI 测试不要同时跑。
 
@@ -200,8 +197,7 @@ done
 ## 已知差异（不算失败）
 
 - 数据目录在 `~/.local/share` 下，不是 Mac 习惯的 `~/Library/Application Support`。
-- 还没有 launchd 配置，只能前台运行。
-- 不能用 Docker：Docker Desktop 在 Mac 上不支持 USB 直通。
+- 这份步骤让守护进程在终端里前台运行，方便看输出；日常使用时装成 launchd 服务（`iphone-control service install`），launchd 方式本身还没按这份清单验证过。
 
 ## 清理
 

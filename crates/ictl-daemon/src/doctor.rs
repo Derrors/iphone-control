@@ -3,6 +3,7 @@
 use std::time::Duration;
 
 use crate::core::{Daemon, DeviceProfile, Inner};
+use crate::machine::DeviceState;
 
 impl Daemon {
     pub(crate) async fn doctor(&self, g: &mut Inner) -> String {
@@ -14,9 +15,7 @@ impl Daemon {
             Ok(_) => out.push(ictl_l10n::tr!("✅ usbmuxd 在运行", "✅ usbmuxd is running").into()),
             Err(e) => {
                 out.push(ictl_l10n::trf!("❌ 连不上 usbmuxd：{e}\n     → {}", "❌ Can't reach usbmuxd: {e}\n     → {}",
-                    if self.cfg.manage_usbmuxd {
-                        ictl_l10n::tr!("由守护进程自动拉起，看数据目录 logs/usbmuxd.log；宿主机已有 usbmuxd 服务时设 ICTL_MANAGE_USBMUXD=0", "the daemon starts it itself, see logs/usbmuxd.log in the data directory; if the host already runs a usbmuxd service, set ICTL_MANAGE_USBMUXD=0")
-                    } else if cfg!(target_os = "macos") {
+                    if cfg!(target_os = "macos") {
                         ictl_l10n::tr!("macOS 自带 usbmuxd，应一直在运行：sudo launchctl kickstart -k system/com.apple.usbmuxd", "macOS ships usbmuxd and it should always be running: sudo launchctl kickstart -k system/com.apple.usbmuxd")
                     } else {
                         ictl_l10n::tr!("用的是系统的 usbmuxd 服务（插上手机时由 udev 拉起）：确认已安装 usbmuxd、手机已插好", "using the system usbmuxd service (udev starts it when the phone is plugged in): make sure usbmuxd is installed and the phone is plugged in")
@@ -67,7 +66,10 @@ impl Daemon {
             (None, _) if self.pinned(g).is_some() && !g.connected.is_empty() => {
                 let p = self.pinned(g).unwrap_or_default();
                 let how = if self.cfg.udid.is_some() {
-                    ictl_l10n::tr!("或改 .env 里的 IPHONE_UDID", "or change IPHONE_UDID in .env")
+                    ictl_l10n::tr!(
+                        "或改 ~/.config/iphone-control/env 里的 IPHONE_UDID",
+                        "or change IPHONE_UDID in ~/.config/iphone-control/env"
+                    )
                 } else {
                     ictl_l10n::tr!(
                         "或 iphone-control select 换成接着的另一台(auto 改回自动选)",
@@ -82,9 +84,7 @@ impl Daemon {
             }
             (None, _) => {
                 out.push(
-                    if self.cfg.manage_usbmuxd {
-                        ictl_l10n::tr!("❌ 守护进程看不到手机\n     → 等 30 秒,会自动重启 usbmuxd;仍不行就重启容器(或守护进程)", "❌ The daemon can't see the phone\n     → wait 30 seconds, usbmuxd restarts automatically; if that doesn't help, restart the container (or the daemon)")
-                    } else if cfg!(target_os = "macos") {
+                    if cfg!(target_os = "macos") {
                         ictl_l10n::tr!("❌ 守护进程看不到手机\n     → 重新插拔数据线;仍不行就 sudo launchctl kickstart -k system/com.apple.usbmuxd", "❌ The daemon can't see the phone\n     → replug the cable; if that doesn't help, sudo launchctl kickstart -k system/com.apple.usbmuxd")
                     } else {
                         ictl_l10n::tr!("❌ 守护进程看不到手机\n     → 重新插拔数据线;仍不行就 sudo systemctl restart usbmuxd", "❌ The daemon can't see the phone\n     → replug the cable; if that doesn't help, sudo systemctl restart usbmuxd")
@@ -165,6 +165,46 @@ impl Daemon {
                         .into(),
                     ),
                 }
+                // 描述文件有效不代表能启动：签 WDA 的证书一被吊销（同一个 Apple ID 在别处新建证书、满了吊销旧的），
+                // 每台设备上用它签的 WDA 都起不来
+                match (g.device.is_some(), g.dev.foreign_wda) {
+                    (true, Some(true)) if g.state == DeviceState::Ready => out.push(ictl_l10n::tr!(
+                        "⚠️  这台设备上的 WDA 不是本机的签名证书签的(别的机器或旧的数据目录签的)  现在能用;签它的证书一被吊销就起不来,那时守护进程会自动重签",
+                        "⚠️  The WDA on this device wasn't signed with this machine's certificate (another machine or an old data directory signed it)  works now; once that certificate is revoked it won't start, and the daemon re-signs it then"
+                    ).into()),
+                    (true, Some(true)) => {
+                        out.push(ictl_l10n::tr!(
+                            "❌ 这台设备上的 WDA 不是本机的签名证书签的(别的机器或旧的数据目录签的,签它的证书多半已被吊销)\n     → iphone-control sign",
+                            "❌ The WDA on this device wasn't signed with this machine's certificate (another machine or an old data directory signed it, and that certificate was most likely revoked)\n     → iphone-control sign"
+                        ).into());
+                        fails += 1;
+                    }
+                    (true, Some(false)) => out.push(
+                        ictl_l10n::tr!(
+                            "✅ 这台设备上的 WDA 是本机的签名证书签的",
+                            "✅ The WDA on this device was signed with this machine's certificate"
+                        )
+                        .into(),
+                    ),
+                    _ => {}
+                }
+                match g.own_cert {
+                    Some((at, true)) => out.push(ictl_l10n::trf!(
+                        "✅ 本机的签名证书还在 Apple ID 的团队里  {}前查过",
+                        "✅ This machine's signing certificate is still in the Apple ID's team  checked {} ago",
+                        ago(at.elapsed())
+                    )),
+                    Some((at, false)) => {
+                        out.push(ictl_l10n::trf!(
+                            "❌ 本机的签名证书已不在 Apple ID 的团队里({}前查的):别处新建证书时把它吊销了,用它签的 WDA 都起不来\n     → iphone-control sign(新建证书并重签这台;其他设备切过去时会自动重签)",
+                            "❌ This machine's signing certificate is no longer in the Apple ID's team (checked {} ago): it was revoked when a certificate was created elsewhere, so WDA signed with it won't start\n     → iphone-control sign (creates a new certificate and re-signs this device; other devices are re-signed automatically when you switch to them)",
+                            ago(at.elapsed())
+                        ));
+                        fails += 1;
+                    }
+                    // 守护进程启动约 90 秒后的会话检查才第一次查
+                    None => {}
+                }
             }
             None => {
                 out.push(
@@ -232,5 +272,25 @@ impl Daemon {
             ictl_l10n::trf!("{fails} 项需要处理", "{fails} item(s) need attention")
         });
         out.join("\n")
+    }
+}
+
+/// 多久以前，粗到分钟、小时
+fn ago(d: Duration) -> String {
+    let m = d.as_secs() / 60;
+    if m < 60 { ictl_l10n::trf!("{} 分钟", "{} min", m.max(1)) } else { ictl_l10n::trf!("{} 小时", "{} h", m / 60) }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ago_rounds_to_minutes_and_hours() {
+        ictl_l10n::with_lang(ictl_l10n::Lang::Zh, || {
+            assert_eq!(ago(Duration::from_secs(5)), "1 分钟");
+            assert_eq!(ago(Duration::from_secs(59 * 60)), "59 分钟");
+            assert_eq!(ago(Duration::from_secs(25 * 3600)), "25 小时");
+        });
     }
 }

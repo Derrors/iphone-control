@@ -5,7 +5,7 @@ result with its wall time, and save screenshots.
     python tests/device/run.py                      # default steps (harmless: Home, Clock tabs, Spotlight search)
     python tests/device/run.py '[["iphone_status", {}], ["sleep", 1], ["iphone_screenshot", {}]]'
 
-The MCP server command comes from MCP_CMD (default: `docker exec -i iphone-control iphone-control mcp`;
+The MCP server command comes from MCP_CMD (default: `iphone-control mcp`;
 for a source install use e.g. `iphone-control mcp`). Screenshots go to SHOTS_DIR (default: ./shots).
 A step `["sleep", seconds]` waits without calling a tool. Exit code is 1 if any tool returned an error.
 """
@@ -42,7 +42,7 @@ DEFAULT_STEPS = [
 
 async def main() -> int:
     steps = json.loads(sys.argv[1]) if len(sys.argv) > 1 else DEFAULT_STEPS
-    cmd = shlex.split(os.environ.get("MCP_CMD", "docker exec -i iphone-control iphone-control mcp"))
+    cmd = shlex.split(os.environ.get("MCP_CMD", "iphone-control mcp"))
     shots = os.environ.get("SHOTS_DIR", "shots")
     os.makedirs(shots, exist_ok=True)
     failed = 0

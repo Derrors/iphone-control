@@ -5,7 +5,7 @@
 //! Everything that finishes work under the device lock (a request, a full supervision round) goes through
 //! [`crate::Daemon`]'s `publish`, which beats the heartbeat. A round that finds the lock busy skips without beating,
 //! so a stuck lock holder shows up as silence. The check runs on its own thread, so a blocked runtime is caught too.
-//! The service manager (systemd `Restart=on-failure`, Docker `restart: unless-stopped`) starts a fresh daemon.
+//! The service manager (systemd `Restart=on-failure`, launchd `KeepAlive`) starts a fresh daemon.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};

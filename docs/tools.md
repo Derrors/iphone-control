@@ -45,7 +45,7 @@ With `IPHONE_CONTROL_DEV_TOOLS=1` in the MCP server's environment, six more tool
 |---|---|---|
 | `iphone_app_logs` | `process`, `grep`, `since` (seconds, default 60, at most 3600), `limit` (default 100, 1 to 1000), `errors_only` | The phone's unified log (os_log) at the default, Error and Fault levels, one line per entry: seconds ago, `process[pid]`, level, subsystem, message. `process` is an app (name or bundle ID) or a process name. Read-only. See the recording notes below the table |
 | `iphone_crash_reports` | `filter`, `name` | Lists crash reports, newest first (at most 50); with `name`, returns that report (`.ips`, cut at 40,000 characters). Read-only |
-| `iphone_install_app` | `path` | Installs a signed `.ipa` or `.app` from a path on the machine that runs the daemon (inside the container for a container deployment). Destructive: it replaces an installed copy of the same app |
+| `iphone_install_app` | `path` | Installs a signed `.ipa` or `.app` from a path on the machine that runs the daemon. Destructive: it replaces an installed copy of the same app |
 | `iphone_uninstall_app` | `app` | Removes an app and its data. `app` must be a bundle ID or the full display name (case-insensitive); an empty, partial or ambiguous name is refused and the candidates are listed. Refuses to remove the WebDriverAgent runner. Destructive |
 | `iphone_web_targets` | — | Inspectable web pages and WebViews over the Web Inspector service: Safari tabs and inspectable WebViews in apps (debug builds of Capacitor, Cordova, React Native…). One line each: id, type, app, title, URL. Only apps in the foreground answer; needs Settings → Safari → Advanced → Web Inspector. Read-only |
 | `iphone_web_eval` | `expression`, `target`, `timeout` (10 s, at most 60) | Runs JavaScript in a page and returns the result as JSON; a promise is awaited, a DOM node comes back as its description (`"<body>"`). `target` is an id from `iphone_web_targets`, or text in the URL or title; it can be left out when there is one page. Destructive: a script can change the page, submit forms and send requests |
@@ -58,6 +58,16 @@ How `iphone_app_logs` records:
 - Recording stops after 15 minutes without a call, when the daemon switches to another device, and when the device goes offline.
 
 See [SECURITY.md](../SECURITY.md#developer-tools) before turning these tools on.
+
+## Tasks from the web viewer
+
+When `iphone-control viewer` runs an AI task, it starts the agent with this MCP server and two environment variables, `ICTL_AGENT_GATE` and `ICTL_AGENT_TOKEN`. With them set, every tool call is first reported to the viewer, which shows it as a step, holds it while the task is paused or the user has taken over, and refuses it once the task is stopped; the result (and the screenshot, if any) is reported back afterwards. One more tool is listed:
+
+| Tool | Parameters | Notes |
+|---|---|---|
+| `iphone_confirm` | `action`, `detail` | Asks the user on the page to confirm one step (paying, deleting, sending a message, changing account settings…) and waits for the answer. A normal result means approved; an error means rejected or the task ended, and the agent must not do the step |
+
+Without the variables, the tool list and every call are unchanged.
 
 ## Auto-unlock and "read-only" tools
 

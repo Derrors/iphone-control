@@ -64,33 +64,41 @@ iphone-control does it all in **one Rust binary** on Linux or macOS, built on [i
 
 ## Quick Start
 
-You need an iPhone or iPad on iOS 17+ connected by a **data** cable, a free Apple ID (use a dedicated one), and a Linux host with Docker or an Apple Silicon Mac.
+You need an iPhone or iPad on iOS 17+ connected by a **data** cable, a free Apple ID (use a dedicated one), and an Apple Silicon Mac or a Linux machine.
 
-**Linux (Docker)**
-
-```bash
-git clone https://github.com/Derrors/iphone-control.git && cd iphone-control
-cp .env.example .env                                  # optional: proxy, notifications
-docker compose up -d --build                          # the first build takes a few minutes
-docker exec -it iphone-control iphone-control setup   # guided setup; safe to re-run
-claude mcp add iphone -s user -- docker exec -i iphone-control iphone-control mcp
-```
-
-**macOS** (Docker can't pass USB through on a Mac, so run the binary directly)
+**macOS or Linux, one command**
 
 ```bash
-V=v0.1.5   # latest release
-curl -fsSL https://github.com/Derrors/iphone-control/releases/download/$V/iphone-control-$V-macos-arm64.tar.gz | tar xz
-mkdir -p ~/.local/bin && install -m 755 iphone-control-$V-macos-arm64/iphone-control ~/.local/bin/
-echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zprofile && source ~/.zprofile
-iphone-control daemon       # keep this terminal open
-iphone-control setup        # in a second terminal
-iphone-control mcp-config   # prints the `claude mcp add` command to run
+curl -fsSL https://raw.githubusercontent.com/Derrors/iphone-control/main/install.sh | sh
 ```
 
-`setup` walks you through pairing, Developer Mode, Apple ID sign-in and installing WebDriverAgent; do what it asks on the phone. Then open a new Claude Code session and ask, for example, *“Open Clock, switch to the stopwatch and start it.”*
+It downloads the release for your machine, checks its sha256, installs `iphone-control` into `~/.local/bin` and runs the daemon as a per-user service that starts at login (launchd on macOS, systemd on Linux). It never runs as root. Run it again to upgrade; `… | sh -s -- --uninstall` removes it and keeps your data.
 
-More: [step-by-step guide](https://derrors.github.io/iphone-control/en/guide/getting-started) · [prebuilt image](https://derrors.github.io/iphone-control/en/deploy/docker) · [binary / source](https://derrors.github.io/iphone-control/en/deploy/source) · [macOS guide](https://derrors.github.io/iphone-control/en/deploy/macos) · [other MCP clients](https://derrors.github.io/iphone-control/en/guide/mcp-clients).
+**Or with a package manager**
+
+```bash
+# macOS or Linux (Homebrew)
+brew install derrors/tap/iphone-control && brew services start iphone-control
+
+# Debian 12+ / Ubuntu 22.04+: the .deb from Releases (amd64 or arm64), pulls in usbmuxd
+sudo apt install ./iphone-control_<version>_amd64.deb && systemctl --user enable --now iphone-control
+```
+
+On Linux the system usbmuxd is needed (`sudo apt install usbmuxd`; the .deb brings it). On an Intel Mac, build from source.
+
+**Then, on every system**
+
+Connect the phone with the cable and run:
+
+```bash
+iphone-control
+```
+
+The first time, it walks you through setup in the terminal, one step at a time: language, proxy, the background service, pairing, Developer Mode, Apple ID, signing and installing WebDriverAgent, the optional auto-unlock and notifications, and registering with Claude Code and Codex. Do what it asks on the phone. Steps already done are skipped; afterwards, `iphone-control` just shows the status.
+
+Then open a new Claude Code or Codex session and ask, for example, *“Open Clock, switch to the stopwatch and start it.”* Or run `iphone-control viewer` for the control page in the browser (http://127.0.0.1:8200), where you can act on the live screen and hand tasks to a local Claude Code or Codex.
+
+More: [step-by-step guide](https://derrors.github.io/iphone-control/en/guide/getting-started) · [build from source](https://derrors.github.io/iphone-control/en/deploy/source) · [macOS guide](https://derrors.github.io/iphone-control/en/deploy/macos) · [other MCP clients](https://derrors.github.io/iphone-control/en/guide/mcp-clients).
 
 ## MCP Tools
 
@@ -118,15 +126,15 @@ Tool texts, results, CLI output and logs are in Simplified Chinese by default; s
 
 ## Everyday Commands
 
-Run them as `docker exec -it iphone-control iphone-control <command>`, or directly for a source install and on macOS.
-
 | Command | What it does |
 | --- | --- |
-| `daemon` | The long-running daemon: the container's entry point; on a source install or macOS you start it yourself |
+| *(none)* | The first time, the setup guide; after that, the status (and starts the service if it isn't running) |
+| `setup [--reconfigure]` | Run the setup guide again; `--reconfigure` redoes one part (language, proxy, service, Apple ID, phone, auto-unlock, notifications, MCP registration) |
+| `service install\|uninstall\|start\|stop\|restart\|status` | The background service (launchd on macOS, systemd user unit on Linux) |
+| `daemon` | The long-running daemon; the service runs it, or start it by hand |
 | `mcp` | The MCP server; your AI client starts it |
 | `status` | Daemon state, time left on the signing profile, recent log |
 | `doctor` | Layer-by-layer health check with a fix for each failure |
-| `setup` | Guided setup; re-run any time |
 | `login` | Sign in to the Apple ID again when the session expires |
 | `sign` | Sign and install WebDriverAgent now |
 | `resign [--force]` | Re-sign WebDriverAgent if it expires soon (or now) |
@@ -136,11 +144,11 @@ Run them as `docker exec -it iphone-control iphone-control <command>`, or direct
 | `notify-test [event]` | Send test notifications |
 | `mcp-config` | Print the command that registers the MCP server |
 | `wda-bridge [--port]` | Expose WebDriverAgent on 127.0.0.1 for other tools; stop it when done |
-| `viewer [--port]` | Watch the screen live in a browser and tap, swipe and type on it, on 127.0.0.1:8200; stop it when done |
+| `viewer [--port]` | Control page on 127.0.0.1:8200: live screen you can tap, swipe and type on, device panel, and AI tasks run by a local Claude Code or Codex; stop it when done |
 
 All commands and options: [CLI reference](https://derrors.github.io/iphone-control/en/guide/cli).
 
-Upgrade with `git pull && docker compose up -d --build` (or `docker compose pull && docker compose up -d --no-build` for the prebuilt image); for the binary and macOS, see [Source / binary](https://derrors.github.io/iphone-control/en/deploy/source#upgrade) and [macOS](https://derrors.github.io/iphone-control/en/deploy/macos#upgrade). Read the upgrade notes in the [changelog](CHANGELOG.md) first. Settings live in `.env` — see [configuration](https://derrors.github.io/iphone-control/en/guide/configuration). All state lives in `data/`: pairing records, the Apple ID session and signing key, and the passcode if auto-unlock is on. **Back it up; never commit or share it.**
+Upgrade by running `install.sh` again, with `brew upgrade iphone-control`, or by installing the new `.deb`; for a source build, see [build from source](https://derrors.github.io/iphone-control/en/deploy/source). Read the upgrade notes in the [changelog](CHANGELOG.md) first. Uninstall with `install.sh --uninstall`, `brew uninstall iphone-control` or `sudo apt remove iphone-control`; your data stays. Settings live in `~/.config/iphone-control/env`: the guide writes it, and after editing it by hand run `iphone-control service restart` — see [configuration](https://derrors.github.io/iphone-control/en/guide/configuration). All state lives in `~/.local/share/iphone-control`: the Apple ID session and signing key, and the passcode if auto-unlock is on. **Back it up; never commit or share it.**
 
 ## Documentation
 
@@ -148,7 +156,7 @@ Upgrade with `git pull && docker compose up -d --build` (or `docker compose pull
 | --- | --- |
 | Guide | [What is it](https://derrors.github.io/iphone-control/en/guide/what-is-iphone-control) · [Limitations](https://derrors.github.io/iphone-control/en/guide/what-is-iphone-control#limitations) · [Getting started](https://derrors.github.io/iphone-control/en/guide/getting-started) · [AI clients](https://derrors.github.io/iphone-control/en/guide/mcp-clients) · [Tools](https://derrors.github.io/iphone-control/en/guide/tools) |
 | Usage | [Configuration](https://derrors.github.io/iphone-control/en/guide/configuration) · [CLI](https://derrors.github.io/iphone-control/en/guide/cli) · [Several devices](https://derrors.github.io/iphone-control/en/guide/multi-device) · [Notifications](https://derrors.github.io/iphone-control/en/guide/notifications) · [Auto-unlock](https://derrors.github.io/iphone-control/en/guide/auto-unlock) |
-| Deployment | [Docker](https://derrors.github.io/iphone-control/en/deploy/docker) · [Source / binary](https://derrors.github.io/iphone-control/en/deploy/source) · [macOS](https://derrors.github.io/iphone-control/en/deploy/macos) · [Data and backups](https://derrors.github.io/iphone-control/en/deploy/backup) |
+| Deployment | [Install](https://derrors.github.io/iphone-control/en/guide/getting-started#install) · [Build from source](https://derrors.github.io/iphone-control/en/deploy/source) · [macOS](https://derrors.github.io/iphone-control/en/deploy/macos) · [Data and backups](https://derrors.github.io/iphone-control/en/deploy/backup) |
 | Problems | [FAQ](https://derrors.github.io/iphone-control/en/troubleshoot/faq) · [Troubleshooting](docs/troubleshooting.md) · [Issues](https://github.com/Derrors/iphone-control/issues) |
 | Security | [SECURITY.md](SECURITY.md): what is stored, who can reach it, reporting vulnerabilities |
 | Development | [Contributing](CONTRIBUTING.md) · [Architecture](docs/architecture.md) · [Decisions](docs/decisions.md) · [Changelog](CHANGELOG.md) |

@@ -2,7 +2,7 @@
 
 一台主机可以接多台 iPhone/iPad，但同一时间只控制一台：所有工具和命令都作用在它上面。只接一台时不用管这一页。
 
-下面的命令在 Docker 部署时前面加 `docker exec -it iphone-control`。不要让两份 iphone-control 或其他基于 usbmuxd 的工具连同一台设备。
+不要让两份 iphone-control 或其他基于 usbmuxd 的工具连同一台设备。
 
 ## 查看和切换
 
@@ -16,7 +16,22 @@ agent 用 `iphone_list_devices` 和 `iphone_select_device`，效果一样。
 
 - 只能选 USB 上接着的设备。先比 UDID，再比设备名；设备名包含这段文字且只有一台时也行，对上多台就报错，要用 UDID 指定。
 - 切换后 WDA 要 10~60 秒才起来，先用 `status`（或 `iphone_status`）确认就绪。没装过 WDA 的设备要先[安装](#给新设备安装)。
-- `iphone-control viewer` 绑定启动时正在控制的设备：切换到别的设备后，它的操作会被拒绝，要重新运行才能看和操作新设备。
+- 浏览器控制台 `iphone-control viewer` 也能切换，见[在控制台里切换](#control-page)。
+
+## 在控制台里切换 {#control-page}
+
+`iphone-control viewer` 页面上方的设备选择框用来切换控制哪台设备。
+
+- **页面跟着守护进程走。** 在别处换了设备（另一个标签页、`iphone-control select`、`iphone_select_device` 工具，或拔掉后自动换了一台），页面 10 秒内会发现，提示一句，并把实时画面和面板（App、元素）换到新设备上。
+- **操作只发给页面显示的那台。** 页面发出的每个操作都带着它显示的设备；守护进程已经不控制那台时，操作会被拒绝，不会发到另一部手机上。
+- **新设备没就绪时**，画面区域会说明原因：
+  - 没有连上设备：用数据线连上，确认数据线能传数据。
+  - 还没配对或没开开发者模式：在终端运行 `iphone-control setup --reconfigure`，选「手机」。
+  - 正在启动 WDA：通常 10~60 秒。
+  - 设备重启后还没解锁过：在设备上手动解锁一次；首次启用 UI 自动化时在设备上输入锁屏密码。
+- **没装 WDA 的设备**：已登录 Apple ID 时，画面区域有「签名并安装 WDA」按钮，大约 1~2 分钟，期间保持手机解锁。没登录时，它会提示在终端运行 `iphone-control setup --reconfigure`，选「Apple ID」。
+- 同一时间只控制一台，不能并排看两部手机。
+- AI 任务执行中不能切换；设了 `IPHONE_UDID` 时也不能切换。
 
 ## 控制哪一台
 
@@ -34,14 +49,16 @@ agent 用 `iphone_list_devices` 和 `iphone_select_device`，效果一样。
 
 ```bash
 iphone-control select <新设备>
-iphone-control setup
+iphone-control setup --reconfigure     # 选「手机」：配对、开发者模式、签名安装 WDA
 ```
 
-`setup` 只作用于正在控制的那台，所以要先 `select`。它会把设备注册到你的 Apple ID，占用账号的设备名额。自动重签不会替没装过 WDA 的设备注册，这时 `doctor` 会提示运行 `setup`。
+设置只作用于正在控制的那台，所以要先 `select`。签名会把设备注册到你的 Apple ID，占用账号的设备名额。自动重签不会替没装过 WDA 的设备注册，这时 `doctor` 会提示运行 `setup`。也可以在控制台里切到新设备，点「签名并安装 WDA」（设备要已经配对、开了开发者模式）。
 
 ## 重签
 
 自动重签只管正在控制的那台。闲置设备的描述文件 7 天后过期，切回去后 1 分钟内会自动检查，快过期或已过期就重签；也可以运行 `resign --force`。
+
+给哪台设备重签都用同一张签名证书，不会让另一台失效。但如果闲置设备上的 WDA 是在别的机器（或旧的数据目录）签的，签它的证书可能已被吊销：切过去后 WDA 起不来时，守护进程会自动重签它，见[常见问题](../troubleshoot/faq#cert)。
 
 ## 自动解锁
 
@@ -64,4 +81,4 @@ iphone-control passcode set --device <UDID 或设备名>     # 设备要接着
 - **iOS 26 没有 HID 后备：** WDA 重启期间操作会失败，iPhone 上也一样。
 - **屏幕尺寸不是 430×932：** iPad mini 5 竖放是 768×1024，以截图和 `iphone_status` 为准。
 
-已验证：iPad mini 5，iOS 26.6.1（Linux，Docker）。
+已验证：iPad mini 5，iOS 26.6.1（Linux）。

@@ -22,7 +22,7 @@ use tokio::task::JoinHandle;
 
 use crate::config::Config;
 use crate::eventlog::EventLog;
-use crate::machine::{Backoff, DeviceState, Misses, MuxWatch};
+use crate::machine::{Backoff, DeviceState, Misses};
 use crate::notify::{self, Dedup, Event};
 use crate::protocol::{Request, Response};
 use crate::supervise::StartOutcome;
@@ -161,7 +161,7 @@ impl DeviceProfile {
 
 /// 从手机上的描述文件（原始内容）里挑 WDA 的：app-id 是「团队 ID.WDA Bundle ID」（不知道团队 ID 时只看 Bundle ID）、
 /// 设备列表里有这台手机，取最晚到期的那份。装过几次会留下几份，旧的过期了也还在
-pub fn wda_profile_expiry(profiles: &[Vec<u8>], team: Option<&str>, bundle: &str, udid: &str) -> Option<SystemTime> {
+pub fn wda_profile(profiles: &[Vec<u8>], team: Option<&str>, bundle: &str, udid: &str) -> Option<ictl_sign::Profile> {
     profiles
         .iter()
         .filter_map(|p| ictl_sign::Profile::parse(p))
@@ -171,8 +171,11 @@ pub fn wda_profile_expiry(profiles: &[Vec<u8>], team: Option<&str>, bundle: &str
                 .is_some_and(|(t, b)| b == bundle && team.is_none_or(|team| t == team))
                 && p.devices.iter().any(|d| d.eq_ignore_ascii_case(udid))
         })
-        .map(|p| p.expires)
-        .max()
+        .max_by_key(|p| p.expires)
+}
+
+pub fn wda_profile_expiry(profiles: &[Vec<u8>], team: Option<&str>, bundle: &str, udid: &str) -> Option<SystemTime> {
+    wda_profile(profiles, team, bundle, udid).map(|p| p.expires)
 }
 
 /// 一次请求的附带条件（来自请求里的 [`ictl_protocol::CANCEL_ON_CLOSE`]、[`ictl_protocol::EXPECT_UDID`]）
@@ -214,6 +217,10 @@ pub struct Snapshot {
 pub(crate) struct PerDevice {
     /// 这台手机上的 WDA 描述文件
     pub device_profile: DeviceProfile,
+    /// 那份描述文件里没有本机签名私钥的证书（Some(true)）：WDA 是别的机器、旧的数据目录签的，或本机的证书是后来才
+    /// 新建的。这时 WDA 起不来多半是签它的证书被吊销了，用本机的证书重签就好（[`Daemon::heal_certificate`]）。
+    /// None：不知道（没读到描述文件、本机还没签过名）
+    pub foreign_wda: Option<bool>,
     /// WDA 最近一次报的界面旋转及读取时间。只在短暂掉线时给 HID 使用，不持久化
     pub wda_rotation: Option<(Instant, Rotation)>,
     /// 开发者镜像连续挂载失败次数，到 3 次清缓存重新下载
@@ -223,6 +230,8 @@ pub(crate) struct PerDevice {
     /// 这台手机上 Home 先用 XCTest 的：上一次 IOHID 的没回到主屏、XCTest 的回到了（iPhone 18 Pro Max /
     /// iOS 27.2.1 上 IOHID 的 Home 基本不起作用）。iPhone 12 mini 正相反，所以按设备记，见 `tools::press_home`
     pub home_via_xctest: bool,
+    /// The orientation of the finger the web viewer is moving (`Request::Touch`), worked out when it touched down
+    pub touch_rotation: Option<Rotation>,
     pub apps: HashMap<bool, Vec<AppInfo>>,
     /// Log capture for `AppLogs` (developer tools), started by the first request
     pub log_capture: Option<crate::devtools::Capture>,
@@ -247,12 +256,6 @@ pub(crate) struct Inner {
     pub resigning: bool,
     pub wda_misses: Misses,
     pub backoff: Backoff,
-    pub mux: MuxWatch,
-    pub usbmuxd: Option<tokio::process::Child>,
-    pub usbmuxd_started: Option<Instant>,
-    /// usbmuxd 起来就退出时，下次重启不早于这个时间（退避）
-    pub usbmuxd_retry_at: Option<Instant>,
-    pub usbmuxd_delay: Duration,
     /// 连续列不出设备的次数（usbmuxd 抖一下不立刻当成离线）
     pub list_errors: u32,
     pub offline_since: Option<Instant>,
@@ -263,6 +266,11 @@ pub(crate) struct Inner {
     /// 滑动等列表停下时最后读到的树（[`crate::tools`] 的 `settle` 拿来当比较的起点）
     pub swiped_tree: Option<(Instant, ictl_wda::elements::Tree)>,
     pub dedup: Dedup,
+    /// 各设备最近一次因为证书自动重签的时间（按 UDID，换设备、重插也记着）：[`crate::supervise::CERT_HEAL_EVERY`] 内
+    /// 不再自动重签同一台，免得重签也治不好时反复签
+    pub cert_heals: HashMap<String, Instant>,
+    /// 本机的签名证书还在不在团队里，和查的时间（会话检查、自动重签前联网查；doctor 显示它，不在持锁时联网）
+    pub own_cert: Option<(Instant, bool)>,
     pub next_resign: Instant,
     pub next_session_check: Instant,
 }
@@ -358,17 +366,14 @@ impl Daemon {
             resigning: false,
             wda_misses: Misses::default(),
             backoff: Backoff::default(),
-            mux: MuxWatch::default(),
-            usbmuxd: None,
-            usbmuxd_started: None,
-            usbmuxd_retry_at: None,
-            usbmuxd_delay: Duration::ZERO,
             list_errors: 0,
             offline_since: Some(now),
             hid_used: None,
             elements_cache: None,
             swiped_tree: None,
             dedup: Dedup::default(),
+            cert_heals: HashMap::new(),
+            own_cert: None,
             // 启动一分钟后再做第一次重签检查和会话验证，先让设备就绪
             next_resign: now + Duration::from_secs(60),
             next_session_check: now + Duration::from_secs(90),
@@ -468,9 +473,14 @@ impl Daemon {
             g.dev.device_profile = DeviceProfile::Missing;
             return;
         };
+        g.dev.foreign_wda = None;
         g.dev.device_profile = match d.installed_profiles().await {
-            Ok(ps) => match wda_profile_expiry(&ps, g.persisted.team_id.as_deref(), &bundle, &d.udid) {
-                Some(t) => DeviceProfile::Expires(t.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs()),
+            Ok(ps) => match wda_profile(&ps, g.persisted.team_id.as_deref(), &bundle, &d.udid) {
+                Some(p) => {
+                    let keys = self.account().local_public_keys();
+                    g.dev.foreign_wda = (!keys.is_empty()).then(|| !p.signed_with_any(&keys));
+                    DeviceProfile::Expires(p.expires.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs())
+                }
                 None => DeviceProfile::Missing,
             },
             Err(e) => {
@@ -655,6 +665,7 @@ impl Daemon {
             Request::Swipe { from, to, seconds } => self.swipe(g, from, to, seconds).await,
             Request::TypeText { text, submit } => self.type_text(g, &text, submit).await,
             Request::PressButton { button } => self.press_button(g, &button).await,
+            Request::Touch { phase, x, y } => self.touch(g, phase, x, y).await,
             Request::ListApps { include_system } => self
                 .list_apps(g, include_system)
                 .await
@@ -700,19 +711,9 @@ impl Daemon {
     pub async fn shutdown(&self) {
         let mut g = self.inner.lock().await;
         self.log.log(ictl_l10n::log_tr!("收到停止信号,退出", "Received stop signal, exiting"));
-        // 先停 HID 媒体流、runner（经 usbmuxd），再停 usbmuxd
+        // 停 HID 媒体流、runner（经系统的 usbmuxd）
         self.drop_session(&mut g).await;
-        if let Some(mut c) = g.usbmuxd.take() {
-            stop_child(&mut c).await;
-        }
     }
-}
-
-/// Kills a child and waits for it, but not forever: a process stuck in the kernel (a USB call that never returns)
-/// doesn't exit on SIGKILL, and whoever is stopping it holds the device lock
-pub(crate) async fn stop_child(child: &mut tokio::process::Child) {
-    let _ = child.start_kill();
-    let _ = tokio::time::timeout(Duration::from_secs(5), child.wait()).await;
 }
 
 /// 参数检查（与设备无关，不必拿锁）
@@ -747,6 +748,7 @@ fn lane(req: &Request) -> Lane {
         | Request::Swipe { .. }
         | Request::TypeText { .. }
         | Request::PressButton { .. }
+        | Request::Touch { .. }
         | Request::ListApps { .. }
         | Request::LaunchApp { .. }
         | Request::TerminateApp { .. }
@@ -831,6 +833,9 @@ fn check_request(req: &Request) -> Result<(), String> {
                 "timeout can't exceed {} seconds",
                 MAX_WAIT_MS / 1000
             ));
+        }
+        Request::Touch { x, y, .. } if !x.is_finite() || !y.is_finite() => {
+            return Err(ictl_l10n::tr!("x、y 要是有效的数", "x and y must be valid numbers").into());
         }
         Request::WaitFor { text, .. } if text.is_empty() => {
             return Err(ictl_l10n::tr!("text 不能为空", "text can't be empty").into());

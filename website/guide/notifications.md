@@ -12,15 +12,23 @@
 | WDA 已恢复 | — |
 | 自动解锁失败已停用 | 见[自动解锁](./auto-unlock) |
 | 手机离线 / 恢复在线 | 检查数据线和主机 |
+| 签名证书换了（签名时新建了证书，可能还吊销了一张旧的） | 一般不用管：用旧证书签的设备，WDA 起不来时会自动重签；用同一个 Apple ID 的其他机器、其他侧载工具要在那边重签，见[常见问题](../troubleshoot/faq#cert) |
 
 不重复推送的规则：
 
 - 重签失败、Apple ID 会话失效：20 小时内不重复，问题还在的话 20 小时后再推。
 - 要输密码、手机离线：推一次，直到恢复。只有这两类有恢复推送（「WDA 已恢复」「已重新连上」）。
 - 自动解锁停用：推一次，`unlock-reset` 后才可能再推。
+- 签名证书换了：每次都推。
 - 这些记录只在内存里，守护进程重启后清空，还没解决的问题会再推一次。
 
 通知文字不带设备名，接着多台时用 `status` 看是哪台，见[多台设备](./multi-device)。
+
+## 设置
+
+最简单的是在引导里设：首次运行 `iphone-control` 时会问，以后运行 `iphone-control setup --reconfigure` 选「通知」。选 Bark 或 Telegram，填好后会发一条测试通知，并重启守护进程让设置生效。
+
+也可以手动写进[设置文件](./configuration#settings-file) `~/.config/iphone-control/env`，改完运行 `iphone-control service restart`。
 
 ## Bark
 
@@ -39,10 +47,10 @@ TG_CHAT_ID=你的chat id
 ## 测试
 
 ```bash
-docker exec iphone-control iphone-control notify-test            # 每类事件各发一条，标题带「[测试]」
-docker exec iphone-control iphone-control notify-test offline    # 只发一类：resign / session / pin / pin-recovered / unlock / offline / online
+iphone-control notify-test            # 每类事件各发一条，标题带「[测试]」
+iphone-control notify-test offline    # 只发一类：resign / session / pin / pin-recovered / unlock / offline / online / cert
 ```
 
-::: info 容器整个挂掉时发不了通知
-通知由守护进程发出。容器或主机宕机时需要宿主机侧的监控，本项目没有提供。
+::: info 守护进程整个挂掉时发不了通知
+通知由守护进程发出。守护进程崩溃后，后台服务会自动重启它；主机宕机时需要另外的监控，本项目没有提供。
 :::

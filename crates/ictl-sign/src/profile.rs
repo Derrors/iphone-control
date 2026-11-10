@@ -46,6 +46,13 @@ impl Profile {
     pub fn load(path: &std::path::Path) -> Option<Self> {
         Self::parse(&std::fs::read(path).ok()?)
     }
+
+    /// 描述文件里有没有这些公钥（[`crate::AccountDir::local_public_keys`]）之一的证书。描述文件列的是生成那一刻
+    /// 团队里所有有效的证书，所以「有」不等于是用它签的；「没有」则一定不是本机签的（别的机器、旧的数据目录签的，
+    /// 或本机的证书是后来才新建的）
+    pub fn signed_with_any(&self, keys: &[Vec<u8>]) -> bool {
+        self.certificates.iter().filter_map(|c| crate::certificate_public_key(c)).any(|k| keys.contains(&k))
+    }
 }
 
 fn find(hay: &[u8], needle: &[u8]) -> Option<usize> {

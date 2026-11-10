@@ -1,0 +1,22 @@
+# systemd user service installed by the iphone-control .deb package (/usr/lib/systemd/user/).
+# Each user turns it on for themselves:
+#   systemctl --user enable --now iphone-control
+#   sudo loginctl enable-linger "$USER"     # also start at boot without logging in
+# Settings: ~/.config/iphone-control/env (same format as /usr/share/doc/iphone-control/env.example).
+
+[Unit]
+Description=iphone-control daemon (iPhone over USB, MCP)
+After=network-online.target
+
+[Service]
+ExecStart=/usr/bin/iphone-control daemon
+EnvironmentFile=-%h/.config/iphone-control/env
+# memory freed after screenshots goes back to the system
+Environment=MALLOC_ARENA_MAX=2
+Restart=on-failure
+RestartSec=10
+# on stop it ends the phone's HID session and WDA first
+TimeoutStopSec=30
+
+[Install]
+WantedBy=default.target

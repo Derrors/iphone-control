@@ -39,7 +39,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      # 锁定工具链（与 Docker 构建镜像一致）：新版 clippy 的 lint 不会在代码没变时把 CI 弄挂
+      # 锁定工具链（与发布一致）：新版 clippy 的 lint 不会在代码没变时把 CI 弄挂
       - uses: dtolnay/rust-toolchain@1.99.1
         with:
           components: clippy, rustfmt
@@ -67,6 +67,49 @@ jobs:
       - run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
       - run: cargo test --workspace --all-features --locked
 
+  # 安装方式能用：deb 打得出、装得上；install.sh 过 shellcheck、真能从最新的 Release 装上；Homebrew formula 能生成
+  packages:
+    needs: [changes]
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.changes.outputs.code == 'true') }}
+    # 和发布的二进制同一个系统（glibc 2.35）
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@1.99.1
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: packages
+      - run: cargo build --release --locked -p iphone-control
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deb,cargo-about@0.9.3
+      # 第三方许可证清单（deb 里要带）：依赖里出现白名单（packaging/licenses/about.toml）以外的许可证时失败
+      - run: cargo about generate --locked -m apps/iphone-control/Cargo.toml -c packaging/licenses/about.toml packaging/licenses/about.hbs -o THIRD_PARTY_LICENSES.html
+      - name: Debian package installs
+        run: |
+          cargo deb -p iphone-control --no-build --output dist/iphone-control.deb
+          sudo apt-get update
+          sudo apt-get install -y ./dist/iphone-control.deb
+          dpkg -s iphone-control | grep -E '^(Version|Depends):'
+          dpkg -L iphone-control
+          test -x /usr/sbin/usbmuxd
+          test -f /usr/lib/systemd/user/iphone-control.service
+          grep -q '^ExecStart=/usr/bin/iphone-control daemon$' /usr/lib/systemd/user/iphone-control.service
+          iphone-control --version
+          sudo apt-get remove -y iphone-control
+      - name: install.sh
+        run: |
+          shellcheck -s sh install.sh
+          sh install.sh --no-service --prefix "$RUNNER_TEMP/ictl"
+          "$RUNNER_TEMP/ictl/bin/iphone-control" --version
+          sh install.sh --uninstall --prefix "$RUNNER_TEMP/ictl"
+          test ! -e "$RUNNER_TEMP/ictl/bin/iphone-control"
+      - name: Homebrew formula
+        run: |
+          shellcheck -s sh packaging/homebrew/formula.sh
+          sh packaging/homebrew/formula.sh v0.0.0 aaa bbb ccc > iphone-control.rb
+          ruby -c iphone-control.rb
+
   # Cargo.toml 声明的最低版本（rust-version）要真能编译
   msrv:
     runs-on: ubuntu-latest
@@ -85,18 +128,3 @@ jobs:
       - uses: gitleaks/gitleaks-action@v3
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-  image:
-    runs-on: ubuntu-latest
-    needs: [rust]
-    steps:
-      - uses: actions/checkout@v7
-      - uses: docker/setup-buildx-action@v4
-      # 只验证镜像能构建，不推送
-      - uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: docker/Dockerfile
-          push: false
-          cache-from: type=gha
-          cache-to: type=gha,mode=max

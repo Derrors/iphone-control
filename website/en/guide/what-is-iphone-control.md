@@ -24,9 +24,9 @@ It works as a set of [MCP](https://modelcontextprotocol.io) (Model Context Proto
 
 | | |
 |---|---|
-| Host | Linux, x86_64 or arm64: Docker (Compose v2), or Rust 1.88+ to build from source<br>macOS, Apple Silicon: prebuilt binary, or Rust 1.88+ to build from source, see [macOS](../deploy/macos) |
+| Host | Linux, x86_64 or arm64: one-command install, Homebrew or a .deb (Debian 12+, Ubuntu 22.04+), with the system usbmuxd; or build from source with Rust 1.88+<br>macOS, Apple Silicon: one-command install or Homebrew, or build from source, see [macOS](../deploy/macos)<br>No Windows |
 | Phone | iPhone or iPad, iOS 17 or later; the HID fallback needs iOS 27 or later |
-| Verified on | iPhone 15 Pro Max, iOS 27.0.1 (Linux, macOS)<br>iPhone 12 mini, iOS 26.4.1 (Linux)<br>iPad mini 5, iOS 26.6.1 (Linux, Docker) |
+| Verified on | iPhone 15 Pro Max, iOS 27.0.1 (Linux, macOS)<br>iPhone 12 mini, iOS 26.4.1 (Linux)<br>iPad mini 5, iOS 26.6.1 (Linux) |
 | Account | A free Apple ID; a dedicated one is recommended |
 
 Other models and iOS versions should work but are untested — [reports](https://github.com/Derrors/iphone-control/issues) are welcome.
@@ -49,13 +49,11 @@ The CLI, `doctor` output and MCP tool results are in Simplified Chinese by defau
 - The HID fallback needs iOS 27 or later. On older iOS everything goes through WebDriverAgent, and actions fail while it restarts.
 - Free Apple ID profiles last 7 days. Re-signing is automatic, but an expired Apple ID session needs `login`.
 - Apple ID logins use a public third-party anisette server by default; set `ICTL_ANISETTE_URL` to use your own, see [Configuration](./configuration).
-- The Docker container runs as root: it needs the USB device nodes and restarts its own usbmuxd after replugging.
 
 **macOS**
 
-- Apple Silicon only; Intel Macs are untested.
+- Prebuilt binaries are for Apple Silicon only; an Intel Mac needs a build from source and is untested.
 - The prebuilt binary isn't notarized; a copy downloaded with a browser needs its quarantine flag removed first.
-- The daemon runs in a terminal (no launchd configuration yet); no Docker (no USB passthrough).
 - Set the phone's charging limit to 100%: with the 80% limit, USB drops about once a minute.
 
 Other differences from Linux: [macOS known differences](../deploy/macos#known-differences).

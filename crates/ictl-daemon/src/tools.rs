@@ -13,7 +13,7 @@ use ictl_wda::{Launch, WdaClient, WdaError};
 use crate::core::{Daemon, Inner, drop_tunnel, hid_supported, wda_down};
 use crate::imaging::{self, fmt_g};
 use crate::notify::Event;
-use crate::protocol::{ALERT_BLOCKING, Response, TAP_MISSED};
+use crate::protocol::{ALERT_BLOCKING, Response, TAP_MISSED, TouchPhase};
 
 /// 锁屏后至少等这么久再自动解锁：锁屏过渡没走完就唤醒，WDA 第一下上滑卡约 16 秒后报 `point.x != INFINITY`
 pub(crate) const LOCK_SETTLE: Duration = Duration::from_secs(3);
@@ -78,7 +78,7 @@ impl Daemon {
             .screen
             .filter(|_| same)
             .or(self.cfg.screen_fallback)
-            .ok_or_else(|| ictl_l10n::tr!("WDA 不可用,也不知道屏幕尺寸;等 WDA 起来一次,或在 .env 里设 SCREEN_W/SCREEN_H", "WDA is unavailable and the screen size is unknown; wait for WDA to start once, or set SCREEN_W/SCREEN_H in .env").into())
+            .ok_or_else(|| ictl_l10n::tr!("WDA 不可用,也不知道屏幕尺寸;等 WDA 起来一次,或在 ~/.config/iphone-control/env 里设 SCREEN_W/SCREEN_H", "WDA is unavailable and the screen size is unknown; wait for WDA to start once, or set SCREEN_W/SCREEN_H in ~/.config/iphone-control/env").into())
     }
 
     /// 记下 WDA 报的界面旋转角：WDA 挂了以后 HID 点击要靠它换算横屏坐标（约 20 毫秒）
@@ -173,11 +173,14 @@ impl Daemon {
             .collect();
         let how = if self.cfg.udid.is_some() {
             ictl_l10n::tr!(
-                "(IPHONE_UDID 固定了设备,要换先改 .env)",
-                " (IPHONE_UDID pins the device; change .env to switch)"
+                "(IPHONE_UDID 固定了设备,要换先改 ~/.config/iphone-control/env)",
+                " (IPHONE_UDID pins the device; change ~/.config/iphone-control/env to switch)"
             )
         } else {
-            ictl_l10n::tr!(";用 iphone_select_device 切换", "; switch with iphone_select_device")
+            ictl_l10n::tr!(
+                ";用 iphone-control select 或 iphone_select_device 工具切换",
+                "; switch with iphone-control select or the iphone_select_device tool"
+            )
         };
         match (current, &pinned) {
             (None, Some(p)) => Some(ictl_l10n::trf!(
@@ -481,6 +484,71 @@ impl Daemon {
         })
         .await?;
         Ok(ictl_l10n::trf!("已点击 {pos}(经 HID)", "Tapped {pos} (via HID)"))
+    }
+
+    /// A finger following the web viewer's pointer, one HID report per call (see `Request::Touch`). The checks a
+    /// gesture needs (unlocking, the orientation) are done once, when it touches down; moves and the lift only send
+    /// their report on the open HID session, so the screen keeps up with the pointer
+    pub(crate) async fn touch(&self, g: &mut Inner, phase: TouchPhase, x: f64, y: f64) -> Result<String, String> {
+        let contact = match phase {
+            TouchPhase::Prepare => {
+                self.hid(g).await?;
+                g.hid_used = Some(Instant::now());
+                return Ok(String::new());
+            }
+            TouchPhase::Down => {
+                self.ensure_unlocked(g).await?;
+                // WDA knows which way the interface is turned (about 20 ms); without it, check with a screenshot
+                let rot = match self.wda(g) {
+                    Some(w) => w.rotation().await.ok(),
+                    None => None,
+                };
+                let rot = match rot {
+                    Some(r) => {
+                        g.dev.wda_rotation = Some((Instant::now(), r));
+                        r
+                    }
+                    None => self.hid_touch_rotation(g).await?,
+                };
+                g.dev.touch_rotation = Some(rot);
+                true
+            }
+            TouchPhase::Move => true,
+            TouchPhase::Up => false,
+        };
+        let Some(rot) = g.dev.touch_rotation else {
+            return Err(ictl_l10n::tr!("没有按下的手指,先发 down", "No finger is down; send down first").into());
+        };
+        if !contact {
+            g.dev.touch_rotation = None;
+        }
+        // the open session straight away: looking up the screen size for every move would cost a WDA request each
+        let open = g.tunnel.as_mut().and_then(|t| t.open_hid()).is_some();
+        let r = if open {
+            let h = g.tunnel.as_mut().and_then(|t| t.open_hid()).expect("checked above");
+            h.rotation = rot;
+            let r = h.touch(contact, x, y).await;
+            g.hid_used = Some(Instant::now());
+            match r {
+                Ok(()) => Ok(()),
+                Err(e) => {
+                    drop_tunnel(g).await;
+                    Err(ictl_l10n::trf!("HID 命令失败: {e}", "HID command failed: {e}"))
+                }
+            }
+        } else {
+            self.hid_do(g, move |h| {
+                Box::pin(async move {
+                    h.rotation = rot;
+                    h.touch(contact, x, y).await
+                })
+            })
+            .await
+        };
+        if r.is_err() {
+            g.dev.touch_rotation = None;
+        }
+        r.map(|()| String::new())
     }
 
     pub(crate) async fn tap_element(
@@ -841,15 +909,17 @@ pub(crate) fn hid_rotation(w: u32, h: u32, known: Option<(Duration, Rotation)>) 
 /// 两种按法各有设备不认：XCTest 的 home 在 iPhone 12 mini / iOS 26.4.1 上不起作用却报成功；IOHID 的 AC Home
 /// 在 iPhone 18 Pro Max / iOS 27.2.1 上基本不起作用（按住 0.05～0.5 秒都一样）。所以默认先 IOHID，
 /// `xctest_first` 时先 XCTest；[`HOME_SETTLE`] 内没回到主屏（或这一下报错）再换另一种补一次。
-/// 同时返回回到主屏的是不是 XCTest 那一下（都没回到为 `None`），调用方记下来，这台设备下次先用它
+/// 同时返回回到主屏的是不是 XCTest 那一下（都没回到为 `None`），调用方记下来，这台设备下次先用它。
+/// 两种都没回到主屏时，再用第一种补按一次：App 刚到前台、转场动画没走完时 iPadOS 会把两下都忽略
+/// （iPad mini 5 / iPadOS 26.6.1：启动 App 后马上按 Home，约三次有一次这样），转场完了再按就行
 async fn press_home(
     w: &mut WdaClient<DeviceTransport>,
     xctest_first: bool,
 ) -> Result<(String, Option<bool>), WdaError> {
     let mut app = String::new();
-    let order = if xctest_first { [false, true] } else { [true, false] };
+    let order = if xctest_first { [false, true, false] } else { [true, false, true] };
     for (i, via_hid) in order.into_iter().enumerate() {
-        let last = i == 1;
+        let last = i == order.len() - 1;
         let sent = if via_hid { w.press_home_hid().await } else { w.press_button("home").await };
         let (way, other) = if via_hid { ("IOHID", "XCTest") } else { ("XCTest", "IOHID") };
         match sent {

@@ -136,7 +136,7 @@ iphone-control mcp-config   # 打印 `claude mcp add` 命令，复制运行
 | `notify-test [事件]` | 发送测试通知 |
 | `mcp-config` | 打印注册 MCP 的命令 |
 | `wda-bridge [--port]` | 把 WebDriverAgent 桥接到 127.0.0.1 给别的工具用，用完就停 |
-| `viewer [--port]` | 在浏览器里看实时画面，并点击、滑动、输入，地址 127.0.0.1:8200；用完就停 |
+| `viewer [--port]` | 控制台页面，地址 127.0.0.1:8200：实时画面可直接点击、滑动、输入，设备面板，还能把任务交给本机的 Claude Code 或 Codex 执行；用完就停 |
 
 全部命令和参数见[命令行](https://derrors.github.io/iphone-control/guide/cli)。
 

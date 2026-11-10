@@ -59,6 +59,16 @@ How `iphone_app_logs` records:
 
 See [SECURITY.md](../SECURITY.md#developer-tools) before turning these tools on.
 
+## Tasks from the web viewer
+
+When `iphone-control viewer` runs an AI task, it starts the agent with this MCP server and two environment variables, `ICTL_AGENT_GATE` and `ICTL_AGENT_TOKEN`. With them set, every tool call is first reported to the viewer, which shows it as a step, holds it while the task is paused or the user has taken over, and refuses it once the task is stopped; the result (and the screenshot, if any) is reported back afterwards. One more tool is listed:
+
+| Tool | Parameters | Notes |
+|---|---|---|
+| `iphone_confirm` | `action`, `detail` | Asks the user on the page to confirm one step (paying, deleting, sending a message, changing account settings…) and waits for the answer. A normal result means approved; an error means rejected or the task ended, and the agent must not do the step |
+
+Without the variables, the tool list and every call are unchanged.
+
 ## Auto-unlock and "read-only" tools
 
 When auto-unlock is configured for the controlled device, a locked phone is unlocked first by the action tools and by `iphone_screenshot`, `iphone_list_elements` and `iphone_wait_for`. `iphone_status`, `iphone_list_apps`, `iphone_list_devices`, `iphone_select_device`, the developer tools and `iphone_press_button` with `lock` never unlock it. While WDA is unavailable nothing is unlocked.

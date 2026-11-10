@@ -41,6 +41,15 @@ pub fn default_socket() -> PathBuf {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TouchPhase {
+    Prepare,
+    Down,
+    Move,
+    Up,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum Request {
@@ -85,6 +94,16 @@ pub enum Request {
     },
     PressButton {
         button: String,
+    },
+    /// A finger that follows the pointer in the web viewer: `down` touches at the point, `move` drags it there, `up`
+    /// lifts it there; `prepare` only opens the HID session, so the first touch doesn't wait for it. Over CoreDevice
+    /// HID (iOS 27 and later), one report each, so the screen moves while the pointer does
+    Touch {
+        phase: TouchPhase,
+        #[serde(default)]
+        x: f64,
+        #[serde(default)]
+        y: f64,
     },
     ListApps {
         include_system: bool,
@@ -216,6 +235,7 @@ impl Request {
             | Self::Swipe { .. }
             | Self::TypeText { .. }
             | Self::PressButton { .. }
+            | Self::Touch { .. }
             | Self::LaunchApp { .. }
             | Self::TerminateApp { .. }
             | Self::OpenUrl { .. }

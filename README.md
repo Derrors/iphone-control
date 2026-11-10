@@ -136,7 +136,7 @@ Run them as `docker exec -it iphone-control iphone-control <command>`, or direct
 | `notify-test [event]` | Send test notifications |
 | `mcp-config` | Print the command that registers the MCP server |
 | `wda-bridge [--port]` | Expose WebDriverAgent on 127.0.0.1 for other tools; stop it when done |
-| `viewer [--port]` | Watch the screen live in a browser and tap, swipe and type on it, on 127.0.0.1:8200; stop it when done |
+| `viewer [--port]` | Control page on 127.0.0.1:8200: live screen you can tap, swipe and type on, device panel, and AI tasks run by a local Claude Code or Codex; stop it when done |
 
 All commands and options: [CLI reference](https://derrors.github.io/iphone-control/en/guide/cli).
 

@@ -223,6 +223,8 @@ pub(crate) struct PerDevice {
     /// 这台手机上 Home 先用 XCTest 的：上一次 IOHID 的没回到主屏、XCTest 的回到了（iPhone 18 Pro Max /
     /// iOS 27.2.1 上 IOHID 的 Home 基本不起作用）。iPhone 12 mini 正相反，所以按设备记，见 `tools::press_home`
     pub home_via_xctest: bool,
+    /// The orientation of the finger the web viewer is moving (`Request::Touch`), worked out when it touched down
+    pub touch_rotation: Option<Rotation>,
     pub apps: HashMap<bool, Vec<AppInfo>>,
     /// Log capture for `AppLogs` (developer tools), started by the first request
     pub log_capture: Option<crate::devtools::Capture>,
@@ -655,6 +657,7 @@ impl Daemon {
             Request::Swipe { from, to, seconds } => self.swipe(g, from, to, seconds).await,
             Request::TypeText { text, submit } => self.type_text(g, &text, submit).await,
             Request::PressButton { button } => self.press_button(g, &button).await,
+            Request::Touch { phase, x, y } => self.touch(g, phase, x, y).await,
             Request::ListApps { include_system } => self
                 .list_apps(g, include_system)
                 .await
@@ -747,6 +750,7 @@ fn lane(req: &Request) -> Lane {
         | Request::Swipe { .. }
         | Request::TypeText { .. }
         | Request::PressButton { .. }
+        | Request::Touch { .. }
         | Request::ListApps { .. }
         | Request::LaunchApp { .. }
         | Request::TerminateApp { .. }
@@ -831,6 +835,9 @@ fn check_request(req: &Request) -> Result<(), String> {
                 "timeout can't exceed {} seconds",
                 MAX_WAIT_MS / 1000
             ));
+        }
+        Request::Touch { x, y, .. } if !x.is_finite() || !y.is_finite() => {
+            return Err(ictl_l10n::tr!("x、y 要是有效的数", "x and y must be valid numbers").into());
         }
         Request::WaitFor { text, .. } if text.is_empty() => {
             return Err(ictl_l10n::tr!("text 不能为空", "text can't be empty").into());

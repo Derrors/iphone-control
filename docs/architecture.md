@@ -44,7 +44,9 @@
 
 - MCP 进程由 `docker exec -i`（从源码运行时直接调用二进制）拉起，短命且可能同时有多个；设备连接（尤其是 HID 需要的显示媒体流、WDA 的 XCTest 会话）只能有一个持有者。
 - 不开 TCP 端口，避免重蹈 `ios forward` 监听所有网卡的覆辙。WDA 本身也通过 idevice 的 provider 直连设备端口，**本机不再监听 8100**。如需给外部工具用，`iphone-control wda-bridge` 显式开启，只绑 127.0.0.1，且只转发 Host 头是 `localhost`/`127.0.0.1`/`[::1]` 的请求（挡住 DNS rebinding）。注意容器用 host 网络，**本机的任何用户都能连上 bridge**，而 WDA 没有认证，用完就停。
-- `iphone-control viewer` 同样显式开启、只绑 127.0.0.1、检查 Host 头：页面看 WDA 的 MJPEG 流（手机上的 9100 端口，经 usbmuxd，只读）；点击、滑动、输入、按键是 POST，还要检查 `Origin` 是页面本身、内容类型是 JSON，然后作为普通请求发给守护进程，和 agent 的调用排队、自动解锁。它绑定启动时正在控制的设备：每个操作带上这台的 UDID，守护进程控制的不是这台就拒绝。
+- `iphone-control viewer` 同样显式开启、只绑 127.0.0.1、检查 Host 头：页面看 WDA 的 MJPEG 流（手机上的 9100 端口，经 usbmuxd，只读）；点击、滑动、输入、按键是 POST，还要检查 `Origin` 是页面本身、内容类型是 JSON，然后作为普通请求发给守护进程，和 agent 的调用排队、自动解锁。它跟着页面上选的设备（启动时是正在控制的那台，页面上 `select` 后换成新的那台）：每个操作带上这台的 UDID，守护进程控制的不是这台就拒绝。
+- viewer 的画面像触摸屏：iOS 27 起按下、移动、松开各发一个 `Request::Touch`（`prepare`/`down`/`move`/`up`），守护进程在已开的 HID 会话上发一个 touchscreen 报告（约 2 毫秒）；解锁、核对方向只在 `down` 时做一次。页面一次只发一个请求，没发出去的移动只留最新的一个，按住不动时每 100 毫秒再报一次位置。滚轮、触控板换成同样的手指拖动。iOS 27 以下松开后发整段手势（WDA）。画面的 MJPEG 流在 `WdaClient::fast_stream` 下是每秒 60 帧、75% 尺寸。页面的文字中英两套，请求带 `X-Ictl-Lang`，viewer 在这种语言下处理，AI 任务记下开始时的语言。
+- viewer 的 AI 任务（`agent.rs`）：页面上写的任务交给本机的 Claude Code（`claude -p --output-format stream-json`，`--tools ""`、`--strict-mcp-config`，只有 iphone 的 MCP 工具）或 Codex（`codex exec --json`，只读沙箱，`-c` 挂上 iphone 的 MCP 服务），作为子进程（单独的进程组，停止时整组结束）。它的 MCP 服务带上环境变量 `ICTL_AGENT_GATE`（viewer 在控制接口旁边监听的 Unix socket `viewer-<端口>.sock`，0600）和 `ICTL_AGENT_TOKEN`（这个任务的口令），于是每次工具调用前先问 viewer（`ictl_mcp::gate`）：记成任务的一步、暂停或用户接管时挂住、任务停了就拒绝；调用后把结果和截图报回去；另外多列一个 `iphone_confirm`，等用户在页面上同意或拒绝。所以步骤、暂停、接管、确认都在 iphone-control 这一层，和用哪种 agent 无关；agent 自己的输出只取它说的话（挂到下一步上）和最后的总结。Codex 对标了 destructive 的 MCP 工具默认要审批，非交互运行时会全部拒绝，所以给这个服务设 `default_tools_approval_mode="approve"`，由 `iphone_confirm` 把关。页面按 SSE 收任务事件（`step`/`confirm`/`state`/`done`），重连时先重放；同一时间只有一个任务，任务执行中（没有接管时）viewer 拒绝页面的手动操作。
 
 ### 并发模型
 
@@ -113,7 +115,7 @@
 | `ictl-unlock` | 锁屏密码键盘定位、逐位输入并核对密码栏、从第 2 位起先写停用标记 | `ictl-wda` |
 | `ictl-daemon` | `core`（共享状态、请求分发、快照）、`supervise`（巡检、usbmuxd 看护、后台启动 WDA、重签、会话检查）、`tools`（工具的实现、HID 后备）、`devtools`（日志采集、崩溃报告、安装、卸载）、`web`（Web Inspector 工具，保留一条连接复用）、`devices`（列出、选择设备）、`doctor`；通知（Bark/Telegram）、截图缩放/裁剪、控制接口服务端 | 以上全部、`tokio`、`reqwest`、`image` |
 | `ictl-mcp` | MCP stdio 服务，`iphone_*` 工具 17 个，开启开发者工具后 23 个：toolkit 的 13 个 + `iphone_wait_for`、`iphone_batch`、`iphone_list_devices`、`iphone_select_device`，以及 6 个可选的开发者工具（D13）；操作类工具可带 `then` 顺带返回操作后的界面；经控制接口调用守护进程 | `ictl-protocol`、`ictl-l10n`、`rmcp`（`server`、`transport-io`） |
-| `apps/iphone-control` | CLI 入口：`daemon`、`mcp`、`mcp-config`、`status`、`doctor`、`setup`、`login`、`sign`、`resign`、`passcode`、`unlock-reset`、`devices`、`select`、`wda-bridge`、`viewer`（`viewer.rs`：本机网页看实时画面并操作）、`notify-test`；隐藏的 `debug <ddi\|hid\|screenshot\|soak\|wda\|e2e>` 真机诊断（原第 0 步 spike，不经守护进程；feature `debug-cmds`，默认不编译） | `clap` |
+| `apps/iphone-control` | CLI 入口：`daemon`、`mcp`、`mcp-config`、`status`、`doctor`、`setup`、`login`、`sign`、`resign`、`passcode`、`unlock-reset`、`devices`、`select`、`wda-bridge`、`viewer`（`viewer.rs`：本机控制台网页，实时画面、设备面板；`agent.rs`：页面上的 AI 任务，`viewer.html` 是页面）、`notify-test`；隐藏的 `debug <ddi\|hid\|screenshot\|soak\|wda\|e2e>` 真机诊断（原第 0 步 spike，不经守护进程；feature `debug-cmds`，默认不编译） | `clap` |
 
 依赖方向：`apps` → `ictl-daemon` / `ictl-mcp`，还直接依赖 `ictl-device`、`ictl-sign`；`ictl-daemon` → `ictl-unlock` → `ictl-wda` → `ictl-device`；`ictl-daemon` 还直接依赖 `ictl-webinspector`、`ictl-sign` 和 `ictl-protocol`。`ictl-device` 也依赖 `ictl-webinspector`（打开连接）。`ictl-mcp` 只依赖 `ictl-protocol` 和 `ictl-l10n`，不依赖守护进程和设备层。`ictl-l10n` 不依赖其他 crate，除 `ictl-webinspector` 外都用它。`apps` 的 `debug`（feature `debug-cmds`）直接调用 `ictl-device`、`ictl-wda`。
 

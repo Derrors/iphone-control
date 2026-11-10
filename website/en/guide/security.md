@@ -12,7 +12,7 @@ This page has the essentials. What is stored, who can reach it and the details o
 
 ## Built-in protections
 
-- **No network ports.** WDA is reached through usbmuxd. `wda-bridge` and the live `viewer` are explicit opt-ins that bind 127.0.0.1 only, and other web pages in your browser can't act through them. They have no login, though: every local user can use them, so stop them when done.
+- **No network ports.** WDA is reached through usbmuxd. `wda-bridge` and the live `viewer` are explicit opt-ins that bind 127.0.0.1 only, and other web pages in your browser can't act through them. They have no login, though: every local user can use them, including starting AI tasks from the viewer, so stop them when done.
 - **Not privileged**: the container only gets USB character devices.
 - **Auto-unlock is off by default** and disables itself after one wrong attempt.
 - **Developer tools are off by default.**

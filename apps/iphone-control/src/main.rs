@@ -12,6 +12,7 @@ use clap::{Parser, Subcommand};
 use ictl_daemon::config::env as env_nonempty;
 use ictl_daemon::protocol::{self, Request, Response};
 
+mod agent;
 #[cfg(feature = "debug-cmds")]
 mod debug;
 mod viewer;
@@ -78,7 +79,7 @@ enum Command {
         #[arg(long, default_value_t = 8100)]
         port: u16,
     },
-    #[command(about = ictl_l10n::tr!("在浏览器里看实时画面并操作手机：只开在 127.0.0.1，点击、滑动、输入和按键都经守护进程（默认不监听任何端口）", "Watch and control the phone live in a browser: serves 127.0.0.1 only, taps, swipes, typing and buttons go through the daemon (by default no port is opened)"))]
+    #[command(about = ictl_l10n::tr!("浏览器里的控制台：实时画面上直接操作手机、看设备状态，把任务交给本机的 Claude Code 或 Codex 执行。只开在 127.0.0.1，操作都经守护进程（默认不监听任何端口）", "Control page in a browser: act on the live screen, see the device's state, and hand tasks to a local Claude Code or Codex. Serves 127.0.0.1 only, every action goes through the daemon (by default no port is opened)"))]
     Viewer {
         #[arg(long, default_value_t = 8200)]
         port: u16,

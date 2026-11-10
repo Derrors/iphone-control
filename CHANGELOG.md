@@ -6,6 +6,20 @@ All notable changes to this project are documented here. The format is based on 
 
 ## [Unreleased]
 
+### Added
+
+- AI tasks in the live viewer: type a task on the page and a local agent (Claude Code or Codex, picked on the page) carries it out on the phone through the MCP tools, while the page shows each step with what the agent says it is doing, the result and screenshots, and marks where it taps. Pause, resume, take over (act on the phone yourself) and hand back, or stop. Before paying, deleting, sending a message or changing account settings the agent asks on the page (`iphone_confirm`) and waits; a rejected step isn't done. The steps, holds and confirmations go through `iphone-control mcp` itself, so they work the same with either agent; the agent runs with only the phone tools (no shell or file tools for Claude Code, a read-only sandbox for Codex).
+
+### Changed
+
+- New viewer page: AI assistant, live screen with zoom, and a device panel with state and readiness checks, installed apps (launch, quit, open a URL) and on-screen elements (highlight on the picture, tap by name, wait for text). The device can be switched from the page, and the picture follows. While an AI task runs, manual actions are refused until you take over.
+- On iOS 27 and later the viewer's picture works like a touchscreen: pressing, moving and releasing the mouse moves a finger on the phone as you go (over CoreDevice HID), so a list scrolls while you drag, and the mouse wheel or trackpad scrolls the page under the pointer without holding the button. A tap round trip is about 20 ms instead of about 530 ms, and a drag no longer waits for the list to stop (1.8 to 3 s before). Older iOS versions keep whole gestures sent on release. While the viewer is used, the HID session's screen stream keeps the phone awake, until 30 seconds after the last touch.
+- The live picture runs at about 50 frames a second at 75% size (WDA's default was 10 at full size).
+- The viewer page is in English or Chinese: it follows `IPHONE_CONTROL_LANG`, and a button switches it. The daemon's messages and the AI task (instructions, tool results) use the page's language.
+- The viewer's task history shows one plain sentence per step (what the agent said it is doing, or a description of the action), without screenshots, tool names, parameters or raw results; a step that didn't work says so. Screenshots are no longer passed from the agent's tools to the viewer.
+- The viewer no longer draws marks for your own taps and swipes, and no longer shows a message for each successful manual action; errors are still shown.
+- The viewer serves more read-only JSON (`/api/daemon`, `/status`, `/devices`, `/apps`, `/elements`) and refuses reads that a browser marks as sent by another site (`Sec-Fetch-Site`), since reading elements can unlock the phone.
+
 ### Fixed
 
 - `lock` no longer takes about 10 seconds on newer iPhones: the power key is pressed for 0.1 s instead of held for 0.5 s, which an iPhone 18 Pro Max (iOS 27.2.1) ignored, so every lock fell through to WebDriverAgent's slower lock and logged a timeout.

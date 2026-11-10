@@ -13,7 +13,7 @@ use ictl_wda::{Launch, WdaClient, WdaError};
 use crate::core::{Daemon, Inner, drop_tunnel, hid_supported, wda_down};
 use crate::imaging::{self, fmt_g};
 use crate::notify::Event;
-use crate::protocol::{ALERT_BLOCKING, Response, TAP_MISSED};
+use crate::protocol::{ALERT_BLOCKING, Response, TAP_MISSED, TouchPhase};
 
 /// 锁屏后至少等这么久再自动解锁：锁屏过渡没走完就唤醒，WDA 第一下上滑卡约 16 秒后报 `point.x != INFINITY`
 pub(crate) const LOCK_SETTLE: Duration = Duration::from_secs(3);
@@ -481,6 +481,71 @@ impl Daemon {
         })
         .await?;
         Ok(ictl_l10n::trf!("已点击 {pos}(经 HID)", "Tapped {pos} (via HID)"))
+    }
+
+    /// A finger following the web viewer's pointer, one HID report per call (see `Request::Touch`). The checks a
+    /// gesture needs (unlocking, the orientation) are done once, when it touches down; moves and the lift only send
+    /// their report on the open HID session, so the screen keeps up with the pointer
+    pub(crate) async fn touch(&self, g: &mut Inner, phase: TouchPhase, x: f64, y: f64) -> Result<String, String> {
+        let contact = match phase {
+            TouchPhase::Prepare => {
+                self.hid(g).await?;
+                g.hid_used = Some(Instant::now());
+                return Ok(String::new());
+            }
+            TouchPhase::Down => {
+                self.ensure_unlocked(g).await?;
+                // WDA knows which way the interface is turned (about 20 ms); without it, check with a screenshot
+                let rot = match self.wda(g) {
+                    Some(w) => w.rotation().await.ok(),
+                    None => None,
+                };
+                let rot = match rot {
+                    Some(r) => {
+                        g.dev.wda_rotation = Some((Instant::now(), r));
+                        r
+                    }
+                    None => self.hid_touch_rotation(g).await?,
+                };
+                g.dev.touch_rotation = Some(rot);
+                true
+            }
+            TouchPhase::Move => true,
+            TouchPhase::Up => false,
+        };
+        let Some(rot) = g.dev.touch_rotation else {
+            return Err(ictl_l10n::tr!("没有按下的手指,先发 down", "No finger is down; send down first").into());
+        };
+        if !contact {
+            g.dev.touch_rotation = None;
+        }
+        // the open session straight away: looking up the screen size for every move would cost a WDA request each
+        let open = g.tunnel.as_mut().and_then(|t| t.open_hid()).is_some();
+        let r = if open {
+            let h = g.tunnel.as_mut().and_then(|t| t.open_hid()).expect("checked above");
+            h.rotation = rot;
+            let r = h.touch(contact, x, y).await;
+            g.hid_used = Some(Instant::now());
+            match r {
+                Ok(()) => Ok(()),
+                Err(e) => {
+                    drop_tunnel(g).await;
+                    Err(ictl_l10n::trf!("HID 命令失败: {e}", "HID command failed: {e}"))
+                }
+            }
+        } else {
+            self.hid_do(g, move |h| {
+                Box::pin(async move {
+                    h.rotation = rot;
+                    h.touch(contact, x, y).await
+                })
+            })
+            .await
+        };
+        if r.is_err() {
+            g.dev.touch_rotation = None;
+        }
+        r.map(|()| String::new())
     }
 
     pub(crate) async fn tap_element(

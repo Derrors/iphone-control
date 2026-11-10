@@ -1,6 +1,6 @@
 # 必须覆盖的回归用例
 
-#1～#34 来自 toolkit 和本项目早期实际踩过的坑，#35～#45 是多设备和 HID 横屏，#46～#58 是实时画面、开发者工具和英文界面，#59 起是 iPhone 18 Pro Max（iOS 27.2.1）真机全量测试发现的问题。能单测的写单测，不能单测的进真机回归清单：改了设备、时序、WDA 相关的代码，要在真机上重跑相关的用例，并在 PR 里写明跑了哪些、用什么设备和 iOS 版本。
+#1～#34 来自 toolkit 和本项目早期实际踩过的坑，#35～#45 是多设备和 HID 横屏，#46～#58 是实时画面、开发者工具和英文界面，#59～#63 是 iPhone 18 Pro Max（iOS 27.2.1）真机全量测试发现的问题，#64 起是 viewer 的 AI 任务和新页面。能单测的写单测，不能单测的进真机回归清单：改了设备、时序、WDA 相关的代码，要在真机上重跑相关的用例，并在 PR 里写明跑了哪些、用什么设备和 iOS 版本。
 
 | # | 坑 | 正确行为 | 测试方式 |
 |---|---|---|---|
@@ -67,3 +67,16 @@
 | 61 | 点击、长按用 0.2 秒的动画冷却：界面上一直有动画时（键盘弹着）WDA 要约 26 秒才返回（同 `NO_COOL_OFF` 注释里滑动的情况） | 点击、长按和滑动一样用冷却 0（`IdleSettings::NO_COOL_OFF`）；解锁仍用 `QUICK` | 单测（`tap_is_one_gesture_with_quick_waits_then_restores_baseline`）+ 真机计时（设置里搜索后点结果：26 秒 → 1.4 秒；主屏点图标、App 里切标签不变慢） |
 | 62 | 网页检查器没开时手机直接断开 Web Inspector 连接，工具只报一句 TLS 错误 | 连接被手机断开时提示打开 设置 → Safari → 高级 → 网页检查器 | 单测（`a_closed_connection_points_at_the_web_inspector_setting`）+ 真机（开关关着时调 `iphone_web_targets`） |
 | 63 | 不带调试消息的日志流里仍有 Info 级别的条目，和 `iphone_app_logs` 的说明不符 | 采集时丢掉 Info、Debug | 单测（`info_and_debug_entries_are_not_kept`）+ 真机 |
+| 64 | Codex 对标了 destructiveHint 的 MCP 工具默认要审批，`codex exec` 非交互运行时直接拒绝（「requires approval, but approval policy is never」），点击、滑动全都做不了 | 给 iphone 这个 MCP 服务设 `default_tools_approval_mode="approve"`，由 `iphone_confirm` 把关 | 真机（Codex 任务里点击、按名字点都执行了） |
+| 65 | viewer 已经停了、任务已经停了，agent 的 MCP 服务还在继续操作手机 | 闸门连不上或任务已结束一律拒绝，并告诉 agent 停下 | 单测（`a_gate_nobody_listens_on_refuses`、`a_stopped_task_refuses_everything`）+ 真机（任务中途停止，之后没有新步骤，agent 进程组已结束） |
+| 66 | 暂停只挡住了界面上的按钮，agent 照样继续点 | 暂停、接管、等确认时，下一个工具调用在闸门处挂住，恢复后才放行 | 单测（`a_paused_task_holds_the_call_until_resumed`）+ 真机（暂停 8 秒没有新步骤） |
+| 67 | 用户接管时动过手机，交还后 agent 按旧的界面接着点 | 交还后第一个不是看屏幕的调用被拒，让它先截图 | 单测（`after_a_takeover_the_agent_looks_again_before_acting`）+ 真机（交还后先截图） |
+| 68 | 用户拒绝确认后 agent 正常结束，页面显示「已完成」 | 有被拒绝的一步就按「已停止」结束 | 单测（`a_rejected_confirmation_tells_the_agent_not_to_do_it`）+ 真机（拒绝删除世界时钟城市，没有删） |
+| 69 | 按结果文字里的 `@(x,y)` 给所有步骤画点击标记，读元素的一步也被标成点击 | 只给 `iphone_tap_element` 的结果解析点击位置 | 单测（`only_a_tap_by_text_gets_a_mark_from_its_result`） |
+| 70 | 其他网站用 `<img src="http://127.0.0.1:8200/api/elements">` 触发读元素，顺带自动解锁手机 | 浏览器标明 `Sec-Fetch-Site` 不是 same-origin / none 的读请求一律 403 | 单测（`reads_from_other_sites_are_refused`）+ curl |
+| 71 | AI 任务执行中，用户在页面上点击和 agent 同时操作 | 没有接管时 viewer 拒绝手动操作（409 并说明），页面也锁住 | 真机（任务中 `/api/tap` 被拒，接管后按 Home 生效） |
+| 72 | 设计稿在 1024×768 下横向溢出 26px：中间栏各行按内容最小宽度把栏撑出窗口 | 中间栏各行 `min-width: 0`；两栏区间「设备面板」只留图标；状态标签先让出空间 | Playwright：360×800 到 1920×1080 共 11 个视口横向溢出都是 0 |
+| 73 | viewer 的手动操作走 WDA：点击约 530 毫秒，滑动要等列表停下（1.8～3 秒），松开鼠标后才滑，画面不跟手 | iOS 27 起经 HID 实时发按下、移动、松开（`Request::Touch`），移动只发最新位置；滚轮换成手指拖动 | 单测（`page_actions_map_to_daemon_requests`）+ 真机（iPhone 18 Pro Max / iOS 27.2.1：移动约 2 毫秒，点击约 20 毫秒；拖动、滚轮滚动设置列表，点击进入「通用」，按住 1 秒出主屏菜单） |
+| 74 | 每次 HID 触摸前截图核对方向（几百毫秒），实时移动跟不上 | 只在 `down` 时核对一次（有 WDA 时读它的旋转角），移动、抬起直接用已开的会话 | 真机计时 |
+| 75 | WDA 的 MJPEG 默认每秒 10 帧，画面比操作慢 | 每秒 60 帧、75% 尺寸（`fast_stream`）；只在有客户端时采集 | 真机：约 48 fps、34 KB/帧，读元素树不变慢 |
+| 76 | viewer 页面只有中文 | 页面文字中英两套（`tr()`），默认跟着 `IPHONE_CONTROL_LANG`，可切换；请求带 `X-Ictl-Lang`，守护进程的提示和 AI 任务用同一种语言 | 单测（`the_page_says_its_default_language`）+ Playwright（英文页面除切换按钮和手机上的数据外没有中文；360×800 到 1920×1080 中英文都没有横向溢出）+ 真机（英文 AI 任务） |

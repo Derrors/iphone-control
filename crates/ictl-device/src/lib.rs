@@ -580,6 +580,11 @@ impl Tunnel {
         self.hid.is_some()
     }
 
+    /// The HID session if it is already open (no request to the phone)
+    pub fn open_hid(&mut self) -> Option<&mut HidSession> {
+        self.hid.as_mut()
+    }
+
     /// 停掉 HID 会话（含屏幕媒体流），隧道保留
     pub async fn close_hid(&mut self) {
         if let Some(h) = self.hid.take() {

@@ -382,6 +382,8 @@ impl Daemon {
                 if g.info.as_ref().is_some_and(|i| i.product_type.starts_with("iPhone")) {
                     client.keep_stream_upright();
                 }
+                // the live viewer's picture at 60 fps, so it follows the pointer (see `WdaClient::fast_stream`)
+                client.fast_stream();
                 g.wda = Some(client);
                 // 状态在下面 online() 的健康检查里变成 Ready
             }

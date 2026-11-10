@@ -8,7 +8,9 @@ use std::time::Duration;
 
 use idevice::{
     ReadWrite, RsdService,
-    core_device::hid::{ButtonState, IndigoHidClient, UniversalHidServiceClient},
+    core_device::hid::{
+        ButtonState, IndigoHidClient, TOUCHSCREEN_STATE_CONTACT, TOUCHSCREEN_STATE_RELEASE, UniversalHidServiceClient,
+    },
     rsd::RsdHandshake,
     tcp::handle::AdapterHandle,
 };
@@ -167,6 +169,18 @@ impl HidSession {
         let d = Duration::from_secs_f64(seconds.max(0.0) + 10.0);
         limit(ictl_l10n::tr!("HID 拖动", "HID drag"), d, async {
             Ok(self.touch.drag(x1, y1, x2, y2, steps, 20).await?)
+        })
+        .await
+    }
+
+    /// One sample of a finger that follows the user's pointer (the web viewer): `contact` true puts the finger at the
+    /// point (the first one touches down, later ones move it), false lifts it there. iOS works out taps, long presses
+    /// and the speed of a swipe from these samples and their timing, the same way as from a real finger
+    pub async fn touch(&mut self, contact: bool, x: f64, y: f64) -> Result<()> {
+        let (hx, hy) = self.hid_point((x, y));
+        let state = if contact { TOUCHSCREEN_STATE_CONTACT } else { TOUCHSCREEN_STATE_RELEASE };
+        limit(ictl_l10n::tr!("HID 触摸", "HID touch"), Duration::from_secs(5), async {
+            Ok(self.touch.send_touchscreen(state, hx, hy, None).await?)
         })
         .await
     }

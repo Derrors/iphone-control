@@ -16,7 +16,7 @@ agent 用 `iphone_list_devices` 和 `iphone_select_device`，效果一样。
 
 - 只能选 USB 上接着的设备。先比 UDID，再比设备名；设备名包含这段文字且只有一台时也行，对上多台就报错，要用 UDID 指定。
 - 切换后 WDA 要 10~60 秒才起来，先用 `status`（或 `iphone_status`）确认就绪。没装过 WDA 的设备要先[安装](#给新设备安装)。
-- `iphone-control viewer` 绑定启动时正在控制的设备：切换到别的设备后，它的操作会被拒绝，要重新运行才能看和操作新设备。
+- `iphone-control viewer` 跟着页面上选的设备。在别处用 `select` 或 `iphone_select_device` 换了设备后，它的操作会被拒绝，在页面上方重新选一下设备即可。AI 任务执行中不能切换设备。
 
 ## 控制哪一台
 

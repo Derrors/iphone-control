@@ -19,7 +19,7 @@
 
 - **决定**：用 idevice 的 provider 直连设备端口访问 WDA；外部工具需要时显式开 bridge，只绑 127.0.0.1。
 - **理由**：WDA 没有认证；toolkit 早期用 `ios forward` 监听了所有网卡，局域网内任何人都能控制手机。
-- **补充**：`iphone-control viewer` 用同样的保护模型（显式开启、只绑 127.0.0.1、检查 `Host`），另加操作的 `Origin` 和 JSON 内容类型检查，并绑定启动时正在控制的设备。
+- **补充**：`iphone-control viewer` 用同样的保护模型（显式开启、只绑 127.0.0.1、检查 `Host`），另加操作的 `Origin` 和 JSON 内容类型检查、读接口的 `Sec-Fetch-Site` 检查，并只作用于页面跟着的那台设备。它的 AI 任务不开新端口：agent 的 MCP 服务经控制接口旁边的 Unix socket（0600，每个任务一个口令）回报 viewer。
 
 ## D4：WDA 仍然是 Objective-C，在 macOS CI 上编译
 

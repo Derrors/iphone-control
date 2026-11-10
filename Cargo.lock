@@ -2278,11 +2278,13 @@ dependencies = [
  "ictl-mcp",
  "ictl-sign",
  "ictl-wda",
+ "libc",
  "rustls",
  "serde_json",
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]

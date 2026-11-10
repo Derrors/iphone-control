@@ -92,9 +92,9 @@ if [ "$UNINSTALL" = 1 ]; then
   if [ "$OS" = Darwin ]; then
     rm -f "$PLIST"
   elif [ -f "$UNIT" ]; then
-    has_systemd_user && systemctl --user disable iphone-control 2>/dev/null || true
+    if has_systemd_user; then systemctl --user disable iphone-control 2>/dev/null || true; fi
     rm -f "$UNIT"
-    has_systemd_user && systemctl --user daemon-reload || true
+    if has_systemd_user; then systemctl --user daemon-reload || true; fi
   fi
   rm -f "$BIN"
   say "已卸载 iphone-control。数据还在 ~/.local/share/iphone-control（Apple ID 会话、签名、配对信息），不需要的话自己删除；手机上的 WebDriverAgent 在手机上删除。" \

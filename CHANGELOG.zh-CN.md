@@ -6,8 +6,25 @@
 
 ## [Unreleased]
 
+### 升级注意事项
+
+- 不再发布 Docker：ghcr 上不再有镜像，也没有 `compose.yaml`。请改用一行命令的 `install.sh`、Homebrew 或 `.deb`（见「新增」）。先停掉容器（`docker compose down`），免得它占着手机。
+- 原来的数据在容器挂的卷里（`compose.yaml` 旁边的 `./data`，属于 root）。第一次运行前把它拷到 `~/.local/share/iphone-control` 并改成自己的（`sudo cp -a ./data ~/.local/share/iphone-control && sudo chown -R "$(id -un)": ~/.local/share/iphone-control`，见[数据与备份](https://derrors.github.io/iphone-control/deploy/backup)），Apple ID 会话、签好的 WebDriverAgent 和自动解锁密码就都还在。配对记录现在由系统的 usbmuxd 保存，手机可能会再问一次是否信任这台电脑。
+- 设置从 `.env` 搬到 `~/.config/iphone-control/env`（同样是 `KEY=value`，权限 0600）。首次运行引导会写好它；也可以把原来的值抄过去，再运行 `iphone-control service restart`。
+- `ICTL_MANAGE_USBMUXD`、`ICTL_USBMUXD_BIN` 已删除：守护进程不再自己启动 usbmuxd。Linux 上请装系统的 usbmuxd（`sudo apt install usbmuxd`，`.deb` 会自动装上）；以前为容器 mask 过的，要 `sudo systemctl unmask usbmuxd`。
+- 重新注册 MCP：原来 `docker exec` 形式的注册不能用了。首次运行引导会注册，或者运行 `iphone-control mcp-config` 打印的命令。
+
 ### 新增
 
+- 首次运行引导：装好后接上手机，运行 `iphone-control`。第一次会在终端里一步步带你完成设置：语言、代理、后台服务、配对、开发者模式、Apple ID、签名并安装 WebDriverAgent，可选的自动解锁密码和通知（Bark 或 Telegram，发一条测试消息），以及把 MCP 注册到 Claude Code 和 Codex。做过的步骤会跳过；设置好以后再运行 `iphone-control` 只显示状态，后台服务没在运行时先启动它。
+- `iphone-control setup --reconfigure`：全部重新设置，或只改一项：语言、代理、后台服务、Apple ID（重新登录并重签 WebDriverAgent）、手机、自动解锁密码、通知、注册 MCP。
+- `iphone-control service install|uninstall|start|stop|restart|status` 管理后台服务（macOS 是 launchd，Linux 是 systemd 用户服务），不管是 `install.sh`、`brew services` 还是 `.deb` 装的。
+- 设置文件 `~/.config/iphone-control/env`：后台服务读它，每个命令启动时也读它（环境里已经设了的变量优先）。手改后运行 `iphone-control service restart`。
+- 每个发布的压缩包和 `.deb` 里都带 `THIRD_PARTY_LICENSES.html`（所有 Rust 依赖的许可证）。
+- 控制台跟着守护进程控制的设备走：在别处切换了设备（另一个标签页、`iphone-control select`、MCP 工具，或拔掉后自动换了一台），页面约 10 秒内发现、提示，并把画面和各面板换过去。操作带着页面显示的那台设备，守护进程已经在控制别的设备时会被拒绝，不会发到另一部手机上。
+- 控制台没有画面时说明原因（没连上、要配对或开开发者模式、WebDriverAgent 正在启动或启动失败的原因、要先解锁）；没装 WebDriverAgent 的设备，登录了 Apple ID 时会显示「签名并安装 WDA」按钮。
+- 签名证书被吊销时自动恢复：免费 Apple ID 同时最多两张证书，在别处（换机器、从 Docker 换成本机安装、别的侧载工具）用同一个 Apple ID 签名会新建证书并吊销一张旧的，用它签的 WDA 在每台设备上都起不来，描述文件却看着还有效。现在设备拒绝启动 WDA 时，守护进程会检查设备上的 WDA 是不是本机证书签的、本机证书还在不在 Apple ID 的团队里，有问题就自动重签这台（同一台 6 小时内最多一次）。
+- `doctor` 显示这两项证书检查；签名时新建或吊销证书会写日志并发通知（新的通知类型 `cert`，`notify-test cert` 可以试发）。
 - 安装更简单：macOS（Apple Silicon）和 Linux 上 `curl -fsSL https://raw.githubusercontent.com/Derrors/iphone-control/main/install.sh | sh` 一行装好 Release 的程序，并把守护进程装成用户服务（macOS 用 launchd，以前没有；Linux 用 systemd），再运行一次就是升级，也能卸载；`brew install derrors/tap/iphone-control` 加 `brew services start iphone-control`；Debian 12+ 和 Ubuntu 22.04+ 的 `.deb`（amd64、arm64），带 systemd 用户服务、依赖 usbmuxd。发布流程会打好这些包并更新 Homebrew 源。
 - 实时画面页面里的 AI 任务：在页面上写下任务，本机的 agent（Claude Code 或 Codex，在页面上选）用 MCP 工具在手机上完成；页面逐步显示 agent 说它要做什么、结果和截图，并在画面上标出点击位置。可以暂停、继续、接管（自己动手）后交还，或者停止。付款、删除、发消息、改账号设置之前，agent 会在页面上请你确认（`iphone_confirm`）并等你回答，拒绝的那一步不会执行。步骤、暂停和确认都经过 `iphone-control mcp` 本身，所以两种 agent 表现一样；agent 只能用操作手机的工具（Claude Code 不带命令行和文件工具，Codex 用只读沙箱）。
 
@@ -21,8 +38,23 @@
 - viewer 不再给自己的点击、滑动画轨迹，手动操作成功时也不再弹提示；出错照样提示。
 - viewer 新增只读的 JSON 接口（`/api/daemon`、`/status`、`/devices`、`/apps`、`/elements`），并拒绝浏览器标明来自其他网站的读取（`Sec-Fetch-Site`），因为读元素可能会解锁手机。
 
+### 移除
+
+- Docker 镜像（`ghcr.io/derrors/iphone-control`）、`compose.yaml`、`docker/Dockerfile` 和 `.dockerignore`。容器够不到控制台要交任务的本机 Claude Code 或 Codex，原生安装也更简单。
+- 守护进程不再启动、看护 usbmuxd（`ICTL_MANAGE_USBMUXD`、`ICTL_USBMUXD_BIN`），Linux 和 macOS 都用系统的 usbmuxd。
+- `deploy/iphone-control.service`：改由 `install.sh` 和 `iphone-control service install` 写服务文件。
+- `iphone-control mcp-config --container`：`mcp-config` 不再带参数，打印的路径在 Homebrew 升级后也有效。
+
 ### 修复
 
+- 控制台：iOS 27 以下的设备（整段手势模式）上，滚轮滚动不再没反应。原来滚轮一直在等一个这种模式下永远不会归零的剩余量，滑动发不出去，之后的滚轮也一起积压。
+- 刚启动 App、转场动画还没走完时按 Home，iPadOS 会把两种按法都忽略（iPad mini 5 / iPadOS 26.6.1 上约三次有一次）。现在两种都没回到主屏时，会再补按一次。
+- WebDriverAgent 启动失败、只报 `unexpected response` 时，提示里加上第二种可能：已经信任过开发者的，可能是签名证书变了，运行 `iphone-control sign` 重签这台设备。控制台在这种情况下，登录了 Apple ID 时会给出「重新签名并安装 WDA」按钮。
+- 自动选择设备时，守护进程重启后接着用上次就绪过的那台，不再按 usbmuxd 列表的顺序换到另一台（接着 iPhone 和 iPad 时，重启后可能换到一台起不来 WebDriverAgent 的设备）。
+- `iphone-control viewer` 在守护进程还没起来、又接着多台设备时不再直接退出：先照常启动，守护进程选好设备后页面自动跟上。
+- 控制台：iOS 27 以下的设备在 WebDriverAgent 没起来时，「操作通道」显示「不可用」，不再说改走 HID 后备（HID 后备要 iOS 27）；不知道锁没锁时不再显示「未锁定」；WebDriverAgent 启动失败时画面区域显示失败原因，不再一直说「通常 10–60 秒」。
+- 日志和状态里的「WDA 启动失败：WDA 启动失败：」不再重复。
+- 命令行里 `devices`、`select`、`doctor` 的提示同时给出 `iphone-control select` / `iphone-control status`，不再只写 MCP 工具名；连不上守护进程时提示 `iphone-control service start`。
 - 新款 iPhone 上 `lock` 不再要 10 秒左右：电源键改为按 0.1 秒，不再按住 0.5 秒。iPhone 18 Pro Max（iOS 27.2.1）不认按住，每次锁屏都退到 WebDriverAgent 较慢的锁屏，还在日志里记一次超时。
 - 不认 IOHID Home 事件的设备（iPhone 18 Pro Max，iOS 27.2.1）上 `home` 从约 3.7 秒变为约 1.3 秒：只有 XCTest 的按法有效时，守护进程按设备记住，之后先用它。只认 IOHID 按法的设备（iPhone 12 mini）顺序不变。
 - 界面上一直有动画时，点击和长按不再要 26 秒左右（iPhone 18 Pro Max、iOS 27.2.1 上，键盘弹着时在设置里点搜索结果每次都这样）：和滑动一样，不再等 WebDriverAgent 的动画冷却。同一个点击现在约 1.4 秒。

@@ -89,8 +89,8 @@ impl Daemon {
         if self.cfg.udid.is_none() && infos.len() > 1 {
             lines.push(
                 ictl_l10n::tr!(
-                    "切换:iphone_select_device(UDID 或设备名),auto 改回自动选",
-                    "Switch: iphone_select_device (UDID or device name), auto to go back to automatic"
+                    "切换:iphone-control select 或 iphone_select_device 工具(UDID 或设备名),auto 改回自动选",
+                    "Switch: iphone-control select or the iphone_select_device tool (UDID or device name), auto to go back to automatic"
                 )
                 .into(),
             );
@@ -107,8 +107,8 @@ impl Daemon {
         if q.eq_ignore_ascii_case("auto") || q == ictl_l10n::tr!("自动", "automatic") {
             if let Some(u) = &self.cfg.udid {
                 return Err(ictl_l10n::trf!(
-                    "IPHONE_UDID 固定为 {u};要改回自动选,先在 .env 里清掉它再重建容器(或重启守护进程)",
-                    "IPHONE_UDID pins {u}; to go back to automatic, remove it from .env and recreate the container (or restart the daemon)"
+                    "IPHONE_UDID 固定为 {u};要改回自动选,先从 ~/.config/iphone-control/env 里删掉它,再重启守护进程",
+                    "IPHONE_UDID pins {u}; to go back to automatic, remove it from ~/.config/iphone-control/env and restart the daemon"
                 ));
             }
             g.persisted.selected_udid = None;
@@ -116,7 +116,7 @@ impl Daemon {
             return Ok(match g.info.as_ref().filter(|_| g.device.is_some()) {
                 Some(i) => ictl_l10n::trf!("已改回自动选;正在控制 {},它断开时换成别的接着的设备", "Back to automatic; controlling {}, switches to another connected device when it disconnects", device_label(i)),
                 None if g.connected.is_empty() => ictl_l10n::tr!("已改回自动选;现在没接设备,接上后自动控制它", "Back to automatic; no device connected now, it takes over the next one plugged in").into(),
-                None => ictl_l10n::tr!("已改回自动选;10 秒内接管接着的设备,先用 iphone_status 确认就绪", "Back to automatic; it takes over a connected device within 10 seconds, check readiness with iphone_status first").into(),
+                None => ictl_l10n::tr!("已改回自动选;10 秒内接管接着的设备,先用 iphone-control status 或 iphone_status 确认就绪", "Back to automatic; it takes over a connected device within 10 seconds, check readiness with iphone-control status or iphone_status first").into(),
             });
         }
         let infos = self.connected_infos(g);
@@ -125,8 +125,8 @@ impl Daemon {
             && !u.eq_ignore_ascii_case(&target.udid)
         {
             return Err(ictl_l10n::trf!(
-                "IPHONE_UDID 固定为 {u};要换设备,先改 .env 里的 IPHONE_UDID 再重建容器(或重启守护进程)",
-                "IPHONE_UDID pins {u}; to switch devices, change IPHONE_UDID in .env and recreate the container (or restart the daemon)"
+                "IPHONE_UDID 固定为 {u};要换设备,先改 ~/.config/iphone-control/env 里的 IPHONE_UDID,再重启守护进程",
+                "IPHONE_UDID pins {u}; to switch devices, change IPHONE_UDID in ~/.config/iphone-control/env and restart the daemon"
             ));
         }
         if self.cfg.udid.is_none() {
@@ -156,8 +156,8 @@ impl Daemon {
             )
         };
         Ok(ictl_l10n::trf!(
-            "已切换到 {label},之后固定控制这台。状态:{};WDA 起来要 10~60 秒,先用 iphone_status 确认就绪{pin}",
-            "Switched to {label}; it stays selected from now on. State: {}; WDA takes 10-60 seconds to start, check readiness with iphone_status first{pin}",
+            "已切换到 {label},之后固定控制这台。状态:{};WDA 起来要 10~60 秒,先用 iphone-control status 或 iphone_status 确认就绪{pin}",
+            "Switched to {label}; it stays selected from now on. State: {}; WDA takes 10-60 seconds to start, check readiness with iphone-control status or iphone_status first{pin}",
             g.state.describe()
         ))
     }

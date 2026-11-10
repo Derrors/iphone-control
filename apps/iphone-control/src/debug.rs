@@ -1,6 +1,6 @@
 //! `iphone-control debug …`：真机诊断（`--features debug-cmds` 才编译）。直接调用设备层和 WDA 客户端，
 //! 不经守护进程。`wda`、`e2e` 会启动 XCTest、`hid` 会开屏幕媒体流，和守护进程同时跑会互相干扰：
-//! 先停掉守护进程（例如在另一个只跑 usbmuxd 的容器里运行）。
+//! 先停掉守护进程。
 
 use std::path::PathBuf;
 use std::time::{Duration, Instant};

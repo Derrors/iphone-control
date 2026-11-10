@@ -11,7 +11,7 @@ After=network-online.target
 [Service]
 ExecStart=/usr/bin/iphone-control daemon
 EnvironmentFile=-%h/.config/iphone-control/env
-# memory freed after screenshots goes back to the system (see docker/Dockerfile)
+# memory freed after screenshots goes back to the system
 Environment=MALLOC_ARENA_MAX=2
 Restart=on-failure
 RestartSec=10

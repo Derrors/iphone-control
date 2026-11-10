@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-/// 以 root 运行（容器、系统服务）时的控制接口和数据目录
+/// 以 root 运行（系统服务）时的控制接口和数据目录
 pub const SYSTEM_SOCKET: &str = "/run/iphone-control/ctl.sock";
 pub const SYSTEM_DATA_DIR: &str = "/var/lib/iphone-control";
 

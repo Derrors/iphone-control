@@ -18,9 +18,9 @@
 | plume_utils（Impactor） | Bundle、Signer | MIT（Impactor 根 LICENSE） | **未 vendor**：`ictl-sign/src/bundle.rs` 改写自它的 `bundle.rs`，签名流程在 `ictl-sign/src/lib.rs` 重写 | 文件头注明来源和版权 |
 | apple-codesign 0.29.0 | 代码签名 | **MPL-2.0** | vendor 到 `vendor/apple-codesign`（Impactor 打过 0o755 权限补丁的副本；去掉了上游的 tests/、docs/、src/testdata/），经 `[patch.crates-io]` 替换 | 以 MPL-2.0 随仓库提供源码 |
 | rmcp 3.8.0 | MCP SDK | Apache-2.0（部分历史代码 MIT） | crates.io 依赖 | 保留 NOTICE/版权声明 |
-| tokio、reqwest、quick-xml、image、clap、serde 等 | 通用 | MIT / Apache-2.0 | crates.io 依赖 | 保留声明：镜像里的 `/usr/share/doc/iphone-control/THIRD_PARTY_LICENSES.html` 由 cargo-about 按 Cargo.lock 生成，含许可证全文。这份清单只随镜像分发，预编译二进制的压缩包只带 `LICENSE` 和 `THIRD_PARTY.md` |
-| WebDriverAgent（Appium） | 手机端代理 | BSD-3-Clause（Facebook 原始） | 镜像构建时下载 Appium 官方的未签名真机包（v16.15.3，校验 sha256）打成 IPA；计划改为本项目 macOS CI 编译 | 保留 BSD 声明（镜像里 `/usr/share/licenses/WebDriverAgent/LICENSE`） |
-| usbmuxd | USB 守护进程 | **GPL-3.0**（以其 README 为准；GitHub 显示 GPL-2.0 有误） | 系统包，独立进程，不链接 | 仅"放在一起分发"。发布镜像时要提供对应源码（Debian 源码包）和许可证文本 |
+| tokio、reqwest、quick-xml、image、clap、serde 等 | 通用 | MIT / Apache-2.0 | crates.io 依赖 | 保留声明：`THIRD_PARTY_LICENSES.html` 由 cargo-about 按 Cargo.lock 生成，含许可证全文，放在每个发布的压缩包里（.deb 里在 `/usr/share/doc/iphone-control/`），和 `LICENSE`、`THIRD_PARTY.md` 一起 |
+| WebDriverAgent（Appium） | 手机端代理 | BSD-3-Clause（Facebook 原始） | 第一次签名前在用户的机器上下载 Appium 官方的未签名真机包（v16.15.3，校验 sha256）打成 IPA，项目本身不分发；计划改为本项目 macOS CI 编译 | 不分发时没有义务；改为自己编译并分发时要保留 BSD 声明 |
+| usbmuxd | USB 守护进程 | **GPL-3.0**（以其 README 为准；GitHub 显示 GPL-2.0 有误） | 系统包（Linux 上用发行版的包，.deb 只声明依赖；macOS 自带），独立进程，不链接 | 不随项目分发，没有额外义务（以前的 Docker 镜像里带着它，要提供对应源码） |
 
 ## MPL-2.0 怎么处理
 
@@ -32,13 +32,13 @@ MPL-2.0 是按文件计算的弱 copyleft：
 
 ## 依赖许可证检查
 
-`docker/about.toml` 列出允许的许可证（MIT、Apache-2.0、BSD、ISC、MPL-2.0 等）。依赖里出现列表以外的许可证（例如 AGPL、没有许可证声明的 crate）时 cargo-about 报错，镜像构建失败，要人看过再决定。
+`packaging/licenses/about.toml` 列出允许的许可证（MIT、Apache-2.0、BSD、ISC、MPL-2.0 等）。依赖里出现列表以外的许可证（例如 AGPL、没有许可证声明的 crate）时 cargo-about 报错，CI 和发布都会失败，要人看过再决定。
 
 ## 不能分发的东西
 
 | 东西 | 原因 | 处理 |
 |---|---|---|
-| 开发者镜像（DDI、Cryptex 组件、BuildManifest） | 苹果的文件 | 运行时下载到 `ddi/` 缓存；镜像和仓库都不包含。下载来源默认与 pymobiledevice3 一致（社区维护的镜像仓库），也允许用户指向从 Xcode 提取的目录 |
+| 开发者镜像（DDI、Cryptex 组件、BuildManifest） | 苹果的文件 | 运行时下载到 `ddi/` 缓存；发布包和仓库都不包含。下载来源默认与 pymobiledevice3 一致（社区维护的镜像仓库），也允许用户指向从 Xcode 提取的目录 |
 | XCTest.framework 等苹果框架 | 苹果的文件 | 编译 WDA 时不嵌入（Appium 官方包也不带），由手机上的开发者镜像提供 |
 | 证书、描述文件、配对记录、Apple ID 会话 | 用户秘密 | 只在用户的数据目录里，`.gitignore` 排除 |
 

@@ -4,11 +4,10 @@ set -e
 if [ "$1" = configure ]; then
   cat <<'MSG'
 
-iphone-control is installed. As your regular user (not root):
-  systemctl --user enable --now iphone-control   # run the daemon, also after the next login
-  iphone-control setup                            # pairing, Developer Mode, Apple ID, WebDriverAgent
-  iphone-control mcp-config                       # prints the command that registers the MCP tools
-安装完成。以普通用户（不是 root）运行上面三条命令：启动守护进程，首次设置，注册 MCP 工具。
+iphone-control is installed. As your regular user (not root), connect the iPhone and run
+  iphone-control
+It starts the daemon as a user service and walks you through setup.
+安装完成。以普通用户（不是 root）接好 iPhone 后运行 iphone-control，它会启动后台服务并一步步带你完成设置。
 
 MSG
 fi

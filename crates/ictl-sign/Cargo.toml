@@ -16,5 +16,7 @@ plume_store.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 plist.workspace = true
+rsa.workspace = true
+x509-certificate.workspace = true
 uuid.workspace = true
 zip.workspace = true

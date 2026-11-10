@@ -1,6 +1,8 @@
 # 命令行
 
-所有命令都是 `iphone-control <命令>`。Docker 部署时前面加 `docker exec -it iphone-control`；从源码运行和在 macOS 上直接运行。`--help` 看帮助，`--version` 看版本。
+所有命令都是 `iphone-control <命令>`。`--help` 看帮助，`--version` 看版本。
+
+不带命令只运行 `iphone-control`：第一次是[首次运行引导](./getting-started#first-run)，设置好以后显示状态（守护进程没在运行时先启动它）。
 
 ## 全局选项
 
@@ -15,15 +17,30 @@
 
 | 命令 | 作用 |
 |---|---|
-| `daemon` | 常驻守护进程。容器的入口；从源码运行时由 systemd 或手动启动，macOS 上在终端里运行 |
+| `daemon` | 常驻守护进程。一般由后台服务启动，也可以在终端里手动运行 |
 | `mcp` | MCP stdio 服务，由 AI 客户端拉起 |
-| `mcp-config [--container <容器名>]` | 打印把 MCP 注册到 Claude Code 的命令。在容器里或给了 `--container` 时打印 `docker exec` 的写法，否则直接调用本程序 |
+| `mcp-config` | 打印把 MCP 注册到 Claude Code 的命令。程序路径用升级后不变的那个（Homebrew 用 `opt` 下的链接） |
 
-## 安装与签名
+## 后台服务
+
+守护进程装成用户服务：macOS 是 launchd，Linux 是 systemd 用户服务。登录后自动启动，崩溃后自动重启。不用 root。
 
 | 命令 | 作用 |
 |---|---|
-| `setup` | 安装向导：配对、开发者模式、登录 Apple ID、签名安装 WDA。可重复运行，只作用于正在控制的那台 |
+| `service install` | 装成后台服务并启动；已经有服务时直接启动 |
+| `service uninstall` | 停止并移除本程序装的服务，数据保留。Homebrew 或 deb 包带的服务不删，只停用或提示怎么停 |
+| `service start` / `stop` | 启动、停止 |
+| `service restart` | 重启，改过 `~/.config/iphone-control/env` 后用 |
+| `service status` | 装的是哪个服务、守护进程在不在运行 |
+
+这些命令认得一行命令安装、`iphone-control service install`、`brew services` 和 deb 包装的服务，哪个在就作用于哪个。
+
+## 设置与签名 {#setup}
+
+| 命令 | 作用 |
+|---|---|
+| `setup` | 把引导完整走一遍：语言、代理、后台服务、配对、开发者模式、Apple ID、签名安装 WDA、自动解锁、通知、注册 MCP。做过的步骤跳过。手机部分只作用于正在控制的那台 |
+| `setup --reconfigure` | 重新设置其中一项，从菜单里选：全部重新走一遍、语言、代理、后台服务、Apple ID（重新登录并重签 WDA）、手机（配对、开发者模式、安装 WDA）、自动解锁密码、通知、注册 MCP（Claude Code、Codex） |
 | `login [邮箱]` | 登录 Apple ID。密码和验证码只在这里输入；不给邮箱就交互输入 |
 | `sign` | 立即签名并安装 WDA，同 `resign --force`。会把设备注册到 Apple ID |
 | `resign [--force]` | 描述文件剩余不到 `RESIGN_MIN_DAYS` 天才重签；`--force` 立即重签。不带 `--force` 时不会替没装过 WDA 的设备注册 |
@@ -61,12 +78,12 @@
 |---|---|
 | `notify-test [事件]` | 发测试通知：每类事件各一条，或只发一类（`resign`、`session`、`pin`、`pin-recovered`、`unlock`、`offline`、`online`） |
 | `wda-bridge [--port <端口>]` | 把 WDA 桥接到 `127.0.0.1`，端口默认 8100，给别的工具用。WDA 没有认证，本机任何用户都能连上，用完就停 |
-| `viewer [--port <端口>]` | 浏览器里的控制台，地址 `http://127.0.0.1:8200/`（默认端口），中英文（默认跟着 `IPHONE_CONTROL_LANG`，页面上可切换）。**画面：** 实时画面像触摸屏一样用：点一下是点击，拖动是滑动，按住是长按，滚动鼠标滚轮或触控板也能滚动页面，另有输入框和硬件键。iOS 27 起手指跟着鼠标实时移动（经 CoreDevice HID，最后一次触摸后 30 秒内手机保持亮屏）；更低的版本在松开后发整段手势。操作都和 MCP 调用一样经守护进程，和 agent 的操作排队，并先自动解锁。画面来自 WDA 的 MJPEG 流，WDA 没就绪时没有画面。**设备面板：** 状态和就绪检查、已安装的 App、屏幕上的元素。在页面上切换设备，画面跟着换；在别处 `select` 了别的设备时操作会被拒绝，在页面上重新选一下设备即可。**AI 任务：** 写下任务，交给本机的 agent 执行（PATH 里有的 Claude Code 或 Codex，在页面上选）。可以暂停、接管后交还、停止；付款、删除、发消息之前它会在页面上请你确认。本机任何用户都能连上这个端口，用完就停 |
+| `viewer [--port <端口>]` | 浏览器里的控制台，地址 `http://127.0.0.1:8200/`（默认端口），中英文（默认跟着 `IPHONE_CONTROL_LANG`，页面上可切换）。**画面：** 实时画面像触摸屏一样用：点一下是点击，拖动是滑动，按住是长按，滚动鼠标滚轮或触控板也能滚动页面，另有输入框和硬件键。iOS 27 起手指跟着鼠标实时移动（经 CoreDevice HID，最后一次触摸后 30 秒内手机保持亮屏）；更低的版本在松开后发整段手势。操作都和 MCP 调用一样经守护进程，和 agent 的操作排队，并先自动解锁。画面来自 WDA 的 MJPEG 流，WDA 没就绪时没有画面。**设备面板：** 状态和就绪检查、已安装的 App、屏幕上的元素。页面跟着守护进程控制的设备走，在页面上或别处切换设备，画面和面板都会跟过去，见[多台设备](./multi-device#control-page)。**AI 任务：** 写下任务，交给本机的 agent 执行（PATH 里有的 Claude Code 或 Codex，在页面上选）。可以暂停、接管后交还、停止；付款、删除、发消息之前它会在页面上请你确认。本机任何用户都能连上这个端口，用完就停 |
 
 调试用的 `debug` 子命令默认不编译，见[贡献指南](https://github.com/Derrors/iphone-control/blob/main/CONTRIBUTING.md#testing-on-a-real-phone)。
 
 ## 使用说明
 
-- **要守护进程在运行的：** `setup`、`status`、`doctor`、`sign`、`resign`、`devices`、`select`、`unlock-reset`、`wda-bridge`、`viewer`，以及 MCP 工具调用。
-- **要在终端里交互运行的：** `setup`、`login`、`passcode set`，Docker 部署要带 `-it`。
-- **环境变量：** 命令行读的是当前 shell 的环境。从源码运行和在 macOS 上，`~/.config/iphone-control/env` 只有守护进程会加载；用 `login`、`setup`（如果配了 `ICTL_ANISETTE_URL`）、`notify-test`、`mcp-config` 前先运行 `set -a; . ~/.config/iphone-control/env; set +a`。
+- **要守护进程在运行的：** `setup` 的手机部分、`status`、`doctor`、`sign`、`resign`、`devices`、`select`、`unlock-reset`、`wda-bridge`、`viewer`，以及 MCP 工具调用。
+- **要在终端里交互运行的：** 不带命令的 `iphone-control`（首次运行时）、`setup`、`login`、`passcode set`。
+- **设置：** 每个命令启动时都会读 `~/.config/iphone-control/env`，环境里已经有的变量优先，见[配置](./configuration#settings-file)。

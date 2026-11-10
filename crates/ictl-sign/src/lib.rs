@@ -6,6 +6,11 @@
 //!
 //! 账号目录（数据目录下 `account/`，0700）：`accounts.json`（会话令牌）、`keys/<团队>/key.pem`（开发私钥）、anisette 状态。
 //! 免费账号：描述文件 7 天过期、开发证书 1 年。
+//!
+//! 证书：每个账号目录有自己的私钥，对应团队里的一张开发证书；同一个团队同时最多两张（免费账号）。没有私钥（新的
+//! 数据目录、换了机器）或私钥的证书已不在团队里时，签名会新建一张，满了就先吊销一张旧的，不挑是谁的。证书一被吊销，
+//! 用它签的 App 在每台设备上都起不来，而描述文件看上去还有效。所以要能判断设备上的 WDA 是不是本机这把私钥签的
+//! （[`AccountDir::local_public_keys`]、[`Profile::signed_with_any`]），本机的证书还在不在（[`Session::own_certificate_listed`]）。
 
 pub mod bundle;
 pub mod ipa;
@@ -21,6 +26,13 @@ use plume_store::AccountStore;
 
 pub use plume_core::auth::{TwoFactorAction, TwoFactorMethod, TwoFactorRequest};
 pub use profile::Profile;
+use rsa::pkcs1::EncodeRsaPublicKey;
+use rsa::pkcs8::DecodePrivateKey;
+
+/// 证书（DER）里的公钥（SubjectPublicKeyInfo 的位串，RSA 时是 PKCS#1）。和 plume 认自己证书的比法一样
+pub fn certificate_public_key(der: &[u8]) -> Option<Vec<u8>> {
+    x509_certificate::X509Certificate::from_der(der).ok().map(|c| c.public_key_data().to_vec())
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum SignError {
@@ -95,6 +107,18 @@ impl AccountDir {
         Ok(email.to_owned())
     }
 
+    /// 本机签名私钥（`keys/<团队>/key.pem`）的公钥，PKCS#1 DER，可以和 [`certificate_public_key`] 比。还没签过名时为空
+    pub fn local_public_keys(&self) -> Vec<Vec<u8>> {
+        let Ok(dirs) = std::fs::read_dir(self.dir.join("keys")) else { return Vec::new() };
+        dirs.flatten()
+            .filter_map(|e| {
+                let pem = std::fs::read_to_string(e.path().join("key.pem")).ok()?;
+                let key = rsa::RsaPrivateKey::from_pkcs8_pem(&pem).ok()?;
+                Some(key.to_public_key().to_pkcs1_der().ok()?.as_bytes().to_vec())
+            })
+            .collect()
+    }
+
     /// 当前选中账号的邮箱
     pub async fn selected_email(&self) -> Result<String> {
         let store =
@@ -131,9 +155,29 @@ pub struct Signed {
     pub team_id: String,
     pub bundle_id: String,
     pub profile: Profile,
+    /// 这次新建了签名证书（本机没有私钥，或私钥的证书已不在团队里）：别处用旧证书签的 App 不受影响，除非也吊销了
+    pub new_certificate: bool,
+    /// 新建时团队里的证书满了，吊销了一张旧的：用它签的 App 在所有设备上都起不来了，要重签
+    pub revoked_certificate: bool,
 }
 
 impl Session {
+    /// 本机的签名证书还在不在团队里（吊销了的不再列出）。本机还没有私钥时为 None
+    pub async fn own_certificate_listed(&self) -> Result<Option<bool>> {
+        let keys = self.dir.local_public_keys();
+        if keys.is_empty() {
+            return Ok(None);
+        }
+        let certs = self.inner.qh_list_certs(&self.team_id).await?.certificates;
+        Ok(Some(
+            certs
+                .iter()
+                .filter_map(|c| c.cert_content.as_ref())
+                .filter_map(|d| certificate_public_key(d.as_ref()))
+                .any(|k| keys.contains(&k)),
+        ))
+    }
+
     /// 把设备注册到团队（已注册则跳过）
     pub async fn ensure_device(&self, udid: &str, name: &str) -> Result<()> {
         self.inner.qh_ensure_device(&self.team_id, &name.to_owned(), &udid.to_owned()).await?;
@@ -165,9 +209,32 @@ impl Session {
         let new_id = if orig.ends_with(&format!(".{team}")) { orig.clone() } else { format!("{orig}.{team}") };
 
         // 证书必须在申请描述文件之前定下来：本地没有私钥时这里会吊销旧证书、新建一张，
-        // 而描述文件只包含生成那一刻团队里有效的证书，先拿描述文件会装不上（0xe8008015）
-        let cert =
-            CertificateIdentity::new_with_session(&self.inner, self.dir.dir.clone(), None, team, false, None).await?;
+        // 而描述文件只包含生成那一刻团队里有效的证书，先拿描述文件会装不上（0xe8008015）。
+        // 证书满了要吊销旧的之前 plume 调这个回调（返回 true 继续），记下来告诉调用方
+        let mut revoked_certificate = false;
+        let mut on_reset = || {
+            revoked_certificate = true;
+            true
+        };
+        let cert = CertificateIdentity::new_with_session(
+            &self.inner,
+            self.dir.dir.clone(),
+            None,
+            team,
+            false,
+            Some(&mut on_reset),
+        )
+        .await?;
+        let new_certificate = cert.new;
+        if new_certificate {
+            tracing::warn!(
+                "{}",
+                ictl_l10n::log_tr!(
+                    "新建了签名证书（本机没有私钥，或它的证书已不在团队里）",
+                    "Created a new signing certificate (no local key, or its certificate is no longer in the team)"
+                )
+            );
+        }
 
         // 只有带 entitlements 的 bundle（App/扩展）需要换 ID 并申请描述文件；WDA 里只有主程序一个
         let mut profiles = Vec::new();
@@ -221,7 +288,7 @@ impl Session {
 
         let profile = verify_signed(&app, udid, cert.cert.as_ref().map(|c| c.constructed_data()))?;
         ipa::pack(work, output)?;
-        Ok(Signed { team_id: team.clone(), bundle_id: new_id, profile })
+        Ok(Signed { team_id: team.clone(), bundle_id: new_id, profile, new_certificate, revoked_certificate })
     }
 }
 
@@ -354,6 +421,47 @@ mod tests {
         assert!(verify_signed(&app, "UDID-2", None).unwrap_err().to_string().contains("没有这台手机"));
         // 描述文件生成后证书被换掉（本地无私钥时 plume 会吊销重建）
         assert!(verify_signed(&app, "UDID-1", Some(b"CERT-B")).unwrap_err().to_string().contains("签名用的证书"));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// 现场生成一把 RSA 私钥（PKCS#8 PEM）和用它自签的证书（DER）。dev 构建里大数运算开了优化（工作区 Cargo.toml），
+    /// 生成 2048 位密钥不到一秒；仓库里不放私钥文件
+    fn key_and_cert() -> (String, Vec<u8>) {
+        use rsa::pkcs8::EncodePrivateKey;
+        let key = rsa::RsaPrivateKey::new(&mut rsa::rand_core::OsRng, 2048).unwrap();
+        let pair =
+            x509_certificate::InMemorySigningKeyPair::from_pkcs8_der(key.to_pkcs8_der().unwrap().as_bytes()).unwrap();
+        let mut b = x509_certificate::X509CertificateBuilder::default();
+        b.subject().append_common_name_utf8_string("ictl-sign test").unwrap();
+        let cert = b.create_with_key_pair(&pair).unwrap().encode_der().unwrap();
+        (key.to_pkcs8_pem(Default::default()).unwrap().to_string(), cert)
+    }
+
+    /// 设备上 WDA 的描述文件里有没有本机私钥的证书：iPad 上那份是别处签的（本机的证书是后来才建的），里面没有
+    #[test]
+    fn tells_whether_a_profile_has_this_machines_certificate() {
+        let (pem, mine) = key_and_cert();
+        let (_, other) = key_and_cert();
+        let root = std::env::temp_dir().join(format!("ictl-keys-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(root.join("keys/TEAM1")).unwrap();
+        std::fs::write(root.join("keys/TEAM1/key.pem"), pem).unwrap();
+        let acct = AccountDir { dir: root.clone(), anisette_url: None };
+        let keys = acct.local_public_keys();
+        assert_eq!(keys.len(), 1);
+        assert_eq!(certificate_public_key(&mine).as_ref(), Some(&keys[0]), "the same comparison plume uses");
+        assert_ne!(certificate_public_key(&other).as_ref(), Some(&keys[0]));
+        let profile = |certs: Vec<Vec<u8>>| Profile {
+            expires: SystemTime::now(),
+            devices: vec![],
+            get_task_allow: true,
+            application_identifier: String::new(),
+            certificates: certs,
+        };
+        assert!(!profile(vec![other.clone()]).signed_with_any(&keys), "signed elsewhere");
+        assert!(profile(vec![other, mine]).signed_with_any(&keys), "lists every certificate valid at the time");
+        assert!(!profile(vec![b"not a certificate".to_vec()]).signed_with_any(&keys));
+        let none = AccountDir { dir: root.join("nothing"), anisette_url: None };
+        assert!(none.local_public_keys().is_empty(), "never signed here");
         std::fs::remove_dir_all(root).unwrap();
     }
 }

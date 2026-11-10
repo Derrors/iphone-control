@@ -45,6 +45,8 @@ const SPRINGBOARD: &str = "com.apple.springboard";
 
 /// What every connection shares
 struct Ctx {
+    /// The data directory: whether an Apple ID is signed in (signing WDA from the page needs one)
+    data_dir: PathBuf,
     /// The page, marked with the viewer's language (the page's default; it can switch)
     page: String,
     socket: PathBuf,
@@ -62,8 +64,23 @@ impl Ctx {
     }
 }
 
-pub async fn run(socket: &Path, port: u16) -> anyhow::Result<()> {
-    let udid = crate::target_device(socket, None).await?.udid;
+pub async fn run(socket: &Path, data_dir: &Path, port: u16) -> anyhow::Result<()> {
+    // only a first guess: the page follows whichever device the daemon controls (see `info`). Not knowing yet is
+    // fine: the daemon may still be starting (started together with this at login), and with several devices
+    // connected it is the one that picks
+    let udid = match crate::target_device(socket, None).await {
+        Ok(d) => d.udid,
+        Err(e) => {
+            eprintln!(
+                "{}",
+                ictl_l10n::trf!(
+                    "还不知道控制哪台设备（{e}），等守护进程选好后页面自动跟上",
+                    "Not sure which device yet ({e}); the page follows once the daemon has picked one"
+                )
+            );
+            String::new()
+        }
+    };
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", port)).await?;
     let port = listener.local_addr()?.port();
     // next to the daemon's socket: a directory only this user can enter
@@ -75,7 +92,7 @@ pub async fn run(socket: &Path, port: u16) -> anyhow::Result<()> {
         ictl_l10n::trf!(
             "实时画面:http://127.0.0.1:{port}/ (手机 {},Ctrl-C 停止)",
             "Live viewer: http://127.0.0.1:{port}/ (phone {}, Ctrl-C to stop)",
-            udid
+            if udid.is_empty() { ictl_l10n::tr!("跟随守护进程", "whichever the daemon controls") } else { &udid }
         )
     );
     let found: Vec<&str> =
@@ -101,6 +118,7 @@ pub async fn run(socket: &Path, port: u16) -> anyhow::Result<()> {
     );
     let ctx = Arc::new(Ctx {
         socket: socket.to_path_buf(),
+        data_dir: data_dir.to_path_buf(),
         port,
         udid: Mutex::new(udid),
         agents,
@@ -151,8 +169,14 @@ async fn handle(mut client: TcpStream, ctx: &Ctx, head: Vec<u8>, req: Head, mut 
     match (req.method.as_str(), path) {
         ("GET", "/") => reply(&mut client, 200, "text/html; charset=utf-8", ctx.page.as_bytes()).await,
         ("GET", "/stream") => {
-            // looked up again each time: after a replug usbmuxd gives the device a new id
-            let device = ictl_device::Device::find(Some(&ctx.udid())).await;
+            // the device the page shows (`?udid=`), so a page that hasn't noticed a switch keeps its own picture
+            // instead of silently showing another phone. Looked up again each time: after a replug usbmuxd gives the
+            // device a new id
+            let udid = req.query("udid").filter(|u| !u.is_empty()).unwrap_or_else(|| ctx.udid());
+            if udid.is_empty() {
+                return reply(&mut client, 503, "text/plain", b"no device yet").await;
+            }
+            let device = ictl_device::Device::find(Some(&udid)).await;
             let mut remote = match async { device?.connect_port(MJPEG_PORT).await }.await {
                 Ok(r) => r,
                 Err(e) => return reply(&mut client, 502, "text/plain", e.to_string().as_bytes()).await,
@@ -209,7 +233,7 @@ async fn handle(mut client: TcpStream, ctx: &Ctx, head: Vec<u8>, req: Head, mut 
             let Ok(b) = serde_json::from_slice::<Value>(&body) else {
                 return json_reply(&mut client, 400, &json!({"ok": false, "message": "bad request"})).await;
             };
-            let (code, v) = post(ctx, &p[5..], &b).await;
+            let (code, v) = post(ctx, &p[5..], &b, req.device.as_deref()).await;
             json_reply(&mut client, code, &v).await
         }
         _ => reply(&mut client, 404, "text/plain", b"not found").await,
@@ -217,7 +241,8 @@ async fn handle(mut client: TcpStream, ctx: &Ctx, head: Vec<u8>, req: Head, mut 
 }
 
 /// A POST under `/api/`: status code and JSON answer
-async fn post(ctx: &Ctx, name: &str, b: &Value) -> (u16, Value) {
+/// `device`: the one the page shows (`X-Ictl-Device`); actions only go to it
+async fn post(ctx: &Ctx, name: &str, b: &Value, device: Option<&str>) -> (u16, Value) {
     let conflict = |m: String| (409, json!({"ok": false, "message": m}));
     if name == "agent/tasks" {
         let prompt = b["prompt"].as_str().unwrap_or_default();
@@ -243,7 +268,7 @@ async fn post(ctx: &Ctx, name: &str, b: &Value) -> (u16, Value) {
             );
         }
         let Some(device) = b["device"].as_str() else { return (400, json!({"ok": false, "message": "bad action"})) };
-        let v = run_action(&ctx.socket, &Request::SelectDevice { device: device.to_owned() }, None).await;
+        let v = run_action(&ctx.socket, &Request::SelectDevice { device: device.to_owned() }, None, SHORT).await;
         // the page follows the device it picked
         if v["ok"] == true
             && let Ok(s) = crate::snapshot(&ctx.socket).await
@@ -252,6 +277,18 @@ async fn post(ctx: &Ctx, name: &str, b: &Value) -> (u16, Value) {
             *ctx.udid.lock().unwrap_or_else(|p| p.into_inner()) = d.udid;
         }
         return (200, v);
+    }
+    let udid = device.map(str::to_owned).unwrap_or_else(|| ctx.udid());
+    // not known yet (the daemon wasn't up when this started): no device check rather than one that always fails
+    let udid = Some(udid.as_str()).filter(|u| !u.is_empty());
+    if name == "sign" {
+        if !ctx.agents.manual_allowed() {
+            return conflict(
+                ictl_l10n::tr!("AI 任务执行中，不能签名安装", "An AI task is running; signing has to wait").into(),
+            );
+        }
+        // signing for the page's device: refused if the daemon has moved on to another one
+        return (200, run_action(&ctx.socket, &Request::Resign { force: true }, udid, SIGN).await);
     }
     let Some(req) = action(name, b) else { return (400, json!({"ok": false, "message": "bad action"})) };
     // reading is fine during a task, and so is lifting a finger that was down when it started; acting would compete
@@ -266,7 +303,7 @@ async fn post(ctx: &Ctx, name: &str, b: &Value) -> (u16, Value) {
             .into(),
         );
     }
-    (200, run_action(&ctx.socket, &req, Some(&ctx.udid())).await)
+    (200, run_action(&ctx.socket, &req, udid, SHORT).await)
 }
 
 /// The task's events so far, then new ones as they come, as server-sent events, until it is done
@@ -337,6 +374,8 @@ struct Head {
     origin: Option<String>,
     content_type: Option<String>,
     content_length: Option<usize>,
+    /// `X-Ictl-Device`: the device the page shows; its actions are refused once the daemon controls another
+    device: Option<String>,
     fetch_site: Option<String>,
     /// `X-Ictl-Lang`: the page's language
     lang: Option<ictl_l10n::Lang>,
@@ -360,6 +399,7 @@ impl Head {
             content_length: None,
             fetch_site: None,
             lang: None,
+            device: None,
         };
         for l in lines {
             let Some((k, v)) = l.split_once(':') else { continue };
@@ -370,6 +410,7 @@ impl Head {
                 "content-length" => h.content_length = Some(v.parse().ok()?),
                 "sec-fetch-site" => h.fetch_site = Some(v.to_ascii_lowercase()),
                 "x-ictl-lang" => h.lang = ictl_l10n::parse(v),
+                "x-ictl-device" if !v.is_empty() => h.device = Some(v.to_owned()),
                 _ => {}
             }
         }
@@ -468,8 +509,12 @@ fn action(name: &str, b: &Value) -> Option<Request> {
 }
 
 /// Sends one action to the daemon; `udid` limits it to the viewer's device (see the module docs)
-async fn run_action(socket: &Path, req: &Request, udid: Option<&str>) -> Value {
-    match protocol::call_expecting(socket, req, Some(Duration::from_secs(120)), udid).await {
+/// How long a page action may take; signing and installing WDA has its own, longer limit in the daemon
+const SHORT: Duration = Duration::from_secs(120);
+const SIGN: Duration = Duration::from_secs(16 * 60);
+
+async fn run_action(socket: &Path, req: &Request, udid: Option<&str>, timeout: Duration) -> Value {
+    match protocol::call_expecting(socket, req, Some(timeout), udid).await {
         // tapping by text that found nothing is an ordinary answer for the agent, a failure for the page
         Ok(Response::Text { text, outcome }) => {
             let missed = matches!(req, Request::TapElement { .. }) && protocol::tapped_nothing(&text, outcome);
@@ -493,13 +538,19 @@ async fn text_of(socket: &Path, req: Request, en: bool) -> Result<String, String
     }
 }
 
-/// Screen size in points (portrait) for turning a click on the picture into a tap, and whether the daemon
-/// still controls the viewer's device
+/// Screen size in points (portrait) for turning a click on the picture into a tap, and the device the viewer follows.
+/// It follows the device the daemon controls: switched on this page, on another page, with `iphone-control select`,
+/// or automatically after an unplug. The page notices `udid` changing and moves its picture and panels over; until
+/// then its actions carry the old UDID and are refused, never sent to a phone the user isn't looking at
 async fn info(ctx: &Ctx) -> Result<Value, String> {
-    let udid = ctx.udid();
     let s = crate::snapshot(&ctx.socket).await.map_err(|e| e.to_string())?;
+    if let Some(d) = &s.device
+        && !d.udid.eq_ignore_ascii_case(&ctx.udid())
+    {
+        *ctx.udid.lock().unwrap_or_else(|p| p.into_inner()) = d.udid.clone();
+    }
+    let udid = ctx.udid();
     let screen = screen_of(&s.persisted, &udid);
-    let controlled = s.device.as_ref().is_some_and(|d| d.udid.eq_ignore_ascii_case(&udid));
     Ok(json!({
         "width": screen.map(|s| s.width),
         "height": screen.map(|s| s.height),
@@ -507,10 +558,7 @@ async fn info(ctx: &Ctx) -> Result<Value, String> {
         // the picture's pointer drives a finger over CoreDevice HID (iOS 27 and later); older phones get whole gestures
         "live_touch": s.device.as_ref().is_some_and(|d| d.major_version() >= 27),
         "device": s.device.map(|d| d.name),
-        "warning": (!controlled).then(|| ictl_l10n::trf!(
-            "守护进程现在控制的不是这台({udid}),操作会被拒绝;在页面上方重新选择设备",
-            "The daemon no longer controls this device ({udid}), so actions are refused; pick the device again at the top of the page"
-        )),
+        "state": state_of(&s.state).0,
     }))
 }
 
@@ -541,6 +589,8 @@ async fn daemon(ctx: &Ctx) -> Result<Value, String> {
         "last_error": last_error,
         "device": s.device.as_ref().map(device_json),
         "auto_unlock": s.auto_unlock && !s.unlock_disabled,
+        // the page offers to sign and install WDA (NeedsSigning) only with an Apple ID to sign with
+        "signed_in": crate::account_dir(&ctx.data_dir).selected_email().await.is_ok(),
     }))
 }
 
@@ -563,14 +613,16 @@ async fn devices(ctx: &Ctx) -> Result<Value, String> {
 /// `{ wda_ready, locked, foreground, foreground_id, width, height, route }`, from the English status text
 async fn status(ctx: &Ctx) -> Result<Value, String> {
     let text = text_of(&ctx.socket, Request::Status, true).await?;
-    let mut v = parse_status(&text);
+    // the HID fallback needs iOS 27; an older device without WDA can't be operated at all
+    let hid = crate::snapshot(&ctx.socket).await.ok().and_then(|s| s.device).is_some_and(|d| d.major_version() >= 27);
+    let mut v = parse_status(&text, hid);
     if let Some(id) = v["foreground_id"].as_str().map(str::to_owned) {
         v["foreground"] = app_name(ctx, &id).await.into();
     }
     Ok(v)
 }
 
-fn parse_status(text: &str) -> Value {
+fn parse_status(text: &str, hid: bool) -> Value {
     let field = |k: &str| text.lines().find_map(|l| l.strip_prefix(k)).map(str::trim);
     let ready = field("WDA ready:") == Some("True");
     let lock = field("Locked:");
@@ -589,8 +641,8 @@ fn parse_status(text: &str) -> Value {
         "foreground": fg,
         "width": w,
         "height": h,
-        // without WDA, screenshots, taps and keys go over CoreDevice HID
-        "route": if ready { "wda" } else { "hid" },
+        // without WDA, screenshots, taps and keys go over CoreDevice HID (iOS 27 and later); otherwise nothing works
+        "route": if ready { "wda" } else if hid { "hid" } else { "none" },
     })
 }
 
@@ -760,6 +812,12 @@ mod tests {
         assert_eq!(percent_decode("100%"), "100%");
         let h = head("GET /api/status HTTP/1.1\r\nHost: localhost\r\nX-Ictl-Lang: en\r\n\r\n");
         assert_eq!(h.lang, Some(ictl_l10n::Lang::En));
+        // the device the page shows: its actions go only there, its picture comes from there
+        let h = head("POST /api/tap HTTP/1.1\r\nX-Ictl-Device: 00008150-001A\r\n\r\n");
+        assert_eq!(h.device.as_deref(), Some("00008150-001A"));
+        assert_eq!(head("POST /api/tap HTTP/1.1\r\nX-Ictl-Device: \r\n\r\n").device, None, "empty means none");
+        let h = head("GET /stream?udid=00008150-001A&t=1 HTTP/1.1\r\n\r\n");
+        assert_eq!(h.query("udid").as_deref(), Some("00008150-001A"));
         assert!(Head::parse(b"POST / HTTP/1.1\r\nContent-Length: x\r\n\r\n").is_none());
     }
 
@@ -773,15 +831,19 @@ mod tests {
     fn status_text_becomes_fields() {
         let v = parse_status(
             "WDA ready: True\nLocked: locked (actions unlock automatically)\nForeground app: com.apple.Preferences\nScreen: 440x956 points\nDaemon: Ready",
+            true,
         );
         assert_eq!(v["wda_ready"], true);
         assert_eq!(v["locked"], true);
         assert_eq!(v["foreground_id"], "com.apple.Preferences");
         assert_eq!((v["width"].as_f64(), v["height"].as_f64()), (Some(440.0), Some(956.0)));
         assert_eq!(v["route"], "wda");
-        assert_eq!(parse_status("WDA ready: True\nLocked: unlocked\n")["locked"], false);
-        let down = parse_status("WDA is starting\nreading elements … wait until WDA is back\nDaemon: Starting WDA");
-        assert_eq!((down["wda_ready"].as_bool(), down["route"].as_str()), (Some(false), Some("hid")));
+        assert_eq!(parse_status("WDA ready: True\nLocked: unlocked\n", false)["locked"], false);
+        let down = "WDA is starting\nreading elements … wait until WDA is back\nDaemon: Starting WDA";
+        assert_eq!(parse_status(down, true)["route"], "hid", "iOS 27 and later");
+        assert_eq!(parse_status(down, false)["route"], "none", "older: no HID fallback");
+        let down = parse_status(down, true);
+        assert_eq!(down["wda_ready"], false);
         assert!(down["locked"].is_null());
     }
 

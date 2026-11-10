@@ -1,10 +1,9 @@
-//! 巡检和后台任务：usbmuxd 看护、每 10 秒推进状态机、后台启动 WDA、重签、Apple ID 会话检查。
+//! 巡检和后台任务：每 10 秒推进状态机、后台启动 WDA、重签（含证书出问题时自动重签）、Apple ID 会话检查。
 
-use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
-use ictl_device::{Device, DeviceError, SYSFS_USB, Tunnel, UsbDevice};
+use ictl_device::{Device, DeviceError, Tunnel, UsbDevice};
 use ictl_wda::{WdaClient, WdaError, WdaRunner, http::DeviceTransport};
 
 use crate::core::{Daemon, DeviceProfile, Inner, close_hid};
@@ -17,9 +16,6 @@ const WDA_START_TIMEOUT: Duration = Duration::from_secs(120);
 /// HID 会话空闲这么久就关掉。它持有屏幕媒体流，开着时 iOS 当作屏幕被远程查看：不会自动锁屏，
 /// 还会弹「viewed remotely」通知。重开约 0.5 秒
 pub(crate) const HID_IDLE: Duration = Duration::from_secs(30);
-/// usbmuxd 起来后这么久内就退出，算「起不来」，按退避重试
-const USBMUXD_QUICK_EXIT: Duration = Duration::from_secs(30);
-const USBMUXD_MAX_DELAY: Duration = Duration::from_secs(300);
 /// 连续这么多轮列不出设备才当作离线
 const LIST_ERRORS_OFFLINE: u32 = 3;
 /// 开发者镜像连续挂载失败这么多次就清缓存重新下载
@@ -30,6 +26,8 @@ const RESIGN_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 const SESSION_CHECK_TIMEOUT: Duration = Duration::from_secs(3 * 60);
 /// 换了设备或重新接上后，这么久内就检查一次要不要重签（离线期间可能过期了，不能等满 RESIGN_CHECK_HOURS）
 const RESIGN_CHECK_AFTER_CONNECT: Duration = Duration::from_secs(60);
+/// 因为证书自动重签同一台设备的最短间隔：重签也治不好时（例如其实是没信任开发者）不反复签
+pub(crate) const CERT_HEAL_EVERY: Duration = Duration::from_secs(6 * 3600);
 
 /// 后台启动 WDA 的结果
 pub(crate) enum StartOutcome {
@@ -49,73 +47,12 @@ pub(crate) enum StartOutcome {
 }
 
 impl Daemon {
-    // ------------------------------------------------------------------ usbmuxd
-
-    pub(crate) async fn ensure_usbmuxd(&self, g: &mut Inner, restart: bool) {
-        if !self.cfg.manage_usbmuxd {
-            return;
-        }
-        let exited = match g.usbmuxd.as_mut().map(|c| c.try_wait()) {
-            Some(Ok(None)) => None,
-            Some(Ok(Some(st))) => Some(st.to_string()),
-            Some(Err(e)) => Some(e.to_string()),
-            None => Some(String::new()),
-        };
-        if exited.is_none() && !restart {
-            return;
-        }
-        if !restart {
-            // 起来就退出（例如宿主机上已有 usbmuxd 占着 socket）：退避重试，不要每 10 秒拆一次会话、写一行日志
-            if let Some(why) = exited.filter(|w| !w.is_empty())
-                && g.usbmuxd_started.is_some_and(|t| t.elapsed() < USBMUXD_QUICK_EXIT)
-            {
-                g.usbmuxd_delay = (g.usbmuxd_delay * 2).clamp(Duration::from_secs(10), USBMUXD_MAX_DELAY);
-                g.usbmuxd_retry_at = Some(Instant::now() + g.usbmuxd_delay);
-                g.usbmuxd_started = None;
-                self.log.log(&ictl_l10n::log_trf!("usbmuxd 启动后很快就退出了（{why}），{} 秒后再试；宿主机已在运行 usbmuxd 时设 ICTL_MANAGE_USBMUXD=0", "usbmuxd exited right after starting ({why}), retrying in {} seconds; if the host already runs usbmuxd, set ICTL_MANAGE_USBMUXD=0",
-                    g.usbmuxd_delay.as_secs()
-                ));
-            }
-            if g.usbmuxd_retry_at.is_some_and(|t| Instant::now() < t) {
-                return;
-            }
-        }
-        // 经旧 usbmuxd 建立的连接（隧道、runner、WDA）都要失效：先停 HID 媒体流（还要经它），再停它
-        self.drop_session(g).await;
-        if let Some(mut c) = g.usbmuxd.take() {
-            crate::core::stop_child(&mut c).await;
-        }
-        let log_path = self.cfg.logs().join("usbmuxd.log");
-        rotate_before_append(&log_path, crate::eventlog::MAX_BYTES);
-        let log = std::fs::OpenOptions::new().create(true).append(true).open(log_path);
-        let mut cmd = tokio::process::Command::new(&self.cfg.usbmuxd_bin);
-        cmd.args(["-U", "root", "-f"]).kill_on_drop(true);
-        if let Ok(f) = log
-            && let Ok(f2) = f.try_clone()
-        {
-            cmd.stdout(f).stderr(f2);
-        }
-        match cmd.spawn() {
-            Ok(c) => {
-                g.usbmuxd = Some(c);
-                g.usbmuxd_started = Some(Instant::now());
-                if g.usbmuxd_retry_at.take().is_none() {
-                    g.usbmuxd_delay = Duration::ZERO;
-                }
-                self.log.log(ictl_l10n::log_tr!("usbmuxd 已(重新)启动", "usbmuxd (re)started"));
-                tokio::time::sleep(Duration::from_secs(1)).await;
-            }
-            Err(e) => self.log.log(&ictl_l10n::log_trf!("启动 usbmuxd 失败：{e}", "Starting usbmuxd failed: {e}")),
-        }
-    }
-
     // ------------------------------------------------------------------ 状态机
 
     /// 每 10 秒一次。有请求在用设备就跳过这一轮（巡检不排队，下一轮再来）
     pub async fn tick(self: Arc<Self>) {
         let Ok(mut g) = self.inner.try_lock() else { return };
         let g = &mut *g;
-        self.ensure_usbmuxd(g, false).await;
 
         if g.tunnel.as_ref().is_some_and(Tunnel::hid_open) && g.hid_used.is_none_or(|t| t.elapsed() >= HID_IDLE) {
             close_hid(g).await;
@@ -155,18 +92,10 @@ impl Daemon {
         self.note_connected(g, devices).await;
         let pinned = self.pinned(g);
         let udids: Vec<&str> = g.connected.iter().map(|d| d.udid.as_str()).collect();
-        let current = g.device.as_ref().map(|d| d.udid.as_str());
+        // just started, nothing controlled yet: in automatic mode go on with the last device that was ready (kept in
+        // state.json), not whichever usbmuxd happens to list first
+        let current = g.device.as_ref().map(|d| d.udid.as_str()).or(g.persisted.screen_udid.as_deref());
         let target = crate::machine::pick_device(&udids, pinned.as_deref(), current).map(|i| g.connected[i].clone());
-        // 只在容器里（自己看护 usbmuxd、没有 udev）需要；用系统的 usbmuxd 服务时插拔由 udev 处理，也重启不了它
-        let on_usb = ictl_device::ios_usb_count(Path::new(SYSFS_USB));
-        if self.cfg.manage_usbmuxd && g.mux.observe(on_usb, g.connected.len()) {
-            self.log.log(&ictl_l10n::log_trf!(
-                "USB 上有 {on_usb} 台 iPhone/iPad,usbmuxd 只认到 {} 台,重启 usbmuxd",
-                "{on_usb} iPhone/iPad on USB but usbmuxd only sees {}, restarting usbmuxd",
-                g.connected.len()
-            ));
-            self.ensure_usbmuxd(g, true).await;
-        }
 
         match target {
             None => self.offline(g).await,
@@ -363,7 +292,7 @@ impl Daemon {
     }
 
     /// 后台启动做完了就收结果
-    async fn poll_start(&self, g: &mut Inner) {
+    async fn poll_start(self: &Arc<Self>, g: &mut Inner) {
         if !g.starting.as_ref().is_some_and(|h| h.is_finished()) {
             return;
         }
@@ -417,9 +346,112 @@ impl Daemon {
             }
             StartOutcome::Wda(e) => {
                 g.backoff.failed(Instant::now());
+                // StartFailed 自己就以「WDA 启动失败：」开头，日志和状态里再加一遍就重复了
+                let e = match e {
+                    WdaError::StartFailed(m) => m,
+                    e => e.to_string(),
+                };
                 self.log.log(&ictl_l10n::log_trf!("WDA 启动失败：{e}", "WDA failed to start: {e}"));
-                self.set_state(g, DeviceState::WdaStarting { last_error: Some(e.to_string()) });
+                let refused = ictl_wda::runner::launch_refused(&e);
+                self.set_state(g, DeviceState::WdaStarting { last_error: Some(e) });
+                if refused {
+                    self.maybe_heal_certificate(g);
+                }
             }
+        }
+    }
+
+    /// 设备拒绝启动 WDA（只报 unexpected response）时，看是不是证书的问题，是就自动重签这台（见 `ictl_sign` 的模块说明）：
+    /// 设备上的 WDA 不是本机的证书签的（别的机器、旧的数据目录签的，签它的证书多半被吊销了），或本机的证书已不在团队里
+    /// （别处新建证书时把它吊销了）。都不是就多半是还没信任开发者，留给用户（状态里有提示）。
+    /// 同一台 [`CERT_HEAL_EVERY`] 内只自动重签一次
+    fn maybe_heal_certificate(self: &Arc<Self>, g: &mut Inner) {
+        let Some(udid) = g.device.as_ref().map(|d| d.udid.clone()) else { return };
+        if g.resigning || g.persisted.wda_bundle.is_none() {
+            return;
+        }
+        if g.cert_heals.get(&udid).is_some_and(|t| t.elapsed() < CERT_HEAL_EVERY) {
+            return;
+        }
+        g.cert_heals.insert(udid.clone(), Instant::now());
+        tokio::task::spawn_local(self.clone().heal_certificate(udid, g.dev.foreign_wda));
+    }
+
+    async fn heal_certificate(self: Arc<Self>, udid: String, foreign: Option<bool>) {
+        if self.account().selected_email().await.is_err() {
+            return;
+        }
+        let why = if foreign == Some(true) {
+            ictl_l10n::tr!(
+                "这台设备上的 WDA 不是本机的签名证书签的（别的机器或旧的数据目录签的，签它的证书多半已被吊销）",
+                "the WDA on this device wasn't signed with this machine's certificate (another machine or an old data directory signed it, and that certificate was most likely revoked)"
+            )
+        } else {
+            match self.check_own_certificate().await {
+                Some(false) => ictl_l10n::tr!(
+                    "本机的签名证书已不在 Apple ID 的团队里（别处新建证书时把它吊销了）",
+                    "this machine's signing certificate is no longer in the Apple ID's team (it was revoked when a certificate was created elsewhere)"
+                ),
+                // 证书没问题（或查不了）：多半是还没信任开发者
+                _ => return,
+            }
+        };
+        {
+            let mut g = self.inner.lock().await;
+            // 查证书期间切到了别的设备，或用户已经在重签了
+            if g.device.as_ref().map(|d| d.udid.as_str()) != Some(udid.as_str()) || g.resigning {
+                return;
+            }
+            self.log.log(&ictl_l10n::log_trf!(
+                "WDA 起不来：{why}，自动重签这台设备",
+                "WDA won't start: {why}; re-signing this device automatically"
+            ));
+            self.set_state(
+                &mut g,
+                DeviceState::WdaStarting {
+                    last_error: Some(ictl_l10n::trf!(
+                        "{why}。正在自动重签这台设备，约 1–2 分钟，保持设备解锁",
+                        "{why}. Re-signing this device automatically, about 1–2 minutes; keep it unlocked"
+                    )),
+                },
+            );
+            self.publish(&g);
+        }
+        if let Err(e) = self.resign_now(true).await {
+            let mut g = self.inner.lock().await;
+            self.notify(&mut g, Event::ResignFailed(e));
+        }
+    }
+
+    /// 联网查本机的签名证书还在不在团队里，记进 `own_cert`（doctor 显示）。登录不了、查不了返回 None
+    async fn check_own_certificate(&self) -> Option<bool> {
+        let account = self.account();
+        // plume_core 的 future 不是 Send，放到阻塞线程里 block_on（同重签）；也不持锁
+        let r = tokio::task::spawn_blocking(move || {
+            tokio::runtime::Handle::current().block_on(async move {
+                tokio::time::timeout(SESSION_CHECK_TIMEOUT, async {
+                    account.session().await?.own_certificate_listed().await
+                })
+                .await
+            })
+        })
+        .await;
+        match r {
+            Ok(Ok(Ok(Some(listed)))) => {
+                self.inner.lock().await.own_cert = Some((Instant::now(), listed));
+                Some(listed)
+            }
+            Ok(Ok(Err(e))) => {
+                tracing::warn!(
+                    "{}",
+                    ictl_l10n::log_trf!(
+                        "查本机的签名证书失败：{e}",
+                        "Checking this machine's signing certificate failed: {e}"
+                    )
+                );
+                None
+            }
+            _ => None,
         }
     }
 
@@ -428,10 +460,28 @@ impl Daemon {
     async fn check_session(self: Arc<Self>) {
         let account = self.account();
         // plume_core 的 future 不是 Send，放到阻塞线程里 block_on（同重签）；也不持锁
-        let r: Result<(), Option<String>> = tokio::task::spawn_blocking(move || {
+        // 会话好的话顺便查本机的签名证书还在不在团队里（同一次登录）
+        let r: Result<Option<bool>, Option<String>> = tokio::task::spawn_blocking(move || {
             tokio::runtime::Handle::current().block_on(async move {
-                match tokio::time::timeout(SESSION_CHECK_TIMEOUT, account.session()).await {
-                    Ok(Ok(_)) => Ok(()),
+                let check = async {
+                    let s = account.session().await?;
+                    Ok::<_, ictl_sign::SignError>(match s.own_certificate_listed().await {
+                        Ok(listed) => listed,
+                        // 会话是好的，只是这一步没查成：不算会话失效，记一笔
+                        Err(e) => {
+                            tracing::warn!(
+                                "{}",
+                                ictl_l10n::log_trf!(
+                                    "查本机的签名证书失败：{e}",
+                                    "Checking this machine's signing certificate failed: {e}"
+                                )
+                            );
+                            None
+                        }
+                    })
+                };
+                match tokio::time::timeout(SESSION_CHECK_TIMEOUT, check).await {
+                    Ok(Ok(listed)) => Ok(listed),
                     Ok(Err(ictl_sign::SignError::NotLoggedIn)) => Err(None),
                     Ok(Err(e)) => Err(Some(e.to_string())),
                     Err(_) => Err(Some(ictl_l10n::trf!(
@@ -446,7 +496,18 @@ impl Daemon {
         .unwrap_or_else(|e| Err(Some(ictl_l10n::trf!("会话检查任务异常：{e}", "Session check task failed: {e}"))));
         let mut g = self.inner.lock().await;
         match r {
-            Ok(()) => g.dedup.clear("session"),
+            Ok(listed) => {
+                g.dedup.clear("session");
+                if let Some(l) = listed {
+                    g.own_cert = Some((Instant::now(), l));
+                    if !l {
+                        self.log.log(ictl_l10n::log_tr!(
+                            "本机的签名证书已不在 Apple ID 的团队里（别处新建证书时把它吊销了）：用它签的 WDA 起不来，会自动重签",
+                            "This machine's signing certificate is no longer in the Apple ID's team (revoked when a certificate was created elsewhere): WDA signed with it won't start and gets re-signed automatically"
+                        ));
+                    }
+                }
+            }
             Err(None) => {}
             Err(Some(e)) => {
                 self.log
@@ -505,8 +566,8 @@ impl Daemon {
         let fetch = self.cfg.wda_unsigned_is_cache() && !unsigned.is_file();
         if fetch {
             self.log.log(&ictl_l10n::log_trf!(
-                "没有未签名的 WDA 包（不在镜像里运行），先下载 {}",
-                "No unsigned WDA package (not running in the image), downloading {} first",
+                "还没有未签名的 WDA 包，先下载 {}",
+                "No unsigned WDA package yet, downloading {} first",
                 crate::wda_pkg::WDA_VERSION
             ));
         }
@@ -547,6 +608,22 @@ impl Daemon {
         g.resigning = false;
         let r = match r {
             Ok(s) => {
+                if s.new_certificate {
+                    self.log.log(if s.revoked_certificate {
+                        ictl_l10n::log_tr!(
+                            "签名新建了证书，团队里的证书满了，吊销了一张旧的：用它签的 WDA 在所有设备上都起不来了",
+                            "Signing created a new certificate and revoked an old one (the team was full): WDA signed with it won't start on any device"
+                        )
+                    } else {
+                        ictl_l10n::log_tr!(
+                            "签名新建了证书（本机没有私钥，或原来的证书已不在团队里）",
+                            "Signing created a new certificate (no local key, or the previous one is no longer in the team)"
+                        )
+                    });
+                    self.notify(g, Event::CertificateChanged { revoked: s.revoked_certificate });
+                }
+                // 刚用它签成功，本机的证书肯定在团队里
+                g.own_cert = Some((Instant::now(), true));
                 let exp = s.profile.expires.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
                 g.persisted.team_id = Some(s.team_id);
                 g.persisted.wda_bundle = Some(s.bundle_id);
@@ -580,13 +657,6 @@ impl Daemon {
         };
         self.publish(g);
         r
-    }
-}
-
-/// Keeps a log that a child appends to from growing without end. Only safe while nothing has it open
-fn rotate_before_append(path: &Path, max: u64) {
-    if std::fs::metadata(path).is_ok_and(|m| m.len() >= max) {
-        let _ = std::fs::rename(path, path.with_extension("log.1"));
     }
 }
 

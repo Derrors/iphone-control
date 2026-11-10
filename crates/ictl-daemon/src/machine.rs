@@ -89,14 +89,6 @@ impl Backoff {
     }
 }
 
-/// 容器里没有 udev，usbmuxd 收不到热插拔：sysfs 上有 Apple 设备但 usbmuxd 看不到，连续 3 次就该重启它
-#[derive(Debug, Default)]
-pub struct MuxWatch {
-    misses: u32,
-}
-
-pub const USBMUXD_MISS_LIMIT: u32 = 3;
-
 /// 接着几台设备时控制哪一台，返回在 `udids` 里的下标：
 /// - 选定了（`IPHONE_UDID` 或运行中选的）：只认那一台，没接就是没有（不换成别的，免得操作、自动解锁落到另一台上）
 /// - 没选定：正在控制的那台还接着就继续用它，不因 usbmuxd 列表顺序变化换台；没有正在控制的才取第一台
@@ -105,24 +97,6 @@ pub fn pick_device(udids: &[&str], pinned: Option<&str>, current: Option<&str>) 
     match pinned {
         Some(p) => pos(p),
         None => current.and_then(pos).or(if udids.is_empty() { None } else { Some(0) }),
-    }
-}
-
-impl MuxWatch {
-    /// 返回 true 表示该重启 usbmuxd 了。`on_usb`：sysfs 里的 iPhone/iPad 台数；`seen`：usbmuxd 认到的台数。
-    /// 比台数而不是「要控制的那台在不在」：那台没接、另一台接着时不该重启；
-    /// 也不是「看没看到任何一台」：已经接着一台时再插一台，没有 udev 的 usbmuxd 认不到它
-    pub fn observe(&mut self, on_usb: usize, seen: usize) -> bool {
-        if seen >= on_usb {
-            self.misses = 0;
-            return false;
-        }
-        self.misses += 1;
-        if self.misses >= USBMUXD_MISS_LIMIT {
-            self.misses = 0;
-            return true;
-        }
-        false
     }
 }
 
@@ -202,30 +176,6 @@ mod tests {
         assert_eq!(pick_device(&[a, b], Some("00008020-bbbb"), Some(a)), Some(1));
         assert_eq!(pick_device(&[a], Some(b), Some(a)), None);
         assert_eq!(pick_device(&[], None, None), None);
-    }
-
-    /// 回归用例 #7：sysfs 有设备但 usbmuxd 看不到，连续 3 次才重启
-    #[test]
-    fn usbmuxd_restart_after_three_misses() {
-        let mut w = MuxWatch::default();
-        assert!(!w.observe(1, 0));
-        assert!(!w.observe(1, 0));
-        assert!(w.observe(1, 0));
-        assert!(!w.observe(1, 0), "重启后重新计数");
-        assert!(!w.observe(0, 0), "USB 上没有设备不算漏");
-        assert!(!w.observe(1, 1));
-    }
-
-    /// 接着 iPad 时再插 iPhone：usbmuxd 只认到 1 台，也要重启
-    #[test]
-    fn usbmuxd_restart_when_a_second_device_is_missed() {
-        let mut w = MuxWatch::default();
-        assert!(!w.observe(2, 1));
-        assert!(!w.observe(2, 1));
-        assert!(w.observe(2, 1));
-        assert!(!w.observe(2, 2));
-        // 拔掉一台、usbmuxd 还没更新列表：不算漏
-        assert!(!w.observe(1, 2));
     }
 
     #[test]

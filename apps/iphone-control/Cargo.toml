@@ -48,7 +48,8 @@ maintainer-scripts = "../../deploy/deb"
 assets = [
   ["target/release/iphone-control", "usr/bin/", "755"],
   ["../../deploy/deb/iphone-control.service", "usr/lib/systemd/user/", "644"],
-  ["../../.env.example", "usr/share/doc/iphone-control/env.example", "644"],
+  ["../../packaging/env.example", "usr/share/doc/iphone-control/env.example", "644"],
+  ["../../THIRD_PARTY_LICENSES.html", "usr/share/doc/iphone-control/", "644"],
   ["../../README.md", "usr/share/doc/iphone-control/", "644"],
   ["../../README.zh-CN.md", "usr/share/doc/iphone-control/", "644"],
   ["../../THIRD_PARTY.md", "usr/share/doc/iphone-control/", "644"],

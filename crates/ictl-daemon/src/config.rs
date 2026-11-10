@@ -1,4 +1,4 @@
-//! 守护进程配置：全部来自环境变量（容器里由 .env 注入；从源码运行时由 systemd 的环境文件或 shell 给），都有默认值。秘密只放文件，不放环境变量以外的地方。
+//! 守护进程配置：全部来自环境变量（服务从 ~/.config/iphone-control/env 读入，手动运行时由 shell 给），都有默认值。秘密只放文件，不放环境变量以外的地方。
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -12,11 +12,7 @@ pub struct Config {
     /// 固定要控制的手机（`IPHONE_UDID`）；None 时可以在运行中选（见 [`crate::core::Persisted::selected_udid`]）。
     /// 都没选是自动选：正在控制的那台一直用到断开，没有正在控制的才取 usbmuxd 列出的第一台
     pub udid: Option<String>,
-    /// 由守护进程拉起并看护 usbmuxd。默认以 root 运行（容器）时为 true；普通用户拉起的 usbmuxd 碰不到 USB，
-    /// 改用系统的 usbmuxd 服务。宿主机以 root 运行、又已有 usbmuxd 服务时设 ICTL_MANAGE_USBMUXD=0
-    pub manage_usbmuxd: bool,
-    pub usbmuxd_bin: String,
-    /// 未签名的 WDA：镜像里自带；从源码运行时是数据目录里的 [`Config::wda_unsigned_cache`]，第一次签名前下载
+    /// 未签名的 WDA：默认是数据目录里的 [`Config::wda_unsigned_cache`]，第一次签名前下载
     pub wda_unsigned: PathBuf,
     pub ddi_url: String,
     /// 自己从 Xcode 提取的 DDI Restore 目录；设了就不下载，也从不删除里面的文件
@@ -46,7 +42,7 @@ impl NotifyConfig {
     }
 }
 
-/// 读环境变量，去掉首尾空白，空值当作没设（.env 里常留着 `KEY=`）
+/// 读环境变量，去掉首尾空白，空值当作没设（配置文件里常留着 `KEY=`）
 pub fn env(k: &str) -> Option<String> {
     std::env::var(k).ok().map(|v| v.trim().to_owned()).filter(|v| !v.is_empty())
 }
@@ -71,13 +67,7 @@ impl Config {
             // 实际值由命令行给（--socket / ICTL_SOCKET，见 apps/iphone-control）
             socket: crate::protocol::default_socket(),
             udid: env("IPHONE_UDID"),
-            manage_usbmuxd: env("ICTL_MANAGE_USBMUXD")
-                .map_or_else(crate::protocol::running_as_root, |v| v != "0" && v != "false"),
-            usbmuxd_bin: env("ICTL_USBMUXD_BIN").unwrap_or_else(|| "usbmuxd".into()),
-            wda_unsigned: env("ICTL_WDA_UNSIGNED").map(PathBuf::from).unwrap_or_else(|| {
-                let image = Path::new(crate::wda_pkg::IMAGE_PATH);
-                if image.is_file() { image.to_owned() } else { wda_unsigned_cache(data_dir) }
-            }),
+            wda_unsigned: env("ICTL_WDA_UNSIGNED").map(PathBuf::from).unwrap_or_else(|| wda_unsigned_cache(data_dir)),
             ddi_url: env("ICTL_DDI_URL").unwrap_or_else(|| ictl_device::ddi::DEFAULT_BASE_URL.into()),
             ddi_dir: env("ICTL_DDI_DIR").map(PathBuf::from),
             anisette_url: env("ICTL_ANISETTE_URL"),
@@ -143,13 +133,13 @@ impl Config {
         self.data_dir.join("state.json")
     }
 
-    /// 建好数据目录并收紧权限：配对记录、账号私钥、锁屏密码都在里面
+    /// 建好数据目录并收紧权限：账号私钥、锁屏密码都在里面（配对记录归系统的 usbmuxd 管）
     pub fn prepare_dirs(&self) -> std::io::Result<()> {
         use std::os::unix::fs::PermissionsExt;
-        for d in ["lockdown", "account", "wda", "ddi", "secrets", "logs"] {
+        for d in ["account", "wda", "ddi", "secrets", "logs"] {
             std::fs::create_dir_all(self.data_dir.join(d))?;
         }
-        for d in ["", "lockdown", "account", "secrets"] {
+        for d in ["", "account", "secrets"] {
             std::fs::set_permissions(self.data_dir.join(d), std::fs::Permissions::from_mode(0o700))?;
         }
         Ok(())

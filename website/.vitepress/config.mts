@@ -46,8 +46,7 @@ export default defineConfig({
           {
             text: '安装部署',
             items: [
-              { text: 'Docker', link: '/deploy/docker' },
-              { text: '从源码 / 二进制', link: '/deploy/source' },
+              { text: '从源码编译', link: '/deploy/source' },
               { text: 'macOS', link: '/deploy/macos' },
               { text: '数据与备份', link: '/deploy/backup' },
             ],
@@ -111,8 +110,7 @@ export default defineConfig({
           {
             text: 'Deployment',
             items: [
-              { text: 'Docker', link: '/en/deploy/docker' },
-              { text: 'Source / Binary', link: '/en/deploy/source' },
+              { text: 'Build from Source', link: '/en/deploy/source' },
               { text: 'macOS', link: '/en/deploy/macos' },
               { text: 'Data and Backups', link: '/en/deploy/backup' },
             ],

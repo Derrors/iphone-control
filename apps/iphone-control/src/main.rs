@@ -1,7 +1,8 @@
 //! iphone-control：唯一的可执行程序。守护进程、MCP 服务和运维命令都在这里。
 //!
+//! 不带参数运行是首次运行引导（[`guide`]）：没设置好就一步步引导，设置好以后只显示状态。
 //! 运维命令（status、doctor、resign、unlock-reset）经控制接口问守护进程；
-//! setup、login、passcode 需要交互，直接在本进程里做。
+//! setup、login、passcode 需要交互，直接在本进程里做。每个命令启动时先读 ~/.config/iphone-control/env（[`envfile`]）。
 
 use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
@@ -15,6 +16,9 @@ use ictl_daemon::protocol::{self, Request, Response};
 mod agent;
 #[cfg(feature = "debug-cmds")]
 mod debug;
+mod envfile;
+mod guide;
+mod service;
 mod viewer;
 
 #[derive(Parser)]
@@ -26,28 +30,34 @@ struct Cli {
     #[arg(help = ictl_l10n::tr!("守护进程控制接口。默认：root 是 /run/iphone-control/ctl.sock，普通用户是 $XDG_RUNTIME_DIR/iphone-control/ctl.sock", "Daemon control socket. Default: /run/iphone-control/ctl.sock for root, $XDG_RUNTIME_DIR/iphone-control/ctl.sock for a regular user"))]
     #[arg(long, env = "ICTL_SOCKET", default_value_os_t = protocol::default_socket())]
     socket: PathBuf,
+    /// 不给就是首次运行引导（设置好以后显示状态）
     #[command(subcommand)]
-    command: Command,
+    command: Option<Command>,
 }
 
 #[derive(Subcommand)]
 enum Command {
-    #[command(about = ictl_l10n::tr!("常驻守护进程（容器入口；从源码运行时由 systemd 或手动启动）", "The long-running daemon (the container's entry point; for a source install started by systemd or by hand)"))]
+    #[command(about = ictl_l10n::tr!("常驻守护进程（安装时装成用户服务：macOS 是 launchd，Linux 是 systemd；也可以手动启动）", "The long-running daemon (installed as a user service: launchd on macOS, systemd on Linux; can also be started by hand)"))]
     Daemon,
     #[command(about = ictl_l10n::tr!("MCP stdio 服务（由 agent 拉起）", "MCP stdio server (started by the agent)"))]
     Mcp,
-    #[command(about = ictl_l10n::tr!("打印把 MCP 注册到 Claude Code 的命令：在容器里打印 docker exec 的写法，否则直接调用本程序", "Print the command that registers the MCP server with Claude Code: a docker exec form inside a container, otherwise this program directly"))]
-    McpConfig {
-        #[arg(help = ictl_l10n::tr!("容器名；给了就按容器部署打印", "Container name; if given, print the container form"))]
-        #[arg(long)]
-        container: Option<String>,
-    },
+    #[command(about = ictl_l10n::tr!("打印把 MCP 注册到 Claude Code 的命令", "Print the command that registers the MCP server with Claude Code"))]
+    McpConfig,
     #[command(about = ictl_l10n::tr!("守护进程和设备状态、最近的日志", "Daemon and device state, recent log"))]
     Status,
     #[command(about = ictl_l10n::tr!("逐层诊断，每项失败都给出修复办法", "Layer-by-layer health check with a fix for each failure"))]
     Doctor,
-    #[command(about = ictl_l10n::tr!("首次安装向导：配对 → 开发者模式 → 登录 Apple ID → 签名安装 WDA（可重复运行）", "Guided setup: pairing → Developer Mode → Apple ID sign-in → sign and install WDA (safe to re-run)"))]
-    Setup,
+    #[command(about = ictl_l10n::tr!("设置引导：语言、代理、后台服务、配对、开发者模式、Apple ID、安装 WDA、自动解锁、通知、注册 MCP（可重复运行，做过的步骤跳过）", "Guided setup: language, proxy, background service, pairing, Developer Mode, Apple ID, WDA, auto-unlock, notifications, MCP registration (safe to re-run; done steps are skipped)"))]
+    Setup {
+        #[arg(help = ictl_l10n::tr!("重新设置：全部重走，或只改其中一项", "Set up again: all of it, or one part"))]
+        #[arg(long)]
+        reconfigure: bool,
+    },
+    #[command(about = ictl_l10n::tr!("后台服务（macOS 是 launchd，Linux 是 systemd 用户服务）：install / uninstall / start / stop / restart / status", "The background service (launchd on macOS, a systemd user service on Linux): install / uninstall / start / stop / restart / status"))]
+    Service {
+        #[command(subcommand)]
+        action: ServiceAction,
+    },
     #[command(about = ictl_l10n::tr!("登录 Apple ID（密码和双重认证验证码只在这里输入）", "Sign in to the Apple ID (the password and two-factor code are only entered here)"))]
     Login {
         #[arg(help = ictl_l10n::tr!("Apple ID 邮箱；不给就交互输入", "Apple ID email; asked for interactively if not given"))]
@@ -95,6 +105,19 @@ enum Command {
     },
 }
 
+#[derive(Subcommand)]
+enum ServiceAction {
+    #[command(about = ictl_l10n::tr!("装成登录后自动启动的后台服务并启动（已有就直接启动）", "Set up the service that starts at login and start it (just start it if it exists)"))]
+    Install,
+    #[command(about = ictl_l10n::tr!("停止并移除本程序装的后台服务（数据保留）", "Stop and remove the service this program set up (data is kept)"))]
+    Uninstall,
+    Start,
+    Stop,
+    #[command(about = ictl_l10n::tr!("重启，改过 ~/.config/iphone-control/env 后用", "Restart, after editing ~/.config/iphone-control/env"))]
+    Restart,
+    Status,
+}
+
 /// 锁屏密码按设备分开存：一台的密码不会输进另一台
 #[derive(Subcommand)]
 enum PasscodeAction {
@@ -113,13 +136,18 @@ enum PasscodeAction {
     },
 }
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
+fn main() -> anyhow::Result<()> {
+    // 设置文件先读进环境（命令行上已设的优先），要在启动任何线程之前：语言、代理、通知等对所有命令都生效
+    envfile::load_into_process();
+    tokio::runtime::Runtime::new()?.block_on(run())
+}
+
+async fn run() -> anyhow::Result<()> {
     // 依赖树里 rustls 的 ring 和 aws-lc-rs 都开着，不装默认 provider 的话第一个 HTTPS 请求就 panic
     let _ = rustls::crypto::ring::default_provider().install_default();
-    let cli = Cli::parse();
-    let quiet = matches!(cli.command, Command::Mcp);
-    // ICTL_LOG 留空（.env 里常见的 `ICTL_LOG=`）当作没设；原来空值会生成一个什么都不放行的过滤器
+    let mut cli = Cli::parse();
+    let quiet = matches!(cli.command, Some(Command::Mcp));
+    // ICTL_LOG 留空（配置文件里常见的 `ICTL_LOG=`）当作没设；原来空值会生成一个什么都不放行的过滤器
     let filter =
         env_nonempty("ICTL_LOG").and_then(|v| tracing_subscriber::EnvFilter::try_new(v).ok()).unwrap_or_else(|| {
             tracing_subscriber::EnvFilter::new(if quiet { "warn" } else { "info,idevice=warn,apple_codesign=warn" })
@@ -130,20 +158,22 @@ async fn main() -> anyhow::Result<()> {
         .with_env_filter(filter)
         .init();
 
-    match cli.command {
+    let Some(command) = cli.command.take() else { return guide::first_run(&cli).await };
+    match command {
         Command::Daemon => {
             let mut cfg = ictl_daemon::Config::from_env(&cli.data_dir);
             cfg.socket = cli.socket;
             ictl_daemon::run(cfg).await
         }
         Command::Mcp => ictl_mcp::serve_stdio(cli.socket).await,
-        Command::McpConfig { container } => {
-            println!("{}", mcp_config(container, &cli.socket)?);
+        Command::McpConfig => {
+            println!("{}", mcp_config(&cli.socket)?);
             Ok(())
         }
         Command::Status => status(&cli.socket).await,
         Command::Doctor => print_text(&cli.socket, Request::Doctor).await,
-        Command::Setup => setup(&cli).await,
+        Command::Setup { reconfigure } => guide::setup(&cli, reconfigure).await,
+        Command::Service { action } => service_cmd(&cli.socket, action).await,
         Command::Login { email } => login(&cli.data_dir, email).await,
         Command::Sign => print_text(&cli.socket, Request::Resign { force: true }).await,
         Command::Resign { force } => print_text(&cli.socket, Request::Resign { force }).await,
@@ -152,7 +182,7 @@ async fn main() -> anyhow::Result<()> {
         Command::Devices => print_text(&cli.socket, Request::ListDevices).await,
         Command::Select { device } => print_text(&cli.socket, Request::SelectDevice { device }).await,
         Command::WdaBridge { port } => wda_bridge(&cli.socket, port).await,
-        Command::Viewer { port } => viewer::run(&cli.socket, port).await,
+        Command::Viewer { port } => viewer::run(&cli.socket, &cli.data_dir, port).await,
         #[cfg(feature = "debug-cmds")]
         Command::Debug(args) => debug::run(env_nonempty("IPHONE_UDID").as_deref(), args).await,
         Command::NotifyTest { event } => notify_test(&cli.data_dir, event.as_deref()).await,
@@ -168,9 +198,9 @@ async fn notify_test(data_dir: &Path, only: Option<&str>) -> anyhow::Result<()> 
         bail!(
             "{}",
             ictl_l10n::tr!(
-                "没有配置通知渠道：填 BARK_KEY，或 TG_BOT_TOKEN + TG_CHAT_ID（容器部署在 .env 里填、重建容器；\
-             从源码运行在守护进程的环境文件里填、重启守护进程）",
-                "No notification channel configured: set BARK_KEY, or TG_BOT_TOKEN + TG_CHAT_ID (container: in .env, then recreate the container; source install: in the daemon's env file, then restart the daemon)"
+                "没有配置通知渠道：运行 iphone-control setup --reconfigure 选「通知」，\
+             或在 ~/.config/iphone-control/env 里填 BARK_KEY、或 TG_BOT_TOKEN + TG_CHAT_ID，再重启守护进程",
+                "No notification channel configured: run iphone-control setup --reconfigure and pick notifications, or set BARK_KEY, or TG_BOT_TOKEN + TG_CHAT_ID, in ~/.config/iphone-control/env and restart the daemon"
             )
         );
     }
@@ -209,33 +239,64 @@ async fn notify_test(data_dir: &Path, only: Option<&str>) -> anyhow::Result<()> 
     Ok(())
 }
 
-/// 容器部署：MCP 进程由 `docker exec -i` 在容器里拉起。从源码运行：直接调用本程序，
-/// 显式带上 socket，免得 Claude Code 的环境里没有 XDG_RUNTIME_DIR 时算出别的位置
-fn mcp_config(container: Option<String>, socket: &Path) -> anyhow::Result<String> {
-    let in_container = Path::new("/.dockerenv").exists() || Path::new("/run/.containerenv").exists();
-    let container = container
-        .or_else(|| in_container.then(|| env_nonempty("CONTAINER_NAME").unwrap_or_else(|| "iphone-control".into())));
-    // 英文时把语言写进注册命令：直接调用时 MCP 客户端不带用户 shell 的环境；容器里一般由 .env 继承，
-    // 但只给这一次 docker exec 设了语言（.env 里没有）时，不写进去 MCP 就还是中文
-    let lang = |flag: &str| if ictl_l10n::is_en() { format!("{flag} {}=en ", ictl_l10n::ENV) } else { String::new() };
-    let dev = || if ictl_mcp::dev_tools_enabled() { "-e IPHONE_CONTROL_DEV_TOOLS=1 " } else { "" };
-    Ok(match container {
-        // 开发者工具开关同理：只给这次 docker exec 设了、.env 里没有时也要写进去
-        Some(c) => {
-            format!("claude mcp add iphone -s user -- docker exec -i {}{}{c} iphone-control mcp", lang("-e"), dev())
-        }
-        None => {
-            let exe = std::env::current_exe()
-                .context(ictl_l10n::tr!("找不到本程序的路径", "can't find the path of this program"))?;
-            let lang = lang("-e");
-            let dev = dev();
-            format!(
-                "claude mcp add iphone -s user {lang}{dev}-- {} --socket {} mcp",
-                shell_quote(&exe.to_string_lossy()),
-                shell_quote(&socket.to_string_lossy())
+/// MCP 进程由客户端直接拉起本程序：显式带上 socket，免得 Claude Code 的环境里没有 XDG_RUNTIME_DIR 时算出别的位置。
+/// 英文、开发者工具开关写进注册命令：MCP 客户端不带用户 shell 的环境
+fn mcp_config(socket: &Path) -> anyhow::Result<String> {
+    Ok(mcp_command(&service::stable_exe()?, socket))
+}
+
+async fn service_cmd(socket: &Path, action: ServiceAction) -> anyhow::Result<()> {
+    let none = || {
+        anyhow::anyhow!(
+            "{}",
+            ictl_l10n::tr!(
+                "没有装后台服务：iphone-control service install",
+                "No service is set up: iphone-control service install"
             )
+        )
+    };
+    match action {
+        ServiceAction::Install => {
+            let s = service::install()?;
+            println!("{}", ictl_l10n::trf!("已安装并启动：{}", "Installed and started: {}", s.describe()));
         }
-    })
+        ServiceAction::Uninstall => service::uninstall()?,
+        ServiceAction::Start => service::start(&service::find().ok_or_else(none)?)?,
+        ServiceAction::Stop => service::stop(&service::find().ok_or_else(none)?)?,
+        ServiceAction::Restart => service::restart(&service::find().ok_or_else(none)?)?,
+        ServiceAction::Status => {
+            match service::find() {
+                Some(s) => println!("{}", ictl_l10n::trf!("后台服务  {}", "Service   {}", s.describe())),
+                None => println!(
+                    "{}",
+                    ictl_l10n::tr!(
+                        "后台服务  没有装（iphone-control service install）",
+                        "Service   not set up (iphone-control service install)"
+                    )
+                ),
+            }
+            let up = snapshot(socket).await.is_ok();
+            println!(
+                "{}",
+                if up {
+                    ictl_l10n::tr!("守护进程  在运行", "Daemon    running")
+                } else {
+                    ictl_l10n::tr!("守护进程  没在运行", "Daemon    not running")
+                }
+            );
+        }
+    }
+    Ok(())
+}
+
+fn mcp_command(exe: &Path, socket: &Path) -> String {
+    let lang = if ictl_l10n::is_en() { format!("-e {}=en ", ictl_l10n::ENV) } else { String::new() };
+    let dev = if ictl_mcp::dev_tools_enabled() { "-e IPHONE_CONTROL_DEV_TOOLS=1 " } else { "" };
+    format!(
+        "claude mcp add iphone -s user {lang}{dev}-- {} --socket {} mcp",
+        shell_quote(&exe.to_string_lossy()),
+        shell_quote(&socket.to_string_lossy())
+    )
 }
 
 fn shell_quote(s: &str) -> String {
@@ -253,8 +314,8 @@ async fn ask(socket: &Path, req: Request) -> anyhow::Result<Response> {
         _ => Some(Duration::from_secs(180)),
     };
     protocol::call(socket, &req, timeout).await.with_context(|| {
-        ictl_l10n::trf!("连不上守护进程（{}）：先启动 iphone-control daemon（容器里是入口进程）；\
-             守护进程以别的用户运行时，用 --socket 或 ICTL_SOCKET 指到它的控制接口", "Can't reach the daemon ({}): start iphone-control daemon first (in the container it is the entry process); if the daemon runs as another user, point --socket or ICTL_SOCKET at its control socket",
+        ictl_l10n::trf!("连不上守护进程（{}）：先启动它（iphone-control service start；没装后台服务的，运行 iphone-control 按引导装，或在另一个终端运行 iphone-control daemon）；\
+             守护进程以别的用户运行时，用 --socket 或 ICTL_SOCKET 指到它的控制接口", "Can't reach the daemon ({}): start it first (iphone-control service start; without a background service, run iphone-control and let the guide set one up, or run iphone-control daemon in another terminal); if the daemon runs as another user, point --socket or ICTL_SOCKET at its control socket",
             socket.display()
         )
     })
@@ -402,8 +463,8 @@ fn read_line(prompt: &str) -> anyhow::Result<String> {
         bail!(
             "{}",
             ictl_l10n::tr!(
-                "读不到输入（标准输入已关闭）：在终端里运行；容器部署用 docker exec -it",
-                "Can't read input (stdin is closed): run it in a terminal; for a container use docker exec -it"
+                "读不到输入（标准输入已关闭）：在终端里运行",
+                "Can't read input (stdin is closed): run it in a terminal"
             )
         );
     }
@@ -639,12 +700,11 @@ where
     }
 }
 
-async fn setup(cli: &Cli) -> anyhow::Result<()> {
+/// The phone's part of the guide: connect, pair, Developer Mode, Apple ID, sign and install WDA, wait for WDA.
+/// Needs the daemon running ([`guide`] starts it first)
+async fn device_setup(cli: &Cli) -> anyhow::Result<()> {
     use ictl_device::{Device, DeviceError};
     let socket = &cli.socket;
-    snapshot(socket)
-        .await
-        .context(ictl_l10n::tr!("setup 需要守护进程在运行", "setup needs the daemon to be running"))?;
 
     println!("{}", ictl_l10n::tr!("[1/6] 等待手机连接", "[1/6] Waiting for the phone"));
     let found = wait_until(Duration::from_secs(600), Duration::from_secs(5), || async {
@@ -761,23 +821,42 @@ async fn setup(cli: &Cli) -> anyhow::Result<()> {
             )
         );
     }
-    print_text(socket, Request::Resign { force: true }).await?;
+    // already on the phone, signed by this Apple ID, and not about to expire: running the guide again doesn't re-sign
+    // (the daemon re-signs by itself before it expires)
+    let left = snapshot(socket).await.ok().and_then(|s| match s.device_profile {
+        ictl_daemon::core::DeviceProfile::Expires(_) => s.device_profile.left(&s.persisted),
+        _ => None,
+    });
+    match left.filter(|l| *l > Duration::from_secs(2 * 86400)) {
+        Some(l) => println!(
+            "{}",
+            ictl_l10n::trf!(
+                "  已签名安装，描述文件还剩 {} 天，到期前会自动重签",
+                "  Already signed and installed, the profile has {} days left and is re-signed automatically before it expires",
+                l.as_secs() / 86400
+            )
+        ),
+        None => print_text(socket, Request::Resign { force: true }).await?,
+    }
 
     println!("{}", ictl_l10n::tr!("[6/6] 等待 WDA 启动", "[6/6] Waiting for WDA to start"));
-    println!(
-        "{}",
-        ictl_l10n::tr!(
-            "  首次安装:在手机 设置 → 通用 → VPN 与设备管理 里找到你的 Apple ID,点「信任」(需要联网)。",
-            "  First install: on the phone, open Settings → General → VPN & Device Management, find your Apple ID and tap “Trust” (needs internet)."
-        )
-    );
-    println!(
-        "{}",
-        ictl_l10n::tr!(
-            "  如果弹出「为 XCTest 输入 iPhone 密码」,输入锁屏密码。",
-            "  If “Enter iPhone passcode for XCTest” appears, enter the passcode."
-        )
-    );
+    let ready_now = snapshot(socket).await.is_ok_and(|s| s.state == ictl_daemon::machine::DeviceState::Ready);
+    if !ready_now {
+        println!(
+            "{}",
+            ictl_l10n::tr!(
+                "  首次安装:在手机 设置 → 通用 → VPN 与设备管理 里找到你的 Apple ID,点「信任」(需要联网)。",
+                "  First install: on the phone, open Settings → General → VPN & Device Management, find your Apple ID and tap “Trust” (needs internet)."
+            )
+        );
+        println!(
+            "{}",
+            ictl_l10n::tr!(
+                "  如果弹出「为 XCTest 输入 iPhone 密码」,输入锁屏密码。",
+                "  If “Enter iPhone passcode for XCTest” appears, enter the passcode."
+            )
+        );
+    }
     let ready = wait_until(Duration::from_secs(600), Duration::from_secs(10), || async {
         snapshot(socket).await.map(|s| s.state == ictl_daemon::machine::DeviceState::Ready).unwrap_or(false)
     })
@@ -793,32 +872,11 @@ async fn setup(cli: &Cli) -> anyhow::Result<()> {
             )
         }
     );
-
-    println!("{}", ictl_l10n::tr!("\n可选设置", "\nOptional"));
-    println!(
-        "{}",
-        ictl_l10n::tr!(
-            "  通知:填 TG_* 或 BARK_*(容器部署在 .env 里,然后重建容器;从源码运行在守护进程的环境文件里,然后重启它)",
-            "  Notifications: set TG_* or BARK_* (container: in .env, then recreate the container; source install: in the daemon's env file, then restart it)"
-        )
-    );
-    println!(
-        "{}",
-        ictl_l10n::tr!("  自动解锁:iphone-control passcode set", "  Auto-unlock: iphone-control passcode set")
-    );
-    println!(
-        "{}",
-        ictl_l10n::tr!(
-            "  注册到 Claude Code:iphone-control mcp-config",
-            "  Register with Claude Code: iphone-control mcp-config"
-        )
-    );
-    println!();
-    print_text(socket, Request::Doctor).await
+    Ok(())
 }
 
 /// 显式开启：127.0.0.1:port → 手机上的 WDA 8100。只绑本机回环地址。
-/// 容器用 host 网络，所以这就是宿主机的回环地址：本机的其他用户、浏览器里的网页都能访问到，而 WDA 没有认证。
+/// 本机的其他用户、浏览器里的网页都能访问到，而 WDA 没有认证。
 /// 浏览器那条路（DNS rebinding）靠检查 Host 头挡住；本机其他用户挡不住，用完就停。
 async fn wda_bridge(socket: &Path, port: u16) -> anyhow::Result<()> {
     // 和守护进程控制同一台（WDA 只在那台上跑着）
@@ -916,18 +974,18 @@ fn host_is_loopback(head: &[u8]) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{host_is_loopback, mcp_config};
+    use super::{host_is_loopback, mcp_command};
     use ictl_l10n::{Lang, with_lang};
     use std::path::Path;
 
-    /// 英文时注册命令带上语言（容器里也带：只给这次 docker exec 设了语言时，.env 里没有）；中文和以前一样
+    /// 英文时注册命令带上语言（MCP 客户端不带用户 shell 的环境）；中文时不带
     #[test]
     fn mcp_config_carries_english() {
-        let cmd = |l| with_lang(l, || mcp_config(Some("ic".into()), Path::new("/s")).unwrap());
-        assert_eq!(cmd(Lang::Zh), "claude mcp add iphone -s user -- docker exec -i ic iphone-control mcp");
+        let cmd = |l| with_lang(l, || mcp_command(Path::new("/b/iphone-control"), Path::new("/s")));
+        assert_eq!(cmd(Lang::Zh), "claude mcp add iphone -s user -- /b/iphone-control --socket /s mcp");
         assert_eq!(
             cmd(Lang::En),
-            "claude mcp add iphone -s user -- docker exec -i -e IPHONE_CONTROL_LANG=en ic iphone-control mcp"
+            "claude mcp add iphone -s user -e IPHONE_CONTROL_LANG=en -- /b/iphone-control --socket /s mcp"
         );
     }
 

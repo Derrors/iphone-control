@@ -1,6 +1,6 @@
 //! 设备层：一台 iPhone 的全部底层能力，基于 `idevice`。
 //!
-//! - 发现：usbmuxd `get_devices`；容器里没有 udev，另用 sysfs 数 USB 上有几台 iPhone/iPad（[`ios_usb_count`]）
+//! - 发现：usbmuxd `get_devices`；`doctor` 另用 sysfs（Linux）或 IORegistry（macOS）看 USB 上有没有 iPhone/iPad
 //! - 配对、设备信息、开发者模式：lockdown / amfi
 //! - 隧道：CoreDeviceProxy + jktcp 用户态 TCP 栈（免 root、不建网卡），RSD 握手（[`Tunnel`]）
 //! - 开发者镜像：`cryptexd::installed_ddi` / `install_ddi`（个性化 + TSS）；DDI 下载见 [`ddi`]
@@ -351,7 +351,7 @@ impl Device {
     }
 
     /// 发起配对：手机上弹「信任此电脑」。用户还没点时返回 [`DeviceError::PairingPending`]，调用方应轮询重试。
-    /// 成功后配对记录交给 usbmuxd 保存（容器里即 `/var/lib/lockdown`）。
+    /// 成功后配对记录交给 usbmuxd 保存（Linux 上是 `/var/lib/lockdown`，macOS 上是 `/var/db/lockdown`）。
     pub async fn pair(&self, host_name: &str) -> Result<()> {
         limit(ictl_l10n::tr!("配对", "pair"), Duration::from_secs(30), async {
             let mut mux = self.provider.addr.connect(0).await?;

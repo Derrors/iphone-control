@@ -201,8 +201,8 @@ impl Daemon {
         let p = std::path::Path::new(path);
         if !p.exists() {
             return Err(ictl_l10n::trf!(
-                "找不到 {path}(路径要在运行守护进程的机器上,容器部署时是容器里的路径)",
-                "{path} not found (the path is on the machine that runs the daemon; inside the container for a container deployment)"
+                "找不到 {path}(路径要在运行守护进程的机器上)",
+                "{path} not found (the path is on the machine that runs the daemon)"
             ));
         }
         device.install(p).await.map_err(|e| e.to_string())?;

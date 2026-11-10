@@ -26,13 +26,14 @@
 - **决定**：不重写 WDA；fork appium/WebDriverAgent，在 GitHub Actions macOS runner 上不签名编译，发布未签名 IPA + sha256。
 - **理由**：WDA 是 XCTest bundle，只能用 Xcode 编译，依赖苹果私有/测试框架；Rust 无法替代。
 - **代价**：发布流程依赖 macOS runner。
-- **现状**：自己编译还没做；镜像构建时暂时下载 Appium 官方 Release 的未签名真机包（v16.15.3，校验 sha256）。
+- **现状**：自己编译还没做；暂时在第一次签名前于本机下载 Appium 官方 Release 的未签名真机包（v16.15.3，校验 sha256）。
 
-## D5：保留系统 usbmuxd，作为子进程看护
+## D5：使用系统的 usbmuxd
 
-- **决定**：不内置 USB 协议栈。Linux 上使用 Debian 的 `usbmuxd`：容器里作为子进程看护，以普通用户运行时用系统服务。macOS 用系统自带的 usbmuxd，守护进程不启动也不重启它。
+- **决定**：不内置 USB 协议栈。Linux 上用发行版的 `usbmuxd` 包（.deb 依赖它），macOS 用系统自带的；守护进程不启动也不重启它。
 - **理由**：idevice 只有 usbmuxd 客户端；自己实现 USB 多路复用收益很小；usbmuxd 是 GPL-3.0，作为独立进程运行不影响本项目许可证。
-- **代价**：仍需处理容器无 udev 的热插拔问题（sysfs 兜底 + 重启）。
+- **代价**：Linux 上要用户自己装 usbmuxd（install.sh 会提示，.deb 自动装上）。
+- **变更（2026-11-10）**：以前在容器里把 usbmuxd 作为子进程看护（`ICTL_MANAGE_USBMUXD`、`ICTL_USBMUXD_BIN`），还要处理容器没有 udev 的热插拔（数 sysfs，台数对不上就重启它）。去掉 Docker 后这部分删了，见 D14。
 
 ## D6：签名组件 vendor 而不是 git 依赖
 
@@ -53,7 +54,7 @@
 
 ## D9：所有依赖锁定精确版本
 
-- **决定**：`Cargo.toml` 用 `=x.y.z`，`Cargo.lock` 入库，Docker 基础镜像锁 digest。
+- **决定**：`Cargo.toml` 用 `=x.y.z`，`Cargo.lock` 入库，CI 和发布用的 Rust 工具链、cargo-about 也锁版本。
 - **理由**：toolkit 两次被版本漂移坑过（mcp 2.x 改名；go-ios main 分支命令变化）。idevice 官方也要求锁定。
 
 ## D10：与 toolkit 工具接口一致
@@ -75,7 +76,7 @@
 ## D12：界面文字可选英文，默认仍是中文
 
 - **决定**：`IPHONE_CONTROL_LANG=en|zh` 选择人和 agent 看到的文字的语言（工具说明、工具结果、命令行输出、日志、通知）；不设或认不出时是简体中文。每条文字在代码里原地写成中英一对（`ictl-l10n` 的 `tr!` / `trf!`），不另建翻译目录。从手机界面读到的文字（例如「滚动条」）不翻译。
-- **结果的语言由客户端决定**：MCP 和命令行在每个请求里带上自己的语言（`lang` 键），守护进程按它回答；不带 `lang` 的请求（旧版本客户端）照旧得到中文，因为它们按中文的固定开头认结果。守护进程自己的设置管它主动写的文字（事件日志、日志行、通知），处理请求时写的也一样（`ictl-l10n` 的 `log_tr!` / `log_trf!`），所以日志和通知始终是同一种语言。上次重签的结果存成时间和成败，显示时再按看的人的语言拼句子。容器部署里 MCP 和守护进程读同一个 `.env`，自然一致。
+- **结果的语言由客户端决定**：MCP 和命令行在每个请求里带上自己的语言（`lang` 键），守护进程按它回答；不带 `lang` 的请求（旧版本客户端）照旧得到中文，因为它们按中文的固定开头认结果。守护进程自己的设置管它主动写的文字（事件日志、日志行、通知），处理请求时写的也一样（`ictl-l10n` 的 `log_tr!` / `log_trf!`），所以日志和通知始终是同一种语言。上次重签的结果存成时间和成败，显示时再按看的人的语言拼句子。MCP 和守护进程启动时都读设置文件 `~/.config/iphone-control/env`，自然一致（注册 MCP 时用 `-e` 设的值优先）。
 - **客户端要据以行动的结果用字段表示**：文字结果带 `outcome`（`tapped_nothing`：按名字没点到；`alert_reported`：结果里已经报过系统弹窗），新版本 MCP 只看字段，不再从文字里认；没有 `outcome` 的响应来自旧版本守护进程，那时文字一定是中文，才按 `TAP_MISSED`、`ALERT_BLOCKING` 认。旧版本客户端不认识这个字段，会忽略它。
 - **理由**：D10 承诺已有工具的默认返回不变，所以英文只能是可选项，不设就和以前完全一样。两种语言并排写在原处，改文字时另一种就在旁边，审查时也能逐条对照。
 - **代价**：每条新文字都要写两种语言；取语言是一次原子读，开销可以忽略。
@@ -89,5 +90,16 @@
   - 日志：idevice 默认的 `StreamFlags` 带 Debug，手机上每个进程都开始产生 Debug 消息。真机上约 650 行/秒，不开时约 80 行/秒；开着时手势变慢、失败（`crates/ictl-device/src/oslog.rs`）。
   - Web Inspector：刚关闭后新开一条连接约 8 秒，几轮连接、断开后手机不再向新连接报告 Safari，要重启 Safari；保留的连接上列表和执行只要几毫秒（iPhone 15 Pro Max，iOS 27.0.1，`crates/ictl-daemon/src/web.rs`）。
   - 卸载连同数据一起删掉，猜错名字的代价比启动错 App 大得多。
-- **代价**：开关挡不住能连上控制接口的本机进程，真正的边界是 socket 权限；从源码运行时开关要设在 MCP 的环境里，守护进程的 env 文件不生效；看不到 Debug、Info 级别的日志；保留的连接要 5 分钟没有请求才关。
+- **代价**：开关挡不住能连上控制接口的本机进程，真正的边界是 socket 权限；开关要对 MCP 进程生效：写在设置文件里，或注册 MCP 时用 `-e` 设（首次运行引导和 `mcp-config` 会带上）；看不到 Debug、Info 级别的日志；保留的连接要 5 分钟没有请求才关。
 - **重新评估**：出现需要在守护进程上按调用方限权的场景时；iOS 能在手机端按进程过滤日志时。
+
+## D14：去掉 Docker，只做原生安装（2026-11-10）
+
+- **背景**：以前 Linux 上推荐用 Docker（`compose.yaml`、ghcr 上的镜像），macOS 和从源码运行是另一套步骤。控制台（`iphone-control viewer`）加了 AI 任务以后，任务要交给本机的 Claude Code 或 Codex 执行。
+- **决定**：从下一个版本起不再发布 Docker 镜像，删掉 `compose.yaml`、`docker/Dockerfile`、`.dockerignore` 和 `deploy/iphone-control.service`。安装只有原生方式：一行命令的 `install.sh`（macOS Apple Silicon、Linux x86_64/aarch64）、Homebrew（`derrors/tap`）、Debian/Ubuntu 的 `.deb`，以及从源码编译（Intel Mac、开发）。守护进程以普通用户运行，装成用户服务（macOS 是 launchd，Linux 是 systemd 用户服务），由 `install.sh`、`iphone-control service install`、`brew services` 或 .deb 的 unit 管理。usbmuxd 用系统的（D5）。装好后运行 `iphone-control`，首次运行引导一步步完成设置，写 `~/.config/iphone-control/env`。
+- **理由**：
+  - 容器里的守护进程够不到宿主机上的 Claude Code / Codex（它们的登录、配置都在用户的家目录里），控制台的 AI 任务用不了。
+  - 原生安装更简单：不用 root、不用 Docker、不用 USB 直通，macOS 和 Linux 是同一套步骤；Mac 上本来就不能用 Docker（Docker Desktop 不支持 USB 直通）。
+  - 少一套要维护的东西：自管 usbmuxd、容器没有 udev 的热插拔兜底、镜像构建和 SBOM、`docker exec` 形式的注册命令都不要了。
+- **代价**：Docker 用户要迁移（数据目录拷到 `~/.local/share/iphone-control`，`.env` 改成 `~/.config/iphone-control/env`，手机可能要重新信任，见更新日志的升级注意事项）；Linux 上要自己装 usbmuxd；不能再用容器把它和宿主机隔离开，守护进程的权限就是登录用户的权限；Intel Mac 没有预编译版本，要从源码编译。
+- **重新评估**：有人需要在无人值守的服务器上隔离运行、又不用控制台的 AI 任务时。

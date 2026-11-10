@@ -8,15 +8,17 @@ The passcode is stored **in plain text** in the data directory. Anyone who can l
 
 ## Enable
 
+The first-run guide of `iphone-control` offers it as an optional step; later, run `iphone-control setup --reconfigure` and pick Auto-unlock passcode. Or use the command directly:
+
 ```bash
-docker exec -it iphone-control iphone-control passcode set
+iphone-control passcode set
 ```
 
 The passcode is saved for the device the daemon is controlling; for another one add `--device <UDID or name>`. Numeric passcodes of 4 or more digits only. To disable:
 
 ```bash
-docker exec -it iphone-control iphone-control passcode clear           # the controlled device; --device for another
-docker exec -it iphone-control iphone-control passcode clear --all     # all devices
+iphone-control passcode clear           # the controlled device; --device for another
+iphone-control passcode clear --all     # all devices
 ```
 
 ## Several devices
@@ -39,8 +41,8 @@ Older versions kept a single passcode (`secrets/passcode`) without knowing which
 Unlock the phone by hand first. If the passcode was wrong (for example, you changed it), save the new one and reset:
 
 ```bash
-docker exec -it iphone-control iphone-control passcode set
-docker exec -it iphone-control iphone-control unlock-reset
+iphone-control passcode set
+iphone-control unlock-reset
 ```
 
 If it stopped because of an error during entry or a killed process, the passcode may be fine; once you've checked, `unlock-reset` alone is enough. `unlock-reset` doesn't check the passcode, and `passcode set` and `passcode clear` don't lift the stop. Don't delete `logs/` to get going again: that removes this safeguard.

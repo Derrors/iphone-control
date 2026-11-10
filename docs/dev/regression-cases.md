@@ -10,7 +10,7 @@
 | 4 | 多位密码合成一个 W3C 手势会漏键 | 每位单独一个手势并逐位核对 | 真机 |
 | 5 | 锁屏上 `/wda/tap` 每次约 2.9 秒 | 解锁用 W3C 单手势（约 0.7 秒） | 真机计时 |
 | 6 | 同名「设置」有 5 个 `SBAppTags` 含 `hidden` 的后台服务 | 按名字解析 App 时跳过 hidden | 单测 |
-| 7 | 容器无 udev，手机重启/重插后 usbmuxd 看不到设备 | sysfs 里 iPhone/iPad/iPod 的台数连续 3 次多于 usbmuxd 认到的台数 → 重启 usbmuxd（只在自管 usbmuxd 时） | 单测（`usbmuxd_restart_after_three_misses`）+ 真机（杀 usbmuxd 模拟） |
+| 7 | 容器无 udev，手机重启/重插后 usbmuxd 看不到设备 | 不再适用：2026-11-10 起不发布 Docker，守护进程不再自管 usbmuxd，热插拔由系统的 usbmuxd 和 udev 处理（D5、D14） | — |
 | 8 | 手机重启后 XCTest 弹「Enable UI Automation」密码框 | 识别错误、只推送一次、60 秒重试、恢复后再推送 | 单测（错误识别）+ 真机 |
 | 9 | plumesign 不签 `.xctest`，WDA 报 XCTest 103 | `.xctest` 签名、无 entitlements | 单测（签完检查 `_CodeSignature`）+ 真机 |
 | 10 | `ios forward` 监听所有网卡，WDA 无认证，局域网可直接控制手机 | 默认不监听任何端口；bridge 只绑 127.0.0.1 | 集成测试（检查监听地址） |
@@ -33,7 +33,7 @@
 | 27 | HID 会话在屏幕媒体流起来之后才失败，媒体流没停（症状同 #24） | `HidSession::open`、`media::start` 出错时先停流；HID 会话归 `Tunnel` 所有，关隧道必先停流 | 真机 |
 | 28 | 一个长操作（启动 WDA 等自动化密码最长 120 秒）挡住所有工具、`status` 和 SIGTERM，排队的点击几分钟后才执行 | 启动 WDA、重签、会话检查不持设备锁；`status` 读快照；改变手机状态的请求排队超过 30 秒就放弃；停止信号优先处理（architecture §2 并发模型） | 真机 |
 | 29 | WDA 请求超时或中途断开后退到 HID，同一个动作做了两遍 | 传输层区分连不上（`WdaError::Unavailable`，可以退到 HID）和请求已发出之后的超时、断开、响应不完整（不退，报错让 agent 先截图确认） | 单测 + 代码审查 |
-| 30 | `.env` 里留空的 `ICTL_LOG=` 生成一个什么都不放行的过滤器，日志全没了 | 空值当作没设 | 真机（`docker logs`） |
+| 30 | 设置文件里留空的 `ICTL_LOG=` 生成一个什么都不放行的过滤器，日志全没了 | 空值当作没设 | 真机（看守护进程的输出） |
 | 31 | `/wda/tap` 每次先等界面空闲：主屏点图标约 1.7 秒（调小等待设置也没用）；W3C actions 手势做完又要等动画冷却（默认 2 秒），App 里切标签约 1.9 秒 | 点击用单个 actions 手势，期间临时把 waitForIdleTimeout/animationCoolOffTimeout 调成 1/0.2，做完恢复（原值只读一次）。真机：主屏点图标 1.70→0.91 秒（到前台 1.80→1.01 秒），App 里 0.62→0.72 秒 | 单测（请求顺序、恢复原值）+ 真机计时 |
 | 32 | `/wda/keys` 没有输入框获得焦点时也返回成功，什么都没输（真机：Safari 地址栏没点中、主屏上直接输入） | 输入前查屏幕上有没有软键盘（`XCUIElementTypeKeyboard`，约 0.2 秒），没有就报错让先点输入框 | 真机 |
 | 33 | 系统弹窗（定位、通知权限）挡着时 Home 不生效、App 到不了前台，WDA 照样报成功；弹窗属于 SpringBoard，看前台 App 发现不了 | 按 Home 前查 `/alert/text`（App 静止时约 0.4 秒；按下后动画中查要好几秒）；有弹窗就说明并不按。launch_app 没到前台时同样带上弹窗文字。按 Home 后等主屏到前台再返回 | 真机计时；弹窗路径待弹窗再出现时复测 |
@@ -44,9 +44,9 @@
 | 38 | 选定的设备重启守护进程后丢了；设了 `IPHONE_UDID` 还能切走 | 选定的写进 state.json；`IPHONE_UDID` 优先，设了就拒绝切到别的设备 | 真机（`select` 后重启；设 `IPHONE_UDID` 后 `select` 另一台） |
 | 39 | 切换后操作还落在上一台，或用了上一台的 App 列表、方向、屏幕尺寸 | 切换时拆掉上一台的会话，清掉 App 列表和方向；屏幕尺寸记录是别的设备的就不用。切换后等 `iphone_status` 就绪，截图、`iphone_list_apps`、点击都要作用在新设备上 | 真机（iPhone + iPad，各做一遍 `iphone_select_device` → 截图 → 点击） |
 | 40 | 一台的密码输进另一台 | 密码按设备存（`secrets/passcodes/<UDID>`）；旧的 `secrets/passcode` 只在 USB 上只接着一台时归到那台，接着多台时不用 | 单测（`passcode_file_is_per_device_and_stays_in_its_dir`）+ 真机 |
-| 41 | 已接着一台时再插一台，没有 udev 的 usbmuxd 认不到第二台 | 比台数，不只看「有没有设备」 | 单测（`usbmuxd_restart_when_a_second_device_is_missed`）+ 真机 |
+| 41 | 已接着一台时再插一台，没有 udev 的 usbmuxd 认不到第二台 | 不再适用：同 #7，守护进程不再自管 usbmuxd | — |
 | 42 | 自动选设备时 `iphone_batch` 执行到一半换了设备（拔线后换到另一台），剩下的步骤落到另一台上 | 控制的设备变了就停下报错 | 真机（batch 里放 `wait`，中途拔线） |
-| 43 | Apple 键盘等配件被当成手机：`doctor` 误报 USB 上有设备，usbmuxd 被反复重启 | 只算 iPhone/iPad/iPod（厂商号 05ac 且产品名匹配） | 单测 + 真机 |
+| 43 | Apple 键盘等配件被当成手机：`doctor` 误报 USB 上有设备（以前自管 usbmuxd 时还会被反复重启） | 只算 iPhone/iPad/iPod（厂商号 05ac 且产品名匹配） | 单测 + 真机 |
 | 44 | 横屏时 WDA 掉线，HID 触摸按竖屏坐标换算，点错位置 | 每次 HID 触摸前重新截图核对横竖；横屏要有 30 秒内且匹配的 WDA 旋转角才发送，否则拒绝，不猜方向；截图和按键不受影响 | 单测（`hid_rotation_requires_fresh_matching_landscape`）+ 真机（iOS 27 横屏下让 WDA 掉线，点击落点正确；守护进程重启后横屏触摸被拒绝） |
 | 45 | WDA 在横屏时就绪，记下的是横屏尺寸，之后 HID 换算错 | state.json 只存竖放尺寸和对应的 UDID，换算时再按当前方向转 | 真机（iOS 27，横屏下启动 WDA，再让它掉线后点击） |
 | 46 | 浏览器里的其他网页向 `viewer` 发请求，借它操作手机 | 操作要求 `Origin` 是页面本身、内容类型是 JSON；`Host` 必须是回环地址 | 单测（`actions_need_own_origin_and_json`） |

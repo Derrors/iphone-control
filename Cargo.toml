@@ -66,6 +66,9 @@ base64 = "=0.23.1"
 anyhow = "=1.0.104"
 plist = "=1.10.3"
 uuid = { version = "=1.26.1", features = ["v4"] }
+# 和 plume_core 同一份：比对证书和本机签名私钥的公钥（ictl-sign）
+rsa = "=0.9.10"
+x509-certificate = "=0.24.0"
 zip = { version = "=9.4.1", default-features = false, features = ["deflate"] }
 regex = "=1.13.1"
 libc = "=0.2.191"
@@ -91,6 +94,10 @@ ictl-mcp = { path = "crates/ictl-mcp" }
 apple-codesign = { path = "vendor/apple-codesign" }
 # idevice 0.1.68 的 cryptexd install 会挂住(persistence 字段错、隧道 MSS),修复在上游 master 但还没发版
 idevice = { git = "https://github.com/jkcoxson/idevice", rev = "89702099f4d7552f704f93b4526756abda319ceb" }
+
+# 测试里现场生成 RSA 密钥（ictl-sign）：不开优化的话大数运算要十几秒
+[profile.dev.package.num-bigint-dig]
+opt-level = 3
 
 [profile.release]
 lto = "thin"

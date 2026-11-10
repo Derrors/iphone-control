@@ -14,11 +14,11 @@
 | Impactor `plume_utils` | 同上 | MIT | 未 vendor；`crates/ictl-sign/src/bundle.rs` 改写自其 `bundle.rs` | 增加 `BundleType::XCTest`，修复 `.xctest` 漏签 |
 | idevice tools | v0.1.68 | MIT | `crates/ictl-device/src/media.rs`、`hid.rs` 的按键/键码表改写自 `tools/src/coredevice_stream.rs`、`hid.rs` | 去掉日志、改错误类型 |
 | idevice os_trace_relay | 上游 master `89702099` | MIT | `crates/ictl-device/src/oslog.rs` 的日志条目格式取自 `idevice/src/services/os_trace_relay.rs` | 请求里去掉 Debug 位，解析加越界检查 |
-| [WebDriverAgent](https://github.com/appium/WebDriverAgent) | v16.15.3（Appium 官方构建，sha256 2176793538d9…） | BSD-3-Clause | 镜像构建时下载校验，打成未签名 IPA；计划改为本项目 macOS CI 编译 | 不嵌入苹果框架 |
-| [usbmuxd](https://github.com/libimobiledevice/usbmuxd) | Debian 包 | GPL-3.0 | 独立进程，不链接 | 无 |
+| [WebDriverAgent](https://github.com/appium/WebDriverAgent) | v16.15.3（Appium 官方构建，sha256 2176793538d9…） | BSD-3-Clause | 第一次签名前在用户的机器上下载、校验，打成未签名 IPA，不随项目分发；计划改为本项目 macOS CI 编译 | 不嵌入苹果框架 |
+| [usbmuxd](https://github.com/libimobiledevice/usbmuxd) | 系统包（Linux；macOS 自带） | GPL-3.0 | 独立进程，不链接，不随项目分发（.deb 只声明依赖它） | 无 |
 
 **不随项目分发**：开发者镜像（DDI/Cryptex）、XCTest.framework 等苹果文件；证书、描述文件、配对记录、Apple ID 会话等用户数据。
 
 因为不启用 omnisette 的默认 feature，AGPL-3.0 的过程宏 `remove-async-await` 和没有许可证声明的 `android-loader`/`sysv64` 都不会被编译。
 
-完整的传递依赖许可证清单由 cargo-about 0.9.3 按 `Cargo.lock` 生成（配置 `docker/about.toml`），随镜像放在 `/usr/share/doc/iphone-control/THIRD_PARTY_LICENSES.html`。vendor 组件的许可证另放在 `/usr/share/licenses/<组件>/`（plume_store 的 MIT 许可证在 `/usr/share/licenses/plume_store/LICENSE`），WDA 的在 `/usr/share/licenses/WebDriverAgent/`。这些只随镜像分发：预编译二进制的压缩包只带 `LICENSE` 和本文件。
+完整的传递依赖许可证清单 `THIRD_PARTY_LICENSES.html` 由 cargo-about 0.9.3 按 `Cargo.lock` 生成（配置 `packaging/licenses/about.toml`），放在每个发布的压缩包里，.deb 里在 `/usr/share/doc/iphone-control/THIRD_PARTY_LICENSES.html`。vendor 组件的许可证文件在仓库的 `vendor/<组件>/` 里。

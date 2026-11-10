@@ -1,7 +1,7 @@
 //! 守护进程：唯一持有设备的进程。替代 toolkit 的 supervisor.sh + 重签定时器 + notify.sh。
 //!
 //! - 状态机（[`machine::DeviceState`]，docs/architecture.md §3）每 10 秒推进一次（[`supervise`]）
-//! - usbmuxd 作为子进程看护；容器无 udev，靠 sysfs 发现漏掉的设备并重启它
+//! - usbmuxd 用系统的（macOS 自带，Linux 是 usbmuxd 包，插上手机时由 udev 拉起）
 //! - 控制接口：Unix socket，每行一个 JSON（[`protocol`]），MCP 和 CLI 都通过它访问设备
 //! - 并发模型见 [`core`]
 

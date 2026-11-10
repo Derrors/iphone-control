@@ -12,8 +12,16 @@ pub enum Event {
     NeedsAutomationPin,
     WdaRecovered,
     UnlockDisabled,
-    DeviceOffline { minutes: u64 },
-    DeviceOnline { minutes: u64 },
+    DeviceOffline {
+        minutes: u64,
+    },
+    DeviceOnline {
+        minutes: u64,
+    },
+    /// 签名时新建了证书；`revoked`：团队里证书满了，还吊销了一张旧的
+    CertificateChanged {
+        revoked: bool,
+    },
 }
 
 impl Event {
@@ -27,6 +35,7 @@ impl Event {
             Self::UnlockDisabled => "unlock",
             Self::DeviceOffline { .. } => "offline",
             Self::DeviceOnline { .. } => "online",
+            Self::CertificateChanged { .. } => "cert",
         }
     }
 
@@ -42,6 +51,7 @@ impl Event {
             Self::UnlockDisabled,
             Self::DeviceOffline { minutes: 10 },
             Self::DeviceOnline { minutes: 12 },
+            Self::CertificateChanged { revoked: true },
         ]
     }
 
@@ -74,6 +84,14 @@ impl Event {
                 ictl_l10n::tr!("连不上手机:检查 USB 线、手机是否没电关机。重新连上后会自动恢复。", "Can't reach the phone: check the USB cable and whether the phone ran out of battery. It recovers automatically once reconnected.").into(),
             ),
             Self::DeviceOnline { minutes } => (ictl_l10n::tr!("iPhone 已重新连上", "iPhone reconnected").into(), ictl_l10n::trf!("离线约 {minutes} 分钟,正在自动恢复。", "Offline for about {minutes} minutes, recovering automatically.")),
+            Self::CertificateChanged { revoked: true } => (
+                ictl_l10n::tr!("签名证书换了,旧证书已被吊销", "Signing certificate replaced, an old one was revoked").into(),
+                ictl_l10n::tr!("这次签名新建了证书;免费 Apple ID 最多两张,满了就吊销了一张旧的。用旧证书签的 WDA(可能在别的设备,或用同一个 Apple ID 的其他机器、其他侧载工具上)起不来了:这里控制的设备切过去时会自动重签,也可以运行 iphone-control sign。", "This signing created a new certificate; a free Apple ID holds at most two, so an old one was revoked. WDA signed with it (maybe on other devices, or on other machines or sideloading tools using the same Apple ID) won't start any more: devices controlled here are re-signed automatically when you switch to them, or run iphone-control sign.").into(),
+            ),
+            Self::CertificateChanged { revoked: false } => (
+                ictl_l10n::tr!("签名证书换了", "Signing certificate replaced").into(),
+                ictl_l10n::tr!("这次签名新建了证书(第一次在这台机器上签名,或原来的证书已被别处吊销)。之前用别的证书签的设备,WDA 起不来时会自动重签,也可以运行 iphone-control sign。", "This signing created a new certificate (the first signing on this machine, or the previous one was revoked elsewhere). Devices signed with another certificate are re-signed automatically when their WDA won't start, or run iphone-control sign.").into(),
+            ),
         }
     }
 }
@@ -88,7 +106,8 @@ pub struct Dedup {
 fn cooldown(e: &Event) -> Option<Duration> {
     match e {
         Event::ResignFailed(_) | Event::SessionExpired(_) => Some(Duration::from_secs(20 * 3600)),
-        Event::WdaRecovered | Event::DeviceOnline { .. } => Some(Duration::ZERO),
+        // 证书每换一次都要知道
+        Event::WdaRecovered | Event::DeviceOnline { .. } | Event::CertificateChanged { .. } => Some(Duration::ZERO),
         _ => None,
     }
 }
@@ -176,7 +195,7 @@ mod tests {
         uniq.dedup();
         assert_eq!(uniq.len(), names.len());
         // 新增事件时这里的数字要跟着改，提醒同时补样例
-        assert_eq!(names.len(), 7);
+        assert_eq!(names.len(), 8);
     }
 
     #[test]

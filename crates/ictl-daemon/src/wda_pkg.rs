@@ -1,6 +1,4 @@
-//! 未签名的 WDA 包。镜像里自带（docker/Dockerfile 的 wda 阶段）；从源码运行时没有它，
-//! 第一次签名前按同一版本下载 Appium 官方构建的真机包、核对 sha256，重新打成 ipa 放进数据目录。
-//! 版本和校验和必须与 Dockerfile 一致（单测核对）。
+//! 未签名的 WDA 包：第一次签名前按固定版本下载 Appium 官方构建的真机包、核对 sha256，重新打成 ipa 放进数据目录。
 
 use std::path::Path;
 use std::time::Duration;
@@ -9,8 +7,6 @@ use sha2::{Digest, Sha256};
 
 pub const WDA_VERSION: &str = "v16.15.3";
 pub const WDA_SHA256: &str = "2176793538d902f6b1e61291e9997f68d306541f222ea715d256a7c6ce9d4fc5";
-/// 镜像里自带的那份
-pub const IMAGE_PATH: &str = "/usr/share/iphone-control/WDA-unsigned.ipa";
 
 fn url() -> String {
     format!("https://github.com/appium/WebDriverAgent/releases/download/{WDA_VERSION}/WebDriverAgentRunner-Runner.zip")
@@ -58,17 +54,4 @@ pub async fn ensure(dest: &Path) -> Result<(), String> {
         return Err(ictl_l10n::trf!("转换 WDA 包失败：{e}", "Converting the WDA package failed: {e}"));
     }
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn matches_dockerfile() {
-        let dockerfile = include_str!("../../../docker/Dockerfile");
-        assert!(dockerfile.contains(&format!("ARG WDA_VERSION={WDA_VERSION}\n")), "WDA_VERSION 和 Dockerfile 不一致");
-        assert!(dockerfile.contains(&format!("ARG WDA_SHA256={WDA_SHA256}\n")), "WDA_SHA256 和 Dockerfile 不一致");
-        assert!(dockerfile.contains(&format!("COPY --from=wda /out/WDA-unsigned.ipa {IMAGE_PATH}\n")));
-    }
 }

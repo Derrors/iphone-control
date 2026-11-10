@@ -1,7 +1,7 @@
 name: Release
 
-# 推送 v* tag 时：多架构镜像推到 ghcr（各架构在原生 runner 上构建，不用 QEMU 模拟），
-# 附 SBOM 和构建来源证明；Linux 和 macOS 二进制及 sha256 附在 GitHub Release 上，发布说明取自 CHANGELOG.md 和 CHANGELOG.zh-CN.md。
+# 推送 v* tag 时：Linux（x86_64、aarch64）和 macOS（Apple Silicon）的压缩包、Linux 的 .deb 及 sha256 附在 GitHub Release 上，
+# 发布说明取自 CHANGELOG.md 和 CHANGELOG.zh-CN.md；最后更新 Homebrew 源 Derrors/homebrew-tap。不再发布 Docker 镜像
 on:
   push:
     tags: ["v*"]
@@ -9,11 +9,8 @@ on:
 permissions:
   contents: read
 
-env:
-  IMAGE: ghcr.io/derrors/iphone-control
-
 jobs:
-  # 从源码运行（不用 Docker）的用户直接下载。在 Ubuntu 22.04 上编译（glibc 2.35），
+  # install.sh、Homebrew、deb 都用这里的包。在 Ubuntu 22.04 上编译（glibc 2.35），
   # 所以 Debian 12、Ubuntu 22.04 及更新的发行版都能运行
   binaries:
     strategy:
@@ -37,13 +34,18 @@ jobs:
         with:
           key: release-${{ matrix.target }}
       - run: cargo build --release --locked -p iphone-control
+      # 第三方 Rust 组件许可证清单（cargo-about，按 Cargo.lock 生成）；白名单（packaging/licenses/about.toml）以外的许可证让发布失败
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-about@0.9.3
+      - run: cargo about generate --locked -m apps/iphone-control/Cargo.toml -c packaging/licenses/about.toml packaging/licenses/about.hbs -o THIRD_PARTY_LICENSES.html
       - name: Package
         run: |
           name="iphone-control-${GITHUB_REF_NAME}-linux-${{ matrix.arch }}"
           mkdir -p "dist/$name"
           cp target/release/iphone-control LICENSE THIRD_PARTY.md README.md README.zh-CN.md CHANGELOG.md CHANGELOG.zh-CN.md "dist/$name/"
-          cp -r deploy "dist/$name/"
-          cp .env.example "dist/$name/env.example"
+          cp packaging/env.example "dist/$name/env.example"
+          cp THIRD_PARTY_LICENSES.html "dist/$name/"
           tar -C dist -czf "dist/$name.tar.gz" "$name"
           (cd dist && sha256sum "$name.tar.gz" > "$name.tar.gz.sha256")
       # Debian/Ubuntu package (metadata in apps/iphone-control/Cargo.toml): the binary, a systemd user service,
@@ -64,99 +66,8 @@ jobs:
             dist/*.deb*
           if-no-files-found: error
 
-  image:
-    strategy:
-      matrix:
-        include:
-          - runner: ubuntu-24.04
-            platform: linux/amd64
-          - runner: ubuntu-24.04-arm
-            platform: linux/arm64
-    runs-on: ${{ matrix.runner }}
-    permissions:
-      contents: read
-      packages: write
-    steps:
-      - uses: actions/checkout@v7
-      - name: Platform name
-        run: echo "PAIR=${PLATFORM//\//-}" >> "$GITHUB_ENV"
-        env:
-          PLATFORM: ${{ matrix.platform }}
-      - id: meta
-        uses: docker/metadata-action@v6
-        with:
-          images: ${{ env.IMAGE }}
-      - uses: docker/setup-buildx-action@v4
-      - uses: docker/login-action@v4
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      # 按 digest 推送，最后一步再合成一个多架构清单打标签
-      - id: build
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: docker/Dockerfile
-          platforms: ${{ matrix.platform }}
-          labels: ${{ steps.meta.outputs.labels }}
-          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
-          cache-from: type=gha,scope=${{ env.PAIR }}
-          cache-to: type=gha,mode=max,scope=${{ env.PAIR }}
-          sbom: true
-          provenance: mode=max
-      - name: Export digest
-        run: |
-          mkdir -p /tmp/digests
-          touch "/tmp/digests/${DIGEST#sha256:}"
-        env:
-          DIGEST: ${{ steps.build.outputs.digest }}
-      - uses: actions/upload-artifact@v7
-        with:
-          name: digests-${{ env.PAIR }}
-          path: /tmp/digests/*
-          if-no-files-found: error
-
-  publish-image:
-    needs: image
-    runs-on: ubuntu-24.04
-    permissions:
-      contents: read
-      packages: write
-    steps:
-      - uses: actions/download-artifact@v8
-        with:
-          path: /tmp/digests
-          pattern: digests-*
-          merge-multiple: true
-      - id: meta
-        uses: docker/metadata-action@v6
-        with:
-          images: ${{ env.IMAGE }}
-          # v1.2.3 → 1.2.3、1.2、latest（预发布版本如 v1.2.3-rc.1 只打自己的版本号，不动 latest）
-          tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-      - uses: docker/setup-buildx-action@v4
-      - uses: docker/login-action@v4
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Create multi-arch manifest
-        working-directory: /tmp/digests
-        run: |
-          # shellcheck disable=SC2046
-          docker buildx imagetools create \
-            $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
-            $(printf "$IMAGE@sha256:%s " *)
-      - name: Inspect
-        run: docker buildx imagetools inspect "$IMAGE:$VERSION"
-        env:
-          VERSION: ${{ steps.meta.outputs.version }}
-
   release:
-    needs: [binaries, publish-image]
+    needs: [binaries]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -190,8 +101,7 @@ jobs:
             echo "## English"; echo; echo "$en"; echo
             echo "## 中文"; echo; echo "$zh"; echo
             echo "---"; echo
-            echo "**Docker:** \`${IMAGE}:${version}\` (linux/amd64, linux/arm64)"; echo
-            echo "**Binaries / 二进制:** \`linux-x86_64\`, \`linux-aarch64\` (glibc 2.34+), \`macos-arm64\` (macOS 11+, Apple Silicon)"; echo
+            echo "**Binaries / 二进制:** \`linux-x86_64\`, \`linux-aarch64\` (glibc 2.34+), \`macos-arm64\` (macOS 11+, Apple Silicon); \`.deb\` amd64, arm64 (Debian 12+, Ubuntu 22.04+)"; echo
             echo "**Install / 安装:** \`curl -fsSL https://raw.githubusercontent.com/Derrors/iphone-control/main/install.sh | sh\` (macOS, Linux) · \`brew install derrors/tap/iphone-control\` · Debian/Ubuntu: \`sudo apt install ./iphone-control_${version}_amd64.deb\` (or \`_arm64.deb\`)"
           } > notes.md
       - name: Create release
@@ -218,6 +128,11 @@ jobs:
         with:
           key: release-aarch64-apple-darwin
       - run: cargo build --release --locked -p iphone-control
+      # 第三方 Rust 组件许可证清单（cargo-about，按 Cargo.lock 生成）；白名单（packaging/licenses/about.toml）以外的许可证让发布失败
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-about@0.9.3
+      - run: cargo about generate --locked -m apps/iphone-control/Cargo.toml -c packaging/licenses/about.toml packaging/licenses/about.hbs -o THIRD_PARTY_LICENSES.html
       - name: Check
         run: |
           file target/release/iphone-control
@@ -229,7 +144,8 @@ jobs:
           name="iphone-control-${GITHUB_REF_NAME}-macos-arm64"
           mkdir -p "dist/$name"
           cp target/release/iphone-control LICENSE THIRD_PARTY.md README.md README.zh-CN.md CHANGELOG.md CHANGELOG.zh-CN.md "dist/$name/"
-          cp .env.example "dist/$name/env.example"
+          cp packaging/env.example "dist/$name/env.example"
+          cp THIRD_PARTY_LICENSES.html "dist/$name/"
           tar -C dist -czf "dist/$name.tar.gz" "$name"
           (cd dist && shasum -a 256 "$name.tar.gz" > "$name.tar.gz.sha256")
       - name: Upload to the release

@@ -6,8 +6,25 @@ All notable changes to this project are documented here. The format is based on 
 
 ## [Unreleased]
 
+### Upgrade notes
+
+- Docker is no longer released: no image on ghcr, no `compose.yaml`. Move to the one-line `install.sh`, Homebrew or the `.deb` (see Added). Stop the container first (`docker compose down`) so it doesn't hold the phone.
+- Your data was in the container's volume (`./data` next to `compose.yaml`, owned by root). Before the first run, copy it to `~/.local/share/iphone-control` and make it yours (`sudo cp -a ./data ~/.local/share/iphone-control && sudo chown -R "$(id -un)": ~/.local/share/iphone-control`; see [Data and backups](https://derrors.github.io/iphone-control/en/deploy/backup)) to keep the Apple ID session, the signed WebDriverAgent and auto-unlock passcodes. Pairing records now live with the system usbmuxd, so the phone may ask you to trust the computer again.
+- Settings move from `.env` to `~/.config/iphone-control/env` (same `KEY=value` lines; mode 0600). The first-run guide writes it, or copy your values over and run `iphone-control service restart`.
+- `ICTL_MANAGE_USBMUXD` and `ICTL_USBMUXD_BIN` are gone: the daemon no longer starts usbmuxd. On Linux install the system one (`sudo apt install usbmuxd`; the `.deb` depends on it), and unmask it if you masked it for the container (`sudo systemctl unmask usbmuxd`).
+- Register the MCP server again: the old `docker exec` registration no longer works. The first-run guide does it, or run the command `iphone-control mcp-config` prints.
+
 ### Added
 
+- First-run guide: after installing, connect the phone and run `iphone-control`. The first time it walks you through setup in the terminal: language, proxy, the background service, pairing, Developer Mode, Apple ID, signing and installing WebDriverAgent, the optional auto-unlock passcode and notifications (Bark or Telegram, with a test message), and registering the MCP server with Claude Code and Codex. Steps already done are skipped; afterwards `iphone-control` shows the status and starts the service if it isn't running.
+- `iphone-control setup --reconfigure` redoes all of setup or one part: language, proxy, background service, Apple ID (sign in again and re-sign WebDriverAgent), phone, auto-unlock passcode, notifications or MCP registration.
+- `iphone-control service install|uninstall|start|stop|restart|status` manages the background service (launchd on macOS, a systemd user unit on Linux), whichever installed it: `install.sh`, `brew services` or the `.deb`.
+- Settings file `~/.config/iphone-control/env`: the service loads it, and so does every command (a variable already set in the environment wins). After editing it by hand, run `iphone-control service restart`.
+- `THIRD_PARTY_LICENSES.html` (licenses of all Rust dependencies) is in every release archive and in the `.deb`.
+- The control page follows the device the daemon controls: when it is switched elsewhere (another tab, `iphone-control select`, the MCP tool, or automatically after an unplug), the page notices within about 10 seconds, says so, and moves its picture and panels over. Actions carry the device the page shows and are refused, never sent to another phone, once the daemon controls a different one.
+- The control page says why a device has no picture (not connected, needs pairing or Developer Mode, WebDriverAgent starting or why it failed to start, needs unlocking), and offers a "Sign and install WDA" button for a device without WebDriverAgent when an Apple ID is signed in.
+- Recovery from a revoked signing certificate: a free Apple ID holds at most two certificates, and signing with it somewhere else (another machine, moving from Docker to a native install, another sideloading tool) creates one and revokes an old one, after which WDA signed with that certificate won't start on any device although its profile still looks valid. When a device now refuses to start WDA, the daemon checks whether that WDA was signed with this machine's certificate and whether this machine's certificate is still in the Apple ID's team, and re-signs the device automatically if not (at most once per device every 6 hours).
+- `doctor` shows both certificate checks; signing that creates or revokes a certificate is logged and notified (a new notification type `cert`, try it with `notify-test cert`).
 - Simpler installs: `curl -fsSL https://raw.githubusercontent.com/Derrors/iphone-control/main/install.sh | sh` on macOS (Apple Silicon) and Linux installs the release binary and runs the daemon as a per-user service (launchd on macOS, which had none before; systemd on Linux), and upgrades or uninstalls it again; `brew install derrors/tap/iphone-control` with `brew services start iphone-control`; and a `.deb` for Debian 12+ and Ubuntu 22.04+ (amd64, arm64) with a systemd user service, depending on usbmuxd. The release workflow builds the packages and updates the Homebrew tap.
 - AI tasks in the live viewer: type a task on the page and a local agent (Claude Code or Codex, picked on the page) carries it out on the phone through the MCP tools, while the page shows each step with what the agent says it is doing, the result and screenshots, and marks where it taps. Pause, resume, take over (act on the phone yourself) and hand back, or stop. Before paying, deleting, sending a message or changing account settings the agent asks on the page (`iphone_confirm`) and waits; a rejected step isn't done. The steps, holds and confirmations go through `iphone-control mcp` itself, so they work the same with either agent; the agent runs with only the phone tools (no shell or file tools for Claude Code, a read-only sandbox for Codex).
 
@@ -21,8 +38,23 @@ All notable changes to this project are documented here. The format is based on 
 - The viewer no longer draws marks for your own taps and swipes, and no longer shows a message for each successful manual action; errors are still shown.
 - The viewer serves more read-only JSON (`/api/daemon`, `/status`, `/devices`, `/apps`, `/elements`) and refuses reads that a browser marks as sent by another site (`Sec-Fetch-Site`), since reading elements can unlock the phone.
 
+### Removed
+
+- The Docker image (`ghcr.io/derrors/iphone-control`), `compose.yaml`, `docker/Dockerfile` and `.dockerignore`. A container can't reach the local Claude Code or Codex that the control page hands tasks to, and the native installs are simpler.
+- The daemon no longer starts or watches usbmuxd (`ICTL_MANAGE_USBMUXD`, `ICTL_USBMUXD_BIN`); the system usbmuxd is used on Linux and macOS.
+- `deploy/iphone-control.service`: `install.sh` and `iphone-control service install` write the unit now.
+- `iphone-control mcp-config --container`: `mcp-config` takes no arguments and prints a path that survives Homebrew upgrades.
+
 ### Fixed
 
+- Control page: the mouse wheel works again on devices below iOS 27 (whole-gesture mode). It waited for a leftover scroll amount that never drains in that mode, so no swipe went out and later wheel events piled up.
+- Pressing Home right after an app comes to the front, while its transition is still running, was ignored by iPadOS for both ways of pressing (about one time in three on an iPad mini 5 / iPadOS 26.6.1). When neither brings back the home screen, Home is now pressed once more.
+- When WebDriverAgent fails to start with only `unexpected response`, the hint adds the second likely cause: if the developer is already trusted, the signing certificate may have changed; run `iphone-control sign` to re-sign the device. In that case the control page offers a "Re-sign and install WDA" button when an Apple ID is signed in.
+- In automatic mode the daemon, after a restart, goes on with the last device that was ready instead of whichever usbmuxd lists first (with an iPhone and an iPad connected, a restart could switch to a device whose WebDriverAgent can't start).
+- `iphone-control viewer` no longer exits when the daemon isn't up yet and several devices are connected: it starts anyway and the page follows once the daemon has picked a device.
+- Control page: on a device below iOS 27 without WebDriverAgent, the route shows "Unavailable" instead of the HID fallback (which needs iOS 27); an unknown lock state is no longer shown as "Unlocked"; when WebDriverAgent fails to start, the picture area shows why instead of "usually 10–60 seconds".
+- "WDA failed to start: WDA failed to start:" is no longer doubled in the log and the state.
+- `devices`, `select` and `doctor` on the command line also name `iphone-control select` / `iphone-control status`, not only the MCP tools; when the daemon can't be reached, the hint is `iphone-control service start`.
 - `lock` no longer takes about 10 seconds on newer iPhones: the power key is pressed for 0.1 s instead of held for 0.5 s, which an iPhone 18 Pro Max (iOS 27.2.1) ignored, so every lock fell through to WebDriverAgent's slower lock and logged a timeout.
 - `home` takes about 1.3 seconds instead of 3.7 on devices that ignore the IOHID Home event (iPhone 18 Pro Max, iOS 27.2.1): when only the XCTest press works, the daemon remembers that for the device and uses it first. Devices where only the IOHID press works (iPhone 12 mini) keep their order.
 - Taps and long presses no longer take about 26 seconds while something on screen keeps animating (seen tapping a search result in Settings with the keyboard up, iPhone 18 Pro Max, iOS 27.2.1): like swipes, they no longer wait for WebDriverAgent's animation cool-off. The result came back in about 1.4 seconds.

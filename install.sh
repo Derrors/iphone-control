@@ -97,8 +97,8 @@ if [ "$UNINSTALL" = 1 ]; then
     if has_systemd_user; then systemctl --user daemon-reload || true; fi
   fi
   rm -f "$BIN"
-  say "已卸载 iphone-control。数据还在 ~/.local/share/iphone-control（Apple ID 会话、签名、配对信息），不需要的话自己删除；手机上的 WebDriverAgent 在手机上删除。" \
-      "iphone-control is uninstalled. Your data is still in ~/.local/share/iphone-control (Apple ID session, signing, pairing); delete it if you no longer need it, and remove WebDriverAgent on the phone."
+  say "已卸载 iphone-control。数据还在 ~/.local/share/iphone-control（Apple ID 会话、签名、自动解锁密码），不需要的话自己删除；手机上的 WebDriverAgent 在手机上删除。" \
+      "iphone-control is uninstalled. Your data is still in ~/.local/share/iphone-control (Apple ID session, signing, auto-unlock passcodes); delete it if you no longer need it, and remove WebDriverAgent on the phone."
   exit 0
 fi
 
@@ -217,11 +217,13 @@ if [ "$started" = 1 ]; then
 elif [ "$SERVICE" = 0 ]; then
   say "没有安装服务。启动守护进程：$BIN daemon" "No service installed. Start the daemon: $BIN daemon"
 fi
-say "接下来：
-  1. 用数据线连上 iPhone，运行  iphone-control setup   （配对、开发者模式、Apple ID、安装 WDA）
-  2. 运行  iphone-control mcp-config  ，执行它打印的命令，把工具注册给 Claude Code
-  3. 想在浏览器里看画面、交给本机的 Claude Code 或 Codex 执行任务：iphone-control viewer" \
-"Next:
-  1. Connect the iPhone with a cable and run  iphone-control setup   (pairing, Developer Mode, Apple ID, WDA)
-  2. Run  iphone-control mcp-config  and the command it prints, to register the tools with Claude Code
-  3. To watch the screen in a browser and hand tasks to a local Claude Code or Codex: iphone-control viewer"
+say "接下来：用数据线连上 iPhone，然后运行
+
+  iphone-control
+
+它会一步步带你完成设置（配对、开发者模式、Apple ID、安装 WDA、注册到 Claude Code / Codex），设置好以后再运行只显示状态。" \
+"Next: connect the iPhone with a cable, then run
+
+  iphone-control
+
+It walks you through setup step by step (pairing, Developer Mode, Apple ID, WDA, registering with Claude Code / Codex); once set up, running it again just shows the status."

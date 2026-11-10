@@ -216,9 +216,9 @@ fn dev_tools() -> Vec<Tool> {
         t(
             "iphone_install_app",
             ictl_l10n::tr!(
-                "安装签好名的 .ipa 或 .app(覆盖已装的同一 App)。path 是运行守护进程的机器上的路径,容器部署时是容器里的路径。\
+                "安装签好名的 .ipa 或 .app(覆盖已装的同一 App)。path 是运行守护进程的机器上的路径。\
 大的包要一两分钟。",
-                "Install a signed .ipa or .app (replacing the same app if installed). path is on the machine that runs the daemon; inside the container for a container deployment. Large packages take a minute or two."
+                "Install a signed .ipa or .app (replacing the same app if installed). path is on the machine that runs the daemon. Large packages take a minute or two."
             ),
             schema(
                 json!({"path": {"type": "string", "description": ictl_l10n::tr!(".ipa 文件或 .app 目录的路径", "path of the .ipa file or .app directory")}}),
@@ -980,7 +980,9 @@ impl McpServer {
         let wait = if matches!(req, Request::InstallApp { .. }) { 660 } else { 150 };
         protocol::call_expecting(&self.socket, req, Some(Duration::from_secs(wait)), expect_udid).await.unwrap_or_else(
             |e| {
-                Response::error(ictl_l10n::trf!("连不上守护进程({}):{e};确认守护进程在运行(容器部署看 iphone-control 容器)", "Can't reach the daemon ({}): {e}; make sure the daemon is running (for a container deployment, check the iphone-control container)",
+                Response::error(ictl_l10n::trf!(
+                    "连不上守护进程({}):{e};确认守护进程在运行(iphone-control status)",
+                    "Can't reach the daemon ({}): {e}; make sure the daemon is running (iphone-control status)",
                     self.socket.display()
                 ))
             },

@@ -12,15 +12,23 @@ The daemon notifies you when the phone needs attention, through whichever channe
 | WDA recovered | — |
 | Auto-unlock failed and was disabled | See [Auto-unlock](./auto-unlock) |
 | Phone offline / back online | Check the cable and the host |
+| Signing certificate replaced (signing created a new certificate, maybe revoking an old one) | Usually nothing: devices signed with the old certificate are re-signed automatically when their WDA won't start; other machines or sideloading tools using the same Apple ID have to re-sign there, see the [FAQ](../troubleshoot/faq#cert) |
 
 How repeats are limited:
 
 - Re-signing failed, Apple ID session expired: not repeated for 20 hours; sent again after that if the problem is still there.
 - Passcode needed, phone offline: sent once until it recovers. Only these two have a recovery notification ("WDA recovered", "back online").
 - Auto-unlock disabled: sent once; it can only be sent again after `unlock-reset`.
+- Signing certificate replaced: sent every time.
 - This record is kept in memory only. Restarting the daemon clears it, so a problem that isn't solved yet is sent again.
 
 Notifications don't name the device; with several connected, use `status` to see which one. See [Several devices](./multi-device).
+
+## Setting up
+
+The easiest way is the guide: the first run of `iphone-control` asks, and later `iphone-control setup --reconfigure` with Notifications. Pick Bark or Telegram and enter the key or token; it sends a test message and restarts the daemon so the settings apply.
+
+You can also put them in the [settings file](./configuration#settings-file), `~/.config/iphone-control/env`, and run `iphone-control service restart`.
 
 ## Bark
 
@@ -39,10 +47,10 @@ TG_CHAT_ID=your-chat-id
 ## Test
 
 ```bash
-docker exec iphone-control iphone-control notify-test           # one per event type, titled "[测试]"
-docker exec iphone-control iphone-control notify-test offline   # one type: resign / session / pin / pin-recovered / unlock / offline / online
+iphone-control notify-test           # one per event type, titled "[test]" (or "[测试]" in Chinese)
+iphone-control notify-test offline   # one type: resign / session / pin / pin-recovered / unlock / offline / online / cert
 ```
 
-::: info No notification if the container itself dies
-Notifications come from the daemon. Watching the container or host needs separate monitoring, which this project doesn't provide.
+::: info No notification if the daemon itself dies
+Notifications come from the daemon. The background service restarts it after a crash; watching the host itself needs separate monitoring, which this project doesn't provide.
 :::

@@ -27,12 +27,11 @@ body:
     attributes:
       label: How do you run it / 运行方式
       options:
-        - Docker (compose)
-        - Linux prebuilt binary
-        - Linux from source (systemd user service or manual)
+        - install.sh (one-line installer)
+        - Homebrew
+        - .deb package
+        - From source (service or started by hand)
         - Linux from source as root
-        - macOS prebuilt binary
-        - macOS from source
     validations:
       required: true
   - type: input
@@ -49,5 +48,5 @@ body:
     id: logs
     attributes:
       label: Relevant logs / 相关日志
-      description: "`docker logs iphone-control`, `data/logs/daemon.log`, or `journalctl --user -u iphone-control`; for MCP problems, the tool call and its result."
+      description: "`iphone-control status`, `~/.local/share/iphone-control/logs/daemon.log`, `journalctl --user -u iphone-control` (Linux) or `~/Library/Logs/iphone-control/daemon.log` (macOS); for MCP problems, the tool call and its result."
       render: text

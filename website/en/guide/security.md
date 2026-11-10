@@ -7,20 +7,19 @@ This page has the essentials. What is stored, who can reach it and the details o
 ## What is stored
 
 - **The data directory** holds the Apple ID session, the signing key, pairing records and, with auto-unlock on, the passcode in **plain text**. Keep it and its backups as safe as a password. The Apple ID password is never stored.
-- **The control socket** is a Unix socket with mode 0600, and whoever can connect to it controls the phone: root on the host, anyone who can `docker exec` into the container, the same user for a source install.
-- **Notification keys** are in `.env` or `~/.config/iphone-control/env`.
+- **The control socket** is a Unix socket with mode 0600, and whoever can connect to it controls the phone: root on the host and the user the daemon runs as.
+- **Notification keys** are in the settings file `~/.config/iphone-control/env`, mode 0600.
 
 ## Built-in protections
 
 - **No network ports.** WDA is reached through usbmuxd. `wda-bridge` and the live `viewer` are explicit opt-ins that bind 127.0.0.1 only, and other web pages in your browser can't act through them. They have no login, though: every local user can use them, including starting AI tasks from the viewer, so stop them when done.
-- **Not privileged**: the container only gets USB character devices.
+- **No root.** The daemon runs as your regular user, as a per-user service; the install script refuses to run as root.
 - **Auto-unlock is off by default** and disables itself after one wrong attempt.
 - **Developer tools are off by default.**
-- Exact dependency versions, base images pinned by digest, and the WebDriverAgent download is sha256-checked.
+- Exact dependency versions; the WebDriverAgent download and the install script's download are sha256-checked.
 
 ## Risks to know about
 
-- **The container runs as root.** It needs the USB device nodes and must restart usbmuxd after re-plugging (there is no udev in the container).
 - **The anisette server.** Apple ID logins use a public third-party server by default (`mac-ani.jkcoxson.com`). It never gets your password, but it can see when you log in. To avoid it, run your own [anisette-v3-server](https://github.com/Dadoum/anisette-v3-server) and set `ICTL_ANISETTE_URL`.
 - **Use a dedicated Apple ID.** A separate account contains the damage if the host is compromised.
 - **The agent acts with your hands.** It can send messages, buy things and change settings. The server tells agents to ask first for these, but that is an instruction, not enforcement.

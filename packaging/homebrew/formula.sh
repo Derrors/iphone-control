@@ -52,9 +52,9 @@ class IphoneControl < Formula
     <<~EOS
       Run the daemon in the background (it also starts when you log in):
         brew services start iphone-control
-      Then connect the iPhone with a cable and set it up:
-        iphone-control setup
-        iphone-control mcp-config    # prints the command that registers the MCP tools
+      Then connect the iPhone with a cable and run
+        iphone-control
+      It walks you through setup (pairing, Developer Mode, Apple ID, WebDriverAgent, MCP registration).
       Settings: ~/.config/iphone-control/env (example: #{opt_pkgshare}/env.example).
       On Linux, the daemon also needs the system's usbmuxd (sudo apt install usbmuxd).
     EOS

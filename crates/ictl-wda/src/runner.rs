@@ -54,14 +54,20 @@ fn automation_signal(msg: &str) -> Option<AutomationSignal> {
     }
 }
 
+/// 设备拒绝启动 runner（见 [`launch_hint`]）：还没信任开发者，或签 WDA 的证书已被吊销。守护进程据此判断要不要重签
+pub fn launch_refused(msg: &str) -> bool {
+    msg.contains("unexpected response")
+}
+
 /// 手机拒绝启动 runner 时回的是 NSError，但 idevice 收到的是没解开的归档（字段都是 `Uid(n)` 引用），读不出文字，
 /// 只报 `unexpected response`。首次安装后最常见的原因是还没信任开发者（iPad mini 5 / iPadOS 26.6.1 真机：
-/// 点「信任」之前这样报，之后下一次就能启动），在报错里提示一句
+/// 点「信任」之前这样报，之后下一次就能启动）；用过的设备则可能是签 WDA 的证书变了（给另一台设备重签时换了证书，
+/// 同一台 iPad 上点 runner 图标提示「无法验证 App」，重签这台后就能启动），两种都在报错里提示一句
 fn launch_hint(msg: String) -> String {
-    if msg.contains("unexpected response") {
+    if launch_refused(&msg) {
         ictl_l10n::trf!(
-            "{msg}(如果是第一次在这台手机上装 WDA:到 设置 → 通用 → VPN 与设备管理 里信任你的 Apple ID 开发者,需要联网)",
-            "{msg} (if this is the first WDA install on this phone: trust your Apple ID developer under Settings → General → VPN & Device Management, which needs internet)"
+            "{msg}(第一次在这台设备上装 WDA 的:到 设置 → 通用 → VPN 与设备管理 里信任你的 Apple ID 开发者,需要联网;已经信任过的,可能是签名证书变了:运行 iphone-control sign 重签这台)",
+            "{msg} (first WDA install on this device: trust your Apple ID developer under Settings → General → VPN & Device Management, which needs internet; already trusted: the signing certificate may have changed, run iphone-control sign to re-sign this device)"
         )
     } else {
         msg
@@ -265,8 +271,12 @@ mod tests {
     #[test]
     fn untrusted_developer_hint_only_for_unexpected_response() {
         let m = launch_hint("unexpected response from device: unexpected response".into());
-        assert!(m.contains("VPN 与设备管理"), "{m}");
+        assert!(m.contains("VPN 与设备管理") && m.contains("iphone-control sign"), "{m}");
         assert_eq!(launch_hint("WDA 在限定时间内没有就绪".into()), "WDA 在限定时间内没有就绪");
+        // 守护进程据此决定要不要查证书、自动重签：带不带提示都认
+        assert!(launch_refused("unexpected response from device: unexpected response"));
+        assert!(launch_refused(&m));
+        assert!(!launch_refused("WDA 在限定时间内没有就绪"));
     }
 
     #[test]

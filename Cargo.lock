@@ -2021,9 +2021,11 @@ dependencies = [
  "plist",
  "plume_core",
  "plume_store",
+ "rsa",
  "thiserror 2.0.21",
  "tracing",
  "uuid",
+ "x509-certificate",
  "zip",
 ]
 

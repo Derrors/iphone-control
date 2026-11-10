@@ -19,6 +19,23 @@ Docker Desktop on a Mac runs containers in a Linux VM without USB passthrough, s
 
 ## Install
 
+### One command (recommended)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Derrors/iphone-control/main/install.sh | sh
+```
+
+It downloads the latest release, checks its sha256, installs `~/.local/bin/iphone-control` and a launchd user service (`~/Library/LaunchAgents/io.github.derrors.iphone-control.plist`) that starts the daemon at login, restarts it after a crash, reads `~/.config/iphone-control/env` and logs to `~/Library/Logs/iphone-control/daemon.log`. Options go after `sh -s --`: `--version v0.1.5`, `--prefix DIR` (installs into `DIR/bin`), `--no-service` (only the binary; start the daemon yourself).
+
+### Homebrew
+
+```bash
+brew install derrors/tap/iphone-control
+brew services start iphone-control      # the daemon runs now and after each login
+```
+
+With either of these the daemon is already running: go on with `iphone-control setup` under *Run* below.
+
 ### Prebuilt binary
 
 Since 0.1.2, [Releases](https://github.com/Derrors/iphone-control/releases) has a macOS archive (Apple Silicon, macOS 11+): `iphone-control-<version>-macos-arm64.tar.gz`. Download and install it from a terminal (set `V` to the latest version):
@@ -97,7 +114,7 @@ Restart the daemon (Ctrl-C, then run it again) after changing settings. The vari
 
 ### Keep it running
 
-There is no launchd configuration yet, so keep the daemon in a terminal (or tmux). It pauses while the Mac sleeps; for long unattended runs, keep the Mac awake with `caffeinate`:
+Installed with the one command or Homebrew, the daemon is already a launchd service. Installed by hand, keep it in a terminal (or tmux). It pauses while the Mac sleeps; for long unattended runs, keep the Mac awake with `caffeinate`:
 
 ```bash
 caffeinate -i iphone-control daemon
@@ -130,6 +147,8 @@ sudo launchctl kickstart -k system/com.apple.usbmuxd
 
 Read the upgrade notes in the [changelog](https://github.com/Derrors/iphone-control/blob/main/CHANGELOG.md) first.
 
+Installed with the one command: run it again; it stops the service, replaces the binary and starts it again. Homebrew: `brew upgrade iphone-control && brew services restart iphone-control`.
+
 Prebuilt binary: download the new version as under *Install* and replace `~/.local/bin/iphone-control`. From source:
 
 ```bash
@@ -141,7 +160,9 @@ Then restart the daemon.
 
 ## Uninstall
 
-Stop the daemon with Ctrl-C in its terminal, then:
+Installed with the one command: `curl -fsSL https://raw.githubusercontent.com/Derrors/iphone-control/main/install.sh | sh -s -- --uninstall`. Homebrew: `brew services stop iphone-control && brew uninstall iphone-control`. Both keep your data; the second line below removes it.
+
+Installed by hand: stop the daemon with Ctrl-C in its terminal, then:
 
 ```bash
 rm -f ~/.local/bin/iphone-control      # prebuilt binary; for a source build: cargo uninstall iphone-control
@@ -154,8 +175,8 @@ On the phone, delete the WebDriverAgent app; its profile under *VPN & Device Man
 
 | | Linux (source install) | macOS |
 |---|---|---|
-| Install | Prebuilt binary or build from source | Same (Apple Silicon archive only) |
-| Keep running | systemd user service | No launchd configuration yet; run in a terminal |
+| Install | One command, .deb, prebuilt binary or build from source | One command, Homebrew, prebuilt binary or build from source (Apple Silicon only) |
+| Keep running | systemd user service | launchd user service (set up by the one command or Homebrew) |
 | usbmuxd | System package, started by udev on plug-in | Built into macOS, always running |
 | Data directory | `~/.local/share/iphone-control` | Same (not the usual `~/Library/Application Support`) |
 | Control socket | `$XDG_RUNTIME_DIR/iphone-control/ctl.sock` | `~/.local/share/iphone-control/ctl.sock` |

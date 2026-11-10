@@ -4,6 +4,26 @@
 
 ## 安装
 
+### 一行命令（推荐）
+
+```bash
+sudo apt install usbmuxd     # 其他发行版用对应的包管理器
+curl -fsSL https://raw.githubusercontent.com/Derrors/iphone-control/main/install.sh | sh
+```
+
+下载最新版本、校验 sha256，装到 `~/.local/bin/iphone-control`，并装好、启动 systemd 用户服务（`~/.config/systemd/user/iphone-control.service`，读取 `~/.config/iphone-control/env`）。要不登录也随开机启动，再运行 `sudo loginctl enable-linger "$USER"`。可选参数写在 `sh -s --` 后面：`--version`、`--prefix`、`--no-service`、`--uninstall`。
+
+### Debian / Ubuntu 的 deb 包
+
+从 [Releases](https://github.com/Derrors/iphone-control/releases) 下载 `iphone-control_<版本>_amd64.deb`（ARM 机器用 `_arm64.deb`），要求 Debian 12 / Ubuntu 22.04 及以上：
+
+```bash
+sudo apt install ./iphone-control_<版本>_amd64.deb   # 会自动装上 usbmuxd
+systemctl --user enable --now iphone-control        # 以普通用户运行，不加 sudo
+```
+
+程序在 `/usr/bin/iphone-control`，服务文件在 `/usr/lib/systemd/user/`。
+
 ### 预编译二进制
 
 [Releases](https://github.com/Derrors/iphone-control/releases) 里有 Linux x86_64 和 aarch64 的压缩包（需要 glibc 2.34 以上：Debian 12、Ubuntu 22.04 及更新的发行版）：
@@ -67,6 +87,8 @@ loginctl enable-linger "$USER"                  # 不登录也随开机启动
 ## 升级
 
 升级前先看[更新日志](https://github.com/Derrors/iphone-control/blob/main/CHANGELOG.zh-CN.md)里的升级注意事项。
+
+一行命令安装的：重新运行同一条命令。deb：下载新版本的 deb 再 `sudo apt install ./…deb`，然后 `systemctl --user restart iphone-control`。从源码或二进制：
 
 ```bash
 git pull && cargo install --path apps/iphone-control --locked   # 或换上新版本的二进制

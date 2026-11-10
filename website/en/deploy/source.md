@@ -4,6 +4,26 @@ Run it directly as a regular user on Linux, without Docker. You need the system 
 
 ## Install
 
+### One command (recommended)
+
+```bash
+sudo apt install usbmuxd     # or your distribution's package manager
+curl -fsSL https://raw.githubusercontent.com/Derrors/iphone-control/main/install.sh | sh
+```
+
+It downloads the latest release, checks its sha256, installs `~/.local/bin/iphone-control`, and installs and starts a systemd user service (`~/.config/systemd/user/iphone-control.service`, reading `~/.config/iphone-control/env`). To also start it at boot without logging in, run `sudo loginctl enable-linger "$USER"`. Options go after `sh -s --`: `--version`, `--prefix`, `--no-service`, `--uninstall`.
+
+### Debian / Ubuntu package
+
+Download `iphone-control_<version>_amd64.deb` (`_arm64.deb` on ARM) from [Releases](https://github.com/Derrors/iphone-control/releases); it needs Debian 12 / Ubuntu 22.04 or newer:
+
+```bash
+sudo apt install ./iphone-control_<version>_amd64.deb   # pulls in usbmuxd
+systemctl --user enable --now iphone-control           # as your regular user, no sudo
+```
+
+The binary is `/usr/bin/iphone-control`, the service file is in `/usr/lib/systemd/user/`.
+
 ### Prebuilt binary
 
 [Releases](https://github.com/Derrors/iphone-control/releases) has Linux x86_64 and aarch64 archives (glibc 2.34 or later: Debian 12, Ubuntu 22.04 and newer):
@@ -67,6 +87,8 @@ loginctl enable-linger "$USER"                  # start at boot without logging 
 ## Upgrade
 
 Read the upgrade notes in the [changelog](https://github.com/Derrors/iphone-control/blob/main/CHANGELOG.md) first.
+
+Installed with the one command: run it again. .deb: install the new package with `sudo apt install ./…deb`, then `systemctl --user restart iphone-control`. From source or a binary:
 
 ```bash
 git pull && cargo install --path apps/iphone-control --locked   # or drop in the new binary

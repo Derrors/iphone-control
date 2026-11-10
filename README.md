@@ -64,31 +64,37 @@ iphone-control does it all in **one Rust binary** on Linux or macOS, built on [i
 
 ## Quick Start
 
-You need an iPhone or iPad on iOS 17+ connected by a **data** cable, a free Apple ID (use a dedicated one), and a Linux host with Docker or an Apple Silicon Mac.
+You need an iPhone or iPad on iOS 17+ connected by a **data** cable, a free Apple ID (use a dedicated one), and an Apple Silicon Mac or a Linux machine.
 
-**Linux (Docker)**
+**macOS or Linux, one command**
 
 ```bash
-git clone https://github.com/Derrors/iphone-control.git && cd iphone-control
-cp .env.example .env                                  # optional: proxy, notifications
-docker compose up -d --build                          # the first build takes a few minutes
-docker exec -it iphone-control iphone-control setup   # guided setup; safe to re-run
-claude mcp add iphone -s user -- docker exec -i iphone-control iphone-control mcp
+curl -fsSL https://raw.githubusercontent.com/Derrors/iphone-control/main/install.sh | sh
 ```
 
-**macOS** (Docker can't pass USB through on a Mac, so run the binary directly)
+It downloads the release for your machine, checks its sha256, installs `iphone-control` into `~/.local/bin` and runs the daemon as a per-user service that starts at login (launchd on macOS, systemd on Linux). Run it again to upgrade; `… | sh -s -- --uninstall` removes it and keeps your data.
+
+**Or with a package manager**
 
 ```bash
-V=v0.1.5   # latest release
-curl -fsSL https://github.com/Derrors/iphone-control/releases/download/$V/iphone-control-$V-macos-arm64.tar.gz | tar xz
-mkdir -p ~/.local/bin && install -m 755 iphone-control-$V-macos-arm64/iphone-control ~/.local/bin/
-echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zprofile && source ~/.zprofile
-iphone-control daemon       # keep this terminal open
-iphone-control setup        # in a second terminal
+# macOS (Homebrew)
+brew install derrors/tap/iphone-control && brew services start iphone-control
+
+# Debian 12+ / Ubuntu 22.04+: the .deb from Releases (amd64 or arm64), pulls in usbmuxd
+sudo apt install ./iphone-control_<version>_amd64.deb && systemctl --user enable --now iphone-control
+```
+
+**Then, on every system**
+
+```bash
+iphone-control setup        # pairing, Developer Mode, Apple ID, WebDriverAgent; do what it asks on the phone
 iphone-control mcp-config   # prints the `claude mcp add` command to run
+iphone-control viewer       # optional: the control page in the browser, with AI tasks for a local Claude Code or Codex
 ```
 
-`setup` walks you through pairing, Developer Mode, Apple ID sign-in and installing WebDriverAgent; do what it asks on the phone. Then open a new Claude Code session and ask, for example, *“Open Clock, switch to the stopwatch and start it.”*
+Then open a new Claude Code session and ask, for example, *“Open Clock, switch to the stopwatch and start it.”*
+
+**Linux with Docker** works too (`docker compose up -d --build`, see the [Docker guide](https://derrors.github.io/iphone-control/en/deploy/docker)), but the viewer's AI tasks need Claude Code or Codex on the same machine, so prefer the native install for them.
 
 More: [step-by-step guide](https://derrors.github.io/iphone-control/en/guide/getting-started) · [prebuilt image](https://derrors.github.io/iphone-control/en/deploy/docker) · [binary / source](https://derrors.github.io/iphone-control/en/deploy/source) · [macOS guide](https://derrors.github.io/iphone-control/en/deploy/macos) · [other MCP clients](https://derrors.github.io/iphone-control/en/guide/mcp-clients).
 

@@ -8,6 +8,7 @@ All notable changes to this project are documented here. The format is based on 
 
 ### Added
 
+- Simpler installs: `curl -fsSL https://raw.githubusercontent.com/Derrors/iphone-control/main/install.sh | sh` on macOS (Apple Silicon) and Linux installs the release binary and runs the daemon as a per-user service (launchd on macOS, which had none before; systemd on Linux), and upgrades or uninstalls it again; `brew install derrors/tap/iphone-control` with `brew services start iphone-control`; and a `.deb` for Debian 12+ and Ubuntu 22.04+ (amd64, arm64) with a systemd user service, depending on usbmuxd. The release workflow builds the packages and updates the Homebrew tap.
 - AI tasks in the live viewer: type a task on the page and a local agent (Claude Code or Codex, picked on the page) carries it out on the phone through the MCP tools, while the page shows each step with what the agent says it is doing, the result and screenshots, and marks where it taps. Pause, resume, take over (act on the phone yourself) and hand back, or stop. Before paying, deleting, sending a message or changing account settings the agent asks on the page (`iphone_confirm`) and waits; a rejected step isn't done. The steps, holds and confirmations go through `iphone-control mcp` itself, so they work the same with either agent; the agent runs with only the phone tools (no shell or file tools for Claude Code, a read-only sandbox for Codex).
 
 ### Changed

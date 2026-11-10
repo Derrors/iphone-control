@@ -8,6 +8,7 @@
 
 ### 新增
 
+- 安装更简单：macOS（Apple Silicon）和 Linux 上 `curl -fsSL https://raw.githubusercontent.com/Derrors/iphone-control/main/install.sh | sh` 一行装好 Release 的程序，并把守护进程装成用户服务（macOS 用 launchd，以前没有；Linux 用 systemd），再运行一次就是升级，也能卸载；`brew install derrors/tap/iphone-control` 加 `brew services start iphone-control`；Debian 12+ 和 Ubuntu 22.04+ 的 `.deb`（amd64、arm64），带 systemd 用户服务、依赖 usbmuxd。发布流程会打好这些包并更新 Homebrew 源。
 - 实时画面页面里的 AI 任务：在页面上写下任务，本机的 agent（Claude Code 或 Codex，在页面上选）用 MCP 工具在手机上完成；页面逐步显示 agent 说它要做什么、结果和截图，并在画面上标出点击位置。可以暂停、继续、接管（自己动手）后交还，或者停止。付款、删除、发消息、改账号设置之前，agent 会在页面上请你确认（`iphone_confirm`）并等你回答，拒绝的那一步不会执行。步骤、暂停和确认都经过 `iphone-control mcp` 本身，所以两种 agent 表现一样；agent 只能用操作手机的工具（Claude Code 不带命令行和文件工具，Codex 用只读沙箱）。
 
 ### 变更

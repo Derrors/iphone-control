@@ -64,31 +64,37 @@ iphone-control 在 Linux 或 macOS 上用**一个 Rust 二进制**把这些事�
 
 ## 快速开始
 
-需要一部 iOS 17 以上的 iPhone 或 iPad 和能**传数据**的线、一个免费 Apple ID（建议专门注册一个），以及一台装了 Docker 的 Linux 主机或一台 Apple Silicon 的 Mac。
+需要一部 iOS 17 以上的 iPhone 或 iPad 和能**传数据**的线、一个免费 Apple ID（建议专门注册一个），以及一台 Apple Silicon 的 Mac 或一台 Linux 机器。
 
-**Linux（Docker）**
+**macOS 或 Linux，一行命令安装**
 
 ```bash
-git clone https://github.com/Derrors/iphone-control.git && cd iphone-control
-cp .env.example .env                                  # 可选：代理、通知；国内网络一般要配代理
-docker compose up -d --build                          # 首次构建需要几分钟
-docker exec -it iphone-control iphone-control setup   # 安装向导，可重复运行
-claude mcp add iphone -s user -- docker exec -i iphone-control iphone-control mcp
+curl -fsSL https://raw.githubusercontent.com/Derrors/iphone-control/main/install.sh | sh
 ```
 
-**macOS**（Mac 上的 Docker 不能直通 USB，直接运行二进制）
+它会下载适合这台机器的版本、校验 sha256，把 `iphone-control` 装到 `~/.local/bin`，并把守护进程装成登录后自动启动的用户服务（macOS 用 launchd，Linux 用 systemd）。再运行一次就是升级；`… | sh -s -- --uninstall` 卸载，数据保留。
+
+**或者用包管理器**
 
 ```bash
-V=v0.1.5   # 最新版本号
-curl -fsSL https://github.com/Derrors/iphone-control/releases/download/$V/iphone-control-$V-macos-arm64.tar.gz | tar xz
-mkdir -p ~/.local/bin && install -m 755 iphone-control-$V-macos-arm64/iphone-control ~/.local/bin/
-echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zprofile && source ~/.zprofile
-iphone-control daemon       # 这个终端保持开着
-iphone-control setup        # 在另一个终端运行
+# macOS（Homebrew）
+brew install derrors/tap/iphone-control && brew services start iphone-control
+
+# Debian 12+ / Ubuntu 22.04+：从 Releases 下载 .deb（amd64 或 arm64），会自动装上 usbmuxd
+sudo apt install ./iphone-control_<版本>_amd64.deb && systemctl --user enable --now iphone-control
+```
+
+**装好以后，各系统都一样**
+
+```bash
+iphone-control setup        # 配对、开发者模式、登录 Apple ID、安装 WebDriverAgent，按提示在手机上操作
 iphone-control mcp-config   # 打印 `claude mcp add` 命令，复制运行
+iphone-control viewer       # 可选：浏览器里的控制台，可以把任务交给本机的 Claude Code 或 Codex
 ```
 
-`setup` 会引导完成配对、开发者模式、登录 Apple ID、安装 WebDriverAgent，按提示在手机上操作即可。然后打开一个新的 Claude Code 会话，试着说：「打开时钟，切到秒表并启动」。
+然后打开一个新的 Claude Code 会话，试着说：「打开时钟，切到秒表并启动」。国内网络下载 Release 慢的话，先在终端里设好 `HTTPS_PROXY` 再运行。
+
+**Linux 也可以用 Docker**（`docker compose up -d --build`，见 [Docker 部署](https://derrors.github.io/iphone-control/deploy/docker)），但控制台里的 AI 任务要求 Claude Code 或 Codex 和守护进程在同一台机器上，要用这个功能请选原生安装。
 
 更多：[分步指南](https://derrors.github.io/iphone-control/guide/getting-started) · [预构建镜像](https://derrors.github.io/iphone-control/deploy/docker) · [二进制 / 源码](https://derrors.github.io/iphone-control/deploy/source) · [macOS 指南](https://derrors.github.io/iphone-control/deploy/macos) · [其他 MCP 客户端](https://derrors.github.io/iphone-control/guide/mcp-clients)
 

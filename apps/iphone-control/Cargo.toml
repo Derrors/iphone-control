@@ -30,3 +30,26 @@ tracing-subscriber.workspace = true
 # `iphone-control debug …` 真机诊断子命令（直接调设备层和 WDA，不经守护进程），开发时用，默认不编进去：
 #   cargo build --features debug-cmds
 debug-cmds = ["dep:ictl-wda"]
+
+# `cargo deb -p iphone-control` (release workflow): the Debian/Ubuntu package
+[package.metadata.deb]
+name = "iphone-control"
+maintainer = "Derrors <33656531+Derrors@users.noreply.github.com>"
+copyright = "Derrors"
+license-file = ["../../LICENSE", "0"]
+extended-description = """\
+Lets an AI agent operate a real iPhone or iPad over USB: a long-running daemon owns the phone (tunnel, \
+WebDriverAgent, HID) and exposes it to Claude Code or any MCP client, plus a control page in the browser that \
+hands tasks to a local Claude Code or Codex. Runs as a systemd user service; see /usr/share/doc/iphone-control."""
+section = "utils"
+priority = "optional"
+depends = "$auto, usbmuxd"
+maintainer-scripts = "../../deploy/deb"
+assets = [
+  ["target/release/iphone-control", "usr/bin/", "755"],
+  ["../../deploy/deb/iphone-control.service", "usr/lib/systemd/user/", "644"],
+  ["../../.env.example", "usr/share/doc/iphone-control/env.example", "644"],
+  ["../../README.md", "usr/share/doc/iphone-control/", "644"],
+  ["../../README.zh-CN.md", "usr/share/doc/iphone-control/", "644"],
+  ["../../THIRD_PARTY.md", "usr/share/doc/iphone-control/", "644"],
+]

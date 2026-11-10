@@ -1,0 +1,15 @@
+#!/bin/sh
+# What to do next. A user service is each user's own to turn on, so the package doesn't start it
+set -e
+if [ "$1" = configure ]; then
+  cat <<'MSG'
+
+iphone-control is installed. As your regular user (not root):
+  systemctl --user enable --now iphone-control   # run the daemon, also after the next login
+  iphone-control setup                            # pairing, Developer Mode, Apple ID, WebDriverAgent
+  iphone-control mcp-config                       # prints the command that registers the MCP tools
+安装完成。以普通用户（不是 root）运行上面三条命令：启动守护进程，首次设置，注册 MCP 工具。
+
+MSG
+fi
+exit 0

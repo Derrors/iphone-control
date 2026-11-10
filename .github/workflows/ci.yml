@@ -67,6 +67,47 @@ jobs:
       - run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
       - run: cargo test --workspace --all-features --locked
 
+  # 安装方式能用：deb 打得出、装得上；install.sh 过 shellcheck、真能从最新的 Release 装上；Homebrew formula 能生成
+  packages:
+    needs: [changes]
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.changes.outputs.code == 'true') }}
+    # 和发布的二进制同一个系统（glibc 2.35）
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@1.99.1
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: packages
+      - run: cargo build --release --locked -p iphone-control
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deb
+      - name: Debian package installs
+        run: |
+          cargo deb -p iphone-control --no-build --output dist/iphone-control.deb
+          sudo apt-get update
+          sudo apt-get install -y ./dist/iphone-control.deb
+          dpkg -s iphone-control | grep -E '^(Version|Depends):'
+          dpkg -L iphone-control
+          test -x /usr/sbin/usbmuxd
+          test -f /usr/lib/systemd/user/iphone-control.service
+          grep -q '^ExecStart=/usr/bin/iphone-control daemon$' /usr/lib/systemd/user/iphone-control.service
+          iphone-control --version
+          sudo apt-get remove -y iphone-control
+      - name: install.sh
+        run: |
+          shellcheck -s sh install.sh
+          sh install.sh --no-service --prefix "$RUNNER_TEMP/ictl"
+          "$RUNNER_TEMP/ictl/bin/iphone-control" --version
+          sh install.sh --uninstall --prefix "$RUNNER_TEMP/ictl"
+          test ! -e "$RUNNER_TEMP/ictl/bin/iphone-control"
+      - name: Homebrew formula
+        run: |
+          shellcheck -s sh packaging/homebrew/formula.sh
+          sh packaging/homebrew/formula.sh v0.0.0 aaa bbb ccc > iphone-control.rb
+          ruby -c iphone-control.rb
+
   # Cargo.toml 声明的最低版本（rust-version）要真能编译
   msrv:
     runs-on: ubuntu-latest

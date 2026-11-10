@@ -19,6 +19,23 @@ Docker Desktop 在 Mac 上把容器跑在 Linux 虚拟机里，不支持 USB 直
 
 ## 安装
 
+### 一行命令（推荐）
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Derrors/iphone-control/main/install.sh | sh
+```
+
+它会下载最新版本、校验 sha256，装到 `~/.local/bin/iphone-control`，再装一个 launchd 用户服务（`~/Library/LaunchAgents/io.github.derrors.iphone-control.plist`）：登录后自动启动守护进程，崩溃后自动重启，读取 `~/.config/iphone-control/env`，日志在 `~/Library/Logs/iphone-control/daemon.log`。可选参数写在 `sh -s --` 后面：`--version v0.1.5`（指定版本）、`--prefix 目录`（装到 `目录/bin`）、`--no-service`（只装程序，守护进程自己启动）。
+
+### Homebrew
+
+```bash
+brew install derrors/tap/iphone-control
+brew services start iphone-control      # 守护进程常驻，登录后自动启动
+```
+
+用上面两种方式装好后，守护进程已经在运行，直接跳到下面「运行」一节的 `iphone-control setup`。
+
 ### 预编译二进制
 
 从 0.1.2 起，[Releases](https://github.com/Derrors/iphone-control/releases) 里有 macOS（Apple Silicon，macOS 11 以上）的压缩包 `iphone-control-<版本>-macos-arm64.tar.gz`。在终端里下载安装（把 `V` 换成最新版本号）：
@@ -97,7 +114,7 @@ iphone-control daemon
 
 ### 保持运行
 
-还没有 launchd 配置，守护进程要留在一个终端（或 tmux）里。Mac 睡眠时它也会暂停，长时间无人值守时用 `caffeinate` 防止睡眠：
+用一行命令或 Homebrew 安装的，守护进程已经是 launchd 服务，不用再管。手动安装的，守护进程要留在一个终端（或 tmux）里。Mac 睡眠时守护进程会暂停，长时间无人值守时用 `caffeinate` 防止睡眠：
 
 ```bash
 caffeinate -i iphone-control daemon
@@ -130,6 +147,8 @@ sudo launchctl kickstart -k system/com.apple.usbmuxd
 
 升级前先看[更新日志](https://github.com/Derrors/iphone-control/blob/main/CHANGELOG.zh-CN.md)里的升级注意事项。
 
+一行命令安装的：重新运行同一条命令，它会先停服务、换程序、再启动。Homebrew：`brew upgrade iphone-control && brew services restart iphone-control`。
+
 预编译二进制：按「安装」一节下载新版本，覆盖 `~/.local/bin/iphone-control`。从源码编译：
 
 ```bash
@@ -141,7 +160,9 @@ cargo install --path apps/iphone-control --locked
 
 ## 卸载
 
-先在守护进程的终端按 Ctrl-C 停掉，然后：
+一行命令安装的：`curl -fsSL https://raw.githubusercontent.com/Derrors/iphone-control/main/install.sh | sh -s -- --uninstall`。Homebrew：`brew services stop iphone-control && brew uninstall iphone-control`。两种都保留数据目录，要彻底删除再执行下面第二行。
+
+手动安装的，先在守护进程的终端按 Ctrl-C 停掉，然后：
 
 ```bash
 rm -f ~/.local/bin/iphone-control      # 预编译二进制；从源码编译的用 cargo uninstall iphone-control
@@ -154,8 +175,8 @@ rm -rf ~/.local/share/iphone-control ~/.config/iphone-control   # 会删掉 Appl
 
 | | Linux（从源码运行） | macOS |
 |---|---|---|
-| 安装 | 预编译二进制或从源码编译 | 同左（只有 Apple Silicon 的包） |
-| 常驻 | systemd 用户服务 | 还没有 launchd 配置，在终端里前台运行 |
+| 安装 | 一行命令、deb、预编译二进制或从源码编译 | 一行命令、Homebrew、预编译二进制或从源码编译（只有 Apple Silicon 的包） |
+| 常驻 | systemd 用户服务 | launchd 用户服务（一行命令或 Homebrew 安装时自动配置） |
 | usbmuxd | 系统包，插上手机时由 udev 拉起 | macOS 自带，一直在运行 |
 | 数据目录 | `~/.local/share/iphone-control` | 同左（不是 Mac 习惯的 `~/Library/Application Support`） |
 | 控制接口 | `$XDG_RUNTIME_DIR/iphone-control/ctl.sock` | `~/.local/share/iphone-control/ctl.sock` |

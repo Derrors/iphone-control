@@ -20,12 +20,15 @@ jobs:
       matrix:
         include:
           # 文件名用 linux-<arch>（arch 与 uname -m 一致），不用 Rust 的 target 名（x86_64-unknown-linux-gnu）
+          # debarch: the architecture name in the .deb (Debian's names)
           - runner: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
             arch: x86_64
+            debarch: amd64
           - runner: ubuntu-22.04-arm
             target: aarch64-unknown-linux-gnu
             arch: aarch64
+            debarch: arm64
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v7
@@ -43,10 +46,22 @@ jobs:
           cp .env.example "dist/$name/env.example"
           tar -C dist -czf "dist/$name.tar.gz" "$name"
           (cd dist && sha256sum "$name.tar.gz" > "$name.tar.gz.sha256")
+      # Debian/Ubuntu package (metadata in apps/iphone-control/Cargo.toml): the binary, a systemd user service,
+      # depends on usbmuxd. `sudo apt install ./iphone-control_<version>_<arch>.deb`
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deb
+      - name: Debian package
+        run: |
+          deb="iphone-control_${GITHUB_REF_NAME#v}_${{ matrix.debarch }}.deb"
+          cargo deb -p iphone-control --no-build --output "dist/$deb"
+          (cd dist && sha256sum "$deb" > "$deb.sha256")
       - uses: actions/upload-artifact@v7
         with:
           name: bin-${{ matrix.arch }}
-          path: dist/*.tar.gz*
+          path: |
+            dist/*.tar.gz*
+            dist/*.deb*
           if-no-files-found: error
 
   image:
@@ -176,7 +191,8 @@ jobs:
             echo "## 中文"; echo; echo "$zh"; echo
             echo "---"; echo
             echo "**Docker:** \`${IMAGE}:${version}\` (linux/amd64, linux/arm64)"; echo
-            echo "**Binaries / 二进制:** \`linux-x86_64\`, \`linux-aarch64\` (glibc 2.34+), \`macos-arm64\` (macOS 11+, Apple Silicon)"
+            echo "**Binaries / 二进制:** \`linux-x86_64\`, \`linux-aarch64\` (glibc 2.34+), \`macos-arm64\` (macOS 11+, Apple Silicon)"; echo
+            echo "**Install / 安装:** \`curl -fsSL https://raw.githubusercontent.com/Derrors/iphone-control/main/install.sh | sh\` (macOS, Linux) · \`brew install derrors/tap/iphone-control\` · Debian/Ubuntu: \`sudo apt install ./iphone-control_${version}_amd64.deb\` (or \`_arm64.deb\`)"
           } > notes.md
       - name: Create release
         run: |
@@ -220,3 +236,34 @@ jobs:
         run: gh release upload "$GITHUB_REF_NAME" dist/*.tar.gz dist/*.tar.gz.sha256 --clobber
         env:
           GH_TOKEN: ${{ github.token }}
+
+  # The Homebrew formula in Derrors/homebrew-tap, once all three archives are on the release. Pushed with a deploy key
+  # that can write to that repository only (secret HOMEBREW_TAP_DEPLOY_KEY). Pre-releases (v1.2.3-rc.1) are skipped
+  homebrew:
+    needs: [release, macos-binary]
+    if: ${{ !contains(github.ref_name, '-') }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: Formula
+        run: |
+          gh release download "$GITHUB_REF_NAME" --pattern '*.tar.gz.sha256' --dir sha
+          sha() { awk '{print $1}' "sha/iphone-control-${GITHUB_REF_NAME}-$1.tar.gz.sha256"; }
+          sh packaging/homebrew/formula.sh "$GITHUB_REF_NAME" "$(sha macos-arm64)" "$(sha linux-x86_64)" "$(sha linux-aarch64)" > iphone-control.rb
+          ruby -c iphone-control.rb
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - name: Push to Derrors/homebrew-tap
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "$DEPLOY_KEY" > ~/.ssh/tap && chmod 600 ~/.ssh/tap
+          export GIT_SSH_COMMAND="ssh -i ~/.ssh/tap -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
+          git clone git@github.com:Derrors/homebrew-tap.git tap
+          mkdir -p tap/Formula && cp iphone-control.rb tap/Formula/iphone-control.rb
+          cd tap
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Formula/iphone-control.rb
+          git diff --cached --quiet || { git commit -m "iphone-control ${GITHUB_REF_NAME#v}" && git push; }
+        env:
+          DEPLOY_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}

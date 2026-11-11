@@ -44,6 +44,8 @@ hands tasks to a local Claude Code or Codex. Runs as a systemd user service; see
 section = "utils"
 priority = "optional"
 depends = "$auto, usbmuxd"
+# the control page's picture as H.264 (about 1/15 of MJPEG's traffic); without it the page uses MJPEG
+recommends = "ffmpeg"
 maintainer-scripts = "../../deploy/deb"
 assets = [
   ["target/release/iphone-control", "usr/bin/", "755"],

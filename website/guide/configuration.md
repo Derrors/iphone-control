@@ -25,6 +25,8 @@ iphone-control service restart
 | `HTTP_PROXY` / `HTTPS_PROXY` | 直连 | 访问苹果、anisette、开发者镜像、推送通知用的代理 |
 | `IPHONE_CONTROL_LANG` | `zh` | 界面语言：`zh` 或 `en`。工具说明和结果、命令行输出、日志、通知都按它。MCP 和命令行各自按自己的设置请求，守护进程按请求的语言回答；日志和通知按守护进程自己的设置。见表下说明 |
 | `IPHONE_CONTROL_DEV_TOOLS` | 关 | 设为 `1` 时 MCP 服务多出[开发者工具](./tools#开发者工具-显式开启)：日志、崩溃报告、安装和卸载 App、Web Inspector（在网页和 WebView 里执行 JavaScript）。风险见[安全与隐私](./security)。见表下说明 |
+| `IPHONE_CONTROL_VIEWER_CODEC` | `auto` | 控制台画面的编码：`auto` 在 iOS 27 及以上用手机自己的视频（HEVC），其余用 H.264（macOS 上直接用 VideoToolbox；Linux 上要装 ffmpeg），先试显卡编码；`device` 只用手机自己的视频，用不了时是 MJPEG；`mjpeg` 只用 MJPEG；也可以指定 `nvenc`、`vaapi`、`qsv`、`v4l2m2m`、`videotoolbox`、`x264`。`iphone-control viewer` 启动时会显示用的是哪个，见[命令行](./cli#viewer-picture) |
+| `IPHONE_CONTROL_VIEWER_QP` | `20` | H.264 的画质，1～51，越小越清晰、流量越大。`20` 正常使用看不出和原画的差别；`24` 约省三分之一流量，快速滚动时小字略糊 |
 | `IPHONE_UDID` | 自动选 | 固定控制哪台设备。不设时自动选：正在控制的那台一直用到它断开；运行中可以用 `select` 命令或 `iphone_select_device` 工具切换。设了就不能切换 |
 | `RESIGN_MIN_DAYS` | `2` | 描述文件剩余不到几天时重签 |
 | `RESIGN_CHECK_HOURS` | `6` | 每隔几小时检查一次；手机重新连上或切换设备后 1 分钟内也查一次 |
@@ -46,6 +48,7 @@ MCP 服务由 AI 客户端拉起，注册时写进去的环境变量优先于设
 | `ICTL_WDA_UNSIGNED` | 未签名 WDA 的路径。默认是数据目录的 `wda/WDA-unsigned.ipa`，第一次签名前下载。自己指定的路径不会下载 |
 | `SCREEN_W` / `SCREEN_H` | HID 后备路线换算坐标用的屏幕尺寸（点）：WDA 不可用、又没有这台设备的尺寸记录时才用，比如 WDA 从没连上过，或切到记录里没有尺寸的设备。不分设备，接多台时要小心 |
 | `ICTL_LOG` | 日志级别，例如 `info,ictl_wda::http=debug` 记录每个 WDA 请求的耗时 |
+| `ICTL_FFMPEG` | ffmpeg 的路径（控制台的 H.264 画面；macOS 上只是 VideoToolbox 的备用）。默认在 `PATH` 里找，macOS 上还会找 Homebrew 的位置 |
 
 ## 目录和控制接口
 

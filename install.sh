@@ -2,7 +2,7 @@
 # iphone-control installer for macOS (Apple Silicon) and Linux (x86_64, aarch64).
 #
 #   curl -fsSL https://raw.githubusercontent.com/Derrors/iphone-control/main/install.sh | sh
-#   curl -fsSL https://raw.githubusercontent.com/Derrors/iphone-control/main/install.sh | sh -s -- --version v0.2.0
+#   curl -fsSL https://raw.githubusercontent.com/Derrors/iphone-control/main/install.sh | sh -s -- --version v0.2.1
 #
 # Downloads the release archive for this machine, checks its sha256, installs the binary into ~/.local/bin and
 # sets up the daemon as a per-user service (launchd on macOS, systemd --user on Linux) that starts at login and
@@ -216,6 +216,12 @@ if [ "$started" = 1 ]; then
   say "守护进程已作为服务运行，登录后自动启动。" "The daemon runs as a service and starts when you log in."
 elif [ "$SERVICE" = 0 ]; then
   say "没有安装服务。启动守护进程：$BIN daemon" "No service installed. Start the daemon: $BIN daemon"
+fi
+# on macOS the control page encodes H.264 with VideoToolbox itself
+if [ "$OS" = Linux ] && ! command -v ffmpeg >/dev/null 2>&1; then
+  say "可选：装上 ffmpeg，控制台（iphone-control viewer）的画面改用 H.264，流量约为原来的 1/15：sudo apt install ffmpeg" \
+      "Optional: with ffmpeg installed, the control page (iphone-control viewer) uses H.264 at about 1/15 of the traffic: sudo apt install ffmpeg"
+  echo
 fi
 say "接下来：用数据线连上 iPhone，然后运行
 

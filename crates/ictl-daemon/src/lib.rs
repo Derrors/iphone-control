@@ -14,6 +14,7 @@ pub mod eventlog;
 pub mod imaging;
 pub mod machine;
 pub mod notify;
+mod screen;
 mod supervise;
 mod tools;
 mod watchdog;
@@ -123,6 +124,12 @@ async fn serve_conn(daemon: Arc<Daemon>, stream: tokio::net::UnixStream) {
             protocol::Response::error(ictl_l10n::tr!("请求太长", "request too long"))
         } else {
             match parse_request(&line) {
+                // streams until either side closes: the connection is the stream's from here on
+                Ok((protocol::Request::ScreenStream, _, expect_udid, lang)) => {
+                    let w = w;
+                    ictl_l10n::scope(lang, daemon.screen_stream(reader, w, expect_udid)).await;
+                    return;
+                }
                 Ok((req, false, expect_udid, lang)) => {
                     let handling = daemon.handle(req, queued_at, core::CallCtx { gone: None, expect_udid });
                     ictl_l10n::scope(lang, handling).await

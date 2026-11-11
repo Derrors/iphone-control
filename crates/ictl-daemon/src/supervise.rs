@@ -78,7 +78,10 @@ impl Daemon {
         let Ok(mut g) = self.inner.try_lock() else { return };
         let g = &mut *g;
 
-        if g.tunnel.as_ref().is_some_and(Tunnel::hid_open) && g.hid_used.is_none_or(|t| t.elapsed() >= HID_IDLE) {
+        if g.tunnel.as_ref().is_some_and(Tunnel::hid_open)
+            && g.screen_viewers == 0
+            && g.hid_used.is_none_or(|t| t.elapsed() >= HID_IDLE)
+        {
             close_hid(g).await;
             tracing::info!(
                 "{}",

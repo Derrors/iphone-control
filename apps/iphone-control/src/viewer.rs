@@ -1,7 +1,9 @@
 //! `iphone-control viewer`: a page on 127.0.0.1 to watch the phone live, act on it with the mouse, look at its
 //! state, apps and elements, and hand tasks to a local AI agent (see [`crate::agent`]).
 //!
-//! - `GET /` the page, `GET /stream` WDA's MJPEG stream (port 9100 on the phone, over usbmuxd, read-only).
+//! - `GET /` the page, `GET /stream` WDA's MJPEG stream (port 9100 on the phone, over usbmuxd, read-only; repeated
+//!   frames dropped), `GET /video` the same frames as H.264 when ffmpeg can encode them ([`crate::video`]), about
+//!   1/15 of the traffic.
 //! - `GET /api/{info,daemon,status,devices,apps,elements}`: the daemon's answers as JSON for the page.
 //! - `POST /api/{tap,swipe,long_press,type,button,launch_app,terminate_app,open_url,tap_element,wait_for,select}`
 //!   turn into ordinary daemon requests, so they queue with an agent's calls, get auto-unlock and follow the
@@ -56,6 +58,10 @@ struct Ctx {
     agents: Arc<Agents>,
     /// Bundle id → display name, for the foreground app
     names: tokio::sync::Mutex<HashMap<String, String>>,
+    /// H.264 for the picture; `None`: MJPEG only
+    video: Option<Arc<crate::video::Encoders>>,
+    /// How much of each H.264 stream its page has read
+    acks: Arc<crate::video::Acks>,
 }
 
 impl Ctx {
@@ -95,6 +101,32 @@ pub async fn run(socket: &Path, data_dir: &Path, port: u16) -> anyhow::Result<()
             if udid.is_empty() { ictl_l10n::tr!("跟随守护进程", "whichever the daemon controls") } else { &udid }
         )
     );
+    if crate::video::device_allowed() {
+        println!(
+            "{}",
+            ictl_l10n::tr!(
+                "画面:iOS 27 及以上直接用手机自己编的视频(HEVC,约 60 帧/秒,本机不编码);浏览器解不了 HEVC 或更早的系统用下面这种",
+                "Picture: on iOS 27 and later the phone's own video (HEVC, about 60 fps, nothing encoded here); browsers that can't decode HEVC and older systems get the one below"
+            )
+        );
+    }
+    let video = match crate::video::Encoders::detect().await {
+        Ok(e) => {
+            println!("{}", ictl_l10n::trf!("画面编码:H.264,{}", "Picture: H.264, {}", e.describe()));
+            println!(
+                "{}",
+                ictl_l10n::tr!(
+                    "  浏览器不支持 WebCodecs 时自动改用 MJPEG;改设置见 IPHONE_CONTROL_VIEWER_CODEC、IPHONE_CONTROL_VIEWER_QP",
+                    "  Browsers without WebCodecs get MJPEG; settings: IPHONE_CONTROL_VIEWER_CODEC, IPHONE_CONTROL_VIEWER_QP"
+                )
+            );
+            Some(e)
+        }
+        Err(why) => {
+            println!("{}", ictl_l10n::trf!("画面编码:MJPEG({why})", "Picture: MJPEG ({why})"));
+            None
+        }
+    };
     let found: Vec<&str> =
         agent::Backend::ALL.iter().filter(|b| b.find().is_some()).map(|b| b.id()).collect::<Vec<_>>();
     println!(
@@ -124,6 +156,8 @@ pub async fn run(socket: &Path, data_dir: &Path, port: u16) -> anyhow::Result<()
         agents,
         names: tokio::sync::Mutex::default(),
         page: page_in(ictl_l10n::lang()),
+        video,
+        acks: Arc::default(),
     });
     let slots = Arc::new(tokio::sync::Semaphore::new(crate::MAX_CONNECTIONS));
     loop {
@@ -168,7 +202,39 @@ async fn handle(mut client: TcpStream, ctx: &Ctx, head: Vec<u8>, req: Head, mut 
     let path = req.path.as_str();
     match (req.method.as_str(), path) {
         ("GET", "/") => reply(&mut client, 200, "text/html; charset=utf-8", ctx.page.as_bytes()).await,
-        ("GET", "/stream") => {
+        // the phone's own screen video (iOS 27 and later), see `crate::video::device`
+        ("GET", "/video") if req.query("src").as_deref() == Some("device") => {
+            if !crate::video::device_allowed() {
+                return reply(&mut client, 404, "text/plain", b"turned off by IPHONE_CONTROL_VIEWER_CODEC").await;
+            }
+            let udid = req.query("udid").filter(|u| !u.is_empty()).unwrap_or_else(|| ctx.udid());
+            if udid.is_empty() {
+                return reply(&mut client, 503, "text/plain", b"no device yet").await;
+            }
+            match crate::video::device::open(&ctx.socket, &udid).await {
+                // the page takes 404 as "not this way" and falls back to H.264 or MJPEG
+                Err(e) => reply(&mut client, 404, "text/plain; charset=utf-8", e.as_bytes()).await,
+                Ok((src, w)) => {
+                    client
+                        .write_all(
+                            b"HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nCache-Control: no-store\r\n\
+                              X-Content-Type-Options: nosniff\r\nConnection: close\r\n\r\n",
+                        )
+                        .await?;
+                    crate::video::device::serve(src, w, ctx.acks.clone(), client).await;
+                    Ok(())
+                }
+            }
+        }
+        ("GET", "/stream" | "/video") => {
+            let video = if path == "/video" {
+                match ctx.video.clone().filter(|e| e.label().is_some()) {
+                    Some(e) => Some(e),
+                    None => return reply(&mut client, 404, "text/plain", b"no H.264 encoder").await,
+                }
+            } else {
+                None
+            };
             // the device the page shows (`?udid=`), so a page that hasn't noticed a switch keeps its own picture
             // instead of silently showing another phone. Looked up again each time: after a replug usbmuxd gives the
             // device a new id
@@ -183,7 +249,18 @@ async fn handle(mut client: TcpStream, ctx: &Ctx, head: Vec<u8>, req: Head, mut 
             };
             // WDA's MJPEG server answers any request with the multipart stream
             remote.write_all(b"GET / HTTP/1.1\r\nHost: localhost\r\n\r\n").await?;
-            tokio::io::copy_bidirectional(&mut client, &mut remote).await?;
+            match video {
+                Some(enc) => {
+                    client
+                        .write_all(
+                            b"HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nCache-Control: no-store\r\n\
+                              X-Content-Type-Options: nosniff\r\nConnection: close\r\n\r\n",
+                        )
+                        .await?;
+                    crate::video::serve(enc, ctx.acks.clone(), remote, client).await;
+                }
+                None => crate::video::serve_mjpeg(remote, client).await,
+            }
             Ok(())
         }
         ("GET", p) if p.starts_with("/api/agent/tasks/") && p.ends_with("/events") => {
@@ -244,6 +321,14 @@ async fn handle(mut client: TcpStream, ctx: &Ctx, head: Vec<u8>, req: Head, mut 
 /// `device`: the one the page shows (`X-Ictl-Device`); actions only go to it
 async fn post(ctx: &Ctx, name: &str, b: &Value, device: Option<&str>) -> (u16, Value) {
     let conflict = |m: String| (409, json!({"ok": false, "message": m}));
+    // how much of an H.264 stream the page has read (see `crate::video`)
+    if name == "video/ack" {
+        let ok = match (b["stream"].as_str(), b["bytes"].as_u64()) {
+            (Some(id), Some(n)) => ctx.acks.report(id, n),
+            _ => false,
+        };
+        return (if ok { 200 } else { 404 }, json!({"ok": ok}));
+    }
     if name == "agent/tasks" {
         let prompt = b["prompt"].as_str().unwrap_or_default();
         let backend = b["agent"].as_str().unwrap_or("claude");
@@ -551,14 +636,19 @@ async fn info(ctx: &Ctx) -> Result<Value, String> {
     }
     let udid = ctx.udid();
     let screen = screen_of(&s.persisted, &udid);
+    let live_touch = s.device.as_ref().is_some_and(|d| d.major_version() >= 27);
     Ok(json!({
         "width": screen.map(|s| s.width),
         "height": screen.map(|s| s.height),
         "udid": udid,
         // the picture's pointer drives a finger over CoreDevice HID (iOS 27 and later); older phones get whole gestures
-        "live_touch": s.device.as_ref().is_some_and(|d| d.major_version() >= 27),
+        "live_touch": live_touch,
         "device": s.device.map(|d| d.name),
         "state": state_of(&s.state).0,
+        // the picture as H.264 (`/video`) and with which encoder; null: MJPEG only
+        "video": ctx.video.as_ref().and_then(|e| e.label()),
+        // the phone's own screen video can be tried (`/video?src=device`): iOS 27 and later, not turned off
+        "device_video": crate::video::device_allowed() && live_touch,
     }))
 }
 

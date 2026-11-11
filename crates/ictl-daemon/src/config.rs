@@ -49,6 +49,20 @@ pub fn env(k: &str) -> Option<String> {
     std::env::var(k).ok().map(|v| v.trim().to_owned()).filter(|v| !v.is_empty())
 }
 
+/// Where to look for ffmpeg (the viewer's H.264 picture; on macOS only the fallback for the native VideoToolbox
+/// encoder), in order: `ICTL_FFMPEG`, else `ffmpeg` on `PATH` and, on macOS, Homebrew's places (a launchd service
+/// doesn't have them on its `PATH`)
+pub fn ffmpeg_paths() -> Vec<PathBuf> {
+    if let Some(p) = env("ICTL_FFMPEG") {
+        return vec![PathBuf::from(p)];
+    }
+    let mut v = vec![PathBuf::from("ffmpeg")];
+    if cfg!(target_os = "macos") {
+        v.extend(["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg"].map(PathBuf::from));
+    }
+    v
+}
+
 fn wda_unsigned_cache(data_dir: &Path) -> PathBuf {
     data_dir.join("wda/WDA-unsigned.ipa")
 }

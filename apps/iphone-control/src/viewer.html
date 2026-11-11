@@ -747,9 +747,9 @@ button.nav-device:disabled { cursor: default; }
   .idle-device { width:155px; max-height:24vh; margin-bottom:20px; }
   .canvas-label { padding-left:6px; }
 }
-@media (max-width:767.98px) {
+@media (max-width:1023.98px) {
   .mbar { padding:0 10px; background:var(--panel); border-bottom:1px solid var(--line); }
-  .mbar .seg { border:0; border-radius:0; padding:0; box-shadow:none; background:transparent; }
+  .mbar .seg { max-width:none; border:0; border-radius:0; padding:0; box-shadow:none; background:transparent; }
   .mbar .seg button { min-height:39px; border:0; border-bottom:2px solid transparent; border-radius:0; box-shadow:none; background:transparent; font-size:var(--fs-xs); }
   .mbar .seg button[aria-selected="true"] { color:var(--text); border-bottom-color:var(--accent-text); background:transparent; box-shadow:none; }
   .pane-stage[data-vacant="true"]:has(#canvas-label:not([hidden])) { grid-template-rows:minmax(0,1fr) auto; }

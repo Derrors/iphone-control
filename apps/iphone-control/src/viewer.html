@@ -70,10 +70,10 @@
 /* ================= 设计变量 ================= */
 :root {
   color-scheme: light;
-  --font-ui: system-ui, -apple-system, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
+  --font-ui: -apple-system, BlinkMacSystemFont, system-ui, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
   --font-mono: "SF Mono", SFMono-Regular, ui-monospace, Menlo, Consolas, monospace;
 
-  --fs-2xs: .75rem; --fs-xs: .8125rem; --fs-sm: .875rem; --fs-md: .9375rem; --fs-lg: 1rem; --fs-xl: 1.375rem;
+  --fs-2xs: .75rem; --fs-xs: .8125rem; --fs-sm: .875rem; --fs-lg: 1rem; --fs-xl: 1.1875rem;
   --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px; --sp-5: 20px; --sp-6: 24px; --sp-8: 32px; --sp-10: 40px;
   --r-xs: 6px; --r-sm: 8px; --r-md: 10px; --r-lg: 14px; --r-xl: 18px; --r-2xl: 20px;
   --gutter: 12px;
@@ -82,8 +82,19 @@
   --dur-fast: 150ms; --dur: 220ms; --dur-slow: 300ms; --dur-exit: 150ms;
   --ease-out: cubic-bezier(.2, .7, .2, 1); --ease-in: cubic-bezier(.4, 0, 1, 1);
 
+  /* Frosted workspace surfaces; --glass-surface stays opaque without blur support. */
+  --canvas-light: #f7f9fb;
+  --canvas-shade: #cddae2;
+  --glass-tint: rgb(252 253 255 / 67%);
+  --glass-surface: var(--panel);
+  --glass-border: rgb(54 75 93 / 19%);
+  --glass-highlight: rgb(255 255 255 / 87%);
+  --glass-shadow: inset 0 1px 0 var(--glass-highlight), 0 3px 12px -6px rgb(16 36 52 / 16%);
+  --glass-blur: none;
+  --workspace-light: linear-gradient(127deg, var(--canvas-light) 0%, transparent 42%, var(--canvas-shade) 73%, transparent 100%);
+
   /* 浅色外观 */
-  --canvas: #e7e8ea; --panel: #ffffff; --sunken: #f4f6f8; --hover: #eff2f4; --press: #e5e9ec;
+  --canvas: #e2e9ed; --panel: #ffffff; --sunken: #f4f6f8; --hover: #eff2f4; --press: #e5e9ec;
   --line: #e3e7ea; --line-strong: #cbd2d8; --panel-edge: rgba(16, 24, 32, .07);
   --text: #11161a; --text-2: #3b444c; --muted: #5f6a73;
   --accent: #365b7c; --accent-hover: #294965; --on-accent: #ffffff; --accent-soft: #e2eaf1; --accent-line: #bfcedc; --accent-text: #2e4e69;
@@ -101,6 +112,12 @@
 }
 :root[data-scheme="dark"] {
     color-scheme: dark;
+    --canvas-light: #28323b;
+    --canvas-shade: #34434d;
+    --glass-tint: rgb(27 33 39 / 79%);
+    --glass-border: rgb(191 212 230 / 20%);
+    --glass-highlight: rgb(238 248 255 / 8%);
+    --glass-shadow: inset 0 1px 0 var(--glass-highlight), 0 4px 14px -5px rgb(0 0 0 / 28%);
     --canvas: #222428; --panel: #111518; --sunken: #0b0e10; --hover: #191e22; --press: #20262b;
     --line: #20262b; --line-strong: #333b42; --panel-edge: rgba(255, 255, 255, .07);
     --text: #e8ecef; --text-2: #c2c9cf; --muted: #96a0aa;
@@ -123,7 +140,7 @@
 /* ================= 基础 ================= */
 * { box-sizing: border-box; }
 html, body { height: 100%; }
-body { margin: 0; background: var(--canvas); color: var(--text); font: var(--fs-md)/1.55 var(--font-ui); -webkit-font-smoothing: antialiased; }
+body { margin: 0; background: var(--workspace-light), var(--canvas); color: var(--text); font: var(--fs-sm)/1.55 var(--font-ui); -webkit-font-smoothing: antialiased; }
 h1, h2, h3, p, ol, ul { margin: 0; }
 ol, ul { padding: 0; list-style: none; }
 button, input, textarea, select { font: inherit; color: inherit; }
@@ -141,7 +158,7 @@ code, .mono { font-family: var(--font-mono); }
   display: inline-flex; align-items: center; justify-content: center; gap: var(--sp-2);
   min-height: 40px; padding: 0 var(--sp-4); border-radius: var(--r-md);
   border: 1px solid var(--line); background: var(--panel); color: var(--text); box-shadow: var(--shadow-xs);
-  font-size: var(--fs-sm); font-weight: 600; cursor: pointer; white-space: nowrap; --od-icon-size: 18px;
+  font-size: var(--fs-sm); font-weight: 500; cursor: pointer; white-space: nowrap; --od-icon-size: 16px;
   transition: background-color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out);
 }
 @media (hover: hover) { .btn:hover:not(:disabled) { background: var(--hover); border-color: var(--line-strong); color: var(--text); } }
@@ -186,7 +203,7 @@ code, .mono { font-family: var(--font-mono); }
 .shell { display: grid; grid-template-columns: var(--w-agent) minmax(0, 1fr) var(--w-dev); grid-template-rows: minmax(0, 1fr); gap: var(--gutter); padding: var(--gutter); height: 100dvh; }
 .mbar { display: none; }
 .pane { display: grid; grid-template-rows: var(--head-h) minmax(0, 1fr) auto; min-height: 0; min-width: 0; }
-.pane-agent, .pane-dev { position: relative; background: var(--panel); border-radius: var(--r-2xl); box-shadow: 0 0 0 1px var(--panel-edge), var(--shadow-panel); }
+.pane-agent, .pane-dev { position: relative; border-radius: var(--r-2xl); }
 /* 拖拽手柄放在面板之间的缝隙里：悬停、聚焦、拖动时显示主色细线 */
 .resizer { position: absolute; top: var(--sp-4); bottom: var(--sp-4); right: calc(var(--gutter) * -1); width: var(--gutter); z-index: 5; cursor: col-resize; touch-action: none; display: flex; justify-content: center; }
 .resizer.resizer-left { right: auto; left: calc(var(--gutter) * -1); }
@@ -200,23 +217,23 @@ body.resizing .stage, body.resizing iframe { pointer-events: none; }
 .pane-body { overflow-y: auto; overscroll-behavior: contain; min-height: 0; scrollbar-width: thin; scrollbar-color: var(--line-strong) transparent; }
 
 .brand { display: flex; align-items: center; gap: 10px; min-width: 0; }
-.brand-mark { flex: none; width: 32px; height: 32px; padding: 3px; border-radius: 9px; background: var(--accent-soft); color: var(--accent-text); }
+.brand-mark { flex: none; width: 26px; height: 26px; padding: 3px; border-radius: 7px; background: var(--accent-soft); color: var(--accent-text); }
 .brand-text { display: grid; line-height: 1.25; }
-.brand-name { display: block; font-family: var(--font-mono); font-size: var(--fs-sm); font-weight: 600; letter-spacing: -.01em; }
+.brand-name { display: block; font-family: var(--font-ui); font-size: var(--fs-sm); font-weight: 600; letter-spacing: -.01em; }
 .brand-sub { display: block; font-size: var(--fs-2xs); color: var(--muted); }
 .pane-head .badge { margin-left: auto; }
 .clear-btn { flex: none; }
 .lang-btn { flex: none; margin-left: auto; min-width: 44px; font-weight: 600; }
 
 /* ================= 左栏：AI 助手 ================= */
-.convo { padding: var(--sp-8) var(--sp-6) var(--sp-4); display: flex; flex-direction: column; gap: var(--sp-6); }
-.intro { display: flex; flex-direction: column; gap: var(--sp-5); }
-.intro-title { font-size: var(--fs-xl); font-weight: 600; letter-spacing: -.01em; line-height: 1.25; outline-offset: 4px; }
-.intro-text { color: var(--text-2); }
+.convo { padding: var(--sp-6) var(--sp-6) var(--sp-4); display: flex; flex-direction: column; gap: var(--sp-6); font-size: var(--fs-sm); }
+.intro { display: flex; flex-direction: column; gap: var(--sp-4); }
+.intro-title { font-size: var(--fs-xl); font-weight: 600; line-height: 1.35; letter-spacing: -.01em; outline-offset: 4px; }
+.intro-text { color: var(--text-2); text-wrap: pretty; }
 .caps { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--sp-3) var(--sp-4); }
 .cap { display: flex; align-items: center; gap: 10px; font-size: var(--fs-sm); color: var(--text-2); min-width: 0; }
-.cap .ic { flex: none; width: 32px; height: 32px; display: grid; place-items: center; border-radius: 9px; background: var(--sunken); box-shadow: inset 0 0 0 1px var(--line); color: var(--accent-text); --od-icon-size: 18px; }
-.agent-example { align-self: start; display: inline-flex; align-items: center; gap: 4px; padding: 4px 0; border: 0; background: transparent; color: var(--accent-text); cursor: pointer; font-size: var(--fs-sm); --od-icon-size: 14px; }
+.cap .ic { flex: none; width: 28px; height: 28px; display: grid; place-items: center; border-radius: 7px; background: var(--sunken); color: var(--accent-text); --od-icon-size: 16px; }
+.agent-example { align-self: start; display: inline-flex; align-items: center; gap: 4px; padding: 4px 0; border: 0; background: transparent; color: var(--accent-text); cursor: pointer; font-size: var(--fs-sm); --od-icon-size: 16px; }
 .demo-note { font-size: var(--fs-xs); color: var(--warn-text); background: var(--warn-soft); padding: 10px var(--sp-3); border-radius: var(--r-md); }
 
 .turns { display: flex; flex-direction: column; gap: var(--sp-8); }
@@ -232,7 +249,7 @@ body.resizing .stage, body.resizing iframe { pointer-events: none; }
 .bubble:disabled { cursor: default; }
 .msg-meta { display: flex; align-items: center; gap: 2px; flex-wrap: wrap; justify-content: flex-end; min-height: 28px; }
 .msg-time { display: block; font-size: var(--fs-2xs); color: var(--muted); font-variant-numeric: tabular-nums; margin-right: var(--sp-1); }
-.mini { display: inline-flex; align-items: center; gap: 4px; min-height: 28px; padding: 0 var(--sp-2); border: 0; border-radius: var(--r-sm); background: transparent; color: var(--muted); font-size: var(--fs-2xs); font-weight: 600; cursor: pointer; white-space: nowrap; --od-icon-size: 14px; transition: opacity var(--dur-fast) var(--ease-out), background-color var(--dur-fast) var(--ease-out); }
+.mini { display: inline-flex; align-items: center; gap: 4px; min-height: 28px; padding: 0 var(--sp-2); border: 0; border-radius: var(--r-sm); background: transparent; color: var(--muted); font-size: var(--fs-2xs); font-weight: 600; cursor: pointer; white-space: nowrap; --od-icon-size: 16px; transition: opacity var(--dur-fast) var(--ease-out), background-color var(--dur-fast) var(--ease-out); }
 @media (hover: hover) {
   .mini:hover:not(:disabled) { background: var(--hover); color: var(--text); }
   .mini.danger:hover:not(:disabled) { background: var(--danger-soft); color: var(--danger-text); }
@@ -250,7 +267,7 @@ body.resizing .stage, body.resizing iframe { pointer-events: none; }
 .agent-name { font-weight: 600; font-size: var(--fs-sm); }
 .agent-meta { font-size: var(--fs-2xs); color: var(--muted); font-variant-numeric: tabular-nums; }
 .agent-line .badge { margin-left: auto; }
-.toggle-steps { align-self: flex-start; display: inline-flex; align-items: center; gap: 6px; min-height: 32px; padding: 0 var(--sp-2); margin-left: -8px; border: 0; border-radius: var(--r-sm); background: transparent; color: var(--muted); font-size: var(--fs-xs); font-weight: 600; cursor: pointer; --od-icon-size: 14px; }
+.toggle-steps { align-self: flex-start; display: inline-flex; align-items: center; gap: 6px; min-height: 32px; padding: 0 var(--sp-2); margin-left: -8px; border: 0; border-radius: var(--r-sm); background: transparent; color: var(--muted); font-size: var(--fs-xs); font-weight: 600; cursor: pointer; --od-icon-size: 16px; }
 @media (hover: hover) { .toggle-steps:hover { background: var(--hover); color: var(--text); } }
 .toggle-steps .od-icon { transition: transform var(--dur) var(--ease-out); }
 .toggle-steps[aria-expanded="true"] .od-icon { transform: rotate(180deg); }
@@ -262,14 +279,14 @@ body.resizing .stage, body.resizing iframe { pointer-events: none; }
 .step-line { flex: 1; width: 1.5px; border-radius: 1px; background: var(--line); margin-top: 4px; min-height: 8px; }
 .step:last-child .step-line { visibility: hidden; }
 .step-body { display: flex; flex-direction: column; gap: 6px; padding-bottom: var(--sp-5); min-width: 0; }
-.step-thought { font-size: var(--fs-md); line-height: 1.5; color: var(--text); overflow-wrap: anywhere; }
+.step-thought { font-size: var(--fs-sm); line-height: 1.5; color: var(--text); overflow-wrap: anywhere; }
 .step-result { font-size: var(--fs-sm); color: var(--muted); overflow-wrap: anywhere; }
 .step-result.err { color: var(--danger-text); }
 .confirm { display: flex; flex-direction: column; gap: var(--sp-2); padding: var(--sp-4); border-radius: var(--r-lg); background: var(--warn-soft); box-shadow: inset 0 0 0 1px var(--warn-line); margin-top: var(--sp-1); }
 .confirm-title { display: flex; align-items: center; gap: var(--sp-2); font-weight: 600; color: var(--warn-text); --od-icon-size: 18px; }
 .confirm-detail { overflow-wrap: anywhere; color: var(--text); }
 .confirm .od-cluster { margin-top: var(--sp-1); }
-.answer { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: var(--sp-3); padding: 14px var(--sp-4); border-radius: var(--r-lg); --od-icon-size: 20px; }
+.answer { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: var(--sp-3); padding: 14px var(--sp-4); border-radius: var(--r-lg); --od-icon-size: 18px; }
 .answer.tone-ok { box-shadow: inset 0 0 0 1px var(--accent-line); }
 .answer.tone-danger { box-shadow: inset 0 0 0 1px var(--danger-line); }
 .answer > .od-icon { margin-top: 2px; }
@@ -277,32 +294,40 @@ body.resizing .stage, body.resizing iframe { pointer-events: none; }
 .answer-title { display: block; font-weight: 600; font-size: var(--fs-sm); }
 .answer-body { display: block; color: var(--text); overflow-wrap: anywhere; }
 
-.agent-foot { padding: var(--sp-3) var(--sp-4) var(--sp-4); display: flex; flex-direction: column; gap: var(--sp-2); }
-.composer { display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: var(--r-xl); background: var(--panel); box-shadow: var(--shadow-float); overflow: hidden; transition: border-color var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out); }
-.composer:focus-within { border-color: var(--accent); box-shadow: 0 0 0 4px var(--accent-soft), var(--shadow-float); }
+.agent-foot { container: task-entry / inline-size; min-width: 0; padding: var(--sp-3) var(--sp-4) var(--sp-4); display: flex; flex-direction: column; gap: var(--sp-2); }
+.composer { display: flex; flex-direction: column; min-width: 0; border: 1px solid var(--glass-border); border-radius: 14px; background: var(--glass-surface); box-shadow: var(--glass-shadow); overflow: hidden; transition: border-color var(--dur-fast) var(--ease-out); }
+.composer:focus-within { border-color: var(--accent); }
 .composer.invalid { border-color: var(--danger); }
 /* 执行中的暂停 / 接管 / 停止并到输入框顶部 */
 .runbar { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; padding: var(--sp-2) var(--sp-2) var(--sp-2) 14px; background: var(--sunken); border-bottom: 1px solid var(--line); }
 .runbar-state { flex: 1 1 120px; display: flex; align-items: center; gap: var(--sp-2); font-size: var(--fs-sm); font-weight: 600; min-width: 0; --od-icon-size: 16px; }
 .runbar-time { font-weight: 500; color: var(--muted); font-variant-numeric: tabular-nums; }
-.textarea { display: block; width: 100%; min-height: 60px; max-height: 176px; resize: none; padding: 14px var(--sp-4) 0; border: 0; background: transparent; color: var(--text); font-size: var(--fs-md); line-height: 1.55; overflow-y: auto; }
+.textarea { display: block; width: 100%; min-height: 44px; max-height: 176px; resize: none; padding: 11px 12px 6px; border: 0; background: transparent; color: var(--text); font-size: var(--fs-sm); line-height: 1.5; overflow-y: auto; }
 .textarea:focus-visible { outline: none; }
 .textarea:disabled { color: var(--muted); cursor: not-allowed; }
-.composer-row { display: flex; align-items: center; gap: var(--sp-2); padding: var(--sp-2) var(--sp-2) var(--sp-2) var(--sp-4); }
-.composer-hint { flex: 1; font-size: var(--fs-2xs); color: var(--muted); }
-.agent-pick { flex: none; }
-.agent-pick .select { min-height: 30px; max-width: 160px; padding: 0 26px 0 10px; border-radius: var(--r-sm); background: var(--sunken); color: var(--text-2); font-size: var(--fs-2xs); font-weight: 500; transition: background var(--dur-fast) var(--ease-out); }
+.composer-row { display: flex; align-items: center; min-width: 0; gap: 8px; padding: 0 8px 8px; }
+.composer-hint { flex: 1; min-width: 0; color: var(--muted); font-size: var(--fs-2xs); line-height: 1.35; }
+.agent-pick { flex: 0 1 auto; min-width: 0; max-width: min(11rem, calc(100% - 52px)); }
+.agent-pick .select { min-height: 28px; max-width: 100%; padding: 0 24px 0 8px; border: 0; border-radius: 6px; background: transparent; color: var(--text-2); font-size: var(--fs-xs); font-weight: 500; text-overflow: ellipsis; }
 .agent-pick .select:hover:not(:disabled) { background: var(--hover); }
 .agent-pick .select:disabled { opacity: .6; cursor: default; }
-.agent-pick .select-chev { margin-right: 6px; --od-icon-size: 14px; }
-.send { width: 44px; height: 44px; padding: 0; border-radius: 12px; --od-icon-size: 20px; }
+.agent-pick .select-chev { margin-right: 7px; --od-icon-size: 12px; }
+.send { flex: none; width: 32px; min-height: 32px; height: 32px; padding: 0; margin-left: auto; border-radius: 9px; --od-icon-size: 16px; }
+.composer .send:disabled { background: var(--sunken); border-color: transparent; color: var(--muted); opacity: .65; }
+@container task-entry (max-width: 23rem) {
+  .composer-hint { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+}
+@media (pointer: coarse) {
+  .send { width: 44px; min-height: 44px; height: 44px; }
+  .agent-pick .select { min-height: 44px; }
+}
 .field-error { font-size: var(--fs-xs); color: var(--danger-text); font-weight: 500; padding: 0 var(--sp-2); }
 
 /* ================= 中间：设备舞台 ================= */
 .pane-stage { container: preview / inline-size; grid-template-rows: var(--head-h) minmax(0, 1fr) auto; }
 .stage-head { border-bottom: 0; padding: 0 var(--sp-1); gap: var(--sp-3); }
 /* 设备选择和状态合成一条分段状态栏 */
-.statusbar { display: flex; align-items: center; min-width: 0; height: 44px; padding: 4px; border-radius: var(--r-lg); background: var(--panel); box-shadow: 0 0 0 1px var(--panel-edge), var(--shadow-xs); }
+.statusbar { display: flex; align-items: center; min-width: 0; height: 44px; padding: 4px; border-radius: var(--r-lg); }
 .dev-select { display: flex; align-items: center; gap: 6px; min-width: 0; padding-left: 10px; }
 .dev-select .label { margin: 0; white-space: nowrap; font-size: var(--fs-2xs); }
 /* 优先保留设备选择器；状态标签在剩余的宽度内滚动。 */
@@ -314,9 +339,9 @@ body.resizing .stage, body.resizing iframe { pointer-events: none; }
 .pane-stage > * { min-width: 0; }
 .select-wrap { display: grid; min-width: 0; }
 .select-wrap > * { grid-area: 1 / 1; }
-.select { appearance: none; -webkit-appearance: none; min-height: 36px; padding: 0 30px 0 var(--sp-2); border: 0; border-radius: var(--r-md); background: transparent; font-weight: 600; cursor: pointer; max-width: 240px; }
+.select { appearance: none; -webkit-appearance: none; min-height: 36px; padding: 0 30px 0 var(--sp-2); border: 0; border-radius: var(--r-md); background: transparent; font-weight: 500; cursor: pointer; max-width: 240px; }
 @media (hover: hover) { .select:hover:not(:disabled) { background: var(--hover); } }
-.select-chev { justify-self: end; align-self: center; margin-right: 8px; pointer-events: none; color: var(--muted); --od-icon-size: 16px; }
+.select-chev { justify-self: end; align-self: center; margin-right: 8px; pointer-events: none; color: var(--muted); --od-icon-size: 12px; }
 .chips { display: flex; align-items: center; gap: 2px; flex-wrap: nowrap; min-width: 0; overflow-x: auto; scrollbar-width: none; margin-left: 6px; padding-left: 8px; border-left: 1px solid var(--line); }
 .chips:empty { display: none; }
 .chips::-webkit-scrollbar { display: none; }
@@ -325,7 +350,7 @@ body.resizing .stage, body.resizing iframe { pointer-events: none; }
 .chip-dot.ok { background: var(--ai); } .chip-dot.warn { background: var(--warn); } .chip-dot.off { background: var(--danger); }
 .chip .k { color: var(--muted); }
 .head-tools { margin-left: auto; display: flex; gap: var(--sp-2); }
-.head-tools .btn { min-height: 44px; border: 0; background: var(--panel); box-shadow: 0 0 0 1px var(--panel-edge), var(--shadow-xs); border-radius: var(--r-lg); }
+.head-tools .btn { min-height: 44px; border-radius: var(--r-lg); }
 .head-tools .btn-icon { width: 44px; }
 @media (hover: hover) { .head-tools .btn:hover:not(:disabled) { background: var(--hover); } }
 .dev-toggle { display: none; }
@@ -336,8 +361,8 @@ body.resizing .stage, body.resizing iframe { pointer-events: none; }
 .stage-wrap > .frame { margin: auto; }
 .frame[data-zoom="fixed"] { width: var(--fixed-w); }
 /* 缩放控件 */
-.zoom { display: flex; align-items: center; gap: 2px; height: 44px; padding: 4px; border-radius: var(--r-lg); background: var(--panel); box-shadow: 0 0 0 1px var(--panel-edge), var(--shadow-xs); }
-.zoom button { height: 36px; min-width: 36px; padding: 0 var(--sp-2); border: 0; border-radius: var(--r-md); background: transparent; color: var(--text-2); display: inline-flex; align-items: center; justify-content: center; font-size: var(--fs-xs); font-weight: 600; cursor: pointer; white-space: nowrap; --od-icon-size: 18px; transition: background-color var(--dur-fast) var(--ease-out); }
+.zoom { display: flex; align-items: center; gap: 2px; height: 44px; padding: 4px; border-radius: var(--r-lg); }
+.zoom button { height: 36px; min-width: 36px; padding: 0 var(--sp-2); border: 0; border-radius: var(--r-md); background: transparent; color: var(--text-2); display: inline-flex; align-items: center; justify-content: center; font-size: var(--fs-xs); font-weight: 600; cursor: pointer; white-space: nowrap; --od-icon-size: 16px; transition: background-color var(--dur-fast) var(--ease-out); }
 @media (hover: hover) { .zoom button:hover:not(:disabled) { background: var(--hover); color: var(--text); } }
 .zoom button:disabled { color: var(--muted); opacity: .45; cursor: not-allowed; }
 .zoom .zoom-val { min-width: 52px; font-variant-numeric: tabular-nums; }
@@ -402,9 +427,9 @@ body.resizing .stage, body.resizing iframe { pointer-events: none; }
 .dock-slot { display: grid; grid-template-columns: minmax(0, 1fr); width: 100%; justify-items: center; align-items: stretch; }
 .dock-slot > * { grid-area: 1 / 1; }
 .dock.is-covered { visibility: hidden; }
-.dock { display: flex; align-items: center; gap: 6px; flex-wrap: nowrap; justify-content: center; padding: 6px; border-radius: var(--r-xl); background: var(--panel); box-shadow: 0 0 0 1px var(--panel-edge), var(--shadow-float); max-width: 100%; }
+.dock { display: flex; align-items: center; gap: 6px; flex-wrap: nowrap; justify-content: center; padding: 6px; border-radius: var(--r-xl); max-width: 100%; }
 .keys { flex: none; display: flex; gap: 2px; padding: 2px; border-radius: 12px; background: var(--sunken); }
-.key { width: 40px; height: 40px; border: 0; border-radius: var(--r-md); background: transparent; color: var(--text-2); display: grid; place-items: center; cursor: pointer; --od-icon-size: 18px; transition: background-color var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out); }
+.key { width: 40px; height: 40px; border: 0; border-radius: var(--r-md); background: transparent; color: var(--text-2); display: grid; place-items: center; cursor: pointer; --od-icon-size: 16px; transition: background-color var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out); }
 @media (hover: hover) { .key:hover:not(:disabled) { background: var(--panel); color: var(--text); box-shadow: var(--shadow-xs), 0 0 0 1px var(--panel-edge); } }
 .key:active:not(:disabled) { background: var(--press); box-shadow: none; }
 .key:disabled { color: var(--muted); opacity: .45; cursor: not-allowed; }
@@ -412,7 +437,7 @@ body.resizing .stage, body.resizing iframe { pointer-events: none; }
 .type-field .input { width: 220px; min-width: 96px; flex: 1 1 220px; min-height: 44px; border-radius: 12px; }
 .type-field .btn { min-height: 44px; border-radius: 12px; }
 .type-field .btn-icon { width: 44px; }
-.guard { width: min(100%, 560px); min-height: 56px; align-self: stretch; display: flex; align-items: center; gap: var(--sp-3); flex-wrap: nowrap; padding: 0 var(--sp-2) 0 var(--sp-4); border-radius: var(--r-xl); background: var(--panel); box-shadow: 0 0 0 1px var(--panel-edge), var(--shadow-float); --od-icon-size: 18px; }
+.guard { width: min(100%, 560px); min-height: 56px; align-self: stretch; display: flex; align-items: center; gap: var(--sp-3); flex-wrap: nowrap; padding: 0 var(--sp-2) 0 var(--sp-4); border-radius: var(--r-xl); --od-icon-size: 16px; }
 .guard-text { flex: 1 1 0; min-width: 0; display: grid; line-height: 1.35; }
 .guard-title { display: block; font-weight: 600; font-size: var(--fs-sm); }
 .guard-sub { display: block; font-size: var(--fs-xs); color: var(--muted); }
@@ -426,7 +451,7 @@ body.resizing .stage, body.resizing iframe { pointer-events: none; }
 
 /* ================= 右栏：设备面板 ================= */
 .seg { display: flex; gap: 2px; padding: 3px; border-radius: 12px; background: var(--sunken); flex: 1; }
-.seg button { flex: 1; min-height: 36px; border: 0; border-radius: 9px; background: transparent; color: var(--muted); font-size: var(--fs-sm); font-weight: 600; cursor: pointer; white-space: nowrap; transition: background-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out); }
+.seg button { flex: 1; min-height: 36px; border: 0; border-radius: 9px; background: transparent; color: var(--muted); font-size: var(--fs-xs); font-weight: 500; cursor: pointer; white-space: nowrap; transition: background-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out); }
 .seg button[aria-selected="true"] { background: var(--panel); color: var(--text); box-shadow: var(--shadow-xs), 0 0 0 1px var(--panel-edge); }
 @media (hover: hover) { .seg button:hover { color: var(--text); } }
 .dev-close { display: inline-flex; }
@@ -449,7 +474,7 @@ button.nav-device { cursor: pointer; }
 button.nav-device:hover { background: var(--hover); }
 button.nav-device[aria-current="true"] { background: var(--accent-soft); color: var(--accent-text); }
 button.nav-device:disabled { cursor: default; }
-.nav-device > svg { flex: none; --od-icon-size: 18px; }
+.nav-device > svg { flex: none; --od-icon-size: 16px; }
 .nav-device-copy { min-width: 0; display: grid; gap: 2px; }
 .device-name { font-size: var(--fs-sm); font-weight: 600; line-height: 1.35; overflow-wrap: anywhere; }
 .device-sub { font-size: var(--fs-xs); color: var(--muted); overflow-wrap: anywhere; }
@@ -468,7 +493,7 @@ button.nav-device:disabled { cursor: default; }
 
 .nav-check-list { display: grid; gap: 10px; padding: 4px 0; }
 .nav-check-list li { display: grid; grid-template-columns: 16px minmax(0,1fr); column-gap: 6px; align-items: start; }
-.nav-check-list svg { margin-top: 2px; --od-icon-size: 14px; color: var(--muted); }
+.nav-check-list svg { margin-top: 2px; --od-icon-size: 12px; color: var(--muted); }
 .nav-check-list .check-ok { color: var(--ok-text); }
 .check-name, .check-hint, .check-err { display: block; font-size: var(--fs-xs); overflow-wrap: anywhere; }
 .check-name { font-weight: 500; }
@@ -486,8 +511,8 @@ button.nav-device:disabled { cursor: default; }
 .switch-row { display: flex; align-items: center; gap: var(--sp-2); font-size: var(--fs-xs); color: var(--text-2); cursor: pointer; }
 .switch-row input { width: 16px; height: 16px; accent-color: var(--accent); margin: 0; }
 .list { display: flex; flex-direction: column; gap: 2px; margin: 0 calc(var(--sp-2) * -1); }
-.app-row { display: grid; grid-template-columns: 40px minmax(0, 1fr) auto; gap: var(--sp-3); align-items: center; padding: var(--sp-2); border-radius: 12px; transition: background-color var(--dur-fast) var(--ease-out); }
-.app-tile { width: 40px; height: 40px; border-radius: 11px; display: grid; place-items: center; font-size: 17px; font-weight: 700; box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .06), var(--shadow-xs); }
+.app-row { display: grid; grid-template-columns: 32px minmax(0, 1fr) auto; gap: var(--sp-3); align-items: center; padding: var(--sp-2); border-radius: 12px; transition: background-color var(--dur-fast) var(--ease-out); }
+.app-tile { width: 32px; height: 32px; border-radius: 8px; display: grid; place-items: center; font-size: 14px; font-weight: 700; box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .06), var(--shadow-xs); }
 .app-text { display: grid; min-width: 0; }
 .app-name { font-size: var(--fs-sm); font-weight: 600; }
 .app-id { font-family: var(--font-mono); font-size: var(--fs-2xs); color: var(--muted); }
@@ -508,10 +533,10 @@ button.nav-device:disabled { cursor: default; }
 .count { font-size: var(--fs-2xs); color: var(--muted); font-variant-numeric: tabular-nums; }
 .wait-result { font-size: var(--fs-sm); }
 /* 读取中的骨架占位 */
-.skel-row { display: grid; grid-template-columns: 40px minmax(0, 1fr); gap: var(--sp-3); align-items: center; padding: var(--sp-2); }
+.skel-row { display: grid; grid-template-columns: 32px minmax(0, 1fr); gap: var(--sp-3); align-items: center; padding: var(--sp-2); }
 .skel-row.no-tile { grid-template-columns: minmax(0, 1fr); padding: 10px; }
 .skel { display: block; background: var(--press); border-radius: var(--r-xs); animation: pulse 1.2s ease-in-out infinite; }
-.skel.tile { width: 40px; height: 40px; border-radius: 11px; }
+.skel.tile { width: 32px; height: 32px; border-radius: 8px; }
 .skel-lines { display: grid; gap: 6px; }
 .skel.l1 { height: 12px; width: 55%; }
 .skel.l2 { height: 10px; width: 80%; }
@@ -519,10 +544,10 @@ button.nav-device:disabled { cursor: default; }
 .skel-row:nth-child(3n) .skel.l2 { width: 65%; }
 
 /* 确认弹窗 */
-.dialog { width: min(420px, calc(100vw - 32px)); padding: var(--sp-6); border: 0; border-radius: var(--r-2xl); background: var(--panel); color: var(--text); box-shadow: 0 0 0 1px var(--panel-edge), var(--shadow-float); }
+.dialog { width: min(420px, calc(100vw - 32px)); padding: var(--sp-6); border: 0; border-radius: var(--r-lg); color: var(--text); }
 .dialog::backdrop { background: rgba(10, 14, 18, .4); }
 .dialog[open] { animation: rise var(--dur) var(--ease-out); }
-.dialog h2 { font-size: var(--fs-lg); margin-bottom: var(--sp-2); }
+.dialog h2 { font-size: 1.125rem; font-weight: 600; margin-bottom: var(--sp-2); }
 .dialog p { color: var(--text-2); }
 .dialog-actions { display: flex; justify-content: flex-end; gap: var(--sp-2); margin-top: var(--sp-6); }
 
@@ -626,11 +651,36 @@ button.nav-device:disabled { cursor: default; }
   .stage-foot { padding-inline: 8px; }
   .dock { flex-wrap: wrap; }
 }
+/* Put the filter on the surface. Its text and the live image render at full sharpness. */
+@supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  :root { --glass-surface: var(--glass-tint); --glass-blur: blur(18px); }
+}
+.glass {
+  background-color: var(--glass-surface);
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--glass-shadow);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+}
+@media (prefers-reduced-transparency: reduce), (prefers-contrast: more), (forced-colors: active) {
+  :root, :root[data-scheme="dark"] {
+    --glass-surface: var(--panel);
+    --glass-blur: none;
+    --glass-shadow: none;
+    --glass-border: var(--line-strong);
+    --workspace-light: none;
+  }
+}
+@media (forced-colors: active) {
+  .glass { border-color: CanvasText; }
+  .composer:focus-within { outline: 2px solid Highlight; }
+  .seg button[aria-selected="true"], .zoom-fit[aria-pressed="true"] { outline: 1px solid Highlight; outline-offset: -2px; }
+}
 /* ================= 响应式 ================= */
 @media (max-width: 1279.98px) {
   .shell { grid-template-columns: var(--w-agent) minmax(0, 1fr); }
   .dev-toggle { display: inline-flex; }
-  .pane-dev { position: fixed; top: var(--gutter); right: var(--gutter); bottom: var(--gutter); z-index: 30; width: min(var(--w-dev), calc(92vw - var(--gutter) * 2)); box-shadow: 0 0 0 1px var(--panel-edge), var(--shadow-float); transform: translateX(calc(100% + var(--gutter) * 2)); transition: transform var(--dur-exit) var(--ease-in); }
+  .pane-dev { position: fixed; top: var(--gutter); right: var(--gutter); bottom: var(--gutter); z-index: 30; width: min(var(--w-dev), calc(92vw - var(--gutter) * 2)); transform: translateX(calc(100% + var(--gutter) * 2)); transition: transform var(--dur-exit) var(--ease-in); }
   .shell[data-dev-open="true"] .pane-dev { transform: none; transition: transform var(--dur-slow) var(--ease-out); }
   .dev-close { display: inline-flex; }
 }
@@ -648,10 +698,10 @@ button.nav-device:disabled { cursor: default; }
 }
 @media (max-width: 1023.98px) {
   .shell { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); gap: 0; padding: 0; }
-  .mbar { display: flex; align-items: center; gap: var(--sp-3); padding: var(--sp-2) var(--sp-4); background: var(--panel); border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+  .mbar { display: flex; align-items: center; gap: var(--sp-3); padding: var(--sp-2) var(--sp-4); border-width: 0 0 1px; flex-wrap: wrap; }
   .mbar .seg { flex: 0 1 300px; margin-left: auto; }
   .pane-agent, .pane-stage, .pane-dev { grid-row: 2; grid-column: 1; }
-  .pane-agent, .pane-dev { border-radius: 0; box-shadow: none; }
+  .pane-agent, .pane-dev { border: 0; border-radius: 0; box-shadow: none; }
   .pane-dev { position: static; width: auto; transform: none; transition: none; }
   .shell[data-view="agent"] .pane-stage, .shell[data-view="agent"] .pane-dev,
   .shell[data-view="screen"] .pane-agent, .shell[data-view="screen"] .pane-dev,
@@ -713,7 +763,7 @@ button.nav-device:disabled { cursor: default; }
 <div class="shell" id="shell" data-view="agent" data-dev-open="false">
 
   <!-- 窄屏顶栏 -->
-  <header class="mbar">
+  <header class="mbar glass">
     <div class="brand">
       <svg class="brand-mark" viewBox="0 0 32 32" width="28" height="28" aria-hidden="true"><rect x="9" y="3" width="14" height="26" rx="3.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="M13.5 25h5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="16" cy="14" r="3" fill="var(--accent)"/></svg>
       <div class="brand-text"><span class="brand-name">iphone-control</span><span class="brand-sub">控制台</span></div>
@@ -726,7 +776,7 @@ button.nav-device:disabled { cursor: default; }
   </header>
 
   <!-- 左：AI 助手 -->
-  <aside class="pane pane-agent" id="pane-agent" aria-label="AI 助手">
+  <aside class="pane pane-agent glass" id="pane-agent" aria-label="AI 助手">
     <div class="resizer" id="resizer" role="separator" aria-orientation="vertical" aria-controls="pane-agent" aria-label="调整 AI 助手栏宽度" title="拖动调整宽度，双击恢复默认" tabindex="0"></div>
     <div class="pane-head">
       <div class="brand agent-brand">
@@ -761,7 +811,7 @@ button.nav-device:disabled { cursor: default; }
       <div class="composer" id="composer">
         <div class="runbar" id="runbar" role="group" aria-label="任务控制" hidden></div>
         <label class="sr-only" for="prompt">交给 AI 的任务</label>
-        <textarea class="textarea" id="prompt" rows="2" maxlength="4000" aria-describedby="composer-hint prompt-error" placeholder="想让设备做什么？"></textarea>
+        <textarea class="textarea" id="prompt" rows="1" maxlength="4000" aria-describedby="composer-hint prompt-error" placeholder="想让设备做什么？"></textarea>
         <div class="composer-row">
           <div class="select-wrap agent-pick" id="agent-pick" hidden>
             <label class="sr-only" for="agent">执行任务的 AI</label>
@@ -769,7 +819,7 @@ button.nav-device:disabled { cursor: default; }
             <span class="select-chev" data-icon="chevron"></span>
           </div>
           <span class="composer-hint" id="composer-hint">Enter 发送 · Shift+Enter 换行</span>
-          <button type="button" class="btn btn-primary send" id="send" data-action="send" data-focus="send" aria-label="开始任务"><span class="ic" data-icon="send"></span></button>
+          <button type="button" class="btn btn-primary send" id="send" data-action="send" data-focus="send" aria-label="开始任务" title="Enter 发送 · Shift+Enter 换行"><span class="ic" data-icon="send"></span></button>
         </div>
       </div>
       <p class="field-error" id="prompt-error" hidden></p>
@@ -779,7 +829,7 @@ button.nav-device:disabled { cursor: default; }
   <!-- 中：设备舞台 -->
   <main class="pane pane-stage" id="pane-stage" aria-label="设备屏幕">
     <div class="pane-head stage-head">
-      <div class="statusbar">
+      <div class="statusbar glass">
         <div class="dev-select">
           <label class="label" for="device">控制设备</label>
           <div class="select-wrap">
@@ -790,14 +840,14 @@ button.nav-device:disabled { cursor: default; }
         <div class="chips" id="chips"></div>
       </div>
       <div class="head-tools">
-        <div class="zoom" role="group" aria-label="画面缩放">
+        <div class="zoom glass" role="group" aria-label="画面缩放">
           <button type="button" data-action="zoom-out" id="zoom-out" aria-label="缩小画面" title="缩小（也可以按住 Ctrl/⌘ 滚动滚轮）"><span class="ic" data-icon="zoomout"></span></button>
           <button type="button" class="zoom-val" data-action="zoom-actual" id="zoom-val" title="切换到实际尺寸（100%）" aria-label="当前缩放比例，点击切换到实际尺寸">100%</button>
           <button type="button" data-action="zoom-in" id="zoom-in" aria-label="放大画面" title="放大（也可以按住 Ctrl/⌘ 滚动滚轮）"><span class="ic" data-icon="zoomin"></span></button>
           <button type="button" class="zoom-fit" data-action="zoom-fit" id="zoom-fit" aria-pressed="true" title="按窗口大小自动适应">适应</button>
         </div>
-        <button type="button" class="btn btn-ghost btn-icon" data-action="reconnect" aria-label="刷新画面" title="刷新画面"><span class="ic" data-icon="refresh"></span></button>
-        <button type="button" class="btn dev-toggle" data-action="dev-open" id="dev-toggle" aria-controls="pane-dev" aria-expanded="false"><span class="ic" data-icon="panel"></span><span>设备面板</span></button>
+        <button type="button" class="btn btn-ghost btn-icon glass" data-action="reconnect" aria-label="刷新画面" title="刷新画面"><span class="ic" data-icon="refresh"></span></button>
+        <button type="button" class="btn dev-toggle glass" data-action="dev-open" id="dev-toggle" aria-controls="pane-dev" aria-expanded="false"><span class="ic" data-icon="panel"></span><span>设备面板</span></button>
       </div>
     </div>
     <div class="stage-area">
@@ -815,8 +865,8 @@ button.nav-device:disabled { cursor: default; }
     </div>
     <div class="stage-foot">
       <div class="dock-slot">
-      <div class="guard" id="guard" role="status" hidden></div>
-      <div class="dock" id="dock" role="group" aria-label="设备按键和输入">
+      <div class="guard glass" id="guard" role="status" hidden></div>
+      <div class="dock glass" id="dock" role="group" aria-label="设备按键和输入">
         <div class="keys" role="group" aria-label="实体按键">
           <button type="button" class="key" data-key="home" aria-label="主屏幕" title="主屏幕"><span class="ic" data-icon="home"></span></button>
           <button type="button" class="key" data-key="lock" aria-label="锁屏" title="锁屏"><span class="ic" data-icon="lock"></span></button>
@@ -839,7 +889,7 @@ button.nav-device:disabled { cursor: default; }
   </main>
 
   <!-- 右：设备面板 -->
-  <aside class="pane pane-dev" id="pane-dev" aria-label="设备面板">
+  <aside class="pane pane-dev glass" id="pane-dev" aria-label="设备面板">
     <div class="resizer resizer-left" id="resizer-dev" role="separator" aria-orientation="vertical" aria-controls="pane-dev" aria-label="调整设备面板宽度" title="拖动调整宽度，双击恢复默认" tabindex="0"></div>
     <div class="pane-head">
       <div class="seg" role="tablist" aria-label="设备面板">
@@ -899,7 +949,7 @@ button.nav-device:disabled { cursor: default; }
   </aside>
 </div>
 
-<dialog class="dialog" id="appearance" aria-labelledby="appearance-title">
+<dialog class="dialog glass" id="appearance" aria-labelledby="appearance-title">
   <h2 id="appearance-title">外观</h2>
   <div class="appearance-options">
     <label><span>明暗</span><select class="select" id="theme"><option value="system">跟随系统</option><option value="light">浅色</option><option value="dark">深色</option></select></label>
@@ -907,7 +957,7 @@ button.nav-device:disabled { cursor: default; }
   </div>
   <form method="dialog" class="dialog-actions"><button class="btn btn-primary" type="submit">完成</button></form>
 </dialog>
-<dialog class="dialog" id="clear-dialog" aria-labelledby="clear-title" aria-describedby="clear-desc">
+<dialog class="dialog glass" id="clear-dialog" aria-labelledby="clear-title" aria-describedby="clear-desc">
   <h2 id="clear-title">清空全部操作记录？</h2>
   <p id="clear-desc">只清除左侧的任务和步骤记录，不会影响设备上已经做过的操作。清空后无法恢复。</p>
   <div class="dialog-actions">
@@ -916,7 +966,7 @@ button.nav-device:disabled { cursor: default; }
   </div>
 </dialog>
 
-<dialog class="dialog" id="stop-dialog" aria-labelledby="stop-title" aria-describedby="stop-desc">
+<dialog class="dialog glass" id="stop-dialog" aria-labelledby="stop-title" aria-describedby="stop-desc">
   <h2 id="stop-title">停止这个任务？</h2>
   <p id="stop-desc">AI 会立刻停下。已经在设备上做完的操作不会撤销。</p>
   <div class="dialog-actions">
@@ -1842,7 +1892,6 @@ function renderChips() {
   if (s && s.locked != null) {
     chips.push(`<span class="chip"><span class="k">${tr('屏幕')}</span><span>${s.locked ? tr('已锁定') : tr('未锁定')}</span></span>`);
   }
-  if (S.mode === 'demo') chips.push(tr('<span class="chip"><span class="chip-dot warn"></span><span>演示模式</span></span>'));
   c.innerHTML = chips.join('');
 }
 // Keep the native disclosures and focused device buttons intact between status polls.
@@ -2392,7 +2441,7 @@ function renderGuard() {
     waiting: { tone: 'warn', ic: 'alert', title: tr('AI 在等你确认一步操作'), sub: tr('确认前画面保持锁定。'), btns: [['goto-confirm', tr('去确认'), 'arrow']] },
     takeover: { tone: 'user', ic: 'cursor', title: tr('你在接管'), sub: tr('AI 已暂停。交还后它会先重新看一遍屏幕。'), btns: [['handback', tr('交还 AI'), 'play']] }
   }[t.status];
-  g.className = `guard tone-${cfg.tone}`;
+  g.className = `guard glass tone-${cfg.tone}`;
   g.innerHTML = `<span class="t-${cfg.tone}">${icon(cfg.ic, cfg.ic === 'loader' ? 'spin' : '')}</span><div class="guard-text"><span class="guard-title od-truncate">${cfg.title}</span><span class="guard-sub od-truncate">${cfg.sub}</span></div>
     <div class="od-row od-fixed">${cfg.btns.map(([a, l, i]) => `<button type="button" class="btn btn-sm" data-action="${a}" data-focus="guard-${a}">${icon(i)}<span>${l}</span></button>`).join('')}</div>`;
   g.hidden = false;

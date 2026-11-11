@@ -6,6 +6,10 @@ All notable changes to this project are documented here. The format is based on 
 
 ## [Unreleased]
 
+### Added
+
+- Experimental `ICTL_WDA_DETACHED=1`: WebDriverAgent is launched in the background without an XCTest session, so it also starts while the phone is locked and keeps running when the daemon restarts. See [WDA dependency research](docs/dev/wda-dependency-research.md).
+
 ## [0.2.0] - 2026-11-11
 
 ### Upgrade notes

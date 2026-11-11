@@ -20,7 +20,7 @@ iphone-control 也能直接跑在 Mac 上：用 macOS 自带的 usbmuxd，不需
 curl -fsSL https://raw.githubusercontent.com/Derrors/iphone-control/main/install.sh | sh
 ```
 
-它会下载最新版本、校验 sha256，装到 `~/.local/bin/iphone-control`，再装一个 launchd 用户服务（`~/Library/LaunchAgents/io.github.derrors.iphone-control.plist`）：登录后自动启动守护进程，崩溃后自动重启，读取 `~/.config/iphone-control/env`，日志在 `~/Library/Logs/iphone-control/daemon.log`。可选参数写在 `sh -s --` 后面：`--version v0.2.0`（指定版本）、`--prefix 目录`（装到 `目录/bin`）、`--no-service`（只装程序，不装服务）。
+它会下载最新版本、校验 sha256，装到 `~/.local/bin/iphone-control`，再装一个 launchd 用户服务（`~/Library/LaunchAgents/io.github.derrors.iphone-control.plist`）：登录后自动启动守护进程，崩溃后自动重启，读取 `~/.config/iphone-control/env`，日志在 `~/Library/Logs/iphone-control/daemon.log`。可选参数写在 `sh -s --` 后面：`--version v0.2.1`（指定版本）、`--prefix 目录`（装到 `目录/bin`）、`--no-service`（只装程序，不装服务）。
 
 ### Homebrew
 

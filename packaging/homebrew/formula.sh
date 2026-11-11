@@ -1,6 +1,6 @@
 #!/bin/sh
 # Prints the Homebrew formula for one release (the release workflow pushes it to Derrors/homebrew-tap):
-#   packaging/homebrew/formula.sh v0.2.0 <sha256 macos-arm64> <sha256 linux-x86_64> <sha256 linux-aarch64>
+#   packaging/homebrew/formula.sh v0.2.1 <sha256 macos-arm64> <sha256 linux-x86_64> <sha256 linux-aarch64>
 # The formula installs the prebuilt binary from the GitHub release; `brew services start iphone-control` runs the
 # daemon (launchd on macOS, systemd on Linux) with the settings in ~/.config/iphone-control/env.
 set -eu

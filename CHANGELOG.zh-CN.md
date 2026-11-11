@@ -6,6 +6,8 @@
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-11-12
+
 ### 新增
 
 - iOS 27 及以上，控制台的画面直接用手机自己硬件编码的视频（CoreDevice 屏幕媒体流，HEVC）：约每秒 60 帧、原生分辨率，本机不编码，WDA 也不用截图；转屏时画面跟着转正。浏览器解不了 HEVC（Firefox、多数 Linux 上的 Chrome）或设备低于 iOS 27 时自动改用 H.264 或 MJPEG。`IPHONE_CONTROL_VIEWER_CODEC=device` 只用这条流。
@@ -185,7 +187,8 @@
 - `setup`、`doctor`、`status`、`mcp-config`、`wda-bridge`、`notify-test` 命令。
 - Docker 镜像（非 privileged，linux/amd64、linux/arm64）；也可不用 Docker，从源码或预编译二进制以普通用户运行，附 systemd 用户服务。
 
-[Unreleased]: https://github.com/Derrors/iphone-control/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/Derrors/iphone-control/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/Derrors/iphone-control/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/Derrors/iphone-control/compare/v0.1.5...v0.2.0
 [0.1.5]: https://github.com/Derrors/iphone-control/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/Derrors/iphone-control/compare/v0.1.3...v0.1.4

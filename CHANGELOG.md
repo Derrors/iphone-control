@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format is based on 
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-11-12
+
 ### Added
 
 - On iOS 27 and later the control page shows the phone's own hardware-encoded video (the CoreDevice screen media stream, HEVC): about 60 frames a second at native resolution, nothing encoded on this machine and no capturing by WDA; the picture turns with the screen. Browsers that can't decode HEVC (Firefox, Chrome on most Linux machines) and older iOS fall back to H.264 or MJPEG. `IPHONE_CONTROL_VIEWER_CODEC=device` uses only this stream.
@@ -187,7 +189,8 @@ First public release.
 - Docker image (single binary plus Debian's usbmuxd, not privileged) with a generated third-party license list, published to `ghcr.io/derrors/iphone-control` for linux/amd64 and linux/arm64.
 - Running without Docker, from source or from the prebuilt Linux binaries (x86_64, aarch64): as a regular user with the system usbmuxd, XDG data and socket paths, the unsigned WebDriverAgent downloaded and checksum-verified before the first signing, `mcp-config` printing a direct command, and a systemd user service.
 
-[Unreleased]: https://github.com/Derrors/iphone-control/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/Derrors/iphone-control/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/Derrors/iphone-control/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/Derrors/iphone-control/compare/v0.1.5...v0.2.0
 [0.1.5]: https://github.com/Derrors/iphone-control/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/Derrors/iphone-control/compare/v0.1.3...v0.1.4

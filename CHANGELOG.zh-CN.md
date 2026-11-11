@@ -6,6 +6,10 @@
 
 ## [Unreleased]
 
+### 新增
+
+- 实验开关 `ICTL_WDA_DETACHED=1`：在后台启动 WebDriverAgent、不持有 XCTest 会话，锁屏时也能启动，守护进程重启时它不跟着断。见 [WDA 依赖调研](docs/dev/wda-dependency-research.md)。
+
 ## [0.2.0] - 2026-11-11
 
 ### 升级注意事项

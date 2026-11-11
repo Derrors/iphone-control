@@ -25,7 +25,7 @@ iphone-control service restart
 | `HTTP_PROXY` / `HTTPS_PROXY` | direct | Proxy for Apple, anisette, Developer Disk Image and notification traffic |
 | `IPHONE_CONTROL_LANG` | `zh` | Language: `zh` or `en`. Applies to tool descriptions and results, CLI output, logs and notifications. The MCP server and the CLI each send their own setting and the daemon answers in it; logs and notifications follow the daemon's own setting. See the note below the table |
 | `IPHONE_CONTROL_DEV_TOOLS` | off | `1` adds the [developer tools](./tools#developer-tools-opt-in) to the MCP server: logs, crash reports, installing and removing apps, and Web Inspector (JavaScript in web pages and WebViews). See [Security](./security) for the risks. See the note below the table |
-| `IPHONE_CONTROL_VIEWER_CODEC` | `auto` | The control page's picture: `auto` uses H.264 when ffmpeg is installed, GPU encoding first; `mjpeg` doesn't use H.264; or name one of `nvenc`, `vaapi`, `qsv`, `v4l2m2m`, `videotoolbox`, `x264`. `iphone-control viewer` says which one it uses when it starts, see [CLI](./cli#viewer-picture) |
+| `IPHONE_CONTROL_VIEWER_CODEC` | `auto` | The control page's picture: `auto` uses H.264 (on macOS with VideoToolbox directly, on Linux when ffmpeg is installed), GPU encoding first; `mjpeg` doesn't use H.264; or name one of `nvenc`, `vaapi`, `qsv`, `v4l2m2m`, `videotoolbox`, `x264`. `iphone-control viewer` says which one it uses when it starts, see [CLI](./cli#viewer-picture) |
 | `IPHONE_CONTROL_VIEWER_QP` | `20` | H.264 quality, 1 to 51: lower is sharper and larger. `20` looks like the source in normal use; `24` saves about a third of the traffic, small text blurs a little while scrolling fast |
 | `IPHONE_UDID` | automatic | Pin the device to control. Unset: the controlled device is kept until it disconnects, and you can switch with the `select` command or the `iphone_select_device` tool. When set, switching is refused |
 | `RESIGN_MIN_DAYS` | `2` | Re-sign when fewer days than this remain |
@@ -48,7 +48,7 @@ Notification variables: see [Notifications](./notifications).
 | `ICTL_WDA_UNSIGNED` | Path of the unsigned WDA. Default: `wda/WDA-unsigned.ipa` in the data directory, downloaded before the first signing. A path you set yourself is not downloaded |
 | `SCREEN_W` / `SCREEN_H` | Screen size in points for the HID fallback, used only while WDA is down and there is no record of this device's size: WDA has never connected, or you switched to a device without one. It applies to every device, so take care with several |
 | `ICTL_LOG` | Log filter, e.g. `info,ictl_wda::http=debug` logs every WDA request with its duration |
-| `ICTL_FFMPEG` | Path to ffmpeg (the control page's H.264 picture). By default it is looked up on `PATH`, and on macOS in Homebrew's places too |
+| `ICTL_FFMPEG` | Path to ffmpeg (the control page's H.264 picture; on macOS only the fallback for VideoToolbox). By default it is looked up on `PATH`, and on macOS in Homebrew's places too |
 
 ## Directories and control socket
 

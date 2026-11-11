@@ -8,7 +8,7 @@
 
 ### 新增
 
-- 装了 ffmpeg 时，控制台的画面改用 H.264，流量约为原来的 1/15（显卡编码优先：NVENC、VAAPI、QSV、V4L2、VideoToolbox，都不行用 x264）；链路慢时降帧率，画面不会越来越滞后。没有 ffmpeg 时仍是 MJPEG，静止时不再重复发同一张。设置：`IPHONE_CONTROL_VIEWER_CODEC`、`IPHONE_CONTROL_VIEWER_QP`。
+- 控制台的画面改用 H.264，流量约为原来的 1/15：macOS 上本程序直接调 VideoToolbox（JPEG 也由硬件解码），不需要 ffmpeg；Linux 上装了 ffmpeg 时显卡编码优先（NVENC、VAAPI、QSV、V4L2，都不行用 x264）；链路慢时降帧率，画面不会越来越滞后。没有 ffmpeg 时仍是 MJPEG，静止时不再重复发同一张。设置：`IPHONE_CONTROL_VIEWER_CODEC`、`IPHONE_CONTROL_VIEWER_QP`。
 
 ## [0.2.0] - 2026-11-11
 

@@ -3,7 +3,8 @@
 //! same picture.
 //!
 //! Per connection: WDA's MJPEG over usbmuxd → frames equal to the previous one dropped (WDA repeats a still screen
-//! about 25 times a second) → ffmpeg ([`ffmpeg`]: hardware encoder first, `mpjpeg` in, FLV out) → the page as
+//! about 25 times a second) → the encoder (on macOS VideoToolbox inside this program, `vt.rs`; else ffmpeg
+//! ([`ffmpeg`]: hardware encoder first, `mpjpeg` in, FLV out)) → the page as
 //! messages of one type byte, a 4-byte big-endian length and the payload:
 //!
 //! - `0` JSON: `codec` (WebCodecs string), `description` (the `avcC`, hex), `width`/`height` (the frames' size),
@@ -26,6 +27,9 @@
 mod ffmpeg;
 mod flv;
 mod mjpeg;
+mod sps;
+#[cfg(target_os = "macos")]
+mod vt;
 
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -172,6 +176,9 @@ fn message(kind: u8, payload: &[u8]) -> Vec<u8> {
 }
 
 fn config_message(avcc: &[u8], size: (u32, u32), encoder: &str, stream: &str) -> Option<Vec<u8>> {
+    // so the browser's decoder shows each frame at once instead of keeping a few (see `sps.rs`)
+    let avcc = sps::low_delay(avcc).unwrap_or_else(|| avcc.to_vec());
+    let avcc = avcc.as_slice();
     let hex: String = avcc.iter().map(|b| format!("{b:02x}")).collect();
     let v = json!({
         "stream": stream,
@@ -495,19 +502,26 @@ mod tests {
             Ok(e) => e,
             Err(m) => panic!("no H.264 encoder: {m}"),
         };
-        // 90 different frames from ffmpeg's test source, cut with the same reader the phone's stream goes through
+        // 90 different frames from ffmpeg's test source, cut with the same reader the phone's stream goes through;
+        // without ffmpeg (macOS) a scrolling test picture from VideoToolbox's JPEG encoder
         let out = tokio::process::Command::new("ffmpeg")
             .args(["-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "testsrc2=s=480x1040:r=15"])
             .args(["-frames:v", "90", "-c:v", "mjpeg", "-pix_fmt", "yuvj420p", "-q:v", "3", "-f", "mpjpeg", "pipe:1"])
             .output()
-            .await
-            .unwrap();
-        let mut whole = b"HTTP/1.0 200 OK\r\n\r\n".to_vec();
-        whole.extend(out.stdout);
-        let mut f = mjpeg::Frames::new(&whole[..]);
+            .await;
         let mut frames = Vec::new();
-        while let Some(j) = f.next().await.unwrap() {
-            frames.push(j);
+        if let Ok(out) = out {
+            let mut whole = b"HTTP/1.0 200 OK\r\n\r\n".to_vec();
+            whole.extend(out.stdout);
+            let mut f = mjpeg::Frames::new(&whole[..]);
+            while let Some(j) = f.next().await.unwrap() {
+                frames.push(j);
+            }
+        } else {
+            #[cfg(target_os = "macos")]
+            for n in 0..90 {
+                frames.push(vt::sample_jpeg(480, 1040, n).unwrap());
+            }
         }
         assert_eq!(frames.len(), 90);
 

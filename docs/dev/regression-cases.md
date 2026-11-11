@@ -88,3 +88,7 @@
 | 82 | 转屏后帧的尺寸变了 | 尺寸一变就开新的编码会话，页面按新的解码配置重新配置 | 真机：Safari 横竖屏切换，解码配置发 3 次，ffmpeg 解码无错 |
 | 83 | 浏览器没有 WebCodecs 或解不了 H.264 | 这一页从没出过画面就改用 MJPEG | 无头 Chrome：删掉 VideoDecoder 后画面是 MJPEG |
 | 84 | MJPEG 去重后画面静止时不显示（Chrome 要看到下一部分的头部才显示上一帧） | 每帧后面紧跟下一部分的分隔线和头部，不带 Content-Length | 无头 Chrome：静止画面下 MJPEG 有图 |
+| 85 | macOS 上要装 ffmpeg 才有 H.264 | 本程序直接调 VideoToolbox：JPEG 由它的硬件解码器解成 NV12，直接交给 H.264 编码器；ffmpeg 的 VideoToolbox 作备用 | 单测 encodes_natively_without_holding_frames、encodes_with_the_local_ffmpeg（没装 ffmpeg 也选中原生的）；真机（Apple 芯片）：从送进到出帧 3.5～6 毫秒；手机真实画面（990×2151）中位 17 毫秒，qp 20 时流量为 MJPEG 的 11.4%，SSIM 中位 0.9976（手动测试 measure_recording） |
+| 86 | VideoToolbox 把奇数尺寸的最后一列、一行裁掉（481×1041 编成 480×1040） | JPEG 解码时就拉成偶数尺寸（482×1042），和 ffmpeg 的 `scale` 一样 | 单测 odd_sizes_grow_to_even；无头 Chrome 用 WebCodecs 解出 482×1042 |
+| 87 | 比 macOS 11 新的 VideoToolbox 键直接链接的话，旧系统上程序起不来 | `MinAllowedFrameQP` 等运行时用 `dlsym` 找，没有就按 `Quality` 近似 qp | 代码审查 |
+| 88 | 页面画面滞后 4 帧，手势结束后停在动作中间那一帧（Chrome 的硬件解码器扣着帧等后面的帧来挤） | VideoToolbox 的 SPS 没有 VUI，解码器按 Level 4.2 的缓冲最坏情况扣 4 帧；发给页面前改写 avcC 里的 SPS，写明 `max_num_reorder_frames=0`（`video/sps.rs`），已经写明的不动 | 单测 videotoolbox_sps_gets_no_reordering、vui_without_restriction_keeps_its_fields；无头 Chrome 逐帧喂：硬件解码器从扣 4 帧变为 0 帧 |

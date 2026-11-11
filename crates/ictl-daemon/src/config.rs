@@ -47,8 +47,9 @@ pub fn env(k: &str) -> Option<String> {
     std::env::var(k).ok().map(|v| v.trim().to_owned()).filter(|v| !v.is_empty())
 }
 
-/// Where to look for ffmpeg (the viewer's H.264 picture), in order: `ICTL_FFMPEG`, else `ffmpeg` on `PATH` and, on
-/// macOS, Homebrew's places (a launchd service doesn't have them on its `PATH`)
+/// Where to look for ffmpeg (the viewer's H.264 picture; on macOS only the fallback for the native VideoToolbox
+/// encoder), in order: `ICTL_FFMPEG`, else `ffmpeg` on `PATH` and, on macOS, Homebrew's places (a launchd service
+/// doesn't have them on its `PATH`)
 pub fn ffmpeg_paths() -> Vec<PathBuf> {
     if let Some(p) = env("ICTL_FFMPEG") {
         return vec![PathBuf::from(p)];

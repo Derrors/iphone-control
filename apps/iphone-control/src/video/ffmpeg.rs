@@ -1,11 +1,13 @@
-//! The encoder: an ffmpeg process per picture connection, picked from what this machine has, hardware first.
+//! The encoder: an ffmpeg process per picture connection (on macOS first VideoToolbox inside this program, see
+//! `vt.rs`), picked from what this machine has, hardware first.
 //!
 //! ffmpeg runs as a separate program, not linked in: the builds that Linux distributions ship have the hardware
-//! encoders, and x264 being GPL doesn't reach this MIT program. Without ffmpeg the page keeps MJPEG.
+//! encoders, and x264 being GPL doesn't reach this MIT program. Without ffmpeg the page keeps MJPEG (on macOS the
+//! native encoder needs no ffmpeg).
 //!
-//! Candidates in order ([`candidates`]): NVENC (NVIDIA), VAAPI on each render node (AMD, Intel; first with the JPEG
-//! decoded by the GPU too, then decoded by ffmpeg on the CPU), QSV (Intel), V4L2 M2M (ARM boards), VideoToolbox
-//! (macOS, through ffmpeg for now), x264 (software). The first one that encodes a test frame is used; one that fails
+//! Candidates in order ([`candidates`]): VideoToolbox in this program (macOS), NVENC (NVIDIA), VAAPI on each render
+//! node (AMD, Intel; first with the JPEG decoded by the GPU too, then decoded by ffmpeg on the CPU), QSV (Intel),
+//! V4L2 M2M (ARM boards), VideoToolbox through ffmpeg (macOS, the fallback for the native one), x264 (software). The first one that encodes a test frame is used; one that fails
 //! on the real frames is dropped for the next ([`Encoders::give_up`]).
 //!
 //! Held frames: ffmpeg keeps the newest frame until the next one arrives (one frame with VAAPI on an AMD 780M:
@@ -35,7 +37,7 @@ use super::mjpeg;
 pub const DEFAULT_QP: u8 = 20;
 /// A keyframe every this many frames. Frames only flow while the screen changes, and a page that falls behind gets a
 /// keyframe by restarting the encoder, so keyframes are rarely needed and cost about as much as 40 other frames
-const GOP: &str = "600";
+pub const GOP_FRAMES: u32 = 600;
 /// More copies than this would mean the measurement went wrong; the copies cost little, so it is only a cap
 const MAX_KICKS: usize = 4;
 /// Size of the test frame (any size the real frames could have; small enough to be quick)
@@ -56,7 +58,9 @@ pub enum Kind {
     Qsv,
     /// The video encoder of ARM boards (Raspberry Pi 4 and the like)
     V4l2m2m,
-    /// macOS
+    /// macOS, VideoToolbox called by this program (`vt.rs`): no ffmpeg needed
+    Native,
+    /// macOS, VideoToolbox through ffmpeg
     VideoToolbox,
     /// Software
     X264,
@@ -69,7 +73,7 @@ impl Kind {
             Self::Vaapi { .. } => "vaapi",
             Self::Qsv => "qsv",
             Self::V4l2m2m => "v4l2m2m",
-            Self::VideoToolbox => "videotoolbox",
+            Self::Native | Self::VideoToolbox => "videotoolbox",
             Self::X264 => "x264",
         }
     }
@@ -81,12 +85,17 @@ impl Kind {
             Self::Vaapi { .. } => "VAAPI",
             Self::Qsv => "QSV",
             Self::V4l2m2m => "V4L2",
-            Self::VideoToolbox => "VideoToolbox",
+            Self::Native | Self::VideoToolbox => "VideoToolbox",
             Self::X264 => "x264",
         }
     }
 
     /// The longer description for the terminal
+    /// Runs in an ffmpeg process (everything but [`Kind::Native`])
+    pub fn needs_ffmpeg(&self) -> bool {
+        !matches!(self, Self::Native)
+    }
+
     pub fn describe(&self) -> String {
         let jpeg = |hw: bool| {
             if hw {
@@ -107,7 +116,15 @@ impl Kind {
             ),
             Self::Qsv => ictl_l10n::tr!("Intel QSV 硬件编码", "Intel QSV hardware encoding").into(),
             Self::V4l2m2m => ictl_l10n::tr!("V4L2 M2M 硬件编码", "V4L2 M2M hardware encoding").into(),
-            Self::VideoToolbox => ictl_l10n::tr!("VideoToolbox 硬件编码", "VideoToolbox hardware encoding").into(),
+            Self::Native => ictl_l10n::tr!(
+                "VideoToolbox 硬件编码(本程序直接调用,JPEG 也由硬件解码)",
+                "VideoToolbox hardware encoding (called directly, JPEG decoded by the hardware too)"
+            )
+            .into(),
+            Self::VideoToolbox => {
+                ictl_l10n::tr!("VideoToolbox 硬件编码(经 ffmpeg)", "VideoToolbox hardware encoding (through ffmpeg)")
+                    .into()
+            }
             Self::X264 => ictl_l10n::tr!("x264 软件编码(占 CPU)", "x264 software encoding (uses the CPU)").into(),
         }
     }
@@ -117,7 +134,7 @@ impl Kind {
 pub fn candidates() -> Vec<Kind> {
     let mut v = Vec::new();
     if cfg!(target_os = "macos") {
-        v.push(Kind::VideoToolbox);
+        v.extend([Kind::Native, Kind::VideoToolbox]);
     }
     if cfg!(target_os = "linux") {
         if Path::new("/dev/nvidiactl").exists() {
@@ -215,7 +232,8 @@ pub fn args(kind: &Kind, w: u32, h: u32, qp: u8, old: bool) -> Vec<String> {
             strings(&["-c:v", "h264_qsv", "-global_quality", &qp_s, "-look_ahead", "0", "-async_depth", "1"]),
         ),
         Kind::V4l2m2m => (Vec::new(), sw_scale, strings(&["-c:v", "h264_v4l2m2m", "-b:v", &bitrate(qp)])),
-        Kind::VideoToolbox => {
+        // never run through ffmpeg; the same line as ffmpeg's VideoToolbox keeps the match whole
+        Kind::Native | Kind::VideoToolbox => {
             (Vec::new(), sw_scale, strings(&["-c:v", "h264_videotoolbox", "-realtime", "1", "-b:v", &bitrate(qp)]))
         }
         // crf one below the quantizer gives about the same size and quality as the hardware encoders at that qp
@@ -264,7 +282,7 @@ pub fn args(kind: &Kind, w: u32, h: u32, qp: u8, old: bool) -> Vec<String> {
         "-bf",
         "0",
         "-g",
-        GOP,
+        &GOP_FRAMES.to_string(),
         "-f",
         "flv",
         "-flvflags",
@@ -301,15 +319,18 @@ pub fn is_old(version_line: &str) -> bool {
 struct Current {
     index: usize,
     kicks: usize,
+    /// The native encoder runs in software (a VM without the media engine)
+    software: bool,
 }
 
 /// The encoders of this machine and the one in use, shared by every picture connection
 pub struct Encoders {
-    ffmpeg: PathBuf,
+    /// `None`: only the native encoder (macOS without ffmpeg)
+    ffmpeg: Option<PathBuf>,
     qp: u8,
     old: bool,
     list: Vec<Kind>,
-    /// A test frame (from ffmpeg itself)
+    /// A test frame (from ffmpeg itself, or VideoToolbox's JPEG encoder without ffmpeg)
     sample: Arc<Vec<u8>>,
     current: Mutex<Option<Current>>,
     /// Only one picks at a time (picking starts processes and takes a second or two)
@@ -348,18 +369,28 @@ impl Encoders {
                 break;
             }
         }
-        let (ffmpeg, version) = found.ok_or_else(|| {
-            ictl_l10n::tr!(
+        let (ffmpeg, old) = match found {
+            Some((p, v)) => (Some(p), is_old(&v)),
+            None => {
+                list.retain(|k| !k.needs_ffmpeg());
+                (None, false)
+            }
+        };
+        if list.is_empty() {
+            return Err(ictl_l10n::tr!(
                 "没找到 ffmpeg;装上它画面改用 H.264,流量约为现在的 1/15",
                 "ffmpeg not found; with it installed the picture uses H.264 at about 1/15 of the traffic"
             )
-            .to_owned()
-        })?;
-        let sample = Arc::new(sample_jpeg(&ffmpeg).await?);
+            .to_owned());
+        }
+        let sample = Arc::new(match &ffmpeg {
+            Some(f) => sample_jpeg(f).await?,
+            None => native_sample().await?,
+        });
         let e = Arc::new(Self {
             ffmpeg,
             qp: qp_from(env("IPHONE_CONTROL_VIEWER_QP").as_deref()),
-            old: is_old(&version),
+            old,
             list,
             sample,
             current: Mutex::new(None),
@@ -381,6 +412,12 @@ impl Encoders {
     /// The encoder in use and its settings (for the terminal)
     pub fn describe(&self) -> String {
         match self.current() {
+            Some(c) if c.software => ictl_l10n::trf!(
+                "{},qp {}(这台机器上是软件编码)",
+                "{}, qp {} (encoding in software on this machine)",
+                self.list[c.index].describe(),
+                self.qp
+            ),
             Some(c) => ictl_l10n::trf!("{},qp {}", "{}, qp {}", self.list[c.index].describe(), self.qp),
             None => ictl_l10n::tr!("没有可用的编码器", "no working encoder").into(),
         }
@@ -389,7 +426,33 @@ impl Encoders {
     /// Starts an encoder session for frames of `w`×`h`
     pub fn start(&self, w: u32, h: u32) -> Result<Session, String> {
         let c = self.current().ok_or_else(|| ictl_l10n::tr!("没有可用的编码器", "no working encoder").to_owned())?;
-        Session::spawn(&self.ffmpeg, &args(&self.list[c.index], w, h, self.qp, self.old), c.kicks, (w, h), c.index)
+        self.session(&self.list[c.index], w, h, c.kicks, c.index, None)
+    }
+
+    /// A session of `kind`; `info`: told how the native encoder was set up
+    fn session(
+        &self,
+        kind: &Kind,
+        w: u32,
+        h: u32,
+        kicks: usize,
+        index: usize,
+        info: Option<tokio::sync::oneshot::Sender<NativeInfo>>,
+    ) -> Result<Session, String> {
+        let inner = match kind {
+            #[cfg(target_os = "macos")]
+            Kind::Native => Inner::Native(super::vt::Session::start(w, h, self.qp, kicks, info)),
+            #[cfg(not(target_os = "macos"))]
+            Kind::Native => {
+                let _ = info;
+                return Err("VideoToolbox is only on macOS".into());
+            }
+            k => {
+                let ffmpeg = self.ffmpeg.as_deref().ok_or_else(|| "no ffmpeg".to_owned())?;
+                Inner::Process(Box::new(Process::spawn(ffmpeg, &args(k, w, h, self.qp, self.old), kicks)?))
+            }
+        };
+        Ok(Session { size: (w, h), index, inner })
     }
 
     /// The encoder at `index` failed on real frames: use the next one that works. False when none is left
@@ -421,9 +484,10 @@ impl Encoders {
         let mut last = String::new();
         for i in start..self.list.len() {
             match self.calibrate(&self.list[i]).await {
-                Ok(kicks) => {
+                Ok((kicks, software)) => {
                     tracing::debug!("picture encoder {}: {} copies after each frame", self.list[i].id(), kicks);
-                    *self.current.lock().unwrap_or_else(|p| p.into_inner()) = Some(Current { index: i, kicks });
+                    *self.current.lock().unwrap_or_else(|p| p.into_inner()) =
+                        Some(Current { index: i, kicks, software });
                     return Ok(());
                 }
                 Err(e) => {
@@ -436,11 +500,13 @@ impl Encoders {
         Err(ictl_l10n::trf!("没有能用的 H.264 编码器({last})", "No working H.264 encoder ({last})"))
     }
 
-    /// Checks that `kind` encodes, and measures how many frames ffmpeg holds back (see the module docs): the test
-    /// frame is written until a frame comes out, then, once nothing more comes, written minus out is what stays held
-    async fn calibrate(&self, kind: &Kind) -> Result<usize, String> {
+    /// Checks that `kind` encodes, and measures how many frames it holds back (see the module docs): the test
+    /// frame is written until a frame comes out, then, once nothing more comes, written minus out is what stays held.
+    /// Also whether the native encoder runs in software
+    async fn calibrate(&self, kind: &Kind) -> Result<(usize, bool), String> {
         let (w, h) = SAMPLE;
-        let mut s = Session::spawn(&self.ffmpeg, &args(kind, w, h, self.qp, self.old), 0, SAMPLE, 0)?;
+        let (info_tx, info) = tokio::sync::oneshot::channel();
+        let mut s = self.session(kind, w, h, 0, 0, Some(info_tx))?;
         let deadline = Instant::now() + CALIBRATE_FOR;
         let mut out = 0;
         while out == 0 {
@@ -453,8 +519,38 @@ impl Encoders {
         }
         out += s.frames_within(Duration::from_millis(500)).await?;
         let written = s.written();
-        Ok(written.saturating_sub(out).min(MAX_KICKS))
+        let software = matches!(info.await, Ok(i) if in_software(&i));
+        Ok((written.saturating_sub(out).min(MAX_KICKS), software))
     }
+}
+
+#[cfg(target_os = "macos")]
+type NativeInfo = super::vt::Info;
+/// No native encoder here, so never a report from one
+#[cfg(not(target_os = "macos"))]
+enum NativeInfo {}
+
+/// The native encoder runs in software (no media engine, e.g. in a VM)
+#[cfg(target_os = "macos")]
+fn in_software(i: &NativeInfo) -> bool {
+    !i.hardware
+}
+#[cfg(not(target_os = "macos"))]
+fn in_software(i: &NativeInfo) -> bool {
+    match *i {}
+}
+
+/// The test frame without ffmpeg: from VideoToolbox's JPEG encoder (macOS)
+async fn native_sample() -> Result<Vec<u8>, String> {
+    #[cfg(target_os = "macos")]
+    {
+        tokio::task::spawn_blocking(|| super::vt::sample_jpeg(SAMPLE.0, SAMPLE.1, 0))
+            .await
+            .map_err(|e| e.to_string())?
+            .map_err(|e| ictl_l10n::trf!("生成测试帧失败:{e}", "Making a test frame failed: {e}"))
+    }
+    #[cfg(not(target_os = "macos"))]
+    Err("no ffmpeg".into())
 }
 
 /// `ffmpeg -version`'s first line; `None` when it doesn't run
@@ -493,12 +589,76 @@ async fn sample_jpeg(ffmpeg: &Path) -> Result<Vec<u8>, String> {
     Ok(out.stdout)
 }
 
-/// One ffmpeg process encoding frames of one size
+/// One encoder session for frames of one size: an ffmpeg process, or the native encoder's thread
 pub struct Session {
     /// The frames' size (the JPEG's, before rounding to even)
     pub size: (u32, u32),
     /// Which encoder ([`Encoders::give_up`])
     pub index: usize,
+    inner: Inner,
+}
+
+enum Inner {
+    Process(Box<Process>),
+    #[cfg(target_os = "macos")]
+    Native(super::vt::Session),
+}
+
+impl Session {
+    /// Encode this frame next (replaces one not yet written)
+    pub fn push(&self, jpeg: Arc<Vec<u8>>) {
+        match &self.inner {
+            Inner::Process(p) => p.push(jpeg),
+            #[cfg(target_os = "macos")]
+            Inner::Native(n) => n.push(jpeg),
+        }
+    }
+
+    /// The next packet; `None` when the encoder ended. Cancel-safe
+    pub async fn next(&mut self) -> Option<Result<Packet, String>> {
+        match &mut self.inner {
+            Inner::Process(p) => p.next().await,
+            #[cfg(target_os = "macos")]
+            Inner::Native(n) => n.next().await,
+        }
+    }
+
+    /// Frames given to the encoder so far, copies included
+    fn written(&self) -> usize {
+        match &self.inner {
+            Inner::Process(p) => p.written(),
+            #[cfg(target_os = "macos")]
+            Inner::Native(n) => n.written(),
+        }
+    }
+
+    /// Why the encoder ended
+    pub fn error(&self) -> String {
+        match &self.inner {
+            Inner::Process(p) => p.error(),
+            #[cfg(target_os = "macos")]
+            Inner::Native(n) => n.error(),
+        }
+    }
+
+    /// Frames that come out within `d`; an error when the encoder fails or ends
+    async fn frames_within(&mut self, d: Duration) -> Result<usize, String> {
+        let until = tokio::time::Instant::now() + d;
+        let mut n = 0;
+        loop {
+            match tokio::time::timeout_at(until, self.next()).await {
+                Err(_) => return Ok(n),
+                Ok(Some(Ok(Packet::Frame { .. }))) => n += 1,
+                Ok(Some(Ok(Packet::Config(_)))) => {}
+                Ok(Some(Err(e))) => return Err(e),
+                Ok(None) => return Err(self.error()),
+            }
+        }
+    }
+}
+
+/// One ffmpeg process encoding frames of one size
+struct Process {
     input: watch::Sender<Option<Arc<Vec<u8>>>>,
     out: mpsc::Receiver<Result<Packet, String>>,
     written: Arc<AtomicUsize>,
@@ -507,7 +667,7 @@ pub struct Session {
     _child: Child,
 }
 
-impl Drop for Session {
+impl Drop for Process {
     fn drop(&mut self) {
         for t in &self.tasks {
             t.abort();
@@ -515,8 +675,8 @@ impl Drop for Session {
     }
 }
 
-impl Session {
-    fn spawn(ffmpeg: &Path, args: &[String], kicks: usize, size: (u32, u32), index: usize) -> Result<Self, String> {
+impl Process {
+    fn spawn(ffmpeg: &Path, args: &[String], kicks: usize) -> Result<Self, String> {
         let mut child = Command::new(ffmpeg)
             .args(args)
             .stdin(Stdio::piped())
@@ -588,41 +748,23 @@ impl Session {
                 e.push_back(l);
             }
         });
-        Ok(Self { size, index, input, out, written, errors, tasks: vec![writer, reader, logger], _child: child })
+        Ok(Self { input, out, written, errors, tasks: vec![writer, reader, logger], _child: child })
     }
 
-    /// Encode this frame next (replaces one not yet written)
-    pub fn push(&self, jpeg: Arc<Vec<u8>>) {
+    fn push(&self, jpeg: Arc<Vec<u8>>) {
         self.input.send_replace(Some(jpeg));
     }
 
-    /// The next packet; `None` when ffmpeg ended. Cancel-safe
-    pub async fn next(&mut self) -> Option<Result<Packet, String>> {
+    async fn next(&mut self) -> Option<Result<Packet, String>> {
         self.out.recv().await
     }
 
-    /// Frames written to ffmpeg so far, copies included
     fn written(&self) -> usize {
         self.written.load(Ordering::Relaxed)
     }
 
-    /// Frames that come out within `d`; an error when ffmpeg fails or ends
-    async fn frames_within(&mut self, d: Duration) -> Result<usize, String> {
-        let until = tokio::time::Instant::now() + d;
-        let mut n = 0;
-        loop {
-            match tokio::time::timeout_at(until, self.next()).await {
-                Err(_) => return Ok(n),
-                Ok(Some(Ok(Packet::Frame { .. }))) => n += 1,
-                Ok(Some(Ok(Packet::Config(_)))) => {}
-                Ok(Some(Err(e))) => return Err(e),
-                Ok(None) => return Err(self.error()),
-            }
-        }
-    }
-
     /// What ffmpeg said before it ended
-    pub fn error(&self) -> String {
+    fn error(&self) -> String {
         let e = self.errors.lock().unwrap_or_else(|p| p.into_inner());
         if e.is_empty() {
             ictl_l10n::tr!("ffmpeg 退出了", "ffmpeg exited").into()
@@ -698,11 +840,25 @@ mod tests {
         assert_eq!(candidates().last(), Some(&Kind::X264));
     }
 
+    /// On macOS the encoder inside this program comes first and ffmpeg's VideoToolbox stays as its fallback; both
+    /// answer to IPHONE_CONTROL_VIEWER_CODEC=videotoolbox
+    #[test]
+    fn native_videotoolbox_comes_first_on_macos() {
+        let c = candidates();
+        if cfg!(target_os = "macos") {
+            assert_eq!(&c[..2], [Kind::Native, Kind::VideoToolbox]);
+            assert!(!c[0].needs_ffmpeg() && c[1].needs_ffmpeg());
+            assert_eq!(c[0].id(), c[1].id());
+        } else {
+            assert!(!c.contains(&Kind::Native));
+        }
+    }
+
     /// End to end with this machine's ffmpeg, when there is one: an encoder is picked and a frame comes out with
     /// its decoder configuration
     #[tokio::test]
     async fn encodes_with_the_local_ffmpeg() {
-        if version_line(Path::new("ffmpeg")).await.is_none() {
+        if version_line(Path::new("ffmpeg")).await.is_none() && !cfg!(target_os = "macos") {
             eprintln!("no ffmpeg here, skipped");
             return;
         }

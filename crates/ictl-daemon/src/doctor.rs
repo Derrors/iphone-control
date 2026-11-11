@@ -276,13 +276,21 @@ impl Daemon {
     }
 }
 
-/// 控制台（`iphone-control viewer`）的画面能不能用 H.264：要有 ffmpeg；Linux 上用显卡编码还要能打开
-/// `/dev/dri/renderD*`（`render` 组）。只看前提，不试编码：用哪个编码器，`viewer` 启动时会说
+/// 控制台（`iphone-control viewer`）的画面能不能用 H.264：macOS 上本程序直接调 VideoToolbox，不用 ffmpeg；
+/// 其他系统要有 ffmpeg，Linux 上用显卡编码还要能打开 `/dev/dri/renderD*`（`render` 组）。只看前提，不试编码：
+/// 用哪个编码器，`viewer` 启动时会说
 async fn viewer_picture() -> String {
     if crate::config::env("IPHONE_CONTROL_VIEWER_CODEC").is_some_and(|v| v.eq_ignore_ascii_case("mjpeg")) {
         return ictl_l10n::tr!(
             "✅ 控制台画面按设置用 MJPEG(IPHONE_CONTROL_VIEWER_CODEC=mjpeg)",
             "✅ Viewer picture uses MJPEG as set (IPHONE_CONTROL_VIEWER_CODEC=mjpeg)"
+        )
+        .into();
+    }
+    if cfg!(target_os = "macos") {
+        return ictl_l10n::tr!(
+            "✅ 控制台画面用 H.264(VideoToolbox,本程序直接调用,不需要 ffmpeg)",
+            "✅ The viewer's picture uses H.264 (VideoToolbox, called directly, no ffmpeg needed)"
         )
         .into();
     }

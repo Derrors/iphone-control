@@ -46,7 +46,7 @@ systemctl --user enable --now iphone-control     # 以普通用户运行，每�
 :::
 
 ::: tip 可选：ffmpeg
-装了 ffmpeg，控制台的画面改用 H.264，流量约为原来的 1/15，经隧道、走外网时更顺：`sudo apt install ffmpeg`，macOS 上 `brew install ffmpeg`。见[控制台的画面](./cli#viewer-picture)。
+Linux 上装了 ffmpeg，控制台的画面改用 H.264，流量约为原来的 1/15，经隧道、走外网时更顺：`sudo apt install ffmpeg`。macOS 上不用装，直接就是 H.264。见[控制台的画面](./cli#viewer-picture)。
 :::
 
 Intel Mac 没有预编译版本，要从源码编译；参与开发也从源码运行。见[从源码编译](../deploy/source)。

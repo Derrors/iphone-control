@@ -90,10 +90,10 @@
 
 ## 控制台的画面 {#viewer-picture}
 
-装了 ffmpeg 时，控制台的画面是 H.264，没有时是 MJPEG。手机的画面先由本机的 ffmpeg 编码，浏览器再用 WebCodecs 解码（浏览器自己选用硬件解码）。同样的画面，流量约为 MJPEG 的 1/15：画面静止时几乎为零，连续滚动时约 300～450 KB/s，MJPEG 要 4～10 MB/s。延迟和 MJPEG 相差不到一帧。
+macOS 上，以及 Linux 上装了 ffmpeg 时，控制台的画面是 H.264，否则是 MJPEG。手机的画面先在本机编码（macOS 上本程序直接调 VideoToolbox，不需要 ffmpeg；Linux 上交给 ffmpeg），浏览器再用 WebCodecs 解码（浏览器自己选用硬件解码）。同样的画面，流量约为 MJPEG 的 1/15：画面静止时几乎为零，连续滚动时约 300～450 KB/s，MJPEG 要 4～10 MB/s。延迟和 MJPEG 相差不到一帧。
 
-- **编码器：** `viewer` 启动时按顺序试，第一个能用的就用，并在终端里显示：NVIDIA 用 NVENC；AMD、Intel 用 VAAPI（JPEG 也交给显卡解码）；Intel 还可以用 QSV；树莓派一类的 ARM 板用 V4L2；macOS 用 VideoToolbox；都不行就用 x264 软件编码（占 CPU）。处理真实画面时出错，会换下一个。Linux 上要用显卡，用户得在 `render` 组里，`doctor` 会检查。
+- **编码器：** `viewer` 启动时按顺序试，第一个能用的就用，并在终端里显示：NVIDIA 用 NVENC；AMD、Intel 用 VAAPI（JPEG 也交给显卡解码）；Intel 还可以用 QSV；树莓派一类的 ARM 板用 V4L2；macOS 用 VideoToolbox（本程序直接调用，JPEG 也由硬件解码；装了 ffmpeg 时，它的 VideoToolbox 作备用）；都不行就用 x264 软件编码（占 CPU）。处理真实画面时出错，会换下一个。Linux 上要用显卡，用户得在 `render` 组里，`doctor` 会检查。
 - **链路慢时：** 页面每 100 毫秒告诉 viewer 收到了多少。链路跟不上时少编几帧，画面帧率下降，但不会越来越滞后。比如每秒 200 KB 的链路，滚动停下后约 0.6 秒画面追上。
-- **自动改用 MJPEG：** 没有 ffmpeg、没有能用的编码器、浏览器不支持 WebCodecs（较旧的浏览器）时自动改用 MJPEG；画面静止时不再重复发同一张图，链路慢时只发最新的一张。
+- **自动改用 MJPEG：** Linux 上没有 ffmpeg、没有能用的编码器、浏览器不支持 WebCodecs（较旧的浏览器）时自动改用 MJPEG；画面静止时不再重复发同一张图，链路慢时只发最新的一张。
 - **看现在用的是哪种：** 画面下方写着，例如「实时画面 · WDA · H.264 VAAPI 254 KB/s」。
-- **设置：** `IPHONE_CONTROL_VIEWER_CODEC`、`IPHONE_CONTROL_VIEWER_QP`、`ICTL_FFMPEG`，见[配置](./configuration)。安装 ffmpeg：`sudo apt install ffmpeg`，macOS 上 `brew install ffmpeg`；deb 包会推荐安装它。
+- **设置：** `IPHONE_CONTROL_VIEWER_CODEC`、`IPHONE_CONTROL_VIEWER_QP`、`ICTL_FFMPEG`，见[配置](./configuration)。Linux 上安装 ffmpeg：`sudo apt install ffmpeg`，deb 包会推荐安装它；macOS 上不用装。

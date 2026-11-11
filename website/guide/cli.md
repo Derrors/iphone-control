@@ -78,7 +78,7 @@
 |---|---|
 | `notify-test [事件]` | 发测试通知：每类事件各一条，或只发一类（`resign`、`session`、`pin`、`pin-recovered`、`unlock`、`offline`、`online`） |
 | `wda-bridge [--port <端口>]` | 把 WDA 桥接到 `127.0.0.1`，端口默认 8100，给别的工具用。WDA 没有认证，本机任何用户都能连上，用完就停 |
-| `viewer [--port <端口>]` | 浏览器里的控制台，地址 `http://127.0.0.1:8200/`（默认端口），中英文（默认跟着 `IPHONE_CONTROL_LANG`，页面上可切换）。**画面：** 实时画面像触摸屏一样用：点一下是点击，拖动是滑动，按住是长按，滚动鼠标滚轮或触控板也能滚动页面，另有输入框和硬件键。iOS 27 起手指跟着鼠标实时移动（经 CoreDevice HID，最后一次触摸后 30 秒内手机保持亮屏）；更低的版本在松开后发整段手势。操作都和 MCP 调用一样经守护进程，和 agent 的操作排队，并先自动解锁。画面来自 WDA 的 MJPEG 流，WDA 没就绪时没有画面。**设备面板：** 状态和就绪检查、已安装的 App、屏幕上的元素。页面跟着守护进程控制的设备走，在页面上或别处切换设备，画面和面板都会跟过去，见[多台设备](./multi-device#control-page)。**AI 任务：** 写下任务，交给本机的 agent 执行（PATH 里有的 Claude Code 或 Codex，在页面上选）。可以暂停、接管后交还、停止；付款、删除、发消息之前它会在页面上请你确认。本机任何用户都能连上这个端口，用完就停 |
+| `viewer [--port <端口>]` | 浏览器里的控制台，地址 `http://127.0.0.1:8200/`（默认端口），中英文（默认跟着 `IPHONE_CONTROL_LANG`，页面上可切换）。**画面：** 实时画面像触摸屏一样用：点一下是点击，拖动是滑动，按住是长按，滚动鼠标滚轮或触控板也能滚动页面，另有输入框和硬件键。iOS 27 起手指跟着鼠标实时移动（经 CoreDevice HID，最后一次触摸后 30 秒内手机保持亮屏）；更低的版本在松开后发整段手势。操作都和 MCP 调用一样经守护进程，和 agent 的操作排队，并先自动解锁。画面来自 WDA，WDA 没就绪时没有画面；装了 ffmpeg 时用 H.264，见下面的[画面编码](#viewer-picture)。**设备面板：** 状态和就绪检查、已安装的 App、屏幕上的元素。页面跟着守护进程控制的设备走，在页面上或别处切换设备，画面和面板都会跟过去，见[多台设备](./multi-device#control-page)。**AI 任务：** 写下任务，交给本机的 agent 执行（PATH 里有的 Claude Code 或 Codex，在页面上选）。可以暂停、接管后交还、停止；付款、删除、发消息之前它会在页面上请你确认。本机任何用户都能连上这个端口，用完就停 |
 
 调试用的 `debug` 子命令默认不编译，见[贡献指南](https://github.com/Derrors/iphone-control/blob/main/CONTRIBUTING.md#testing-on-a-real-phone)。
 
@@ -87,3 +87,13 @@
 - **要守护进程在运行的：** `setup` 的手机部分、`status`、`doctor`、`sign`、`resign`、`devices`、`select`、`unlock-reset`、`wda-bridge`、`viewer`，以及 MCP 工具调用。
 - **要在终端里交互运行的：** 不带命令的 `iphone-control`（首次运行时）、`setup`、`login`、`passcode set`。
 - **设置：** 每个命令启动时都会读 `~/.config/iphone-control/env`，环境里已经有的变量优先，见[配置](./configuration#settings-file)。
+
+## 控制台的画面 {#viewer-picture}
+
+装了 ffmpeg 时，控制台的画面是 H.264，没有时是 MJPEG。手机的画面先由本机的 ffmpeg 编码，浏览器再用 WebCodecs 解码（浏览器自己选用硬件解码）。同样的画面，流量约为 MJPEG 的 1/15：画面静止时几乎为零，连续滚动时约 300～450 KB/s，MJPEG 要 4～10 MB/s。延迟和 MJPEG 相差不到一帧。
+
+- **编码器：** `viewer` 启动时按顺序试，第一个能用的就用，并在终端里显示：NVIDIA 用 NVENC；AMD、Intel 用 VAAPI（JPEG 也交给显卡解码）；Intel 还可以用 QSV；树莓派一类的 ARM 板用 V4L2；macOS 用 VideoToolbox；都不行就用 x264 软件编码（占 CPU）。处理真实画面时出错，会换下一个。Linux 上要用显卡，用户得在 `render` 组里，`doctor` 会检查。
+- **链路慢时：** 页面每 100 毫秒告诉 viewer 收到了多少。链路跟不上时少编几帧，画面帧率下降，但不会越来越滞后。比如每秒 200 KB 的链路，滚动停下后约 0.6 秒画面追上。
+- **自动改用 MJPEG：** 没有 ffmpeg、没有能用的编码器、浏览器不支持 WebCodecs（较旧的浏览器）时自动改用 MJPEG；画面静止时不再重复发同一张图，链路慢时只发最新的一张。
+- **看现在用的是哪种：** 画面下方写着，例如「实时画面 · WDA · H.264 VAAPI 254 KB/s」。
+- **设置：** `IPHONE_CONTROL_VIEWER_CODEC`、`IPHONE_CONTROL_VIEWER_QP`、`ICTL_FFMPEG`，见[配置](./configuration)。安装 ffmpeg：`sudo apt install ffmpeg`，macOS 上 `brew install ffmpeg`；deb 包会推荐安装它。

@@ -217,6 +217,12 @@ if [ "$started" = 1 ]; then
 elif [ "$SERVICE" = 0 ]; then
   say "没有安装服务。启动守护进程：$BIN daemon" "No service installed. Start the daemon: $BIN daemon"
 fi
+if ! command -v ffmpeg >/dev/null 2>&1; then
+  if [ "$OS" = Darwin ]; then FF="brew install ffmpeg"; else FF="sudo apt install ffmpeg"; fi
+  say "可选：装上 ffmpeg，控制台（iphone-control viewer）的画面改用 H.264，流量约为原来的 1/15：$FF" \
+      "Optional: with ffmpeg installed, the control page (iphone-control viewer) uses H.264 at about 1/15 of the traffic: $FF"
+  echo
+fi
 say "接下来：用数据线连上 iPhone，然后运行
 
   iphone-control

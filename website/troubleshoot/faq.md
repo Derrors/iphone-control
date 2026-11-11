@@ -60,6 +60,10 @@ iphone-control doctor    # 逐层检查，每项失败都给出修复办法
 
 画面区域会写明原因：没连上、还要配对或打开开发者模式（运行 `iphone-control setup --reconfigure` 选「手机」）、WDA 正在启动（通常 10–60 秒）、要先解锁。新设备上还没装 WDA 时，已登录 Apple ID 的可以点「签名并安装 WDA」，大约 1–2 分钟，期间保持手机解锁；没登录的运行 `iphone-control setup --reconfigure` 选「Apple ID」。AI 任务执行中，或设了 `IPHONE_UDID` 时，不能切换设备。见[多台设备](../guide/multi-device)。
 
+## 控制台画面卡、流量大
+
+看画面下方写的编码方式。是 MJPEG 的话，装上 ffmpeg 再重启 `iphone-control viewer`，画面改用 H.264，流量约为原来的 1/15；启动时终端里会写用的是哪个编码器，`doctor` 会检查 ffmpeg 和显卡能不能用。已经是 H.264、链路又很慢时，画面帧率会下降，但不会越来越滞后；还嫌慢，可以把 `IPHONE_CONTROL_VIEWER_QP` 调大一些（比如 `24`）。见[控制台的画面](../guide/cli#viewer-picture)。
+
 ## 灵动岛一直显示「配对的电脑」、手机不自动锁屏
 
 HID 后备路线使用时会开一个屏幕镜像会话，空闲 30 秒自动关闭。图标一直不消失时，重启一下守护进程（`iphone-control service restart`）。

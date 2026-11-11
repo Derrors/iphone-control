@@ -6,6 +6,10 @@ All notable changes to this project are documented here. The format is based on 
 
 ## [Unreleased]
 
+### Added
+
+- The control page shows the picture as H.264 when ffmpeg is installed, at about 1/15 of the traffic (GPU encoding first: NVENC, VAAPI, QSV, V4L2, VideoToolbox, else x264); on a slow link the frame rate drops instead of the picture falling further behind. Without ffmpeg it stays MJPEG, now without repeated frames. Settings: `IPHONE_CONTROL_VIEWER_CODEC`, `IPHONE_CONTROL_VIEWER_QP`.
+
 ## [0.2.0] - 2026-11-11
 
 ### Upgrade notes

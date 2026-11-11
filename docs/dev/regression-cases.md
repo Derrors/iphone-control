@@ -80,3 +80,11 @@
 | 74 | 每次 HID 触摸前截图核对方向（几百毫秒），实时移动跟不上 | 只在 `down` 时核对一次（有 WDA 时读它的旋转角），移动、抬起直接用已开的会话 | 真机计时 |
 | 75 | WDA 的 MJPEG 默认每秒 10 帧，画面比操作慢 | 每秒 60 帧、75% 尺寸（`fast_stream`）；只在有客户端时采集 | 真机：约 48 fps、34 KB/帧，读元素树不变慢 |
 | 76 | viewer 页面只有中文 | 页面文字中英两套（`tr()`），默认跟着 `IPHONE_CONTROL_LANG`，可切换；请求带 `X-Ictl-Lang`，守护进程的提示和 AI 任务用同一种语言 | 单测（`the_page_says_its_default_language`）+ Playwright（英文页面除切换按钮和手机上的数据外没有中文；360×800 到 1920×1080 中英文都没有横向溢出）+ 真机（英文 AI 任务） |
+| 77 | 控制台画面每秒 4～10 MB，经隧道在外网看会卡 | 装了 ffmpeg 时改用 H.264（`/video`），显卡编码优先，约为 MJPEG 的 1/15 | 真机：设置里来回滚动，`/video` 约 250～430 KB/s，静止时为零 |
+| 78 | ffmpeg 扣住最新一帧，画面静止时最后一次变化一直出不来 | 每帧后面紧跟 K 份副本，K 在探测时测出 | 单测 encodes_with_the_local_ffmpeg；真机：每帧延迟 16 毫秒 |
+| 79 | 裸 H.264 流要等下一帧开头才知道这一帧结束 | ffmpeg 输出 FLV，每帧带长度 | 单测 tags_come_out_whole_however_the_bytes_arrive |
+| 80 | 链路慢时系统和 SSH 隧道的缓冲吞下几 MB，画面越来越滞后（每秒读 30 KB 落后 40 秒） | 页面每 100 毫秒回报收到多少；落后时新画面先不编码，追上后只编最新的 | 单测 behind_means_late_beyond_the_usual_round_trip、no_more_on_the_way_than_the_link_carries_in_the_slack；手动 slow_page_stays_close_to_live；真机：每秒 200 KB 时滚动停下后约 0.6 秒追上 |
+| 81 | 一次回报丢了，服务端一直等，画面卡住 | 页面收到确认才算报过；服务端 3 秒没收到回报就不再等 | 单测 behind_means_late_beyond_the_usual_round_trip |
+| 82 | 转屏后帧的尺寸变了 | 尺寸一变就开新的编码会话，页面按新的解码配置重新配置 | 真机：Safari 横竖屏切换，解码配置发 3 次，ffmpeg 解码无错 |
+| 83 | 浏览器没有 WebCodecs 或解不了 H.264 | 这一页从没出过画面就改用 MJPEG | 无头 Chrome：删掉 VideoDecoder 后画面是 MJPEG |
+| 84 | MJPEG 去重后画面静止时不显示（Chrome 要看到下一部分的头部才显示上一帧） | 每帧后面紧跟下一部分的分隔线和头部，不带 Content-Length | 无头 Chrome：静止画面下 MJPEG 有图 |

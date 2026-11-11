@@ -19,6 +19,7 @@ mod debug;
 mod envfile;
 mod guide;
 mod service;
+mod video;
 mod viewer;
 
 #[derive(Parser)]

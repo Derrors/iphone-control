@@ -62,6 +62,10 @@ Messages are in Simplified Chinese by default, and in English with `IPHONE_CONTR
 
 The picture area says why: not connected; pairing or Developer Mode still needed (run `iphone-control setup --reconfigure` and pick *Phone*); WDA starting (usually 10–60 seconds); or it needs unlocking. When the new device has no WDA yet and an Apple ID is signed in, click *Sign and install WDA*; it takes about 1–2 minutes, keep the phone unlocked. Without an Apple ID, run `iphone-control setup --reconfigure` and pick *Apple ID*. Switching is refused while an AI task runs, and when `IPHONE_UDID` is set. See [Several devices](../guide/multi-device).
 
+## The control page's picture stutters or uses a lot of traffic
+
+Look at the encoding shown under the picture. If it says MJPEG, install ffmpeg and restart `iphone-control viewer`: the picture switches to H.264 at about 1/15 of the traffic. The terminal says which encoder it uses when it starts, and `doctor` checks ffmpeg and access to the GPU. If it is already H.264 and the link is very slow, the frame rate drops but the picture doesn't fall further behind; to go further, raise `IPHONE_CONTROL_VIEWER_QP` a little (e.g. `24`). See [the control page's picture](../guide/cli#viewer-picture).
+
 ## "Paired computer" icon stays and the phone won't auto-lock
 
 The HID fallback opens a screen-mirroring session while in use and closes it after 30 seconds idle. If the icon doesn't go away, restart the daemon (`iphone-control service restart`).

@@ -934,7 +934,7 @@ fn pattern(w: u32, h: u32, n: u32) -> Result<Cf, String> {
         for r in 0..bh.div_ceil(2) {
             let row = std::slice::from_raw_parts_mut(uv.add(r * uvs), bw.div_ceil(2) * 2);
             let (item, line) = ((r * 2 + scroll) / 48, (r * 2 + scroll) % 48);
-            for (c, p) in row.chunks_exact_mut(2).enumerate() {
+            for (c, p) in row.as_chunks_mut::<2>().0.iter_mut().enumerate() {
                 let icon = item % 3 == 0 && (10..38).contains(&line) && (6..20).contains(&c);
                 p[0] = if icon { 90 + (item % 5) as u8 * 20 } else { 128 };
                 p[1] = if icon { 200 - (item % 4) as u8 * 25 } else { 128 };
@@ -1103,7 +1103,7 @@ mod measure {
             let (mut u, mut v) = (Vec::with_capacity(cw * ch), Vec::with_capacity(cw * ch));
             for r in 0..ch {
                 let row = std::slice::from_raw_parts(uv.add(r * uvs), cw * 2);
-                for p in row.chunks_exact(2) {
+                for p in row.as_chunks::<2>().0 {
                     u.push(p[0]);
                     v.push(p[1]);
                 }

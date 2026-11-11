@@ -228,6 +228,28 @@ impl<T: Transport> WdaClient<T> {
         Ok(self.call("GET", "/status", None, Duration::from_secs(5)).await?["value"]["ready"] == true)
     }
 
+    /// Read the WDA screen size again, including changes to Display Zoom.
+    pub async fn measure_screen(&mut self) -> Result<ScreenSize> {
+        let v = self.get("/wda/screen").await?;
+        let s = &v["screenSize"];
+        let positive = |key: &str| s[key].as_f64().filter(|n| n.is_finite() && *n > 0.0);
+        let size = positive("width")
+            .zip(positive("height"))
+            .map(|(width, height)| ScreenSize { width, height })
+            .ok_or_else(|| {
+                WdaError::Unavailable(ictl_l10n::tr!("/wda/screen 尺寸无效", "Invalid /wda/screen dimensions").into())
+            })?;
+        self.screen = Some(size);
+        Ok(size)
+    }
+
+    pub async fn base_screen_size(&mut self) -> Result<ScreenSize> {
+        match self.screen {
+            Some(s) => Ok(s),
+            None => self.measure_screen().await,
+        }
+    }
+
     /// 当前方向下的屏幕点尺寸（转屏后宽高跟着变）
     pub async fn screen_size(&mut self) -> Result<ScreenSize> {
         Ok(self.view().await?.screen)
@@ -237,23 +259,7 @@ impl<T: Transport> WdaClient<T> {
     /// 尺寸缓存的是问的那一刻的方向，转屏后不换算的话截图会被压扁、屏幕下半截的元素被当成屏幕外。
     /// 问不到方向（旧版 WDA 等）就按缓存的尺寸、方向未知（不换算元素坐标）
     pub async fn view(&mut self) -> Result<elements::View> {
-        let base = match self.screen {
-            Some(s) => s,
-            None => {
-                let v = self.get("/wda/screen").await?;
-                let s = &v["screenSize"];
-                let size = match (s["width"].as_f64(), s["height"].as_f64()) {
-                    (Some(width), Some(height)) => ScreenSize { width, height },
-                    _ => {
-                        return Err(WdaError::Unavailable(
-                            ictl_l10n::tr!("/wda/screen 没有 screenSize", "/wda/screen has no screenSize").into(),
-                        ));
-                    }
-                };
-                self.screen = Some(size);
-                size
-            }
-        };
+        let base = self.base_screen_size().await?;
         Ok(match self.orientation().await {
             Ok(o) => elements::View { screen: o.orient(base), orientation: Some(o) },
             Err(e) => {

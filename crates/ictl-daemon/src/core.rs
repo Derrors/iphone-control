@@ -186,6 +186,31 @@ pub struct CallCtx {
     pub gone: Option<tokio::sync::oneshot::Receiver<()>>,
     /// 正在控制的不是这台就不执行
     pub expect_udid: Option<String>,
+    /// Identity of the measured display used for this coordinate.
+    pub expect_view: Option<String>,
+}
+
+/// Logical points measured on this connection. A different id invalidates queued coordinates.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DisplayGeometry {
+    pub id: String,
+    pub width: f64,
+    pub height: f64,
+    pub rotation: u16,
+}
+
+impl DisplayGeometry {
+    pub(crate) fn update(current: &mut Option<Self>, measurement: Option<(ScreenSize, Rotation)>) -> bool {
+        let Some((size, rotation)) = measurement else { return current.take().is_some() };
+        let width = size.width;
+        let height = size.height;
+        let rotation = rotation.degrees();
+        if current.as_ref().is_some_and(|v| (v.width, v.height, v.rotation) == (width, height, rotation)) {
+            return false;
+        }
+        *current = Some(Self { id: uuid::Uuid::new_v4().to_string(), width, height, rotation });
+        true
+    }
 }
 
 /// 快照：`iphone-control status` 显示
@@ -196,6 +221,8 @@ pub struct Snapshot {
     /// USB 上接着的全部设备（读不到名字的只有 UDID）
     #[serde(default)]
     pub devices: Vec<DeviceInfo>,
+    #[serde(default)]
+    pub display: Option<DisplayGeometry>,
     /// 选定的设备：`IPHONE_UDID` 或运行中选的；None 是自动选
     #[serde(default)]
     pub pinned: Option<String>,
@@ -215,6 +242,7 @@ pub struct Snapshot {
 /// ([`Daemon::forget_device`]), so a new field can't be left holding the previous device's value
 #[derive(Default)]
 pub(crate) struct PerDevice {
+    pub display: Option<DisplayGeometry>,
     /// 这台手机上的 WDA 描述文件
     pub device_profile: DeviceProfile,
     /// 那份描述文件里没有本机签名私钥的证书（Some(true)）：WDA 是别的机器、旧的数据目录签的，或本机的证书是后来才
@@ -289,6 +317,7 @@ pub struct Daemon {
 /// 停掉 HID 会话（屏幕媒体流），隧道保留。媒体流不停的话手机一直以为「配对的电脑」在看屏幕：
 /// 灵动岛常驻图标、不会自动锁屏，本进程退出、拔插数据线都清不掉（iOS 27 真机）
 pub(crate) async fn close_hid(g: &mut Inner) {
+    g.dev.touch_rotation = None;
     if let Some(t) = g.tunnel.as_mut() {
         t.close_hid().await;
     }
@@ -296,6 +325,7 @@ pub(crate) async fn close_hid(g: &mut Inner) {
 
 /// 丢掉隧道。一律走这里：先停 HID 媒体流再断（见 [`close_hid`]）
 pub(crate) async fn drop_tunnel(g: &mut Inner) {
+    g.dev.touch_rotation = None;
     if let Some(t) = g.tunnel.take() {
         t.close().await;
     }
@@ -382,6 +412,7 @@ impl Daemon {
             state: DeviceState::Absent,
             device: None,
             devices: Vec::new(),
+            display: None,
             pinned: cfg.udid.clone().or_else(|| inner.persisted.selected_udid.clone()),
             pinned_by_env: cfg.udid.is_some(),
             persisted: inner.persisted.clone(),
@@ -505,6 +536,7 @@ impl Daemon {
             r.stop();
         }
         g.wda = None;
+        g.dev.display = None;
         g.elements_cache = None;
         g.swiped_tree = None;
         drop_tunnel(g).await;
@@ -547,10 +579,20 @@ impl Daemon {
         self.heartbeat.beat();
         let unlock = self.unlock_cfg(g.device.as_ref().map(|d| d.udid.as_str()));
         let pinned = self.pinned(g);
+        let devices = self.connected_infos(g);
+        // USB identity is available even when lockdown refuses the metadata connection.
+        let device = g.device.as_ref().map(|selected| {
+            g.info
+                .as_ref()
+                .or_else(|| devices.iter().find(|info| info.udid == selected.udid))
+                .cloned()
+                .unwrap_or_else(|| DeviceInfo { udid: selected.udid.clone(), ..Default::default() })
+        });
         self.snap.send_replace(Snapshot {
             state: g.state.clone(),
-            device: g.info.clone(),
-            devices: self.connected_infos(g),
+            device,
+            devices,
+            display: g.dev.display.clone(),
             pinned,
             pinned_by_env: self.cfg.udid.is_some(),
             persisted: g.persisted.clone(),
@@ -639,6 +681,7 @@ impl Daemon {
         if let Err(r) = admit(&req, queued_at, &ctx, g.device.as_ref().map(|d| d.udid.as_str())) {
             return r;
         }
+        let view = ctx.expect_view.as_deref();
         // 改变界面的操作做完后缓存的元素树就作废；只有调用方声明「不改变布局」的按名字点击（max_age_ms > 0）保留
         let keeps_cache = matches!(req, Request::TapElement { max_age_ms, .. } if max_age_ms > 0);
         let invalidates = req.is_device_action() && !keeps_cache;
@@ -654,18 +697,18 @@ impl Daemon {
             Request::ListElements { filter, limit, max_age_ms } => {
                 self.list_elements(g, &filter, limit, Duration::from_millis(max_age_ms)).await
             }
-            Request::Tap { x, y } => self.tap(g, x, y).await,
+            Request::Tap { x, y } => self.tap(g, x, y, view).await,
             Request::TapElement { text, index, max_age_ms } => {
                 self.tap_element(g, &text, index, Duration::from_millis(max_age_ms)).await.map(|(t, missed)| {
                     outcome.tapped_nothing = missed;
                     t
                 })
             }
-            Request::LongPress { x, y, seconds } => self.long_press(g, x, y, seconds).await,
-            Request::Swipe { from, to, seconds } => self.swipe(g, from, to, seconds).await,
+            Request::LongPress { x, y, seconds } => self.long_press(g, x, y, seconds, view).await,
+            Request::Swipe { from, to, seconds } => self.swipe(g, from, to, seconds, view).await,
             Request::TypeText { text, submit } => self.type_text(g, &text, submit).await,
             Request::PressButton { button } => self.press_button(g, &button).await,
-            Request::Touch { phase, x, y } => self.touch(g, phase, x, y).await,
+            Request::Touch { phase, x, y } => self.touch(g, phase, x, y, view).await,
             Request::ListApps { include_system } => self
                 .list_apps(g, include_system)
                 .await
@@ -904,9 +947,60 @@ mod tests {
         let busy = d.inner.lock().await;
         let (tx, rx) = tokio::sync::oneshot::channel();
         tx.send(()).unwrap();
-        let r = d.handle(Request::Status, Instant::now(), CallCtx { gone: Some(rx), expect_udid: None }).await;
+        let r = d
+            .handle(
+                Request::Status,
+                Instant::now(),
+                CallCtx { gone: Some(rx), expect_udid: None, ..Default::default() },
+            )
+            .await;
         drop(busy);
         assert!(matches!(&r, Response::Error { message } if message.contains("已取消")), "{r:?}");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn display_identity_expires_on_rotation_resize_and_reconnect() {
+        let size = ScreenSize { width: 393.0, height: 852.0 };
+        let portrait = Some((size, Rotation::Portrait));
+        let mut display = None;
+        assert!(DisplayGeometry::update(&mut display, portrait));
+        let first = display.clone().unwrap().id;
+        assert!(!DisplayGeometry::update(&mut display, portrait));
+        assert_eq!(display.as_ref().unwrap().id, first);
+        assert!(DisplayGeometry::update(&mut display, Some((size, Rotation::UpsideDown))));
+        assert_ne!(display.as_ref().unwrap().id, first);
+        let zoom = ScreenSize { width: 375.0, height: 812.0 };
+        assert!(DisplayGeometry::update(&mut display, Some((zoom, Rotation::UpsideDown))));
+        assert!(DisplayGeometry::update(&mut display, None));
+        assert!(!DisplayGeometry::update(&mut display, None));
+        assert!(DisplayGeometry::update(&mut display, portrait));
+        assert_ne!(display.as_ref().unwrap().id, first);
+    }
+
+    #[tokio::test]
+    async fn coordinate_from_a_previous_view_is_rejected_before_dispatch() {
+        let (d, dir) = test_daemon("previous-view");
+        let ctx = CallCtx { expect_view: Some("old-view".into()), ..Default::default() };
+        let r = d.handle(Request::Tap { x: 3.0, y: 4.0 }, Instant::now(), ctx).await;
+        assert!(matches!(r, Response::Error { message } if message.contains("画面")));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_known_view_losing_its_measurement_cannot_start_a_finger() {
+        let (d, dir) = test_daemon("lost-display");
+        let mut g = d.inner.lock().await;
+        let size = ScreenSize { width: 393.0, height: 852.0 };
+        DisplayGeometry::update(&mut g.dev.display, Some((size, Rotation::Portrait)));
+        let ctx = CallCtx { expect_view: Some(g.dev.display.as_ref().unwrap().id.clone()), ..Default::default() };
+        drop(g);
+        let req = Request::Touch { phase: crate::protocol::TouchPhase::Down, x: 20.0, y: 50.0 };
+        let response = d.handle(req, Instant::now(), ctx).await;
+        assert!(matches!(response, Response::Error { message } if message.contains("画面")));
+        let g = d.inner.lock().await;
+        assert!(g.dev.display.is_none());
+        assert!(g.dev.touch_rotation.is_none());
         std::fs::remove_dir_all(dir).unwrap();
     }
 
@@ -914,7 +1008,7 @@ mod tests {
     #[tokio::test]
     async fn request_for_another_device_is_refused() {
         let (d, dir) = test_daemon("expect");
-        let ctx = CallCtx { gone: None, expect_udid: Some("00008130-AAAA".into()) };
+        let ctx = CallCtx { gone: None, expect_udid: Some("00008130-AAAA".into()), ..Default::default() };
         let r = d.handle(Request::Status, Instant::now(), ctx).await;
         assert!(matches!(&r, Response::Error { message } if message.contains("设备变了")), "{r:?}");
         std::fs::remove_dir_all(dir).unwrap();

@@ -69,24 +69,24 @@
 
 /* ================= 设计变量 ================= */
 :root {
-  color-scheme: light dark;
+  color-scheme: light;
   --font-ui: system-ui, -apple-system, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
-  --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", "Cascadia Mono", Menlo, Consolas, monospace;
+  --font-mono: "SF Mono", SFMono-Regular, ui-monospace, Menlo, Consolas, monospace;
 
-  --fs-2xs: 12px; --fs-xs: 13px; --fs-sm: 14px; --fs-md: 16px; --fs-lg: 18px; --fs-xl: 26px;
+  --fs-2xs: .8125rem; --fs-xs: .8125rem; --fs-sm: .875rem; --fs-md: .9375rem; --fs-lg: 1rem; --fs-xl: 1.125rem;
   --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px; --sp-5: 20px; --sp-6: 24px; --sp-8: 32px; --sp-10: 40px;
   --r-xs: 6px; --r-sm: 8px; --r-md: 10px; --r-lg: 14px; --r-xl: 18px; --r-2xl: 20px;
-  --gutter: 12px;
-  --head-h: 64px;
-  --w-agent: 460px; --w-dev: 344px;
+  --gutter: 0px;
+  --head-h: max(48px, 3.2rem);
+  --w-agent: 352px; --w-dev: 288px;
   --dur-fast: 150ms; --dur: 220ms; --dur-slow: 300ms; --dur-exit: 150ms;
   --ease-out: cubic-bezier(.2, .7, .2, 1); --ease-in: cubic-bezier(.4, 0, 1, 1);
 
-  /* 浅色：冷调浅灰底，白色面板浮在上面；深青绿只用来点睛 */
-  --canvas: #eaedf0; --panel: #ffffff; --sunken: #f4f6f8; --hover: #eff2f4; --press: #e5e9ec;
+  /* 浅色外观 */
+  --canvas: #e7e8ea; --panel: #ffffff; --sunken: #f4f6f8; --hover: #eff2f4; --press: #e5e9ec;
   --line: #e3e7ea; --line-strong: #cbd2d8; --panel-edge: rgba(16, 24, 32, .07);
   --text: #11161a; --text-2: #3b444c; --muted: #5f6a73;
-  --accent: #0d6e5f; --accent-hover: #0a5a4e; --on-accent: #ffffff; --accent-soft: #e5f3ef; --accent-line: #c3e3d9; --accent-text: #0a5a4e;
+  --accent: #365b7c; --accent-hover: #294965; --on-accent: #ffffff; --accent-soft: #e2eaf1; --accent-line: #bfcedc; --accent-text: #2e4e69;
   --user: #2457d6; --user-soft: #e9effc; --user-text: #1f48b3;
   --ai: #10937c;
   --danger: #c0352b; --danger-hover: #9f2a22; --on-danger: #ffffff; --danger-soft: #fdeeec; --danger-line: #f4cdc8; --danger-text: #a52c23;
@@ -99,12 +99,12 @@
   --shadow-float: 0 2px 6px rgba(16, 24, 32, .06), 0 12px 32px rgba(16, 24, 32, .10);
   --shadow-phone: 0 4px 10px rgba(16, 24, 32, .08), 0 36px 64px -16px rgba(16, 24, 32, .32);
 }
-@media (prefers-color-scheme: dark) {
-  :root {
-    --canvas: #07090a; --panel: #111518; --sunken: #0b0e10; --hover: #191e22; --press: #20262b;
+:root[data-scheme="dark"] {
+    color-scheme: dark;
+    --canvas: #222428; --panel: #111518; --sunken: #0b0e10; --hover: #191e22; --press: #20262b;
     --line: #20262b; --line-strong: #333b42; --panel-edge: rgba(255, 255, 255, .07);
     --text: #e8ecef; --text-2: #c2c9cf; --muted: #96a0aa;
-    --accent: #3ccaa9; --accent-hover: #67dbc0; --on-accent: #03201a; --accent-soft: rgba(60, 202, 169, .12); --accent-line: rgba(60, 202, 169, .30); --accent-text: #7ae0c8;
+    --accent: #a1c8ef; --accent-hover: #bdd9f6; --on-accent: #162536; --accent-soft: #273746; --accent-line: #42596d; --accent-text: #b8d5ee;
     --user: #8ab4f8; --user-soft: rgba(138, 180, 248, .14); --user-text: #aac8fa;
     --ai: #3ccaa9;
     --danger: #f2827a; --danger-hover: #f6a39d; --on-danger: #2a0806; --danger-soft: rgba(242, 130, 122, .12); --danger-line: rgba(242, 130, 122, .30); --danger-text: #f8b0aa;
@@ -116,13 +116,14 @@
     --shadow-panel: none;
     --shadow-float: 0 2px 6px rgba(0, 0, 0, .4), 0 12px 32px rgba(0, 0, 0, .45);
     --shadow-phone: 0 36px 64px -16px rgba(0, 0, 0, .7);
-  }
 }
+:root[data-text-size="large"] { font-size:112.5%; }
+:root[data-text-size="xlarge"] { font-size:125%; }
 
 /* ================= 基础 ================= */
 * { box-sizing: border-box; }
 html, body { height: 100%; }
-body { margin: 0; background: var(--canvas); color: var(--text); font: var(--fs-md)/1.55 var(--font-ui); -webkit-font-smoothing: antialiased; }
+body { display:grid; grid-template-rows:auto minmax(0,1fr); height:100dvh; margin: 0; background: var(--canvas); color: var(--text); font: var(--fs-md)/1.55 var(--font-ui); -webkit-font-smoothing: antialiased; }
 h1, h2, h3, p, ol, ul { margin: 0; }
 ol, ul { padding: 0; list-style: none; }
 button, input, textarea, select { font: inherit; color: inherit; }
@@ -181,14 +182,14 @@ code, .mono { font-family: var(--font-mono); }
 .input:focus-visible, .select:focus-visible { outline: 2px solid var(--focus); outline-offset: -1px; border-color: transparent; }
 .label { display: block; font-size: var(--fs-xs); font-weight: 600; color: var(--muted); margin-bottom: 6px; }
 
-/* ================= 外壳：浮在浅底上的三栏 ================= */
-.shell { display: grid; grid-template-columns: var(--w-agent) minmax(0, 1fr) var(--w-dev); grid-template-rows: minmax(0, 1fr); gap: var(--gutter); padding: var(--gutter); height: 100dvh; }
+/* ================= 三栏工作区 ================= */
+.shell { display: grid; grid-template-columns: var(--w-dev) minmax(0, 1fr) var(--w-agent); grid-template-rows: minmax(0, 1fr); gap: var(--gutter); padding: var(--gutter); min-height: 0; }
 .mbar { display: none; }
 .pane { display: grid; grid-template-rows: var(--head-h) minmax(0, 1fr) auto; min-height: 0; min-width: 0; }
-.pane-agent, .pane-dev { position: relative; background: var(--panel); border-radius: var(--r-2xl); box-shadow: 0 0 0 1px var(--panel-edge), var(--shadow-panel); }
+.pane-agent, .pane-dev { position: relative; background: var(--panel); }
 /* 拖拽手柄放在面板之间的缝隙里：悬停、聚焦、拖动时显示主色细线 */
-.resizer { position: absolute; top: var(--sp-4); bottom: var(--sp-4); right: calc(var(--gutter) * -1); width: var(--gutter); z-index: 5; cursor: col-resize; touch-action: none; display: flex; justify-content: center; }
-.resizer.resizer-left { right: auto; left: calc(var(--gutter) * -1); }
+.resizer { position: absolute; top: 0; bottom: 0; right: -4px; width: 8px; z-index: 5; cursor: col-resize; touch-action: none; display: flex; justify-content: center; }
+.resizer.resizer-left { right: auto; left: -4px; }
 .resizer::after { content: ""; width: 3px; height: 100%; border-radius: 2px; background: transparent; transition: background-color var(--dur-fast) var(--ease-out); }
 @media (hover: hover) { .resizer:hover::after { background: var(--accent-line); } }
 .resizer:focus-visible { outline: none; }
@@ -201,13 +202,13 @@ body.resizing .stage, body.resizing iframe { pointer-events: none; }
 .brand { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .brand-mark { flex: none; width: 32px; height: 32px; padding: 3px; border-radius: 9px; background: var(--accent-soft); color: var(--accent-text); }
 .brand-text { display: grid; line-height: 1.25; }
-.brand-name { display: block; font-family: var(--font-mono); font-size: var(--fs-sm); font-weight: 600; letter-spacing: -.01em; }
+.brand-name { display: block; font-size: var(--fs-md); font-weight: 600; }
 .brand-sub { display: block; font-size: var(--fs-2xs); color: var(--muted); }
 .pane-head .badge { margin-left: auto; }
 .clear-btn { flex: none; }
 .lang-btn { flex: none; margin-left: auto; min-width: 44px; font-weight: 600; }
 
-/* ================= 左栏：AI 助手 ================= */
+/* ================= 右栏：AI 助手 ================= */
 .convo { padding: var(--sp-8) var(--sp-6) var(--sp-4); display: flex; flex-direction: column; gap: var(--sp-6); }
 .intro { display: flex; flex-direction: column; gap: var(--sp-5); }
 .intro-title { font-size: var(--fs-xl); font-weight: 700; letter-spacing: -.02em; line-height: 1.25; outline-offset: 4px; }
@@ -303,7 +304,7 @@ body.resizing .stage, body.resizing iframe { pointer-events: none; }
 .statusbar { display: flex; align-items: center; min-width: 0; height: 44px; padding: 4px; border-radius: var(--r-lg); background: var(--panel); box-shadow: 0 0 0 1px var(--panel-edge), var(--shadow-xs); }
 .dev-select { display: flex; align-items: center; gap: 6px; min-width: 0; padding-left: 10px; }
 .dev-select .label { margin: 0; white-space: nowrap; font-size: var(--fs-2xs); }
-/* 地方不够时设备名先省略（右侧设备面板里有全名，至少留约 6 个字），状态标签尽量完整，再不够才横向滚动 */
+/* 地方不够时设备名先省略（设备面板里有全名，至少留约 6 个字），状态标签尽量完整，再不够才横向滚动 */
 .dev-select { flex: 0 100 auto; }
 .dev-select .select-wrap { min-width: 6.5em; }
 .dev-select .select-wrap { grid-template-columns: minmax(0, auto); flex: 0 1 auto; }
@@ -344,7 +345,7 @@ body.resizing .stage, body.resizing iframe { pointer-events: none; }
 .zoom .zoom-fit[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent-text); }
 .frame {
   --ratio: .4613; --pad: 11px;
-  width: min(100cqw - 48px, calc((100cqh - 40px - var(--pad) * 2) * var(--ratio) + var(--pad) * 2));
+  width: min(100cqw, calc((100cqh - var(--pad) * 2) * var(--ratio) + var(--pad) * 2));
   padding: var(--pad); border-radius: 54px; background: var(--bezel);
   box-shadow: inset 0 0 0 1.5px var(--bezel-edge), inset 0 0 0 4px rgba(255, 255, 255, .03), var(--shadow-phone);
   transition: box-shadow var(--dur) var(--ease-out);
@@ -356,6 +357,7 @@ body.resizing .stage, body.resizing iframe { pointer-events: none; }
 /* iPad：边框更厚、屏幕圆角更小，跟实际机身比例一致 */
 .frame[data-kind="ipad"] { --pad: 14px; border-radius: 34px; }
 .frame[data-kind="ipad"] .stage { border-radius: 20px; }
+.frame[data-kind="unknown"], .frame[data-kind="unknown"] .stage { border-radius: 10px; }
 .stage > * { grid-area: 1 / 1; }
 .stage img { width: 100%; height: 100%; object-fit: contain; display: block; -webkit-user-drag: none; }
 .stage-msg { place-self: center; padding: var(--sp-6); color: #d4d7dc; text-align: center; font-size: var(--fs-sm); max-width: 34ch; }
@@ -393,7 +395,7 @@ body.resizing .stage, body.resizing iframe { pointer-events: none; }
 
 .stage-foot { display: flex; flex-direction: column; align-items: center; gap: var(--sp-2); padding: 0 var(--sp-6) var(--sp-3); }
 /* 提示条叠在按键工具条的位置上：工具条只是隐藏、仍占位，任何宽度下设备画面都不会因此变小 */
-.dock-slot { display: grid; width: 100%; justify-items: center; align-items: stretch; }
+.dock-slot { display: grid; grid-template-columns: minmax(0, 1fr); width: 100%; justify-items: center; align-items: stretch; }
 .dock-slot > * { grid-area: 1 / 1; }
 .dock.is-covered { visibility: hidden; }
 .dock { display: flex; align-items: center; gap: 6px; flex-wrap: nowrap; justify-content: center; padding: 6px; border-radius: var(--r-xl); background: var(--panel); box-shadow: 0 0 0 1px var(--panel-edge), var(--shadow-float); max-width: 100%; }
@@ -418,16 +420,15 @@ body.resizing .stage, body.resizing iframe { pointer-events: none; }
 .feed-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ai); flex: none; }
 .feed-dot.off { background: var(--danger); } .feed-dot.wait { background: var(--muted); }
 
-/* ================= 右栏：设备面板 ================= */
+/* ================= 左栏：设备面板 ================= */
 .seg { display: flex; gap: 2px; padding: 3px; border-radius: 12px; background: var(--sunken); flex: 1; }
 .seg button { flex: 1; min-height: 36px; border: 0; border-radius: 9px; background: transparent; color: var(--muted); font-size: var(--fs-sm); font-weight: 600; cursor: pointer; white-space: nowrap; transition: background-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out); }
 .seg button[aria-selected="true"] { background: var(--panel); color: var(--text); box-shadow: var(--shadow-xs), 0 0 0 1px var(--panel-edge); }
 @media (hover: hover) { .seg button:hover { color: var(--text); } }
 .dev-close { display: inline-flex; }
 @media (min-width: 1280px) {
-  .shell[data-dev-hidden="true"] { grid-template-columns: var(--w-agent) minmax(0, 1fr); }
+  .shell[data-dev-hidden="true"] { grid-template-columns: minmax(0, 1fr) var(--w-agent); }
   .shell[data-dev-hidden="true"] .pane-dev { display: none; }
-  .shell[data-dev-hidden="true"] .dev-toggle { display: inline-flex; }
 }
 .tabpanel { padding: var(--sp-5); display: flex; flex-direction: column; gap: var(--sp-6); }
 .sec { display: flex; flex-direction: column; gap: var(--sp-3); }
@@ -589,11 +590,58 @@ body.resizing .stage, body.resizing iframe { pointer-events: none; }
 .ph-lock-time { font-size: 96px; font-weight: 600; line-height: 1.05; font-variant-numeric: tabular-nums; }
 .ph-lock-hint { margin-top: auto; margin-bottom: 12px; font-size: 15px; opacity: .8; }
 
+/* A single toolbar aligns the window above all three panes. */
+.shell { position:relative; }
+.workspace-bar { display:flex; align-items:center; gap:8px; min-height:46px; padding:3px 12px; background:var(--panel); border-bottom:1px solid var(--line-strong); }
+.workspace-bar #dev-toggle .ic { transform:scaleX(-1); }
+.workspace-bar .workspace-actions { margin-left:auto; display:flex; align-items:center; gap:2px; }
+.workspace-bar .btn[aria-expanded="true"] { color:var(--accent-text); }
+.pane-dev { border-right:1px solid var(--line-strong); }
+.pane-agent { border-left:1px solid var(--line-strong); }
+.pane-head { padding:0 14px; gap:6px; background:var(--sunken); border-bottom:1px solid var(--line-strong); }
+.pane-head h2 { margin-right:auto; font-size:var(--fs-sm); font-weight:600; }
+.stage-head { overflow-x:auto; scrollbar-width:thin; }
+.statusbar,.head-tools .btn,.zoom { border:0; background:transparent; box-shadow:none; }
+.head-tools,.zoom { gap:1px; }
+.zoom button { min-width:28px; padding:0 4px; }
+.head-tools .btn-icon { width:32px; }
+.dev-select .select { font-size:var(--fs-sm); }
+.agent-foot,.stage-foot { padding:8px 12px; border-top:1px solid var(--line); background:var(--panel); }
+.dock,.composer,.composer:focus-within { box-shadow:none; }
+.dock { padding:0; border-radius:0; }
+.convo,.tabpanel { padding:16px; }
+.intro { gap:12px; }
+.intro-title { font-weight:600; letter-spacing:normal; }
+.sec-title { letter-spacing:normal; }
+.device-card { padding:0; background:transparent; border-radius:0; gap:10px; }
+.device-ic { width:30px; height:38px; background:transparent; box-shadow:none; }
+.facts { display:flex; flex-direction:column; gap:0; }
+.fact { display:grid; grid-template-columns: minmax(0,.85fr) minmax(0,1.15fr); align-items:baseline; gap:8px; padding:6px 0; border-radius:0; box-shadow:none; }
+.fact-v { text-align:right; white-space:normal; overflow-wrap:anywhere; }
+.checks { padding:0; background:transparent; }
+.appearance-options { display:grid; gap:14px; }
+.appearance-options label { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1.5fr); gap:12px; align-items:center; }
+.appearance-options select { border:1px solid var(--line-strong); }
+@media (min-width:1024px) {
+  .shell[data-agent-hidden="true"] { grid-template-columns:var(--w-dev) minmax(0,1fr); }
+  .shell[data-agent-hidden="true"] .pane-agent { display:none; }
+  .shell[data-agent-hidden="true"][data-dev-hidden="true"] { grid-template-columns:minmax(0,1fr); }
+}
+@media (min-width:1024px) and (max-width:1279.98px) {
+  .shell[data-agent-hidden="true"] { grid-template-columns:minmax(0,1fr); }
+}
+@supports (backdrop-filter:blur(12px)) or (-webkit-backdrop-filter:blur(12px)) {
+  .workspace-bar,.dialog { background:color-mix(in srgb,var(--panel) 88%,transparent); -webkit-backdrop-filter:blur(16px); backdrop-filter:blur(16px); }
+}
+@media (prefers-reduced-transparency: reduce) {
+  .workspace-bar,.dialog { background:var(--panel); -webkit-backdrop-filter:none; backdrop-filter:none; }
+}
+
 /* ================= 响应式 ================= */
 @media (max-width: 1279.98px) {
-  .shell { grid-template-columns: var(--w-agent) minmax(0, 1fr); }
+  .shell { grid-template-columns: minmax(0, 1fr) var(--w-agent); }
   .dev-toggle { display: inline-flex; }
-  .pane-dev { position: fixed; top: var(--gutter); right: var(--gutter); bottom: var(--gutter); z-index: 30; width: min(var(--w-dev), calc(92vw - var(--gutter) * 2)); box-shadow: 0 0 0 1px var(--panel-edge), var(--shadow-float); transform: translateX(calc(100% + var(--gutter) * 2)); transition: transform var(--dur-exit) var(--ease-in); }
+  .pane-dev { position: absolute; top: 0; left: 0; bottom: 0; z-index: 30; width: min(var(--w-dev), calc(92vw - var(--gutter) * 2)); box-shadow: 0 0 0 1px var(--panel-edge), var(--shadow-float); transform: translateX(-105%); transition: transform var(--dur-exit) var(--ease-in); }
   .shell[data-dev-open="true"] .pane-dev { transform: none; transition: transform var(--dur-slow) var(--ease-out); }
   .dev-close { display: inline-flex; }
 }
@@ -612,7 +660,9 @@ body.resizing .stage, body.resizing iframe { pointer-events: none; }
 @media (max-width: 1023.98px) {
   .shell { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); gap: 0; padding: 0; }
   .mbar { display: flex; align-items: center; gap: var(--sp-3); padding: var(--sp-2) var(--sp-4); background: var(--panel); border-bottom: 1px solid var(--line); flex-wrap: wrap; }
-  .mbar .seg { flex: 0 1 300px; margin-left: auto; }
+  .mbar .seg { flex:1; }
+  .workspace-bar .pane-switch { display:none; }
+  .pane-agent,.pane-dev { border-inline:0; }
   .pane-agent, .pane-stage, .pane-dev { grid-row: 2; grid-column: 1; }
   .pane-agent, .pane-dev { border-radius: 0; box-shadow: none; }
   .pane-dev { position: static; width: auto; transform: none; transition: none; }
@@ -624,20 +674,43 @@ body.resizing .stage, body.resizing iframe { pointer-events: none; }
   .stage-head { padding: 0 var(--sp-4); }
 }
 @media (max-width: 767.98px) {
-  .mbar .brand-sub { display: none; }
+  .workspace-bar { min-height:44px; }
+  .workspace-bar .btn,.mbar .seg button { min-height:40px; }
+  .mbar { padding:3px 8px; }
   .mbar .seg { flex-basis: 100%; }
-  .stage-head { flex-wrap: wrap; height: auto; padding: var(--sp-3) var(--sp-3) 0; }
-  .statusbar { flex: 1 1 0; }
+  .stage-head { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:2px; padding:4px 8px; }
+  .statusbar { min-height:32px; height:auto; padding:0; }
+  .dev-select { padding:0; }
+  .dev-select .label { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); }
+  .dev-select .select-wrap { min-width:0; }
+  .zoom button { min-width:28px; }
+  .head-tools .btn-icon { width:32px; }
   .pane-stage { grid-template-rows: auto minmax(0, 1fr) auto; }
   .chips { display: none; }
   .stage-wrap { padding: var(--sp-4) var(--sp-3) var(--sp-4); }
-  .stage-foot { padding: 0 var(--sp-3) var(--sp-3); }
+  .stage-foot { padding:4px 8px; }
   .dock { flex-wrap: wrap; }
   .type-field { flex: 1 1 100%; }
   .type-field .input { width: auto; flex: 1; }
   .convo { padding: var(--sp-6) var(--sp-4) var(--sp-4); }
   .tabpanel { padding: var(--sp-4); }
   .caps { grid-template-columns: minmax(0, 1fr); }
+}
+/* A short landscape viewport has room beside the picture for the two toolbars. */
+@media (orientation:landscape) and (min-width:540px) and (max-width:1023.98px) and (max-height:520px) {
+  .pane-stage { grid-template-columns:minmax(0,1fr) minmax(220px,33%); grid-template-rows:auto minmax(0,1fr); }
+  .stage-area { grid-area:1 / 1 / 3 / 2; }
+  .stage-wrap { padding:8px; }
+  .stage-head,.stage-foot { border-left:1px solid var(--line-strong); }
+  .stage-head { grid-area:1 / 2; display:flex; flex-direction:column; align-items:stretch; gap:0; height:auto; padding:4px 8px; }
+  .stage-head .chips { display:none; }
+  .head-tools { margin:0; justify-content:center; }
+  .stage-head .statusbar { justify-content:center; }
+  .stage-foot { grid-area:2 / 2; padding:8px; border-top:0; overflow-y:auto; }
+  .dock { flex-wrap:wrap; }
+  .type-field { flex:1 1 100%; }
+  .type-field .input { min-width:0; }
+  .keys,.type-field { justify-content:center; }
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 1ms !important; animation-iteration-count: 1 !important; transition-duration: 1ms !important; }
@@ -646,135 +719,27 @@ body.resizing .stage, body.resizing iframe { pointer-events: none; }
 </style>
 </head>
 <body>
-<div class="shell" id="shell" data-view="agent" data-dev-open="false">
-
-  <!-- 窄屏顶栏 -->
+<header class="workspace-bar">
+  <button type="button" class="btn btn-ghost btn-sm btn-icon pane-switch" id="dev-toggle" aria-controls="pane-dev" aria-expanded="true" aria-label="设备面板" title="设备面板"><span class="ic" data-icon="panel"></span></button>
+  <span class="brand-name">iPhone Control</span>
+  <div class="workspace-actions">
+    <button type="button" class="btn btn-ghost btn-sm" id="appearance-btn" aria-haspopup="dialog" aria-controls="appearance">外观</button>
+    <button type="button" class="btn btn-ghost btn-sm" id="lang-btn" aria-label="切换语言" title="切换语言">EN</button>
+    <button type="button" class="btn btn-ghost btn-sm btn-icon pane-switch" id="agent-toggle" aria-controls="pane-agent" aria-expanded="true" aria-label="AI 助手" title="AI 助手"><span class="ic" data-icon="panel"></span></button>
+  </div>
+</header>
+<div class="shell" id="shell" data-view="screen" data-dev-open="false">
   <header class="mbar">
-    <div class="brand">
-      <svg class="brand-mark" viewBox="0 0 32 32" width="28" height="28" aria-hidden="true"><rect x="9" y="3" width="14" height="26" rx="3.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="M13.5 25h5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="16" cy="14" r="3" fill="var(--accent)"/></svg>
-      <div class="brand-text"><span class="brand-name">iphone-control</span><span class="brand-sub">控制台</span></div>
-    </div>
     <div class="seg" role="tablist" aria-label="切换视图">
-      <button type="button" role="tab" id="vt-agent" aria-selected="true" aria-controls="pane-agent" data-action="view" data-view="agent"><span id="vt-agent-label">AI 助手</span></button>
-      <button type="button" role="tab" id="vt-screen" aria-selected="false" aria-controls="pane-stage" data-action="view" data-view="screen">屏幕</button>
+      <button type="button" role="tab" id="vt-agent" aria-selected="false" aria-controls="pane-agent" data-action="view" data-view="agent"><span id="vt-agent-label">AI 助手</span></button>
+      <button type="button" role="tab" id="vt-screen" aria-selected="true" aria-controls="pane-stage" data-action="view" data-view="screen">屏幕</button>
       <button type="button" role="tab" id="vt-device" aria-selected="false" aria-controls="pane-dev" data-action="view" data-view="device">设备</button>
     </div>
   </header>
 
-  <!-- 左：AI 助手 -->
-  <aside class="pane pane-agent" id="pane-agent" aria-label="AI 助手">
-    <div class="resizer" id="resizer" role="separator" aria-orientation="vertical" aria-controls="pane-agent" aria-label="调整 AI 助手栏宽度" title="拖动调整宽度，双击恢复默认" tabindex="0"></div>
-    <div class="pane-head">
-      <div class="brand agent-brand">
-        <svg class="brand-mark" viewBox="0 0 32 32" width="28" height="28" aria-hidden="true"><rect x="9" y="3" width="14" height="26" rx="3.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="M13.5 25h5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="16" cy="14" r="3" fill="var(--accent)"/></svg>
-        <div class="brand-text"><span class="brand-name">iphone-control</span></div>
-      </div>
-      <span id="agent-badge"></span>
-      <button type="button" class="btn btn-ghost btn-sm clear-btn" id="clear-btn" data-action="clear" data-focus="clear" hidden><span class="ic" data-icon="trash"></span><span>清空记录</span></button>
-      <button type="button" class="btn btn-ghost btn-sm lang-btn" id="lang-btn" aria-label="切换语言" title="切换语言">EN</button>
-    </div>
-    <div class="pane-body" id="agent-scroll">
-      <div class="convo">
-        <div class="intro" id="intro">
-          <h1 class="intro-title" tabindex="-1" id="intro-title">让 AI 操作你的 Apple 设备</h1>
-          <p class="intro-text">用一句话描述目标。AI 会看真实屏幕，用下面这些现成的操作一步步完成；遇到付款、删除、发消息这类操作会先停下来等你确认。</p>
-          <ul class="caps" aria-label="AI 能用的操作">
-            <li class="cap"><span class="ic" data-icon="eye"></span><span>看屏幕、读元素</span></li>
-            <li class="cap"><span class="ic" data-icon="tap"></span><span>点按、滑动、长按</span></li>
-            <li class="cap"><span class="ic" data-icon="keyboard"></span><span>输入文字</span></li>
-            <li class="cap"><span class="ic" data-icon="grid"></span><span>启动、关闭 App</span></li>
-            <li class="cap"><span class="ic" data-icon="link"></span><span>打开链接</span></li>
-            <li class="cap"><span class="ic" data-icon="home"></span><span>实体按键</span></li>
-          </ul>
-          <p class="demo-note" id="demo-note" hidden>演示模式：没有连上 iphone-control 服务。设备画面、App 列表、元素和 AI 的每一步都是本地模拟的。</p>
-        </div>
-        <ol class="turns" id="turns" aria-label="任务记录"></ol>
-      </div>
-    </div>
-    <div class="agent-foot">
-      <div class="composer" id="composer">
-        <div class="runbar" id="runbar" role="group" aria-label="任务控制" hidden></div>
-        <label class="sr-only" for="prompt">交给 AI 的任务</label>
-        <textarea class="textarea" id="prompt" rows="2" maxlength="4000" aria-describedby="composer-hint prompt-error" placeholder="想让设备做什么？"></textarea>
-        <div class="composer-row">
-          <div class="select-wrap agent-pick" id="agent-pick" hidden>
-            <label class="sr-only" for="agent">执行任务的 AI</label>
-            <select class="select" id="agent" title="执行任务的本地 AI"></select>
-            <span class="select-chev" data-icon="chevron"></span>
-          </div>
-          <span class="composer-hint" id="composer-hint">Enter 发送 · Shift+Enter 换行</span>
-          <button type="button" class="btn btn-primary send" id="send" data-action="send" data-focus="send" aria-label="开始任务"><span class="ic" data-icon="send"></span></button>
-        </div>
-      </div>
-      <p class="field-error" id="prompt-error" hidden></p>
-    </div>
-  </aside>
-
-  <!-- 中：设备舞台 -->
-  <main class="pane pane-stage" id="pane-stage" aria-label="设备屏幕">
-    <div class="pane-head stage-head">
-      <div class="statusbar">
-        <div class="dev-select">
-          <label class="label" for="device">控制设备</label>
-          <div class="select-wrap">
-            <select class="select" id="device" disabled><option>正在查找…</option></select>
-            <span class="select-chev" data-icon="chevron"></span>
-          </div>
-        </div>
-        <div class="chips" id="chips"></div>
-      </div>
-      <div class="head-tools">
-        <div class="zoom" role="group" aria-label="画面缩放">
-          <button type="button" data-action="zoom-out" id="zoom-out" aria-label="缩小画面" title="缩小（也可以按住 Ctrl/⌘ 滚动滚轮）"><span class="ic" data-icon="zoomout"></span></button>
-          <button type="button" class="zoom-val" data-action="zoom-actual" id="zoom-val" title="切换到实际尺寸（100%）" aria-label="当前缩放比例，点击切换到实际尺寸">100%</button>
-          <button type="button" data-action="zoom-in" id="zoom-in" aria-label="放大画面" title="放大（也可以按住 Ctrl/⌘ 滚动滚轮）"><span class="ic" data-icon="zoomin"></span></button>
-          <button type="button" class="zoom-fit" data-action="zoom-fit" id="zoom-fit" aria-pressed="true" title="按窗口大小自动适应">适应</button>
-        </div>
-        <button type="button" class="btn btn-ghost btn-icon" data-action="reconnect" aria-label="刷新画面" title="刷新画面"><span class="ic" data-icon="refresh"></span></button>
-        <button type="button" class="btn dev-toggle" data-action="dev-open" id="dev-toggle" aria-controls="pane-dev" aria-expanded="false"><span class="ic" data-icon="panel"></span><span>设备面板</span></button>
-      </div>
-    </div>
-    <div class="stage-area">
-    <div class="stage-wrap" id="stage-wrap">
-      <div class="frame" id="frame" data-ctl="user">
-        <div class="stage" id="stage" role="group" aria-label="设备实时画面：单击轻点，拖动或滚动滚轮滑动，按住长按" aria-describedby="status">
-          <img id="live" alt="设备的实时画面" draggable="false" hidden>
-          <div id="demo" class="ph" aria-hidden="true" hidden></div>
-          <svg id="marks" class="marks" viewBox="0 0 393 852" aria-hidden="true"></svg>
-          <div class="stage-msg" id="stage-msg">正在连接 iphone-control 服务…</div>
-        </div>
-      </div>
-    </div>
-      <p class="toast" id="status" role="status" aria-live="polite"></p>
-    </div>
-    <div class="stage-foot">
-      <div class="dock-slot">
-      <div class="guard" id="guard" role="status" hidden></div>
-      <div class="dock" id="dock" role="group" aria-label="设备按键和输入">
-        <div class="keys" role="group" aria-label="实体按键">
-          <button type="button" class="key" data-key="home" aria-label="主屏幕" title="主屏幕"><span class="ic" data-icon="home"></span></button>
-          <button type="button" class="key" data-key="lock" aria-label="锁屏" title="锁屏"><span class="ic" data-icon="lock"></span></button>
-          <button type="button" class="key" data-key="volume_down" aria-label="音量减" title="音量减"><span class="ic" data-icon="voldown"></span></button>
-          <button type="button" class="key" data-key="volume_up" aria-label="音量加" title="音量加"><span class="ic" data-icon="volup"></span></button>
-        </div>
-        <div class="type-field">
-          <label class="sr-only" for="type-text">向设备输入文字</label>
-          <input class="input" id="type-text" autocomplete="off" placeholder="向设备输入文字">
-          <button type="button" class="btn btn-ghost" id="type-btn">输入</button>
-          <button type="button" class="btn btn-ghost btn-icon" id="type-submit" aria-label="输入并回车" title="输入并回车"><span class="ic" data-icon="enter"></span></button>
-        </div>
-        <button type="button" class="btn btn-primary" id="dock-handback" data-action="handback" data-focus="dock-handback" hidden><span class="ic" data-icon="play"></span><span>交还 AI</span></button>
-      </div>
-      </div>
-      <div class="meta-row">
-        <div class="feed"><span class="feed-dot wait" id="feed-dot"></span><span class="od-truncate" id="feed-text">正在连接…</span></div>
-      </div>
-    </div>
-  </main>
-
-  <!-- 右：设备面板 -->
+  <!-- 左：设备面板 -->
   <aside class="pane pane-dev" id="pane-dev" aria-label="设备面板">
-    <div class="resizer resizer-left" id="resizer-dev" role="separator" aria-orientation="vertical" aria-controls="pane-dev" aria-label="调整设备面板宽度" title="拖动调整宽度，双击恢复默认" tabindex="0"></div>
+    <div class="resizer" id="resizer-dev" role="separator" aria-orientation="vertical" aria-controls="pane-dev" aria-label="调整设备面板宽度" title="拖动调整宽度，双击恢复默认" tabindex="0"></div>
     <div class="pane-head">
       <div class="seg" role="tablist" aria-label="设备面板">
         <button type="button" role="tab" id="tab-status" aria-selected="true" aria-controls="tp-status" data-action="dev-tab" data-tab="status">状态</button>
@@ -820,11 +785,126 @@ body.resizing .stage, body.resizing iframe { pointer-events: none; }
       </section>
     </div>
   </aside>
+  <!-- 中：设备舞台 -->
+  <main class="pane pane-stage" id="pane-stage" aria-label="设备屏幕">
+    <div class="pane-head stage-head">
+      <div class="statusbar">
+        <div class="dev-select">
+          <label class="label" for="device">控制设备</label>
+          <div class="select-wrap">
+            <select class="select" id="device" disabled><option>正在查找…</option></select>
+            <span class="select-chev" data-icon="chevron"></span>
+          </div>
+        </div>
+        <div class="chips" id="chips"></div>
+      </div>
+      <div class="head-tools">
+        <div class="zoom" role="group" aria-label="画面缩放">
+          <button type="button" data-action="zoom-out" id="zoom-out" aria-label="缩小画面" title="缩小（也可以按住 Ctrl/⌘ 滚动滚轮）"><span class="ic" data-icon="zoomout"></span></button>
+          <button type="button" class="zoom-val" data-action="zoom-actual" id="zoom-val" title="切换到实际尺寸（100%）" aria-label="当前缩放比例，点击切换到实际尺寸">100%</button>
+          <button type="button" data-action="zoom-in" id="zoom-in" aria-label="放大画面" title="放大（也可以按住 Ctrl/⌘ 滚动滚轮）"><span class="ic" data-icon="zoomin"></span></button>
+          <button type="button" class="zoom-fit" data-action="zoom-fit" id="zoom-fit" aria-pressed="true" title="按窗口大小自动适应">适应</button>
+        </div>
+        <button type="button" class="btn btn-ghost btn-icon" data-action="reconnect" aria-label="刷新画面" title="刷新画面"><span class="ic" data-icon="refresh"></span></button>
+      </div>
+    </div>
+    <div class="stage-area">
+    <div class="stage-wrap" id="stage-wrap">
+      <div class="frame" id="frame" data-ctl="user">
+        <div class="stage" id="stage" role="group" aria-label="设备实时画面：单击轻点，拖动或滚动滚轮滑动，按住长按" aria-describedby="status">
+          <img id="live" alt="设备的实时画面" draggable="false" hidden>
+          <div id="demo" class="ph" aria-hidden="true" hidden></div>
+          <svg id="marks" class="marks" viewBox="0 0 393 852" aria-hidden="true"></svg>
+          <div class="stage-msg" id="stage-msg">正在连接 iphone-control 服务…</div>
+        </div>
+      </div>
+    </div>
+      <p class="toast" id="status" role="status" aria-live="polite"></p>
+    </div>
+    <div class="stage-foot">
+      <div class="dock-slot">
+      <div class="guard" id="guard" role="status" hidden></div>
+      <div class="dock" id="dock" role="group" aria-label="设备按键和输入">
+        <div class="keys" role="group" aria-label="实体按键">
+          <button type="button" class="key" data-key="home" aria-label="主屏幕" title="主屏幕"><span class="ic" data-icon="home"></span></button>
+          <button type="button" class="key" data-key="lock" aria-label="锁屏" title="锁屏"><span class="ic" data-icon="lock"></span></button>
+          <button type="button" class="key" data-key="volume_down" aria-label="音量减" title="音量减"><span class="ic" data-icon="voldown"></span></button>
+          <button type="button" class="key" data-key="volume_up" aria-label="音量加" title="音量加"><span class="ic" data-icon="volup"></span></button>
+        </div>
+        <div class="type-field">
+          <label class="sr-only" for="type-text">向设备输入文字</label>
+          <input class="input" id="type-text" autocomplete="off" placeholder="向设备输入文字">
+          <button type="button" class="btn btn-ghost" id="type-btn">输入</button>
+          <button type="button" class="btn btn-ghost btn-icon" id="type-submit" aria-label="输入并回车" title="输入并回车"><span class="ic" data-icon="enter"></span></button>
+        </div>
+        <button type="button" class="btn btn-primary" id="dock-handback" data-action="handback" data-focus="dock-handback" hidden><span class="ic" data-icon="play"></span><span>交还 AI</span></button>
+      </div>
+      </div>
+      <div class="meta-row">
+        <div class="feed"><span class="feed-dot wait" id="feed-dot"></span><span class="od-truncate" id="feed-text">正在连接…</span></div>
+      </div>
+    </div>
+  </main>
+
+  <!-- 右：AI 助手 -->
+  <aside class="pane pane-agent" id="pane-agent" aria-label="AI 助手">
+    <div class="resizer resizer-left" id="resizer" role="separator" aria-orientation="vertical" aria-controls="pane-agent" aria-label="调整 AI 助手栏宽度" title="拖动调整宽度，双击恢复默认" tabindex="0"></div>
+    <div class="pane-head">
+      <h2>AI 助手</h2>
+      <span id="agent-badge"></span>
+      <button type="button" class="btn btn-ghost btn-sm clear-btn" id="clear-btn" data-action="clear" data-focus="clear" hidden><span class="ic" data-icon="trash"></span><span>清空记录</span></button>
+    </div>
+    <div class="pane-body" id="agent-scroll">
+      <div class="convo">
+        <div class="intro" id="intro">
+          <h1 class="intro-title" tabindex="-1" id="intro-title">让 AI 操作你的 Apple 设备</h1>
+          <p class="intro-text">用一句话描述目标。AI 会看真实屏幕，用下面这些现成的操作一步步完成；遇到付款、删除、发消息这类操作会先停下来等你确认。</p>
+          <ul class="caps" aria-label="AI 能用的操作">
+            <li class="cap"><span class="ic" data-icon="eye"></span><span>看屏幕、读元素</span></li>
+            <li class="cap"><span class="ic" data-icon="tap"></span><span>点按、滑动、长按</span></li>
+            <li class="cap"><span class="ic" data-icon="keyboard"></span><span>输入文字</span></li>
+            <li class="cap"><span class="ic" data-icon="grid"></span><span>启动、关闭 App</span></li>
+            <li class="cap"><span class="ic" data-icon="link"></span><span>打开链接</span></li>
+            <li class="cap"><span class="ic" data-icon="home"></span><span>实体按键</span></li>
+          </ul>
+          <p class="demo-note" id="demo-note" hidden>演示模式：没有连上 iphone-control 服务。设备画面、App 列表、元素和 AI 的每一步都是本地模拟的。</p>
+        </div>
+        <ol class="turns" id="turns" aria-label="任务记录"></ol>
+      </div>
+    </div>
+    <div class="agent-foot">
+      <div class="composer" id="composer">
+        <div class="runbar" id="runbar" role="group" aria-label="任务控制" hidden></div>
+        <label class="sr-only" for="prompt">交给 AI 的任务</label>
+        <textarea class="textarea" id="prompt" rows="2" maxlength="4000" aria-describedby="composer-hint prompt-error" placeholder="想让设备做什么？"></textarea>
+        <div class="composer-row">
+          <div class="select-wrap agent-pick" id="agent-pick" hidden>
+            <label class="sr-only" for="agent">执行任务的 AI</label>
+            <select class="select" id="agent" title="执行任务的本地 AI"></select>
+            <span class="select-chev" data-icon="chevron"></span>
+          </div>
+          <span class="composer-hint" id="composer-hint">Enter 发送 · Shift+Enter 换行</span>
+          <button type="button" class="btn btn-primary send" id="send" data-action="send" data-focus="send" aria-label="开始任务"><span class="ic" data-icon="send"></span></button>
+        </div>
+      </div>
+      <p class="field-error" id="prompt-error" hidden></p>
+    </div>
+  </aside>
+
+
 </div>
 
+<dialog class="dialog" id="appearance" aria-labelledby="appearance-title">
+  <h2 id="appearance-title">外观</h2>
+  <div class="appearance-options">
+    <label><span>明暗</span><select class="select" id="theme"><option value="system">跟随系统</option><option value="light">浅色</option><option value="dark">深色</option></select></label>
+    <label><span>界面字号</span><select class="select" id="text-size"><option value="standard">标准</option><option value="large">大</option><option value="xlarge">特大</option></select></label>
+  </div>
+  <form method="dialog" class="dialog-actions"><button class="btn btn-primary" type="submit">完成</button></form>
+</dialog>
 <dialog class="dialog" id="clear-dialog" aria-labelledby="clear-title" aria-describedby="clear-desc">
   <h2 id="clear-title">清空全部操作记录？</h2>
-  <p id="clear-desc">只清除左侧的任务和步骤记录，不会影响设备上已经做过的操作。清空后无法恢复。</p>
+  <p id="clear-desc">只清除任务和步骤记录，不会影响设备上已经做过的操作。清空后无法恢复。</p>
   <div class="dialog-actions">
     <button type="button" class="btn" id="clear-cancel">取消</button>
     <button type="button" class="btn btn-danger-solid" id="clear-confirm">清空</button>
@@ -853,8 +933,13 @@ const LANG = (() => {
   return v === 'en' || v === 'zh' ? v : document.documentElement.dataset.lang === 'en' ? 'en' : 'zh';
 })();
 document.documentElement.lang = LANG === 'en' ? 'en' : 'zh-CN';
-const EN = {" · 演示数据":" · demo data"," 等":" and more","<div class=\"ph-kb\" data-type=\"Keyboard\">键盘</div>":"<div class=\"ph-kb\" data-type=\"Keyboard\">Keyboard</div>","<li class=\"empty-note\">打开这一页时会读取已安装的 App。</li>":"<li class=\"empty-note\">The installed apps are read when this tab opens.</li>","<li class=\"sr-only\">正在读取 App 列表…</li>":"<li class=\"sr-only\">Reading the app list…</li>","<li class=\"sr-only\">正在读取元素…</li>":"<li class=\"sr-only\">Reading elements…</li>","<option>没有可用的 AI</option>":"<option>No AI available</option>","<p class=\"empty-note\">正在连接 iphone-control 服务…</p>":"<p class=\"empty-note\">Connecting to the iphone-control service…</p>","<span class=\"chip\"><span class=\"chip-dot warn\"></span><span>演示模式</span></span>":"<span class=\"chip\"><span class=\"chip-dot warn\"></span><span>Demo</span></span>","AI 任务已停止":"AI task stopped","AI 任务已完成":"AI task done","AI 任务没有完成":"AI task not done","AI 任务的事件流断开了，正在重连…":"Lost the AI task's event stream, reconnecting…","AI 会立刻停下。已经在设备上做完的操作不会撤销。":"The AI stops right away. What it already did on the device isn't undone.","AI 助手":"AI assistant","AI 在等你确认一步操作":"The AI is waiting for you to confirm a step","AI 在等你确认一步操作，确认前画面保持锁定。":"The AI is waiting for you to confirm a step; the screen stays locked until you do.","AI 已暂停":"AI paused","AI 已暂停。交还后它会先重新看一遍屏幕。":"The AI is paused. When you hand back, it looks at the screen again first.","AI 正在操作这台设备":"The AI is operating this device","AI 正在操作这台设备。要自己操作，先点「接管」。":"The AI is operating this device. To act yourself, click “Take over” first.","AI 继续执行":"AI resumed","AI 能用的操作":"Actions the AI can use","Enter 发送 · Shift+Enter 换行":"Enter to send · Shift+Enter for a new line","HID 后备":"HID fallback","USB 连接":"USB connection","WDA 已签名安装":"WDA signed and installed","WDA 运行中":"WDA running","https://… 或 App 的 URL scheme":"https://… or an app's URL scheme","iMessage 信息":"iMessage","iOS 版本":"iOS Version","iPad mini（第 6 代）":"iPad mini (6th generation)","iphone-control 控制台":"iphone-control console","、":", ","。":".","。可以换个说法再试，或者接管后手动完成。":". Try rephrasing, or take over and finish by hand.","「":"“","」":"”","」。":"”.","」。界面可能已经变了，需要重新截图判断。":"” on the screen. It may have changed; take a new screenshot.","」出现，最多 5 秒":"” to appear, up to 5 s","」发给「":"” to “","」已在前台":"” is in front","」已经出现（":"” appeared (","」的 App。":"”.","」的元素。":"”.","」的对话":"”","」的对话。":"”.","」，能看到：":"”, showing: ","」：":"”: ","一共":"","上滑：":": ","与「":"Chat with “","世界时钟":"World Clock","个":"items","个带文字的元素":"elements with text","个步骤":"steps","个闹钟":"alarms","个闹钟：":"alarms: ","主屏幕":"Home Screen","乐":"M","交给 AI 的任务":"Task for the AI","交还 AI":"Hand back","今天":"Today","今天，−13 小时":"Today, −13 hours","今天，−8 小时":"Today, −8 hours","从":"Swipe up from","任务已交给 AI，画面的手动操作已锁定":"Task handed to the AI; manual control of the screen is locked","任务控制":"Task controls","任务没能交给 AI。手动操作和设备面板不受影响。":"The task couldn't be handed to the AI. Manual control and the device panel still work.","任务记录":"Task history","伦敦":"London","你刚才接管过设备，先重新看一下界面再继续。":"You took over the device just now, so first a fresh look at the screen.","你在接管":"You're in control","你已接管：现在可以直接在画面上操作。":"You're in control: act on the screen directly now.","你拒绝了发送。消息还留在输入框里，没有发出。":"You declined to send. The message is still in the text field, not sent.","你拒绝了这一步，没有执行。":"You rejected this step; it wasn't done.","例如：秒表":"e.g. Stopwatch","信":"M","信任这台电脑":"Trust this computer","信息":"Messages","停止":"Stop","停止任务":"Stop task","停止这个任务？":"Stop this task?","健康":"Health","像素":"px","元素":"Elements","先写下要 AI 做的事，例如「打开设置，查看系统版本」。":"First write what the AI should do, for example “Open Settings and check the iOS version”.","先填要打开的链接":"Enter the link to open first","先填要等的文字。":"Enter the text to wait for first.","先看一下设备现在的界面。":"First a look at the device's screen.","先输入要打到设备上的文字":"Enter the text to type on the device first","全部就绪":"All ready","关":"off","关于本机":"About","内容填好了。发消息需要你先确认。":"The message is ready. Sending it needs your confirmation.","再点「关于本机」。":"Then tap “About”.","切到「":"Switched to “","切换到实际尺寸（100%）":"Actual size (100%)","切换视图":"Switch view","切换语言":"Switch language","列表里没有闹钟":"No alarms in the list","删除":"Delete","删除这条记录":"Delete this record","刷新":"Refresh","刷新 App 列表":"Refresh the app list","刷新画面":"Refresh the picture","前台":"Front","前台 App":"Foreground app","助手":"assistant","包含系统 App":"Include system apps","北京":"Beijing","去确认":"Review","发给「":"To “","发送":"Send","发送消息":"Send message","取消":"Cancel","只清除左侧的任务和步骤记录，不会影响设备上已经做过的操作。清空后无法恢复。":"Only clears the tasks and steps on the left; nothing already done on the device changes. This can't be undone.","名称":"Name","向上轻扫以打开":"Swipe up to open","向设备输入文字":"Type on the device","启动":"Start","启动、关闭 App":"Open and quit apps","周末":"Weekends","回到「信息」列表":"Back to the Messages list","回到主屏幕":"Back to the Home Screen","图":"M","在第":"Stopped at step","在设备「设置 › 隐私与安全性 › 开发者模式」里打开，重启后确认。":"Turn it on in Settings › Privacy & Security › Developer Mode on the device, then confirm after the restart.","地图":"Maps","型号名称":"Model Name","型号未知":"Unknown model","备忘录":"Notes","复位":"Reset","天气":"Weather","失败":"Failed","妈妈":"Mom","它不是可点的控件，界面没有变化":"it isn't a control, nothing changed","完成":"Done","实体按键":"Hardware buttons","实时画面":"Live","容量":"Capacity","就绪":"Ready","就绪检查":"Readiness","屏幕":"Screen","屏幕尺寸":"Screen size","工作日":"Weekdays","已中止":"Stopped","已交还 AI，它会先重新看一遍屏幕":"Handed back to the AI; it looks at the screen again first","已停止":"Stopped","已切换到":"Switched to","已删除这条记录":"Record deleted","已刷新演示画面":"Demo screen refreshed","已发送给「":"Sent to “","已回到主屏幕。":"Back on the Home Screen.","已安装的 App":"Installed apps","已完成":"Done","已批准，AI 继续执行":"Approved, the AI continues","已把「":"Sent “","已拒绝":"Rejected","已拒绝这一步":"Step rejected","已改为自动选择：继续控制":"Switched to automatic: still controlling","已显示设备面板":"Device panel shown","已暂停":"Paused","已清空操作记录":"History cleared","已用 IPHONE_UDID 固定设备，不能切换":"IPHONE_UDID pins the device, so it can't be switched","已用 Safari 打开":"Opened in Safari:","已经在控制这台设备":"Already controlling this device","已结束「":"Quit “","已自动解锁，回到主屏幕":"Unlocked automatically, back to the Home Screen","已设置密码":"Passcode set","已输入「":"Typed “","已连接":"Connected","已连接的设备":"Connected device","已锁定":"Locked","已锁屏":"Locked","已隐藏设备面板，点右上角「设备面板」可以再打开":"Device panel hidden; open it again with “Device panel” at the top right","应用":"Apps","底部有「闹钟」标签，点它。":"There's an “Alarms” tab at the bottom; tap it.","康":"H","开":"on","开发者模式":"Developer Mode","开始任务":"Start task","当前任务结束后可以发新任务":"A new task can start when this one ends","当前任务结束后可以重新执行":"Can run again when the current task ends","当前在「":"Now on “","当前界面没有带文字的元素。":"No elements with text on the current screen.","当前界面的元素":"Elements on screen","当前缩放比例，点击切换到实际尺寸":"Current zoom; click for actual size","当前设备":"Current device","待确认":"Confirm","快递通知":"Delivery","您的包裹已到驿站，凭取件码取件":"Your parcel is at the pickup point; bring your pickup code","想让设备做什么？":"What should the device do?","我晚点到":"I'll be late","手动操作已锁定，避免和 AI 同时点击。":"Manual control is locked so you and the AI don't tap at once.","打开":"On","打开「":"Open “","打开了「":"Opened “","打开了与「":"Opened the chat with “","打开链接":"Open links","执行中":"Running","执行任务的 AI":"AI that runs the task","执行任务的本地 AI":"Local AI that runs the task","执行步骤":"Steps","批准并执行":"Approve","找到":"Found","拒绝":"Reject","拖动调整宽度，双击恢复默认":"Drag to resize, double-click to reset","按一下主屏幕键。":"Press the Home button.","按名字点「":"Tap by name “","按名称或 bundle id 搜索":"Search by name or bundle id","按文字或类型筛选":"Filter by text or type","按窗口大小自动适应":"Fit to the window","接管":"Take over","接管中":"You're in control","控制台":"console","控制设备":"Device","搜索":"Search","搜索 App":"Search apps","摄":"C","操作失败":"Action failed","操作往返":"round trip","操作没有生效：":"That didn't take effect: ","操作通道":"Route","收起步骤":"Hide steps","放大画面":"Zoom in","放大（也可以按住 Ctrl/⌘ 滚动滚轮）":"Zoom in (or Ctrl/⌘ + scroll)","无线局域网":"Wi-Fi","日历":"Calendar","日期与时间":"Date & Time","时":"C","时钟":"Clock","明天的评审改到上午十点了":"Tomorrow's review moved to 10 a.m.","昨天":"Yesterday","显示与亮度":"Display & Brightness","晚上回来吃饭吗？":"Coming home for dinner tonight?","晴":"W","暂停":"Pause","未就绪":"Not ready","未设置":"Not set","未锁定":"Unlocked","查看":"Show","次计次":"","正在打开":"Opening","正在挂开发者镜像、启动 WebDriverAgent，最长约 2 分钟。期间截图和点击会改走 HID 后备。":"Mounting the developer disk image and starting WebDriverAgent, up to about 2 minutes. Meanwhile screenshots and taps use the HID fallback.","正在查找…":"Looking…","正在连接 iphone-control 服务…":"Connecting to the iphone-control service…","正在连接…":"Connecting…","正在连接画面…":"Connecting to the screen…","正在重新连接画面…":"Reconnecting the picture…","步":"steps","步停下了。已经做完的操作不会撤销。":". What was already done isn't undone.","步时的屏幕截图":"screen","步没走通：":"failed: ","没找到「iOS 版本」":"“iOS Version” not found","没有你自己安装的 App。勾上「包含系统 App」可以看到系统自带的。":"No apps you installed yourself. Check “Include system apps” to see the built-in ones.","没有名称或 bundle id 含「":"No app whose name or bundle id contains “","没有含「":"No element contains “","没有完成":"Not done","没有弹出键盘：先在画面里点一下输入框。":"No keyboard on screen: tap a text field on the screen first.","没有画面：画面来自设备上的 WebDriverAgent，它现在没有运行。3 秒后自动重试…":"No picture: it comes from WebDriverAgent on the device, which isn't running right now. Retrying in 3 s…","没有设备":"No device","没有读到 App。":"No apps were read.","没有这个接口（":"has no such endpoint (","清空":"Clear","清空全部操作记录？":"Clear all history?","清空记录":"Clear history","滑动":"Swipe","演示模式":"Demo","演示模式只内置了几个示例：查系统版本、看闹钟、秒表、发信息、回主屏幕、看屏幕。这条在模拟画面上做不了。":"The demo only knows a few examples: check the iOS version, look at alarms, the stopwatch, send a message, go Home, look at the screen. This one can't be done on the simulated screen.","演示模式只模拟 http(s) 链接，URL scheme 要连上真机才能试":"The demo only simulates http(s) links; try URL schemes with a real device","演示模式只能跑内置示例。连上服务后，这条指令会交给真正的 agent。":"The demo only runs its built-in examples. Connected to the service, this task goes to a real agent.","演示模式没有模拟计时器":"The demo doesn't simulate timers","演示模式没有模拟这一页":"The demo doesn't simulate this page","演示模式没有模拟这个 App。按主屏幕键或从底部上滑返回。":"The demo doesn't simulate this app. Press Home or swipe up from the bottom to go back.","演示模式没有模拟这个任务":"The demo doesn't simulate this task","演示模式：没有连上 iphone-control 服务。设备画面、App 列表、元素和 AI 的每一步都是本地模拟的。":"Demo mode: not connected to the iphone-control service. The screen, app list, elements and every AI step are simulated locally.","演示模式：没有连上 iphone-control 服务，画面是本地模拟的。":"Demo mode: not connected to the iphone-control service; the screen is simulated locally.","演示画面 · 本地模拟":"Demo screen · simulated locally","点「启动」。":"Tap “Start”.","点「读取」列出当前界面上带文字的元素。鼠标移上去会在画面上框出位置。":"Click “Read” to list the elements with text on the current screen. Hover one to outline it on the picture.","点一下底部的输入框。":"Tap the text field at the bottom.","点了":"Tapped","点击重新执行这条指令":"Click to run this task again","点它":"Tap","点底部的「秒表」。":"Tap “Stopwatch” at the bottom.","点开和「":"Open the chat with “","点按、滑动、长按":"Tap, swipe, long press","照":"P","照片":"Photos","状态":"Status","王磊":"Wang Lei","现在在「":"Now on “","用 USB 连上设备，确认数据线能传数据。":"Connect the device over USB with a cable that carries data.","用一句话描述目标。AI 会看真实屏幕，用下面这些现成的操作一步步完成；遇到付款、删除、发消息这类操作会先停下来等你确认。":"Describe the goal in a sentence. The AI looks at the real screen and gets there step by step with the actions below; before paying, deleting, sending a message and the like it stops and waits for you to confirm.","电池":"Battery","电话":"Phone","画面仍为 AI 保留，要自己操作先接管。":"The screen stays reserved for the AI; take over to act yourself.","画面断开":"Picture lost","画面断开 · 自动重试中":"Picture lost · retrying","画面缩放":"Zoom","界面上没找到「":"Couldn't find “","界面变了，":"The screen changed. ","相机":"Camera","看屏幕、读元素":"See the screen, read elements","确认删除":"Delete","确认前画面保持锁定。":"The screen stays locked until you confirm.","确认已经在主屏幕。":"Check that the Home Screen is in front.","确认秒表在走。":"Check that the stopwatch runs.","秒内没有出现「":"s passed without “","秒表":"Stopwatch","秒表已停止":"Stopwatch stopped","秒表已复位":"Stopwatch reset","秒表已经在计时":"The stopwatch is already running","秒表已经开始计时。":"The stopwatch has started.","秒表开始计时":"Stopwatch started","秒表时间":"Stopwatch time","秒表正在计时：":"Stopwatch running: ","秒表没有在计时":"The stopwatch isn't running","秒）":" s)","秒：演示模式没有模拟长按菜单":"s: the demo doesn't simulate long-press menus","空闲":"Idle","第":"Step","等「":"Waiting for “","等一段文字出现":"Wait for text","等你确认":"Needs you","等待 5 秒":"Wait 5 s","等待中…":"Waiting…","等待前一步":"waiting for the step before","筛选元素":"Filter elements","系统":"System","系统版本在「通用 › 关于本机」里，先点「通用」。":"The version is under General › About; tap “General” first.","纽约":"New York","结束":"Quit","结束「":"Quit “","继续":"Resume","继续执行":"Keep running","缩小画面":"Zoom out","缩小（也可以按住 Ctrl/⌘ 滚动滚轮）":"Zoom out (or Ctrl/⌘ + scroll)","自动解锁":"Auto-unlock","自动选择":"Automatic","蓝牙":"Bluetooth","计时器":"Timers","计次":"Lap","让 AI 操作你的 Apple 设备":"Let AI operate your Apple device","记":"N","记了第":"Recorded lap","设":"S","设备":"Device","设备实时画面：单击轻点，拖动或滚动滚轮滑动，按住长按":"Live device screen: click to tap, drag or scroll to swipe, hold to long-press","设备屏幕":"Device screen","设备按键和输入":"Device buttons and typing","设备的实时画面":"Live picture of the device","设备重启后还没解锁过，需要在设备上手动解锁一次。":"The device hasn't been unlocked since it restarted; unlock it by hand once.","设备重启后首次启用 UI 自动化，请在设备上输入锁屏密码。":"UI automation is starting for the first time since the restart; enter the passcode on the device.","设备面板":"Device panel","设置":"Settings","话":"P","请求失败（":"Request failed (","读一下列表里的闹钟。":"Read the alarms in the list.","读一下界面上带文字的元素。":"Read the elements with text on the screen.","读出「iOS 版本」这一行。":"Read the “iOS Version” row.","读取":"Read","调整 AI 助手栏宽度":"Resize the AI assistant column","调整设备面板宽度":"Resize the device panel","软件更新":"Software Update","轻点":"Tap","输入":"Type","输入并回车":"Type and press Return","输入文字":"Type text","输入框":"Text field","输入框是空的，没有发出任何内容":"The text field is empty, nothing was sent","输入框获得焦点，弹出了键盘":"The text field has focus and the keyboard is up","输入要发的内容。":"Type the message.","运行 <code>iphone-control sign</code>，用免费 Apple ID 签名并安装。":"Run <code>iphone-control sign</code> to sign and install it with a free Apple ID.","还不知道屏幕尺寸，稍后再试":"The screen size isn't known yet; try again shortly","还停在「":"Still on “","还在读取可用的 AI，稍等一下再试。":"Still reading the available AIs; try again in a moment.","还在连接服务，稍等一下再开始":"Still connecting to the service; start in a moment","还没有拿到守护进程状态。":"No daemon status yet.","这个位置在画面外面":"That point is outside the screen","这台机器上没有可用的 AI。安装并登录 Claude Code 或 Codex，再重新运行 iphone-control viewer。":"No AI is available on this machine. Install and log in to Claude Code or Codex, then run iphone-control viewer again.","这台机器的 PATH 里没有 claude 或 codex":"Neither claude nor codex is on this machine's PATH","这台设备的系统版本是 iOS 18.1。":"This device runs iOS 18.1.","这里没有可点的东西":"nothing to tap here","进入「":"Opened “","进行中":"in progress","连接中":"Connecting","适应":"Fit","通用":"General","通道":"Route","邮":"M","邮件":"Mail","重新执行":"Run again","重新执行：":"Run again: ","钱":"W","钱包":"Wallet","锁定屏幕":"Lock Screen","锁屏":"Lock","键盘":"Keyboard","长按":"Long press","闹钟":"Alarms","闹钟 ":"Alarm ","闹钟，":"Alarm, ","隐私与安全性":"Privacy & Security","隐藏设备面板":"Hide the device panel","需要你确认：":"Needs your confirmation: ","需要处理":"needs attention","音乐":"Music","音量减":"Volume down","音量减（演示画面没有变化）":"Volume down (no change on the demo screen)","音量加":"Volume up","音量加（演示画面没有变化）":"Volume up (no change on the demo screen)","页面刷新时这个任务还在执行，刷新后页面不再跟踪它的进度。":"This task was still running when the page reloaded, so the page no longer follows it.","（":" (","（未安装）":" (not installed)","（演示画面不加载网页）":" (the demo doesn't load web pages)","（演示）":" (demo)","）":")","，":", ","：":": ","：演示画面不支持滚动":": the demo screen doesn't scroll","看一下屏幕":"Look at the screen","读取屏幕上的内容":"Read what's on the screen","查看手机状态":"Check the phone's status","点击屏幕":"Tap the screen","点击":"Tap","长按屏幕":"Long-press the screen","滑动屏幕":"Swipe the screen","按主屏幕键":"Press Home","按键":"Press a button","打开 App":"Open","关闭":"Quit","等待":"Wait for","出现":"to appear","查看已安装的 App":"List installed apps","查看已连接的设备":"List connected devices","连续执行几步操作":"Run a few steps in a row","请你确认":"Ask you to confirm","操作手机":"Operate the phone","这一步没成功":"This step didn't work","另一台设备":"another device","设备已在别处切换到":"The device was switched elsewhere to","，画面已跟过去":"; the picture follows it","没有连上设备：用数据线连上 iPhone，确认数据线能传数据。":"No device connected: connect the iPhone with a cable that carries data.","还没设置好（配对、开发者模式）。在终端运行":"isn’t set up yet (pairing, Developer Mode). In a terminal, run","，选「手机」。":" and pick Phone.","上还没装 WebDriverAgent。":"doesn’t have WebDriverAgent yet.","正在签名安装…":"Signing and installing…","签名并安装 WDA":"Sign and install WDA","上还没装 WebDriverAgent，需要先登录 Apple ID：在终端运行":"doesn’t have WebDriverAgent yet, and an Apple ID is needed to sign it: in a terminal, run","，选「Apple ID」。":" and pick Apple ID.","正在":"Starting WebDriverAgent on","上启动 WebDriverAgent，通常 10–60 秒…":"— usually 10–60 seconds…","设备重启后还没解锁过，在设备上手动解锁一次，画面就会出来。":"The device hasn’t been unlocked since it restarted. Unlock it once by hand and the picture appears.","正在签名并安装 WebDriverAgent，大约 1–2 分钟，保持手机解锁…":"Signing and installing WebDriverAgent, about 1–2 minutes; keep the phone unlocked…","运行 <code>iphone-control setup --reconfigure</code> 选「手机」，在设备上点「信任」。":"Run <code>iphone-control setup --reconfigure</code>, pick Phone, and tap “Trust” on the device.","：WebDriverAgent 启动失败，会自动重试":": WebDriverAgent failed to start; retrying automatically","不可用":"Unavailable","正在挂开发者镜像、启动 WebDriverAgent，最长约 2 分钟。这台设备低于 iOS 27，没有 HID 后备，期间不能截图和操作。":"Mounting the developer disk image and starting WebDriverAgent, up to about 2 minutes. This device is below iOS 27, so there is no HID fallback: no screenshots or actions until then.","重新签名并安装 WDA":"Re-sign and install WDA"};
+const EN = {" · 演示数据":" · demo data"," 等":" and more","<div class=\"ph-kb\" data-type=\"Keyboard\">键盘</div>":"<div class=\"ph-kb\" data-type=\"Keyboard\">Keyboard</div>","<li class=\"empty-note\">打开这一页时会读取已安装的 App。</li>":"<li class=\"empty-note\">The installed apps are read when this tab opens.</li>","<li class=\"sr-only\">正在读取 App 列表…</li>":"<li class=\"sr-only\">Reading the app list…</li>","<li class=\"sr-only\">正在读取元素…</li>":"<li class=\"sr-only\">Reading elements…</li>","<option>没有可用的 AI</option>":"<option>No AI available</option>","<p class=\"empty-note\">正在连接 iphone-control 服务…</p>":"<p class=\"empty-note\">Connecting to the iphone-control service…</p>","<span class=\"chip\"><span class=\"chip-dot warn\"></span><span>演示模式</span></span>":"<span class=\"chip\"><span class=\"chip-dot warn\"></span><span>Demo</span></span>","AI 任务已停止":"AI task stopped","AI 任务已完成":"AI task done","AI 任务没有完成":"AI task not done","AI 任务的事件流断开了，正在重连…":"Lost the AI task's event stream, reconnecting…","AI 会立刻停下。已经在设备上做完的操作不会撤销。":"The AI stops right away. What it already did on the device isn't undone.","AI 助手":"AI assistant","AI 在等你确认一步操作":"The AI is waiting for you to confirm a step","AI 在等你确认一步操作，确认前画面保持锁定。":"The AI is waiting for you to confirm a step; the screen stays locked until you do.","AI 已暂停":"AI paused","AI 已暂停。交还后它会先重新看一遍屏幕。":"The AI is paused. When you hand back, it looks at the screen again first.","AI 正在操作这台设备":"The AI is operating this device","AI 正在操作这台设备。要自己操作，先点「接管」。":"The AI is operating this device. To act yourself, click “Take over” first.","AI 继续执行":"AI resumed","AI 能用的操作":"Actions the AI can use","Enter 发送 · Shift+Enter 换行":"Enter to send · Shift+Enter for a new line","HID 后备":"HID fallback","USB 连接":"USB connection","WDA 已签名安装":"WDA signed and installed","WDA 运行中":"WDA running","https://… 或 App 的 URL scheme":"https://… or an app's URL scheme","iMessage 信息":"iMessage","iOS 版本":"iOS Version","iPad mini（第 6 代）":"iPad mini (6th generation)","iphone-control 控制台":"iphone-control console","、":", ","。":".","。可以换个说法再试，或者接管后手动完成。":". Try rephrasing, or take over and finish by hand.","「":"“","」":"”","」。":"”.","」。界面可能已经变了，需要重新截图判断。":"” on the screen. It may have changed; take a new screenshot.","」出现，最多 5 秒":"” to appear, up to 5 s","」发给「":"” to “","」已在前台":"” is in front","」已经出现（":"” appeared (","」的 App。":"”.","」的元素。":"”.","」的对话":"”","」的对话。":"”.","」，能看到：":"”, showing: ","」：":"”: ","一共":"","上滑：":": ","与「":"Chat with “","世界时钟":"World Clock","个":"items","个带文字的元素":"elements with text","个步骤":"steps","个闹钟":"alarms","个闹钟：":"alarms: ","主屏幕":"Home Screen","乐":"M","交给 AI 的任务":"Task for the AI","交还 AI":"Hand back","今天":"Today","今天，−13 小时":"Today, −13 hours","今天，−8 小时":"Today, −8 hours","从":"Swipe up from","任务已交给 AI，画面的手动操作已锁定":"Task handed to the AI; manual control of the screen is locked","任务控制":"Task controls","任务没能交给 AI。手动操作和设备面板不受影响。":"The task couldn't be handed to the AI. Manual control and the device panel still work.","任务记录":"Task history","伦敦":"London","你刚才接管过设备，先重新看一下界面再继续。":"You took over the device just now, so first a fresh look at the screen.","你在接管":"You're in control","你已接管：现在可以直接在画面上操作。":"You're in control: act on the screen directly now.","你拒绝了发送。消息还留在输入框里，没有发出。":"You declined to send. The message is still in the text field, not sent.","你拒绝了这一步，没有执行。":"You rejected this step; it wasn't done.","例如：秒表":"e.g. Stopwatch","信":"M","信任这台电脑":"Trust this computer","信息":"Messages","停止":"Stop","停止任务":"Stop task","停止这个任务？":"Stop this task?","健康":"Health","像素":"px","元素":"Elements","先写下要 AI 做的事，例如「打开设置，查看系统版本」。":"First write what the AI should do, for example “Open Settings and check the iOS version”.","先填要打开的链接":"Enter the link to open first","先填要等的文字。":"Enter the text to wait for first.","先看一下设备现在的界面。":"First a look at the device's screen.","先输入要打到设备上的文字":"Enter the text to type on the device first","全部就绪":"All ready","关":"off","关于本机":"About","内容填好了。发消息需要你先确认。":"The message is ready. Sending it needs your confirmation.","再点「关于本机」。":"Then tap “About”.","切到「":"Switched to “","切换到实际尺寸（100%）":"Actual size (100%)","切换视图":"Switch view","切换语言":"Switch language","列表里没有闹钟":"No alarms in the list","删除":"Delete","删除这条记录":"Delete this record","刷新":"Refresh","刷新 App 列表":"Refresh the app list","刷新画面":"Refresh the picture","前台":"Front","前台 App":"Foreground app","助手":"assistant","包含系统 App":"Include system apps","北京":"Beijing","去确认":"Review","发给「":"To “","发送":"Send","发送消息":"Send message","取消":"Cancel","只清除任务和步骤记录，不会影响设备上已经做过的操作。清空后无法恢复。":"Only clears the tasks and steps on the left; nothing already done on the device changes. This can't be undone.","名称":"Name","向上轻扫以打开":"Swipe up to open","向设备输入文字":"Type on the device","启动":"Start","启动、关闭 App":"Open and quit apps","周末":"Weekends","回到「信息」列表":"Back to the Messages list","回到主屏幕":"Back to the Home Screen","图":"M","在第":"Stopped at step","在设备「设置 › 隐私与安全性 › 开发者模式」里打开，重启后确认。":"Turn it on in Settings › Privacy & Security › Developer Mode on the device, then confirm after the restart.","地图":"Maps","型号名称":"Model Name","型号未知":"Unknown model","备忘录":"Notes","复位":"Reset","天气":"Weather","失败":"Failed","妈妈":"Mom","它不是可点的控件，界面没有变化":"it isn't a control, nothing changed","完成":"Done","实体按键":"Hardware buttons","实时画面":"Live","容量":"Capacity","就绪":"Ready","就绪检查":"Readiness","屏幕":"Screen","屏幕尺寸":"Screen size","工作日":"Weekdays","已中止":"Stopped","已交还 AI，它会先重新看一遍屏幕":"Handed back to the AI; it looks at the screen again first","已停止":"Stopped","已切换到":"Switched to","已删除这条记录":"Record deleted","已刷新演示画面":"Demo screen refreshed","已发送给「":"Sent to “","已回到主屏幕。":"Back on the Home Screen.","已安装的 App":"Installed apps","已完成":"Done","已批准，AI 继续执行":"Approved, the AI continues","已把「":"Sent “","已拒绝":"Rejected","已拒绝这一步":"Step rejected","已改为自动选择：继续控制":"Switched to automatic: still controlling","已显示设备面板":"Device panel shown","已暂停":"Paused","已清空操作记录":"History cleared","已用 IPHONE_UDID 固定设备，不能切换":"IPHONE_UDID pins the device, so it can't be switched","已用 Safari 打开":"Opened in Safari:","已经在控制这台设备":"Already controlling this device","已结束「":"Quit “","已自动解锁，回到主屏幕":"Unlocked automatically, back to the Home Screen","已设置密码":"Passcode set","已输入「":"Typed “","已连接":"Connected","已连接的设备":"Connected device","已锁定":"Locked","已锁屏":"Locked","已隐藏设备面板，点左上角「设备面板」可以再打开":"Device panel hidden; open it again with “Device panel” at the top right","应用":"Apps","底部有「闹钟」标签，点它。":"There's an “Alarms” tab at the bottom; tap it.","康":"H","开":"on","开发者模式":"Developer Mode","开始任务":"Start task","当前任务结束后可以发新任务":"A new task can start when this one ends","当前任务结束后可以重新执行":"Can run again when the current task ends","当前在「":"Now on “","当前界面没有带文字的元素。":"No elements with text on the current screen.","当前界面的元素":"Elements on screen","当前缩放比例，点击切换到实际尺寸":"Current zoom; click for actual size","当前设备":"Current device","待确认":"Confirm","快递通知":"Delivery","您的包裹已到驿站，凭取件码取件":"Your parcel is at the pickup point; bring your pickup code","想让设备做什么？":"What should the device do?","我晚点到":"I'll be late","手动操作已锁定，避免和 AI 同时点击。":"Manual control is locked so you and the AI don't tap at once.","打开":"On","打开「":"Open “","打开了「":"Opened “","打开了与「":"Opened the chat with “","打开链接":"Open links","执行中":"Running","执行任务的 AI":"AI that runs the task","执行任务的本地 AI":"Local AI that runs the task","执行步骤":"Steps","批准并执行":"Approve","找到":"Found","拒绝":"Reject","拖动调整宽度，双击恢复默认":"Drag to resize, double-click to reset","按一下主屏幕键。":"Press the Home button.","按名字点「":"Tap by name “","按名称或 bundle id 搜索":"Search by name or bundle id","按文字或类型筛选":"Filter by text or type","按窗口大小自动适应":"Fit to the window","接管":"Take over","接管中":"You're in control","控制台":"console","控制设备":"Device","搜索":"Search","搜索 App":"Search apps","摄":"C","操作失败":"Action failed","操作往返":"round trip","操作没有生效：":"That didn't take effect: ","操作通道":"Route","收起步骤":"Hide steps","放大画面":"Zoom in","放大（也可以按住 Ctrl/⌘ 滚动滚轮）":"Zoom in (or Ctrl/⌘ + scroll)","无线局域网":"Wi-Fi","日历":"Calendar","日期与时间":"Date & Time","时":"C","时钟":"Clock","明天的评审改到上午十点了":"Tomorrow's review moved to 10 a.m.","昨天":"Yesterday","显示与亮度":"Display & Brightness","晚上回来吃饭吗？":"Coming home for dinner tonight?","晴":"W","暂停":"Pause","未就绪":"Not ready","未设置":"Not set","未锁定":"Unlocked","查看":"Show","次计次":"","正在打开":"Opening","正在挂开发者镜像、启动 WebDriverAgent，最长约 2 分钟。期间截图和点击会改走 HID 后备。":"Mounting the developer disk image and starting WebDriverAgent, up to about 2 minutes. Meanwhile screenshots and taps use the HID fallback.","正在查找…":"Looking…","正在连接 iphone-control 服务…":"Connecting to the iphone-control service…","正在连接…":"Connecting…","正在连接画面…":"Connecting to the screen…","正在重新连接画面…":"Reconnecting the picture…","步":"steps","步停下了。已经做完的操作不会撤销。":". What was already done isn't undone.","步时的屏幕截图":"screen","步没走通：":"failed: ","没找到「iOS 版本」":"“iOS Version” not found","没有你自己安装的 App。勾上「包含系统 App」可以看到系统自带的。":"No apps you installed yourself. Check “Include system apps” to see the built-in ones.","没有名称或 bundle id 含「":"No app whose name or bundle id contains “","没有含「":"No element contains “","没有完成":"Not done","没有弹出键盘：先在画面里点一下输入框。":"No keyboard on screen: tap a text field on the screen first.","没有画面：画面来自设备上的 WebDriverAgent，它现在没有运行。3 秒后自动重试…":"No picture: it comes from WebDriverAgent on the device, which isn't running right now. Retrying in 3 s…","没有设备":"No device","没有读到 App。":"No apps were read.","没有这个接口（":"has no such endpoint (","清空":"Clear","清空全部操作记录？":"Clear all history?","清空记录":"Clear history","滑动":"Swipe","演示模式":"Demo","演示模式只内置了几个示例：查系统版本、看闹钟、秒表、发信息、回主屏幕、看屏幕。这条在模拟画面上做不了。":"The demo only knows a few examples: check the iOS version, look at alarms, the stopwatch, send a message, go Home, look at the screen. This one can't be done on the simulated screen.","演示模式只模拟 http(s) 链接，URL scheme 要连上真机才能试":"The demo only simulates http(s) links; try URL schemes with a real device","演示模式只能跑内置示例。连上服务后，这条指令会交给真正的 agent。":"The demo only runs its built-in examples. Connected to the service, this task goes to a real agent.","演示模式没有模拟计时器":"The demo doesn't simulate timers","演示模式没有模拟这一页":"The demo doesn't simulate this page","演示模式没有模拟这个 App。按主屏幕键或从底部上滑返回。":"The demo doesn't simulate this app. Press Home or swipe up from the bottom to go back.","演示模式没有模拟这个任务":"The demo doesn't simulate this task","演示模式：没有连上 iphone-control 服务。设备画面、App 列表、元素和 AI 的每一步都是本地模拟的。":"Demo mode: not connected to the iphone-control service. The screen, app list, elements and every AI step are simulated locally.","演示模式：没有连上 iphone-control 服务，画面是本地模拟的。":"Demo mode: not connected to the iphone-control service; the screen is simulated locally.","演示画面 · 本地模拟":"Demo screen · simulated locally","点「启动」。":"Tap “Start”.","点「读取」列出当前界面上带文字的元素。鼠标移上去会在画面上框出位置。":"Click “Read” to list the elements with text on the current screen. Hover one to outline it on the picture.","点一下底部的输入框。":"Tap the text field at the bottom.","点了":"Tapped","点击重新执行这条指令":"Click to run this task again","点它":"Tap","点底部的「秒表」。":"Tap “Stopwatch” at the bottom.","点开和「":"Open the chat with “","点按、滑动、长按":"Tap, swipe, long press","照":"P","照片":"Photos","状态":"Status","王磊":"Wang Lei","现在在「":"Now on “","用 USB 连上设备，确认数据线能传数据。":"Connect the device over USB with a cable that carries data.","用一句话描述目标。AI 会看真实屏幕，用下面这些现成的操作一步步完成；遇到付款、删除、发消息这类操作会先停下来等你确认。":"Describe the goal in a sentence. The AI looks at the real screen and gets there step by step with the actions below; before paying, deleting, sending a message and the like it stops and waits for you to confirm.","电池":"Battery","电话":"Phone","画面仍为 AI 保留，要自己操作先接管。":"The screen stays reserved for the AI; take over to act yourself.","画面断开":"Picture lost","画面断开 · 自动重试中":"Picture lost · retrying","画面缩放":"Zoom","界面上没找到「":"Couldn't find “","界面变了，":"The screen changed. ","相机":"Camera","看屏幕、读元素":"See the screen, read elements","确认删除":"Delete","确认前画面保持锁定。":"The screen stays locked until you confirm.","确认已经在主屏幕。":"Check that the Home Screen is in front.","确认秒表在走。":"Check that the stopwatch runs.","秒内没有出现「":"s passed without “","秒表":"Stopwatch","秒表已停止":"Stopwatch stopped","秒表已复位":"Stopwatch reset","秒表已经在计时":"The stopwatch is already running","秒表已经开始计时。":"The stopwatch has started.","秒表开始计时":"Stopwatch started","秒表时间":"Stopwatch time","秒表正在计时：":"Stopwatch running: ","秒表没有在计时":"The stopwatch isn't running","秒）":" s)","秒：演示模式没有模拟长按菜单":"s: the demo doesn't simulate long-press menus","空闲":"Idle","第":"Step","等「":"Waiting for “","等一段文字出现":"Wait for text","等你确认":"Needs you","等待 5 秒":"Wait 5 s","等待中…":"Waiting…","等待前一步":"waiting for the step before","筛选元素":"Filter elements","系统":"System","系统版本在「通用 › 关于本机」里，先点「通用」。":"The version is under General › About; tap “General” first.","纽约":"New York","结束":"Quit","结束「":"Quit “","继续":"Resume","继续执行":"Keep running","缩小画面":"Zoom out","缩小（也可以按住 Ctrl/⌘ 滚动滚轮）":"Zoom out (or Ctrl/⌘ + scroll)","自动解锁":"Auto-unlock","自动选择":"Automatic","蓝牙":"Bluetooth","计时器":"Timers","计次":"Lap","让 AI 操作你的 Apple 设备":"Let AI operate your Apple device","记":"N","记了第":"Recorded lap","设":"S","设备":"Device","设备实时画面：单击轻点，拖动或滚动滚轮滑动，按住长按":"Live device screen: click to tap, drag or scroll to swipe, hold to long-press","设备屏幕":"Device screen","设备按键和输入":"Device buttons and typing","设备的实时画面":"Live picture of the device","设备重启后还没解锁过，需要在设备上手动解锁一次。":"The device hasn't been unlocked since it restarted; unlock it by hand once.","设备重启后首次启用 UI 自动化，请在设备上输入锁屏密码。":"UI automation is starting for the first time since the restart; enter the passcode on the device.","设备面板":"Device panel","设置":"Settings","话":"P","请求失败（":"Request failed (","读一下列表里的闹钟。":"Read the alarms in the list.","读一下界面上带文字的元素。":"Read the elements with text on the screen.","读出「iOS 版本」这一行。":"Read the “iOS Version” row.","读取":"Read","调整 AI 助手栏宽度":"Resize the AI assistant column","调整设备面板宽度":"Resize the device panel","软件更新":"Software Update","轻点":"Tap","输入":"Type","输入并回车":"Type and press Return","输入文字":"Type text","输入框":"Text field","输入框是空的，没有发出任何内容":"The text field is empty, nothing was sent","输入框获得焦点，弹出了键盘":"The text field has focus and the keyboard is up","输入要发的内容。":"Type the message.","运行 <code>iphone-control sign</code>，用免费 Apple ID 签名并安装。":"Run <code>iphone-control sign</code> to sign and install it with a free Apple ID.","还不知道屏幕尺寸，稍后再试":"The screen size isn't known yet; try again shortly","还停在「":"Still on “","还在读取可用的 AI，稍等一下再试。":"Still reading the available AIs; try again in a moment.","还在连接服务，稍等一下再开始":"Still connecting to the service; start in a moment","还没有拿到守护进程状态。":"No daemon status yet.","这个位置在画面外面":"That point is outside the screen","这台机器上没有可用的 AI。安装并登录 Claude Code 或 Codex，再重新运行 iphone-control viewer。":"No AI is available on this machine. Install and log in to Claude Code or Codex, then run iphone-control viewer again.","这台机器的 PATH 里没有 claude 或 codex":"Neither claude nor codex is on this machine's PATH","这台设备的系统版本是 iOS 18.1。":"This device runs iOS 18.1.","这里没有可点的东西":"nothing to tap here","进入「":"Opened “","进行中":"in progress","连接中":"Connecting","适应":"Fit","通用":"General","通道":"Route","邮":"M","邮件":"Mail","重新执行":"Run again","重新执行：":"Run again: ","钱":"W","钱包":"Wallet","锁定屏幕":"Lock Screen","锁屏":"Lock","键盘":"Keyboard","长按":"Long press","闹钟":"Alarms","闹钟 ":"Alarm ","闹钟，":"Alarm, ","隐私与安全性":"Privacy & Security","隐藏设备面板":"Hide the device panel","需要你确认：":"Needs your confirmation: ","需要处理":"needs attention","音乐":"Music","音量减":"Volume down","音量减（演示画面没有变化）":"Volume down (no change on the demo screen)","音量加":"Volume up","音量加（演示画面没有变化）":"Volume up (no change on the demo screen)","页面刷新时这个任务还在执行，刷新后页面不再跟踪它的进度。":"This task was still running when the page reloaded, so the page no longer follows it.","（":" (","（未安装）":" (not installed)","（演示画面不加载网页）":" (the demo doesn't load web pages)","（演示）":" (demo)","）":")","，":", ","：":": ","：演示画面不支持滚动":": the demo screen doesn't scroll","看一下屏幕":"Look at the screen","读取屏幕上的内容":"Read what's on the screen","查看手机状态":"Check the phone's status","点击屏幕":"Tap the screen","点击":"Tap","长按屏幕":"Long-press the screen","滑动屏幕":"Swipe the screen","按主屏幕键":"Press Home","按键":"Press a button","打开 App":"Open","关闭":"Quit","等待":"Wait for","出现":"to appear","查看已安装的 App":"List installed apps","查看已连接的设备":"List connected devices","连续执行几步操作":"Run a few steps in a row","请你确认":"Ask you to confirm","操作手机":"Operate the phone","这一步没成功":"This step didn't work","另一台设备":"another device","设备已在别处切换到":"The device was switched elsewhere to","，画面已跟过去":"; the picture follows it","没有连上设备：用数据线连上 iPhone，确认数据线能传数据。":"No device connected: connect the iPhone with a cable that carries data.","还没设置好（配对、开发者模式）。在终端运行":"isn’t set up yet (pairing, Developer Mode). In a terminal, run","，选「手机」。":" and pick Phone.","上还没装 WebDriverAgent。":"doesn’t have WebDriverAgent yet.","正在签名安装…":"Signing and installing…","签名并安装 WDA":"Sign and install WDA","上还没装 WebDriverAgent，需要先登录 Apple ID：在终端运行":"doesn’t have WebDriverAgent yet, and an Apple ID is needed to sign it: in a terminal, run","，选「Apple ID」。":" and pick Apple ID.","正在":"Starting WebDriverAgent on","上启动 WebDriverAgent，通常 10–60 秒…":"— usually 10–60 seconds…","设备重启后还没解锁过，在设备上手动解锁一次，画面就会出来。":"The device hasn’t been unlocked since it restarted. Unlock it once by hand and the picture appears.","正在签名并安装 WebDriverAgent，大约 1–2 分钟，保持手机解锁…":"Signing and installing WebDriverAgent, about 1–2 minutes; keep the phone unlocked…","运行 <code>iphone-control setup --reconfigure</code> 选「手机」，在设备上点「信任」。":"Run <code>iphone-control setup --reconfigure</code>, pick Phone, and tap “Trust” on the device.","：WebDriverAgent 启动失败，会自动重试":": WebDriverAgent failed to start; retrying automatically","不可用":"Unavailable","正在挂开发者镜像、启动 WebDriverAgent，最长约 2 分钟。这台设备低于 iOS 27，没有 HID 后备，期间不能截图和操作。":"Mounting the developer disk image and starting WebDriverAgent, up to about 2 minutes. This device is below iOS 27, so there is no HID fallback: no screenshots or actions until then.","重新签名并安装 WDA":"Re-sign and install WDA"};
+Object.assign(EN, {
+  '外观':'Appearance', '界面字号':'Text size', '标准':'Standard', '大':'Large', '特大':'Extra large',
+  '明暗':'Theme', '跟随系统':'System', '浅色':'Light', '深色':'Dark', '完成':'Done'
+});
 /* 中文原文 → 当前语言 */
+Object.assign(EN, { '画面已连接 · 等待屏幕尺寸和方向，仅可观看':'Picture connected · waiting for screen dimensions and orientation (view only)', '没有收到设备画面，3 秒后自动重试。':'No picture received. Retrying in 3 seconds.' });
 function tr(zh) { return LANG === 'en' ? (EN[zh] ?? zh) : zh; }
 /* 静态标记里的文字和提示（aria-label、title、placeholder、alt）开始时译一次 */
 (function translateStatic() {
@@ -980,14 +1065,17 @@ const ACTIVE = ['running', 'paused', 'takeover', 'waiting'];
 const badge = st => `<span class="badge tone-${st.tone}">${icon(st.icon, st.icon === 'loader' ? 'spin' : '')}<span>${esc(st.label)}</span></span>`;
 
 /* ---------- 元素与状态 ---------- */
-const shell = $('#shell'), stage = $('#stage'), frame = $('#frame'), live = $('#live'), demoEl = $('#demo'), marks = $('#marks'), stageMsg = $('#stage-msg');
+const shell = $('#shell'), stage = $('#stage'), frame = $('#frame'), demoEl = $('#demo'), marks = $('#marks'), stageMsg = $('#stage-msg');
 const statusEl = $('#status'), promptEl = $('#prompt'), promptErr = $('#prompt-error'), typeEl = $('#type-text');
 const turnsEl = $('#turns'), stopDialog = $('#stop-dialog'), deviceEl = $('#device');
 
+let live = $('#live');
+let feedId = '', feedEpoch = 0, retryTimer = 0, infoSequence = 0;
+let frameWidth = 0, frameHeight = 0;
 const S = {
   mode: 'detecting',            // detecting | live | demo
-  size: null, stream: 'connecting', rtt: null,
-  view: 'agent', devOpen: false, devTab: 'status',
+  display: null, family: 'unknown', stream: 'connecting', rtt: null,
+  view: 'screen', devOpen: false, devTab: 'status',
   daemon: null, dstatus: null, statusErr: '',
   devices: [], devicesErr: '',
   apps: [], appsState: 'idle', appsErr: '',
@@ -1043,13 +1131,21 @@ const SETTINGS = {
   about: { title: tr('关于本机'), back: [tr('通用'), 'set:general'], groups: [[[tr('名称'), 'iPhone', null], [tr('iOS 版本'), '18.1', null], [tr('型号名称'), 'iPhone 15 Pro', null], [tr('容量'), '256 GB', null]]] }
 };
 const DEMO_DEVICES = [
-  { udid: '00008130-001A2B3C4D5E001E', name: 'iPhone 15 Pro', model: 'iPhone16,1', ios: '18.1', kind: 'iphone', w: 393, h: 852 },
-  { udid: '00008112-000C1D2E3F4A5B6C', name: tr('iPad mini（第 6 代）'), model: 'iPad14,1', ios: '18.1', kind: 'ipad', w: 1133, h: 744 }  // iPad 默认横屏
+  { udid: '00008130-001A2B3C4D5E001E', name: 'iPhone 15 Pro', model: 'iPhone16,1', model_name: 'iPhone 15 Pro', family: 'iphone', ios: '18.1', kind: 'iphone', w: 393, h: 852 },
+  { udid: '00008112-000C1D2E3F4A5B6C', name: tr('iPad mini（第 6 代）'), model: 'iPad14,1', model_name: tr('iPad mini（第 6 代）'), family: 'ipad', ios: '18.1', kind: 'ipad', w: 1133, h: 744 }  // iPad 默认横屏
 ];
 let demoDev = DEMO_DEVICES[0];
 const DW = () => demoDev.w, DH = () => demoDev.h;
-const isPad = dev => dev && (dev.kind === 'ipad' || /^iPad/.test(dev.model || ''));
-const osName = dev => isPad(dev) ? 'iPadOS' : 'iOS';
+function osVersion(device) {
+  const family = device.family ?? (/^iPad[0-9]+,[0-9]+$/.test(device.model) ? 'ipad' : /^iPhone[0-9]+,[0-9]+$/.test(device.model) ? 'iphone' : 'unknown');
+  const system = family === 'ipad' ? 'iPadOS' : family === 'iphone' ? 'iOS' : '';
+  return device.ios ? [system, device.ios].filter(Boolean).join(' ') : '';
+}
+function deviceOptionLabel(device) {
+  const model = device.model_name || device.model;
+  if (device.name && model && device.name !== model) return device.name + ' · ' + model;
+  return device.name || model || device.udid;
+}
 
 const D = {
   screen: 'home', clockTab: 'world', setPage: 'root', generic: '', genericSub: '',
@@ -1189,14 +1285,16 @@ function demoElements() {
  * ================================================================ */
 function dims() {
   if (S.mode === 'demo') return { W: DW(), H: DH() };
-  if (!S.size) return null;
-  const land = live.naturalWidth > live.naturalHeight;
-  return land ? { W: S.size.h, H: S.size.w } : { W: S.size.w, H: S.size.h };
+  if (!S.display?.id || S.switching || S.stream !== 'ok' || !live.naturalHeight) return null;
+  const { width, height, rotation } = S.display;
+  if (!(width > 0 && height > 0) || ![0, 90, 180, 270].includes(rotation)) return null;
+  const land = rotation === 90 || rotation === 270;
+  const W = land ? height : width, H = land ? width : height;
+  return Math.abs(live.naturalWidth / live.naturalHeight / (W / H) - 1) <= 0.01 ? { W, H } : null;
 }
 function setRatio(w, h) {
   stage.style.aspectRatio = `${w} / ${h}`; frame.style.setProperty('--ratio', String(w / h));
-  // 短边/长边 > 0.6 是 iPad（约 0.66–0.77），iPhone 约 0.46；横竖屏都适用
-  frame.dataset.kind = Math.min(w, h) / Math.max(w, h) > 0.6 ? 'ipad' : 'iphone';
+  frame.dataset.kind = S.mode === 'demo' ? demoDev.kind : S.family;
   applyZoom();
 }
 function applyDemoGeometry() {
@@ -1205,17 +1303,19 @@ function applyDemoGeometry() {
   requestAnimationFrame(() => demoEl.style.setProperty('--k', String(stage.clientWidth / DW())));
 }
 function syncMarksBox() { const d = dims(); if (d) marks.setAttribute('viewBox', `0 0 ${d.W} ${d.H}`); }
-function toPoints(cx, cy) {
-  const d = dims(); if (!d) return null;
+function pictureRect() {
   const r = stage.getBoundingClientRect();
-  let w = r.width, h = r.height, ox = 0, oy = 0;
-  if (S.mode === 'live' && live.naturalWidth) {
-    const sc = Math.min(r.width / live.naturalWidth, r.height / live.naturalHeight);
-    w = live.naturalWidth * sc; h = live.naturalHeight * sc; ox = (r.width - w) / 2; oy = (r.height - h) / 2;
-  }
-  const fx = (cx - r.left - ox) / w, fy = (cy - r.top - oy) / h;
-  if (fx < 0 || fx > 1 || fy < 0 || fy > 1) return null;
-  return { x: round1(fx * d.W), y: round1(fy * d.H) };
+  if (S.mode !== 'live') return r;
+  const k = Math.min(r.width / live.naturalWidth, r.height / live.naturalHeight);
+  const width = k * live.naturalWidth, height = k * live.naturalHeight;
+  return { left: r.left + (r.width - width) / 2, top: r.top + (r.height - height) / 2, width, height };
+}
+function toPoints(cx, cy, clamp = false) {
+  const d = dims(); if (!d) return null;
+  const r = pictureRect(); if (!r.width || !r.height) return null;
+  const x = (cx - r.left) / r.width, y = (cy - r.top) / r.height;
+  if (!clamp && (x < 0 || x > 1 || y < 0 || y > 1)) return null;
+  return { x: round1(Math.min(1, Math.max(0, x)) * d.W), y: round1(Math.min(1, Math.max(0, y)) * d.H) };
 }
 new ResizeObserver(() => { demoEl.style.setProperty('--k', String(stage.clientWidth / DW())); }).observe(stage);
 
@@ -1244,7 +1344,7 @@ function drawMark(kind, who, p, p2) {
 let hlRect = null;
 function highlight(el) {
   hlRect?.remove(); hlRect = null;
-  if (!el || !el.width) return;
+  if (!el || !el.width || !dims()) return;
   hlRect = svgEl('rect', { x: el.x, y: el.y, width: el.width, height: el.height, rx: 6, class: 'mk-hl' });
   marks.append(hlRect);
 }
@@ -1252,11 +1352,11 @@ function highlight(el) {
 /* ================================================================
  * 请求
  * ================================================================ */
-async function api(path, body) {
+async function api(path, body, device = S.udid) {
   const opt = body === undefined ? {} : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) };
   opt.headers = { ...(opt.headers || {}), 'X-Ictl-Lang': LANG };
   // 操作只发给本页显示的那台；守护进程已换到别的设备时会被拒绝，不会点到用户没在看的手机上
-  if (S.udid) opt.headers['X-Ictl-Device'] = S.udid;
+  if (device) opt.headers['X-Ictl-Device'] = device;
   const r = await fetch(path, opt);
   if (!r.ok) {
     let msg = '';
@@ -1267,9 +1367,11 @@ async function api(path, body) {
   return r.json();
 }
 async function act(path, body, quiet) {
-  const t0 = performance.now();
+  if (S.mode === 'live' && path !== '/api/select' && (S.switching || !S.udid)) return { ok: false };
+  const t0 = performance.now(), epoch = feedEpoch;
   try {
     const v = await api(path, body);
+    if (epoch !== feedEpoch) return v;
     S.rtt = Math.round(performance.now() - t0); renderFeed();
     // 画面上的手势、底栏的按键和输入：成功时不弹提示，画面本身就是结果；失败照样提示
     if (!quiet || !v.ok) show(v.message || (v.ok ? tr('完成') : tr('失败')), v.ok ? null : 'err');
@@ -1291,33 +1393,19 @@ function nudgeGuard() {
   show(t && t.status === 'waiting' ? tr('AI 在等你确认一步操作，确认前画面保持锁定。') : tr('AI 正在操作这台设备。要自己操作，先点「接管」。'), 'warn');
 }
 /* 画面外的点夹到屏幕边上（拖动时手指不会离开屏幕） */
-function clampPoint(cx, cy) {
-  const d = dims(); if (!d) return null;
-  const r = stage.getBoundingClientRect();
-  let w = r.width, h = r.height, ox = 0, oy = 0;
-  if (S.mode === 'live' && live.naturalWidth) {
-    const sc = Math.min(r.width / live.naturalWidth, r.height / live.naturalHeight);
-    w = live.naturalWidth * sc; h = live.naturalHeight * sc; ox = (r.width - w) / 2; oy = (r.height - h) / 2;
-  }
-  const fx = Math.min(1, Math.max(0, (cx - r.left - ox) / w)), fy = Math.min(1, Math.max(0, (cy - r.top - oy) / h));
-  return { x: round1(fx * d.W), y: round1(fy * d.H) };
-}
-/* 页面上一个 CSS 像素对应设备上多少点 */
 function pointsPerPx() {
-  const d = dims(), r = stage.getBoundingClientRect();
-  if (!d || !r.width) return 1;
-  if (S.mode === 'live' && live.naturalWidth) return d.W / (live.naturalWidth * Math.min(r.width / live.naturalWidth, r.height / live.naturalHeight));
-  return d.W / r.width;
+  const d = dims();
+  return d ? d.W / pictureRect().width : 1;
 }
 
 /* ---------- 实时手指（iOS 27 起，经 CoreDevice HID）：按下、移动、抬起各发一次，设备跟着鼠标动 ----------
  * 一次只有一个请求在路上：还没发出去的移动只留最新的一个，按下、抬起一定按顺序发。
  * 按住不动时每 100 毫秒再报一次当前位置，长按、拖动中途停顿都和真手指一样。 */
-const T = { q: [], busy: false, on: false, last: null, keep: 0, warm: 0, fails: 0, legacy: false };
+const T = { q: [], busy: false, on: false, last: null, keep: 0, warm: 0, fails: 0, gesture: 0 };
 function touchSend(phase, p) {
   const tail = T.q[T.q.length - 1];
-  if (phase === 'move' && tail && tail.phase === 'move') tail.p = p;
-  else T.q.push({ phase, p });
+  if (phase === 'move' && tail?.phase === 'move' && tail.gesture === T.gesture) tail.p = p;
+  else T.q.push({ phase, p, gesture: T.gesture, view: S.display?.id, device: S.udid, epoch: feedEpoch });
   touchPump();
 }
 async function touchPump() {
@@ -1326,15 +1414,19 @@ async function touchPump() {
   while (T.q.length) {
     const e = T.q.shift(), t0 = performance.now();
     let v;
-    try { v = await api('/api/touch', { phase: e.phase, x: e.p ? e.p.x : 0, y: e.p ? e.p.y : 0 }); }
+    try { v = await api('/api/touch', { phase: e.phase, x: e.p ? e.p.x : 0, y: e.p ? e.p.y : 0, view: e.view }, e.device); }
     catch (err) { v = { ok: false, message: String(err.message || err) }; }
+    if (!v.ok && e.phase === 'down') {
+      // Don't send moves from a failed press. Keep its release in case the reply was lost.
+      T.q = T.q.filter(next => next.gesture !== e.gesture || next.phase !== 'move');
+    }
+    if (e.epoch !== feedEpoch || e.gesture !== T.gesture) continue;
     if (e.phase === 'down' || e.phase === 'up') { S.rtt = Math.round(performance.now() - t0); renderFeed(); }
-    if (v.ok) { if (e.phase !== 'prepare') T.fails = 0; if (e.phase === 'up') refreshStatusSoon(); continue; }
+    if (v.ok) { if (e.phase === 'down') T.fails = 0; if (e.phase === 'up') refreshStatusSoon(); continue; }
     if (e.phase === 'prepare') continue;
     show(v.message || tr('操作失败'), 'err');
     if (e.phase === 'down') {
-      // 这一下没按下去：丢掉它后面的移动和抬起，松开时改用整段手势
-      while (T.q.length && T.q[0].phase !== 'down') T.q.shift();
+      fingerUp(T.last);
       if (down) down.legacy = true;
       // 连着两次按不下去（HID 不可用），本页之后都用整段手势
       if (++T.fails >= 2) { S.liveTouch = false; renderFeed(); }
@@ -1343,10 +1435,10 @@ async function touchPump() {
   T.busy = false;
 }
 function touchWarm() {
-  if (!S.liveTouch || S.mode !== 'live' || guarded() || Date.now() - T.warm < 20000) return;
+  if (!S.liveTouch || S.mode !== 'live' || !dims() || guarded() || Date.now() - T.warm < 20000) return;
   T.warm = Date.now(); touchSend('prepare', null);
 }
-function fingerDown(p) { T.on = true; T.last = p; touchSend('down', p); clearInterval(T.keep); T.keep = setInterval(() => { if (T.on && T.last) touchSend('move', T.last); }, 100); }
+function fingerDown(p) { ++T.gesture; T.on = true; T.last = p; touchSend('down', p); clearInterval(T.keep); T.keep = setInterval(() => { if (T.on && T.last) touchSend('move', T.last); }, 100); }
 function fingerMove(p) { if (!T.on) return; T.last = p; touchSend('move', p); }
 function fingerUp(p) { if (!T.on) return; T.on = false; clearInterval(T.keep); touchSend('up', p || T.last); T.last = null; }
 stage.addEventListener('pointerenter', touchWarm);
@@ -1355,10 +1447,11 @@ stage.addEventListener('pointerdown', ev => {
   if (ev.button !== 0 || S.mode === 'detecting' || ev.target.closest('button, a, code')) return;
   if (guarded()) { nudgeGuard(); return; }
   const p = toPoints(ev.clientX, ev.clientY);
+  if (!p || down) return;
   stage.setPointerCapture(ev.pointerId);
   wheelEnd(true);
   const liveFinger = S.mode === 'live' && S.liveTouch && !!p;
-  down = { p, t: performance.now(), cx: ev.clientX, cy: ev.clientY, live: liveFinger, legacy: false };
+  down = { p, pointerId: ev.pointerId, t: performance.now(), cx: ev.clientX, cy: ev.clientY, live: liveFinger, legacy: false };
   if (liveFinger) fingerDown(p);
 });
 /* 鼠标悬停时跟随光标的小圆点，标出将要点到的位置；触屏、画面外、AI 操作时不显示 */
@@ -1379,15 +1472,20 @@ function moveHoverDot(p, ev) {
 function hideHoverDot() { hoverDot?.setAttribute('hidden', ''); }
 stage.addEventListener('pointerleave', hideHoverDot);
 stage.addEventListener('pointermove', ev => {
+  if (down && ev.pointerId !== down.pointerId) return;
   const p = toPoints(ev.clientX, ev.clientY);
   moveHoverDot(p, ev);
-  if (down && down.live && !down.legacy) fingerMove(p || clampPoint(ev.clientX, ev.clientY));
+  if (down && down.live && !down.legacy) {
+    const pos = p || toPoints(ev.clientX, ev.clientY, true);
+    if (pos) fingerMove(pos); else cancelGestures();
+  }
 });
 function endPointer(ev, cancelled) {
-  if (!down) return;
+  if (!down || ev.pointerId !== down.pointerId) return;
   const start = down; down = null;
+  if (!dims()) { cancelGestures(); return; }
   hoverDot?.classList.remove('pressed');
-  if (start.live && !start.legacy) { fingerUp(clampPoint(ev.clientX, ev.clientY)); return; }
+  if (start.live && !start.legacy) { fingerUp(toPoints(ev.clientX, ev.clientY, true)); return; }
   if (cancelled) return;
   const end = toPoints(ev.clientX, ev.clientY), held = (performance.now() - start.t) / 1000;
   if (!start.p) { show(dims() ? tr('这个位置在画面外面') : tr('还不知道屏幕尺寸，稍后再试'), 'err'); return; }
@@ -1406,7 +1504,7 @@ const W = { on: false, start: null, cur: null, pend: { x: 0, y: 0 }, idle: 0, ra
 const EDGE = 90;
 function wheelSafe(p) { const d = dims(); return { x: Math.min(d.W - 30, Math.max(30, p.x)), y: Math.min(d.H - EDGE, Math.max(EDGE, p.y)) }; }
 stage.addEventListener('wheel', ev => {
-  if (S.mode !== 'live' || ev.ctrlKey || down) return;
+  if (S.mode !== 'live' || ev.ctrlKey || ev.metaKey || down) return;
   const p = toPoints(ev.clientX, ev.clientY);
   if (!p) return;
   ev.preventDefault();
@@ -1421,7 +1519,7 @@ stage.addEventListener('wheel', ev => {
 }, { passive: false });
 function wheelStep() {
   if (!W.on) return;
-  const d = dims();
+  const d = dims(); if (!d) { cancelGestures(); return; }
   // 一格滚轮分几帧走完，像手指拖过去
   const step = a => (Math.abs(a) < 1 ? a : a * 0.45);
   const sx = step(W.pend.x), sy = step(W.pend.y);
@@ -1436,6 +1534,7 @@ function wheelStep() {
 }
 function wheelEnd(now) {
   if (!W.on) return;
+  if (!dims()) { cancelGestures(); return; }
   // 边移动边滑动时等手指把剩下的滚动量走完；整段手势（iOS 27 以下）没人消耗它，等下去就永远发不出滑动
   if (!now && S.liveTouch && (Math.abs(W.pend.x) > 1 || Math.abs(W.pend.y) > 1)) { W.idle = setTimeout(() => wheelEnd(false), 60); return; }
   clearTimeout(W.idle); cancelAnimationFrame(W.raf); W.on = false;
@@ -1446,7 +1545,7 @@ function wheelEnd(now) {
     const dx = Math.max(-max, Math.min(max, W.pend.x)), dy = Math.max(-max, Math.min(max, W.pend.y));
     if (Math.abs(dx) > 4 || Math.abs(dy) > 4) {
       const a = W.start, b = { x: round1(Math.min(d.W - 10, Math.max(10, a.x - dx))), y: round1(Math.min(d.H - 10, Math.max(10, a.y - dy))) };
-      act('/api/swipe', { x1: a.x, y1: a.y, x2: b.x, y2: b.y, seconds: 0.3 }, true);
+      act('/api/swipe', { view: S.display.id, x1: a.x, y1: a.y, x2: b.x, y2: b.y, seconds: 0.3 }, true);
     }
   }
   W.pend = { x: 0, y: 0 };
@@ -1455,9 +1554,9 @@ function wheelEnd(now) {
 /* 整段手势（没有实时手指时）：松开后一次发出 */
 function userGesture(kind, p, p2, held, cx, cy) {
   if (S.mode === 'live') {
-    if (kind === 'tap') act('/api/tap', p, true);
-    else if (kind === 'long_press') act('/api/long_press', { ...p, seconds: round1(held) }, true);
-    else act('/api/swipe', { x1: p.x, y1: p.y, x2: p2.x, y2: p2.y, seconds: Math.max(round1(held), 0.1) }, true);
+    if (kind === 'tap') act('/api/tap', { ...p, view: S.display.id }, true);
+    else if (kind === 'long_press') act('/api/long_press', { ...p, view: S.display.id, seconds: round1(held) }, true);
+    else act('/api/swipe', { view: S.display.id, x1: p.x, y1: p.y, x2: p2.x, y2: p2.y, seconds: Math.max(round1(held), 0.1) }, true);
     return;
   }
   const at = `(${p.x}, ${p.y})`;
@@ -1491,30 +1590,38 @@ typeEl.addEventListener('keydown', ev => { if (ev.key === 'Enter' && !ev.isCompo
 /* ================================================================
  * 实时画面
  * ================================================================ */
-function applyInfo(v) {
-  S.size = v.width && v.height ? { w: v.width, h: v.height } : null;
-  if (v.device) S.deviceName = v.device;
-  if (v.udid && S.udid && v.udid.toLowerCase() !== S.udid.toLowerCase()) { onDeviceChanged(v); return; }
-  if (v.udid) S.udid = v.udid;
-  // 一旦改用整段手势（连着按不下去），本页之后不再改回来
-  if (S.liveTouch !== false) S.liveTouch = !!v.live_touch;
-  if (v.warning) show(v.warning, 'err');
+function cancelGestures() {
+  down = null; W.on = false; W.pend = { x:0, y:0 };
+  clearTimeout(W.idle); cancelAnimationFrame(W.raf);
+  T.q = T.q.filter(e => e.phase === 'up');
+  fingerUp(T.last);
+  hideHoverDot();
 }
-/* 守护进程控制的设备变了（本页、别的页面、命令行切换，或拔掉后自动换了一台）：画面和各面板都换过去 */
-function onDeviceChanged(v) {
-  const mine = S.switching;
-  S.udid = v.udid;
-  // 上一台设备上按着的手指、没走完的滚动，都不能带到新设备上
-  W.on && (clearTimeout(W.idle), cancelAnimationFrame(W.raf), W.on = false);
-  T.q.length = 0; T.on = false; T.last = null; clearInterval(T.keep); T.warm = 0; T.fails = 0; down = null;
-  S.liveTouch = !!v.live_touch;
-  S.dstatus = null; S.rtt = null;
-  S.apps = []; S.appsState = 'idle'; S.elements = []; S.elState = 'idle'; appNames.map = null;
-  highlight(null);
-  connect(); loadDeviceState();
-  if (S.devTab === 'apps') loadApps(); else if (S.devTab === 'elements') renderElements();
-  const name = v.device || tr('另一台设备');
-  show(mine ? `${tr('已切换到')} ${name}` : `${tr('设备已在别处切换到')} ${name}${tr('，画面已跟过去')}`);
+function applyInfo(v) {
+  const udid = v.udid || null;
+  const changed = S.udid !== udid, display = v.display || null;
+  if (changed || S.display?.id !== display?.id) {
+    cancelGestures();  // queue a release for the original device and view
+    S.rtt = null; S.elements = []; S.elState = 'idle';
+    highlight(null); marks.replaceChildren(); hoverDot = null;
+    if (changed) {
+      S.daemon = null; S.dstatus = null; S.apps = []; S.appsState = 'idle'; appNames.map = null; appNames.loading = false;
+      T.warm = 0; T.fails = 0;
+    }
+  }
+  const reconnect = feedId && (changed || S.display?.id !== display?.id);
+  S.udid = udid; S.display = display;
+  S.family = v.family || 'unknown'; frame.dataset.kind = S.family; S.deviceName = v.device || '';
+  S.liveTouch = T.fails < 2 && !!v.live_touch;
+  if (reconnect) {
+    connect();
+    loadDeviceState();
+    if (changed && S.devTab === 'apps') loadApps();
+  } else if (v.feed_open === false && S.stream === 'ok') {
+    feedError();
+  }
+  if (v.warning && !S.infoWarning) show(v.warning, 'err');
+  S.infoWarning = v.warning || '';
 }
 function signButton(label) {
   return `<button type="button" data-action="sign"${S.signing ? ' disabled' : ''} class="btn btn-primary btn-sm">${esc(S.signing ? tr('正在签名安装…') : label)}</button>`;
@@ -1537,7 +1644,7 @@ function stageNote() {
       return `${esc(tr('正在'))} ${esc(name)} ${esc(tr('上启动 WebDriverAgent，通常 10–60 秒…'))}`;
     case 'NeedsUnlock': return esc(tr('设备重启后还没解锁过，在设备上手动解锁一次，画面就会出来。'));
     case 'NeedsAutomationPin': return esc(tr('设备重启后首次启用 UI 自动化，请在设备上输入锁屏密码。'));
-    default: return esc(tr('没有画面：画面来自设备上的 WebDriverAgent，它现在没有运行。3 秒后自动重试…'));
+    default: return esc(tr('没有收到设备画面，3 秒后自动重试。'));
   }
 }
 function showStageNote() {
@@ -1545,30 +1652,71 @@ function showStageNote() {
   const html = stageNote(); if (stageMsg.dataset.note !== html) { stageMsg.innerHTML = html; stageMsg.dataset.note = html; }  // 不变就不重画，免得按钮丢了焦点
   stageMsg.hidden = false;
 }
-async function loadInfo() { try { applyInfo(await (await fetch('/api/info', { headers: { 'X-Ictl-Lang': LANG } })).json()); } catch { /* 跟着画面一起重试 */ } }
-function connect() {
-  S.stream = 'connecting'; stageMsg.textContent = tr('正在连接画面…'); delete stageMsg.dataset.note; stageMsg.hidden = false; live.hidden = false;
-  live.src = `/stream?${S.udid ? `udid=${encodeURIComponent(S.udid)}&` : ''}t=${Date.now()}`; renderFeed(); renderChips();
+async function loadInfo() {
+  const seq = ++infoSequence, epoch = feedEpoch;
+  try {
+    const r = await fetch('/api/info?feed=' + encodeURIComponent(feedId), { headers: { 'X-Ictl-Lang': LANG }, signal: AbortSignal.timeout(4800) });
+    if (!r.ok) throw new Error('offline');
+    const v = await r.json();
+    if (seq === infoSequence && epoch === feedEpoch) applyInfo(v);
+  } catch {
+    if (seq === infoSequence && epoch === feedEpoch) feedError();
+  }
 }
-live.addEventListener('load', () => {
-  if (S.mode !== 'live') return;
-  S.stream = 'ok'; stageMsg.hidden = true; live.style.visibility = ''; setRatio(live.naturalWidth, live.naturalHeight); syncMarksBox(); renderFeed(); renderChips();
-});
-live.addEventListener('error', () => {
-  if (S.mode !== 'live') return;
-  S.stream = 'error'; live.style.visibility = 'hidden'; showStageNote();
-  renderFeed(); renderChips(); loadDeviceState();
-  // 换了设备时 loadInfo 自己会重连；没换就重试这一台
-  setTimeout(async () => { const u = S.udid; await loadInfo(); if (S.udid === u) connect(); }, 3000);
-});
+async function pollInfo() {
+  await loadInfo();
+  setTimeout(pollInfo, 2000);
+}
+let firstFrameTimer = 0;
+function feedError() {
+  if (S.stream === 'error') return;
+  cancelGestures(); ++feedEpoch;
+  clearTimeout(firstFrameTimer); S.stream = 'error'; S.rtt = null;
+  live.style.visibility = 'hidden'; live.removeAttribute('src');
+  marks.replaceChildren(); hoverDot = null; S.elements = []; S.elState = 'idle'; renderElements();
+  applyZoom(); showStageNote(); renderFeed(); renderChips();
+  const epoch = feedEpoch;
+  retryTimer = setTimeout(async () => {
+    await loadInfo();
+    if (epoch === feedEpoch) connect();
+  }, 3000);
+}
+function refreshFrame() {
+  if (S.mode !== 'live' || S.stream === 'error' || !live.naturalWidth || !live.naturalHeight) return;
+  if (S.stream === 'ok' && live.naturalWidth === frameWidth && live.naturalHeight === frameHeight) return;
+  if (S.stream === 'ok') {
+    cancelGestures(); marks.replaceChildren(); hoverDot = null; S.elements = []; S.elState = 'idle';
+    loadInfo();
+  }
+  clearTimeout(firstFrameTimer);
+  S.stream = 'ok'; stageMsg.hidden = true; live.style.visibility = '';
+  frameWidth = live.naturalWidth; frameHeight = live.naturalHeight;
+  setRatio(frameWidth, frameHeight); syncMarksBox(); renderElements(); renderFeed(); renderChips();
+}
+function connect() {
+  cancelGestures(); const epoch = ++feedEpoch;
+  clearTimeout(firstFrameTimer); clearTimeout(retryTimer);
+  feedId = crypto.randomUUID();
+  S.stream = 'connecting'; frameWidth = frameHeight = 0;
+  applyZoom();
+  stageMsg.textContent = tr('正在连接画面…'); delete stageMsg.dataset.note; stageMsg.hidden = false;
+  const next = live.cloneNode(false); next.removeAttribute('src'); next.hidden = false; next.style.visibility = 'hidden';
+  live.replaceWith(next); live.removeAttribute('src'); live = next;
+  if (!S.udid) { feedError(); return; }
+  next.onload = () => { if (epoch === feedEpoch) refreshFrame(); };
+  next.onerror = () => { if (epoch === feedEpoch) feedError(); };
+  next.src = '/stream?udid=' + encodeURIComponent(S.udid) + '&feed=' + encodeURIComponent(feedId);
+  firstFrameTimer = setTimeout(() => { if (epoch === feedEpoch) feedError(); }, 9000);
+  renderFeed(); renderChips();
+}
 function renderFeed() {
   const dot = $('#feed-dot'), txt = $('#feed-text');
   dot.className = 'feed-dot';
   if (S.mode === 'demo') { txt.textContent = tr('演示画面 · 本地模拟'); return; }
   if (S.mode === 'detecting' || S.stream === 'connecting') { dot.classList.add('wait'); txt.textContent = tr('正在连接画面…'); return; }
   if (S.stream === 'error') { dot.classList.add('off'); txt.textContent = tr('画面断开 · 自动重试中'); return; }
-  const route = S.dstatus?.route === 'hid' ? tr('HID 后备') : 'WDA';
-  txt.textContent = `${tr('实时画面')} · ${route}${S.rtt != null ? ` · ${tr('操作往返')} ${S.rtt} ms` : ''}`;
+  if (!dims()) { dot.classList.add('wait'); txt.textContent = tr('画面已连接 · 等待屏幕尺寸和方向，仅可观看'); return; }
+  txt.textContent = `${tr('实时画面')}${S.rtt != null ? ` · ${tr('操作往返')} ${S.rtt} ms` : ''}`;
 }
 
 /* ================================================================
@@ -1587,7 +1735,7 @@ const STARTING_HINT = {
   NeedsUnlock: tr('设备重启后还没解锁过，需要在设备上手动解锁一次。'),
   NeedsAutomationPin: tr('设备重启后首次启用 UI 自动化，请在设备上输入锁屏密码。')
 };
-let statusTimerId = 0;
+let statusTimerId = 0, statusSequence = 0;
 function refreshStatusSoon() { clearTimeout(statusTimerId); statusTimerId = setTimeout(loadDeviceState, 600); }
 async function loadDeviceState() {
   if (S.mode === 'demo') {
@@ -1595,7 +1743,10 @@ async function loadDeviceState() {
     S.dstatus = { wda_ready: true, locked: D.screen === 'lock', foreground: foreground(), width: DW(), height: DH(), route: 'wda' };
     S.devices = DEMO_DEVICES.map(d => ({ ...d, controlled: d === demoDev })); S.statusErr = ''; S.devicesErr = '';
   } else if (S.mode === 'live') {
+    const udid = S.udid, sequence = ++statusSequence;
     const [d, s, l] = await Promise.allSettled([api('/api/daemon'), api('/api/status'), api('/api/devices')]);
+    // Video can reconnect while the same device is still waiting for trust or signing.
+    if (udid !== S.udid || sequence !== statusSequence) return;
     S.daemon = d.status === 'fulfilled' ? d.value : null;
     S.dstatus = s.status === 'fulfilled' ? s.value : null;
     S.statusErr = d.status === 'rejected' ? String(d.reason.message) : s.status === 'rejected' ? String(s.reason.message) : '';
@@ -1617,10 +1768,16 @@ function renderDevices() {
     deviceEl.title = S.devicesErr || ''; return;
   }
   const cur = S.devices.find(d => d.controlled);
-  deviceEl.innerHTML = S.devices.map(d => `<option value="${esc(d.udid)}"${d.controlled ? ' selected' : ''}>${esc(d.name)}${S.mode === 'demo' ? tr('（演示）') : ''}</option>`).join('')
+  const labels = S.devices.map(deviceOptionLabel);
+  deviceEl.innerHTML = S.devices.map((d, index) => {
+    const name = labels[index];
+    const duplicate = labels.indexOf(name) !== labels.lastIndexOf(name);
+    const label = duplicate ? name + ' · ' + d.udid : name;
+    return `<option value="${esc(d.udid)}"${d.controlled ? ' selected' : ''}>${esc(label)}</option>`;
+  }).join('')
     + `<option value="auto"${cur ? '' : ' selected'}>${tr('自动选择')}</option>`;
-  deviceEl.disabled = guarded() || S.devicesFixed;
-  deviceEl.title = S.devicesFixed ? tr('已用 IPHONE_UDID 固定设备，不能切换') : '';
+  deviceEl.disabled = guarded() || S.switching || S.devicesFixed;
+  deviceEl.title = [deviceEl.selectedOptions[0]?.textContent, S.devicesFixed && tr('已用 IPHONE_UDID 固定设备，不能切换')].filter(Boolean).join(' · ');
 }
 deviceEl.addEventListener('change', async () => {
   const v = deviceEl.value;
@@ -1633,18 +1790,18 @@ deviceEl.addEventListener('change', async () => {
     show(`${tr('已切换到')} ${next.name}${tr('（演示）')}`);
     return;
   }
-  S.switching = true; deviceEl.disabled = true;
+  cancelGestures(); S.switching = true; deviceEl.disabled = true;
   try {
     const r = await act('/api/select', { device: v }, true);
-    // /api/info 拿到新设备后 onDeviceChanged 换画面、清面板；选的就是当前这台时什么也不用换
+    // /api/info 确认当前设备后才重新启用输入
     if (r.ok) { const u = S.udid; await loadInfo(); if (S.udid === u) show(r.message || tr('已经在控制这台设备')); }
-  } finally { S.switching = false; await loadDeviceState(); }
+  } finally { S.switching = false; renderFeed(); renderElements(); await loadDeviceState(); }
 });
 function renderChips() {
   const c = $('#chips'), d = S.daemon, s = S.dstatus;
   if (S.mode === 'detecting') { c.innerHTML = ''; return; }
   const chips = [];
-  const ready = d ? d.state === 'Ready' : S.stream === 'ok';
+  const ready = d?.state === 'Ready';
   chips.push(`<span class="chip"><span class="chip-dot ${ready ? 'ok' : d ? 'warn' : S.stream === 'error' ? 'off' : 'warn'}"></span><span>${ready ? tr('就绪') : d ? tr('未就绪') : S.stream === 'error' ? tr('画面断开') : tr('连接中')}</span></span>`);
   // 不知道锁没锁（WDA 没起来、又没有 HID）时不显示
   if (s && s.locked != null) {
@@ -1656,11 +1813,13 @@ function renderChips() {
 function renderStatusPanel() {
   const p = $('#tp-status'), d = S.daemon, s = S.dstatus;
   if (S.mode === 'detecting') { p.innerHTML = tr('<p class="empty-note">正在连接 iphone-control 服务…</p>'); return; }
-  const dev = d?.device || {};
+  const dev = d?.device || {}, screen = dims();
+  const model = dev.model_name || dev.model || tr('型号未知');
+  const subtitle = [model !== dev.name && model, osVersion(dev), S.mode === 'demo' && tr('演示模式')].filter(Boolean).join(' · ');
   const facts = [
     [tr('前台 App'), s?.foreground || '—'], [tr('屏幕'), s && s.locked != null ? (s.locked ? tr('已锁定') : tr('未锁定')) : '—'],
-    [tr('操作通道'), s ? (s.route === 'hid' ? tr('HID 后备') : s.route === 'none' ? tr('不可用') : 'WDA') : '—'], [tr('屏幕尺寸'), s?.width ? `${s.width}×${s.height} pt` : S.size ? `${S.size.w}×${S.size.h} pt` : '—'],
-    [tr('自动解锁'), d ? (d.auto_unlock ? tr('已设置密码') : tr('未设置')) : '—'], [tr('系统'), dev.ios ? `${osName(dev)} ${dev.ios}` : '—']
+    [tr('操作通道'), s ? (s.route === 'hid' ? tr('HID 后备') : s.route === 'none' ? tr('不可用') : 'WDA') : '—'], [tr('屏幕尺寸'), screen ? `${screen.W}×${screen.H} pt` : '—'],
+    [tr('自动解锁'), d ? (d.auto_unlock ? tr('已设置密码') : tr('未设置')) : '—'], [tr('系统'), osVersion(dev) || '—']
   ];
   let checks = '';
   if (d) {
@@ -1676,9 +1835,10 @@ function renderStatusPanel() {
     }).join('');
   }
   p.innerHTML = `
-    <div class="device-card"><span class="device-ic">${icon(isPad(dev) || frame.dataset.kind === 'ipad' ? 'tablet' : 'phone')}</span>
-      <div class="od-field"><span class="device-name od-truncate">${esc(dev.name || (S.mode === 'live' ? tr('已连接的设备') : '—'))}</span><span class="device-sub od-truncate">${esc([dev.model, dev.ios && `${osName(dev)} ${dev.ios}`].filter(Boolean).join(' · ') || tr('型号未知'))}${S.mode === 'demo' ? tr(' · 演示数据') : ''}</span></div></div>
+    <div class="device-card"><span class="device-ic">${icon(dev.family === 'ipad' || frame.dataset.kind === 'ipad' ? 'tablet' : 'phone')}</span>
+      <div class="od-field"><span class="device-name od-truncate">${esc(dev.name || (S.mode === 'live' ? tr('已连接的设备') : '—'))}</span><span class="device-sub od-truncate">${esc(subtitle)}</span></div></div>
     <div class="facts">${facts.map(([k, v]) => `<div class="fact"><span class="fact-k">${k}</span><span class="fact-v">${esc(v)}</span></div>`).join('')}
+      <div class="fact" style="grid-column:1/-1"><span class="fact-k">ProductType</span><span class="fact-v mono">${esc(dev.model || '—')}</span></div>
       <div class="fact" style="grid-column:1/-1"><span class="fact-k">UDID</span><span class="fact-v mono">${esc(dev.udid || '—')}</span></div></div>
     <div class="sec"><div class="sec-head"><span class="sec-title">${tr('就绪检查')}</span>${d ? badge(d.state === 'Ready' ? { label: tr('全部就绪'), tone: 'ok', icon: 'check' } : { label: tr('未就绪'), tone: 'warn', icon: 'alert' }) : ''}</div>
       ${d ? `<ol class="checks">${checks}</ol>` : `<p class="empty-note${S.statusErr ? ' err' : ''}">${esc(S.statusErr || tr('还没有拿到守护进程状态。'))}</p>`}</div>`;
@@ -1689,12 +1849,16 @@ function renderStatusPanel() {
  * ================================================================ */
 async function loadApps() {
   S.appsState = 'loading'; renderApps();
-  const sys = $('#app-sys').checked;
+  const sys = $('#app-sys').checked, target = S.udid;
   try {
     if (S.mode === 'demo') { await sleep(350); S.apps = sys ? ALL_APPS.map(a => ({ name: a.name, bundle_id: a.bundle })) : []; }
-    else S.apps = (await api(`/api/apps?system=${sys ? 1 : 0}`)).apps || [];
+    else {
+      const result = await api(`/api/apps?system=${sys ? 1 : 0}`);
+      if (target !== S.udid || sys !== $('#app-sys').checked) return;
+      S.apps = result.apps || [];
+    }
     S.appsState = 'ok';
-  } catch (e) { S.appsState = 'error'; S.appsErr = String(e.message || e); }
+  } catch (e) { if (target !== S.udid || sys !== $('#app-sys').checked) return; S.appsState = 'error'; S.appsErr = String(e.message || e); }
   renderApps();
 }
 function renderApps() {
@@ -1741,16 +1905,21 @@ $('#url').addEventListener('keydown', ev => { if (ev.key === 'Enter' && !ev.isCo
  * 元素
  * ================================================================ */
 async function loadElements() {
+  const epoch = feedEpoch;
   S.elState = 'loading'; renderElements();
   try {
     if (S.mode === 'demo') { await sleep(300); S.elements = demoElements(); }
-    else S.elements = (await api('/api/elements?filter=')).elements || [];
+    else {
+      const result = await api('/api/elements?filter=');
+      if (epoch !== feedEpoch) return;
+      S.elements = result.elements || [];
+    }
     S.elState = 'ok';
-  } catch (e) { S.elState = 'error'; S.elErr = String(e.message || e); }
+  } catch (e) { if (epoch !== feedEpoch) return; S.elState = 'error'; S.elErr = String(e.message || e); }
   renderElements();
 }
 function renderElements() {
-  const ul = $('#elements'), q = $('#el-q').value.trim().toLowerCase(), lock = guarded();
+  const ul = $('#elements'), q = $('#el-q').value.trim().toLowerCase(), lock = guarded() || !dims();
   const list = S.elements.map((e, i) => ({ ...e, i })).filter(e => !q || e.label.toLowerCase().includes(q) || e.type.toLowerCase().includes(q));
   $('#el-count').textContent = S.elState === 'ok' ? `${list.length} ${tr('个')}${S.mode === 'demo' ? tr(' · 演示数据') : ''}` : '';
   if (S.elState === 'loading') { ul.innerHTML = tr('<li class="sr-only">正在读取元素…</li>') + '<li class="skel-row no-tile" aria-hidden="true"><span class="skel-lines"><span class="skel l1"></span><span class="skel l2"></span></span></li>'.repeat(6); return; }
@@ -1769,11 +1938,11 @@ elList.addEventListener('focusin', ev => { const row = ev.target.closest('[data-
 elList.addEventListener('focusout', () => highlight(null));
 async function tapElement(i) {
   if (guarded()) { nudgeGuard(); return; }
-  const e = S.elements[i]; if (!e) return;
+  const e = S.elements[i]; if (!e || !dims()) return;
   const same = S.elements.slice(0, i).filter(x => x.label === e.label).length;
   const p = { x: round1(e.x + e.width / 2), y: round1(e.y + e.height / 2) };
   highlight(null);
-  if (S.mode === 'live') { drawMark('tap', 'user', p); await act('/api/tap_element', { text: e.label, index: same }); }
+  if (S.mode === 'live') { drawMark('tap', 'user', p); await act('/api/tap_element', { view: S.display.id, text: e.label, index: same }); }
   else {
     const el = $$('[data-label]', demoEl).filter(x => x.dataset.label === e.label)[same];
     drawMark('tap', 'user', p);
@@ -2041,6 +2210,7 @@ function stopTask() {
   finish(t, 'stopped', `${tr('在第')} ${t.steps.length} ${tr('步停下了。已经做完的操作不会撤销。')}`);
 }
 function gotoConfirm() {
+  shell.dataset.agentHidden = 'false';
   setView('agent');
   const t = activeTask(); if (t) { S.expanded.add(t.id); renderTurns(); }
   const btn = $('[data-action="approve"]');
@@ -2058,11 +2228,12 @@ function appLabel(app) {
   if (a) return a.name;
   if (appNames.map) return appNames.map[app] || app;
   if (!appNames.loading && S.mode === 'live') {
-    appNames.loading = true;
+    const target = S.udid; appNames.loading = true;
     api('/api/apps?system=1').then(v => {
+      if (target !== S.udid) return;
       appNames.map = Object.fromEntries((v.apps || []).map(x => [x.bundle_id, x.name]));
       renderTurns();
-    }).catch(() => { appNames.map = {}; });
+    }).catch(() => { if (target === S.udid) appNames.map = {}; });
   }
   return app;
 }
@@ -2177,7 +2348,7 @@ function renderManual() {
   $$('[data-key]').forEach(b => { b.disabled = lock; });
   typeEl.disabled = lock; $('#type-btn').disabled = lock; $('#type-submit').disabled = lock;
   $('#url').disabled = lock; $('#url-btn').disabled = lock;
-  deviceEl.disabled = lock || !S.devices.length || !!S.devicesFixed;
+  deviceEl.disabled = lock || S.switching || !S.devices.length || !!S.devicesFixed;
   const t = activeTask();
   $('#vt-agent-label').textContent = t ? `AI · ${{ running: tr('执行中'), waiting: tr('待确认'), paused: tr('已暂停'), takeover: tr('接管中') }[t.status]}` : tr('AI 助手');
 }
@@ -2205,12 +2376,15 @@ setInterval(() => {
   const m = $(`[data-elapsed="${t.id}"]`); if (m) m.textContent = `${t.steps.length} ${tr('步')} · ${mmss(Date.now() - t.startedAt)}`;
 }, 1000);
 
-/* ---------- 视图：≥1280 三栏；1024–1279 右栏抽屉；<1024 三个标签页 ---------- */
+/* ---------- 视图：≥1280 三栏；1024–1279 左栏抽屉；<1024 三个标签页 ---------- */
 const mqDrawer = matchMedia('(min-width: 1024px) and (max-width: 1279.98px)');
 const mqTabs = matchMedia('(max-width: 1023.98px)');
 function syncInert() {
   $('#pane-dev').inert = (mqDrawer.matches && !S.devOpen) || (mqTabs.matches && S.view !== 'device') || (isThreeCol() && devHidden);
-  $('#pane-agent').inert = mqTabs.matches && S.view !== 'agent';
+  const agentHidden = !mqTabs.matches && shell.dataset.agentHidden === 'true';
+  $('#pane-agent').inert = agentHidden || (mqTabs.matches && S.view !== 'agent');
+  $('#agent-toggle').setAttribute('aria-expanded', String(!agentHidden));
+  $('#dev-toggle').setAttribute('aria-expanded', String(!$('#pane-dev').inert));
   $('#pane-stage').inert = mqTabs.matches && S.view !== 'screen';
 }
 function setView(v) {
@@ -2262,14 +2436,14 @@ document.addEventListener('click', ev => {
     case 'tap-el': tapElement(+b.dataset.el); break;
     case 'wait-for': waitFor(); break;
     case 'reconnect':
-      if (S.mode === 'live') { loadInfo(); connect(); loadDeviceState(); show(tr('正在重新连接画面…')); }
+      if (S.mode === 'live') { connect(); loadInfo(); loadDeviceState(); show(tr('正在重新连接画面…')); }
       else if (S.mode === 'demo') { renderDemo(); loadDeviceState(); show(tr('已刷新演示画面')); }
       break;
   }
 });
 promptEl.addEventListener('keydown', ev => { if (ev.key === 'Enter' && !ev.shiftKey && !ev.isComposing && ev.keyCode !== 229) { ev.preventDefault(); sendPrompt(); } });
 promptEl.addEventListener('input', () => { autosize(); if (!promptErr.hidden && promptEl.value.trim()) clearPromptError(); });
-document.addEventListener('keydown', ev => { if (ev.key === 'Escape' && mqDrawer.matches && S.devOpen && !stopDialog.open) setDevOpen(false); });
+document.addEventListener('keydown', ev => { if (ev.key === 'Escape' && mqDrawer.matches && S.devOpen && !document.querySelector('dialog[open]')) setDevOpen(false); });
 // 设备面板的标签页支持左右方向键切换
 $('#pane-dev .seg').addEventListener('keydown', ev => {
   if (ev.key !== 'ArrowLeft' && ev.key !== 'ArrowRight') return;
@@ -2314,13 +2488,22 @@ async function detect() {
     if (!r.ok) throw new Error('no service');
     const v = await r.json();
     if (!v || typeof v !== 'object' || !('width' in v || 'warning' in v)) throw new Error('no service');
-    S.mode = 'live'; applyInfo(v); connect(); loadAgents();
-    setInterval(() => { loadInfo(); loadDeviceState(); }, 10000);
+    S.mode = 'live'; applyInfo(v);
   } catch {
-    S.mode = 'demo'; S.stream = 'ok';
-    stageMsg.hidden = true; live.hidden = true; demoEl.hidden = false; $('#demo-note').hidden = false;
-    applyDemoGeometry(); renderDemo();
-    show(tr('演示模式：没有连上 iphone-control 服务，画面是本地模拟的。'));
+    if (document.documentElement.hasAttribute('data-viewer')) {
+      S.mode = 'live';
+    } else {
+      S.mode = 'demo'; S.stream = 'ok';
+      stageMsg.hidden = true; live.hidden = true; demoEl.hidden = false; $('#demo-note').hidden = false;
+      applyDemoGeometry(); renderDemo();
+      show(tr('演示模式：没有连上 iphone-control 服务，画面是本地模拟的。'));
+    }
+  }
+  if (S.mode === 'live') {
+    connect(); loadAgents();
+    setInterval(refreshFrame, 250);
+    setTimeout(pollInfo, 2000);
+    setInterval(loadDeviceState, 10000);
   }
   await loadDeviceState();
   renderAll(); setDevTab(S.devTab);
@@ -2353,7 +2536,7 @@ $('#agent').addEventListener('change', ev => {
   try { localStorage.setItem(AGENT_KEY, S.agent); } catch { /* 只在本次会话生效 */ }
 });
 
-/* ---------- 右侧设备面板隐藏 / 显示（宽屏三栏时），记在浏览器里 ---------- */
+/* ---------- 左侧设备面板隐藏 / 显示（宽屏三栏时），记在浏览器里 ---------- */
 let devHidden = false;
 try { devHidden = localStorage.getItem('ictl.devHidden') === '1'; } catch { /* 预览环境可能禁用存储 */ }
 shell.dataset.devHidden = String(devHidden);
@@ -2364,8 +2547,34 @@ function setDevHidden(hidden, moveFocus) {
   syncInert(); fitPanes();
   if (!hidden) setDevTab(S.devTab);
   if (moveFocus) (hidden ? $('#dev-toggle') : $(`#tab-${S.devTab}`)).focus();
-  show(hidden ? tr('已隐藏设备面板，点右上角「设备面板」可以再打开') : tr('已显示设备面板'));
+  show(hidden ? tr('已隐藏设备面板，点左上角「设备面板」可以再打开') : tr('已显示设备面板'));
 }
+
+/* Local appearance affects workspace text only. Device pixels have their own scale. */
+const appearanceKey = 'ictl.appearance.v1';
+const systemDark = matchMedia('(prefers-color-scheme: dark)');
+const textSize = $('#text-size'), theme = $('#theme');
+function applyAppearance() {
+  document.documentElement.dataset.textSize = textSize.value;
+  document.documentElement.dataset.scheme = theme.value === 'system' ? (systemDark.matches ? 'dark' : 'light') : theme.value;
+}
+function readAppearance() {
+  let saved;
+  try { saved = JSON.parse(localStorage.getItem(appearanceKey)); } catch {}
+  textSize.value = ['large','xlarge'].includes(saved?.textSize) ? saved.textSize : 'standard';
+  theme.value = ['dark','light'].includes(saved?.theme) ? saved.theme : 'system';
+  applyAppearance();
+}
+readAppearance();
+systemDark.addEventListener('change', applyAppearance);
+window.addEventListener('storage', event => { if (event.key === appearanceKey || event.key === null) readAppearance(); });
+$('#appearance').addEventListener('change', () => {
+  applyAppearance();
+  try { localStorage.setItem(appearanceKey, JSON.stringify({textSize:textSize.value, theme:theme.value})); } catch {}
+});
+$('#appearance-btn').addEventListener('click', () => $('#appearance').showModal());
+$('#agent-toggle').onclick = () => { shell.dataset.agentHidden = String(shell.dataset.agentHidden !== 'true'); syncInert(); };
+$('#dev-toggle').onclick = () => { if (mqDrawer.matches) setDevOpen(!S.devOpen); else setDevHidden(!devHidden, false); };
 
 /* ---------- 两侧栏宽度：拖拽、方向键调整，双击恢复默认，记在浏览器里 ---------- */
 const MIN_STAGE = 420;   // 中间设备画面至少保留的宽度
@@ -2412,13 +2621,13 @@ function makeResizer({ handle, pane, cssVar, def, min, key, edge, maxFn }) {
   return r;
 }
 const agentRS = makeResizer({
-  handle: $('#resizer'), pane: $('#pane-agent'), cssVar: '--w-agent', def: 460, min: 360, key: 'ictl.agentWidth', edge: 'right',
-  maxFn: () => Math.max(360, Math.min(760, window.innerWidth - (isThreeCol() && !devHidden ? devRS.w : 0) - MIN_STAGE))
+  handle: $('#resizer'), pane: $('#pane-agent'), cssVar: '--w-agent', def: 352, min: 300, key: 'ictl.agentWidth', edge: 'left',
+  maxFn: () => Math.max(300, Math.min(760, window.innerWidth - (isThreeCol() && !devHidden ? devRS.w : 0) - MIN_STAGE))
 });
 const devRS = makeResizer({
-  handle: $('#resizer-dev'), pane: $('#pane-dev'), cssVar: '--w-dev', def: 344, min: 300, key: 'ictl.devWidth', edge: 'left',
-  // 三栏时给左栏和设备画面留够位置；1024–1279px 的抽屉最宽占视口 90%
-  maxFn: () => isThreeCol() ? Math.max(300, Math.min(600, window.innerWidth - agentRS.w - MIN_STAGE)) : Math.max(300, Math.min(600, window.innerWidth * 0.9))
+  handle: $('#resizer-dev'), pane: $('#pane-dev'), cssVar: '--w-dev', def: 288, min: 260, key: 'ictl.devWidth', edge: 'right',
+  // 三栏时给 AI 助手和设备画面留够位置；1024–1279px 的抽屉最宽占视口 90%
+  maxFn: () => isThreeCol() ? Math.max(260, Math.min(600, window.innerWidth - agentRS.w - MIN_STAGE)) : Math.max(260, Math.min(600, window.innerWidth * 0.9))
 });
 function fitPanes() { devRS.set(devRS.w, false); agentRS.set(agentRS.w, false); }
 window.addEventListener('resize', fitPanes);
@@ -2479,13 +2688,15 @@ function applyZoom() {
   updateZoomUI();
 }
 function updateZoomUI() {
-  const sc = currentScale();
-  $('#zoom-val').textContent = `${Math.round(sc * 100)}%`;
+  const known = !!devPointsW(), sc = currentScale();
+  $('#zoom-val').textContent = known ? `${Math.round(sc * 100)}%` : '—';
+  $('#zoom-val').disabled = !known;
   $('#zoom-fit').setAttribute('aria-pressed', String(zoom === 'fit'));
-  $('#zoom-out').disabled = sc <= ZOOM.min + 0.001;
-  $('#zoom-in').disabled = sc >= ZOOM.max - 0.001;
+  $('#zoom-out').disabled = !known || sc <= ZOOM.min + 0.001;
+  $('#zoom-in').disabled = !known || sc >= ZOOM.max - 0.001;
 }
 function setZoom(z, anchor) {
+  if (z !== 'fit' && !devPointsW()) return;
   // 缩放前记下视野中心（或滚轮所在点）在内容里的相对位置，缩放后保持在原处
   const r = stageWrap.getBoundingClientRect();
   const ax = anchor ? anchor.x - r.left : stageWrap.clientWidth / 2, ay = anchor ? anchor.y - r.top : stageWrap.clientHeight / 2;

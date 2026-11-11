@@ -21,7 +21,7 @@
 //! instead of tapping a phone the user isn't looking at. The device handle is looked up again for each stream, so a
 //! replug (new usbmuxd id) doesn't break the picture.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -30,7 +30,7 @@ use anyhow::bail;
 use ictl_daemon::machine::DeviceState;
 use ictl_daemon::protocol::{self, Request, Response, TouchPhase};
 use serde_json::{Value, json};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
 
 use crate::agent::{self, Agents};
@@ -53,6 +53,7 @@ struct Ctx {
     port: u16,
     /// The device the page shows and acts on
     udid: Mutex<String>,
+    feeds: Mutex<HashSet<String>>,
     agents: Arc<Agents>,
     /// Bundle id → display name, for the foreground app
     names: tokio::sync::Mutex<HashMap<String, String>>,
@@ -121,6 +122,7 @@ pub async fn run(socket: &Path, data_dir: &Path, port: u16) -> anyhow::Result<()
         data_dir: data_dir.to_path_buf(),
         port,
         udid: Mutex::new(udid),
+        feeds: Mutex::default(),
         agents,
         names: tokio::sync::Mutex::default(),
         page: page_in(ictl_l10n::lang()),
@@ -142,10 +144,11 @@ pub async fn run(socket: &Path, data_dir: &Path, port: u16) -> anyhow::Result<()
 
 /// The page with `data-lang` set for English, which the page reads as its default language
 fn page_in(lang: ictl_l10n::Lang) -> String {
-    match lang {
-        ictl_l10n::Lang::En => PAGE.replacen("<html lang=\"zh-CN\">", "<html lang=\"en\" data-lang=\"en\">", 1),
-        ictl_l10n::Lang::Zh => PAGE.to_owned(),
-    }
+    let html = match lang {
+        ictl_l10n::Lang::En => "<html lang=\"en\" data-lang=\"en\" data-viewer>",
+        ictl_l10n::Lang::Zh => "<html lang=\"zh-CN\" data-viewer>",
+    };
+    PAGE.replacen("<html lang=\"zh-CN\">", html, 1)
 }
 
 /// One request per connection (`Connection: close`), which keeps the parser small. It is handled in the page's
@@ -176,15 +179,17 @@ async fn handle(mut client: TcpStream, ctx: &Ctx, head: Vec<u8>, req: Head, mut 
             if udid.is_empty() {
                 return reply(&mut client, 503, "text/plain", b"no device yet").await;
             }
-            let device = ictl_device::Device::find(Some(&udid)).await;
-            let mut remote = match async { device?.connect_port(MJPEG_PORT).await }.await {
-                Ok(r) => r,
-                Err(e) => return reply(&mut client, 502, "text/plain", e.to_string().as_bytes()).await,
-            };
-            // WDA's MJPEG server answers any request with the multipart stream
-            remote.write_all(b"GET / HTTP/1.1\r\nHost: localhost\r\n\r\n").await?;
-            tokio::io::copy_bidirectional(&mut client, &mut remote).await?;
-            Ok(())
+            let feed = req.query("feed").filter(|id| !id.is_empty() && id.len() <= 80);
+            if let Some(id) = &feed
+                && !ctx.feeds.lock().unwrap_or_else(|p| p.into_inner()).insert(id.clone())
+            {
+                return reply(&mut client, 409, "text/plain", b"duplicate stream").await;
+            }
+            let result = relay_feed(&mut client, &udid).await;
+            if let Some(id) = feed {
+                ctx.feeds.lock().unwrap_or_else(|p| p.into_inner()).remove(&id);
+            }
+            result
         }
         ("GET", p) if p.starts_with("/api/agent/tasks/") && p.ends_with("/events") => {
             let id = &p["/api/agent/tasks/".len()..p.len() - "/events".len()];
@@ -199,7 +204,14 @@ async fn handle(mut client: TcpStream, ctx: &Ctx, head: Vec<u8>, req: Head, mut 
         ("GET", p) if p.starts_with("/api/") => {
             let v = match &p[5..] {
                 // always an answer: the page falls back to its offline demo when this one fails
-                "info" => Ok(info(ctx).await.unwrap_or_else(|m| json!({"width": null, "height": null, "warning": m}))),
+                "info" => {
+                    let mut v =
+                        info(ctx).await.unwrap_or_else(|m| json!({"width": null, "height": null, "warning": m}));
+                    if let Some(id) = req.query("feed") {
+                        v["feed_open"] = json!(ctx.feeds.lock().unwrap_or_else(|p| p.into_inner()).contains(&id));
+                    }
+                    Ok(v)
+                }
                 "daemon" => daemon(ctx).await,
                 "status" => status(ctx).await,
                 "devices" => devices(ctx).await,
@@ -237,6 +249,36 @@ async fn handle(mut client: TcpStream, ctx: &Ctx, head: Vec<u8>, req: Head, mut 
             json_reply(&mut client, code, &v).await
         }
         _ => reply(&mut client, 404, "text/plain", b"not found").await,
+    }
+}
+
+/// WDA normally emits even unchanged frames. End an idle feed so the browser can discard its last image and retry.
+async fn relay_feed(client: &mut TcpStream, udid: &str) -> anyhow::Result<()> {
+    const IDLE: Duration = Duration::from_secs(8);
+    let mut remote = match tokio::time::timeout(IDLE, async {
+        ictl_device::Device::find(Some(udid)).await?.connect_port(MJPEG_PORT).await
+    })
+    .await
+    {
+        Ok(Ok(remote)) => remote,
+        _ => return reply(client, 502, "text/plain", b"device feed unavailable").await,
+    };
+    tokio::time::timeout(IDLE, remote.write_all(b"GET / HTTP/1.1\r\nHost: localhost\r\n\r\n")).await??;
+    copy_feed(&mut remote, client, IDLE).await
+}
+
+async fn copy_feed(
+    remote: &mut (impl AsyncRead + Unpin),
+    client: &mut (impl AsyncWrite + Unpin),
+    idle: Duration,
+) -> anyhow::Result<()> {
+    let mut buf = vec![0; 64 * 1024];
+    loop {
+        let n = tokio::time::timeout(idle, remote.read(&mut buf)).await??;
+        if n == 0 {
+            return Ok(());
+        }
+        tokio::time::timeout(idle, client.write_all(&buf[..n])).await??;
     }
 }
 
@@ -302,6 +344,22 @@ async fn post(ctx: &Ctx, name: &str, b: &Value, device: Option<&str>) -> (u16, V
             )
             .into(),
         );
+    }
+    let positional = matches!(
+        req,
+        Request::Tap { .. }
+            | Request::LongPress { .. }
+            | Request::Swipe { .. }
+            | Request::TapElement { .. }
+            | Request::Touch { phase: TouchPhase::Down | TouchPhase::Move | TouchPhase::Up, .. }
+    );
+    if positional {
+        let (Some(target), Some(view)) = (device, b["view"].as_str().filter(|id| !id.is_empty())) else {
+            return conflict(
+                ictl_l10n::tr!("画面已变化，请刷新后重试", "Display changed. Refresh the viewer and try again.").into(),
+            );
+        };
+        return (200, action_result(&req, protocol::call_in_view(&ctx.socket, &req, Some(SHORT), target, view).await));
     }
     (200, run_action(&ctx.socket, &req, udid, SHORT).await)
 }
@@ -514,7 +572,11 @@ const SHORT: Duration = Duration::from_secs(120);
 const SIGN: Duration = Duration::from_secs(16 * 60);
 
 async fn run_action(socket: &Path, req: &Request, udid: Option<&str>, timeout: Duration) -> Value {
-    match protocol::call_expecting(socket, req, Some(timeout), udid).await {
+    action_result(req, protocol::call_expecting(socket, req, Some(timeout), udid).await)
+}
+
+fn action_result(req: &Request, result: Result<Response, impl std::fmt::Display>) -> Value {
+    match result {
         // tapping by text that found nothing is an ordinary answer for the agent, a failure for the page
         Ok(Response::Text { text, outcome }) => {
             let missed = matches!(req, Request::TapElement { .. }) && protocol::tapped_nothing(&text, outcome);
@@ -544,20 +606,20 @@ async fn text_of(socket: &Path, req: Request, en: bool) -> Result<String, String
 /// then its actions carry the old UDID and are refused, never sent to a phone the user isn't looking at
 async fn info(ctx: &Ctx) -> Result<Value, String> {
     let s = crate::snapshot(&ctx.socket).await.map_err(|e| e.to_string())?;
-    if let Some(d) = &s.device
-        && !d.udid.eq_ignore_ascii_case(&ctx.udid())
-    {
-        *ctx.udid.lock().unwrap_or_else(|p| p.into_inner()) = d.udid.clone();
-    }
-    let udid = ctx.udid();
-    let screen = screen_of(&s.persisted, &udid);
+    let udid = s.device.as_ref().map(|d| d.udid.as_str()).unwrap_or_default();
+    *ctx.udid.lock().unwrap_or_else(|p| p.into_inner()) = udid.to_owned();
+    let screen = screen_of(&s.persisted, udid);
     Ok(json!({
+        "display": s.display,
         "width": screen.map(|s| s.width),
         "height": screen.map(|s| s.height),
         "udid": udid,
         // the picture's pointer drives a finger over CoreDevice HID (iOS 27 and later); older phones get whole gestures
         "live_touch": s.device.as_ref().is_some_and(|d| d.major_version() >= 27),
-        "device": s.device.map(|d| d.name),
+        "device": s.device.as_ref().map(|d| &d.name),
+        "model": s.device.as_ref().map(|d| &d.product_type),
+        "model_name": s.device.as_ref().and_then(|d| d.model_name()),
+        "family": s.device.as_ref().map_or("unknown", |d| d.family()),
         "state": state_of(&s.state).0,
     }))
 }
@@ -576,10 +638,13 @@ fn state_of(s: &DeviceState) -> (&'static str, Option<String>) {
 }
 
 fn device_json(d: &ictl_device::DeviceInfo) -> Value {
-    json!({"udid": d.udid, "name": d.name, "model": d.product_type, "ios": d.product_version})
+    json!({
+        "udid": d.udid, "name": d.name, "model": d.product_type, "ios": d.product_version,
+        "model_name": d.model_name(), "family": d.family(),
+    })
 }
 
-/// `{ state, last_error?, device: { name, model, ios, udid }, auto_unlock }`
+/// `{ state, last_error?, device: { name, model, model_name, family, ios, udid }, auto_unlock }`
 async fn daemon(ctx: &Ctx) -> Result<Value, String> {
     let s = crate::snapshot(&ctx.socket).await.map_err(|e| e.to_string())?;
     let (state, last_error) = state_of(&s.state);
@@ -594,7 +659,7 @@ async fn daemon(ctx: &Ctx) -> Result<Value, String> {
     }))
 }
 
-/// `{ devices: [{ udid, name, model, ios, controlled }], fixed }`
+/// `{ devices: [{ udid, name, model, model_name, family, ios, controlled }], fixed }`
 async fn devices(ctx: &Ctx) -> Result<Value, String> {
     let s = crate::snapshot(&ctx.socket).await.map_err(|e| e.to_string())?;
     let cur = s.device.as_ref().map(|d| d.udid.to_ascii_lowercase());
@@ -729,6 +794,40 @@ mod tests {
         Head::parse(s.as_bytes()).unwrap()
     }
 
+    #[tokio::test]
+    async fn feed_relays_all_bytes_and_finishes_when_the_phone_disconnects() {
+        let (mut phone, mut remote) = tokio::io::duplex(8);
+        let (mut client, mut browser) = tokio::io::duplex(8);
+        let frames = b"--wda\r\nContent-Type: image/jpeg\r\n\r\n\xff\xd8\xff\xd9\r\n--wda--\r\n";
+        let send = async {
+            phone.write_all(frames).await.unwrap();
+            phone.shutdown().await.unwrap();
+        };
+        let relay = async {
+            copy_feed(&mut remote, &mut client, Duration::from_secs(2)).await.unwrap();
+            client.shutdown().await.unwrap();
+        };
+        let mut received = Vec::new();
+        let (_, _, count) = tokio::join!(send, relay, browser.read_to_end(&mut received));
+        assert_eq!(count.unwrap(), frames.len());
+        assert_eq!(received, frames);
+    }
+
+    #[tokio::test]
+    async fn feed_expires_when_the_phone_stalls_or_the_browser_stops_reading() {
+        let (mut phone, mut remote) = tokio::io::duplex(8);
+        let (mut client, mut browser) = tokio::io::duplex(1);
+        let idle = Duration::from_millis(50);
+        phone.write_all(b"a").await.unwrap();
+        let err = copy_feed(&mut remote, &mut client, idle).await.unwrap_err();
+        assert!(err.is::<tokio::time::error::Elapsed>());
+        assert_eq!(browser.read_u8().await.unwrap(), b'a');
+        phone.write_all(b"bc").await.unwrap();
+        let err = copy_feed(&mut remote, &mut client, idle).await.unwrap_err();
+        assert!(err.is::<tokio::time::error::Elapsed>());
+        assert_eq!(browser.read_u8().await.unwrap(), b'b');
+    }
+
     #[test]
     fn actions_need_own_origin_and_json() {
         let ok = "POST /api/tap HTTP/1.1\r\nHost: 127.0.0.1:8200\r\nOrigin: http://127.0.0.1:8200\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n";
@@ -823,8 +922,8 @@ mod tests {
 
     #[test]
     fn the_page_says_its_default_language() {
-        assert!(page_in(ictl_l10n::Lang::En).contains("<html lang=\"en\" data-lang=\"en\">"));
-        assert!(page_in(ictl_l10n::Lang::Zh).contains("<html lang=\"zh-CN\">"));
+        assert!(page_in(ictl_l10n::Lang::En).contains("<html lang=\"en\" data-lang=\"en\" data-viewer>"));
+        assert!(page_in(ictl_l10n::Lang::Zh).contains("<html lang=\"zh-CN\" data-viewer>"));
     }
 
     #[test]

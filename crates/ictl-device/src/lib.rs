@@ -14,6 +14,7 @@ pub mod apps;
 pub mod ddi;
 pub mod hid;
 mod media;
+mod models;
 pub mod oslog;
 
 use std::future::Future;
@@ -185,6 +186,15 @@ impl Rotation {
             270 => Self::TopToLeft,
             _ => return None,
         })
+    }
+
+    pub fn degrees(self) -> u16 {
+        match self {
+            Self::Portrait => 0,
+            Self::TopToRight => 90,
+            Self::UpsideDown => 180,
+            Self::TopToLeft => 270,
+        }
     }
 
     pub fn is_landscape(self) -> bool {

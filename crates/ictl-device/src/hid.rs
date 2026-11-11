@@ -109,6 +109,7 @@ pub struct HidSession {
     pub screen: ScreenSize,
     /// 界面现在转了多少；点击、拖动的坐标是界面上的，发出去前按它换算回竖放（调用方每次操作前设）
     pub rotation: Rotation,
+    contact: Option<(u16, u16)>,
     stream: Option<ScreenMediaStream>,
     touch: UniversalHidServiceClient<Box<dyn ReadWrite>>,
     indigo: IndigoHidClient<Box<dyn ReadWrite>>,
@@ -135,6 +136,7 @@ impl HidSession {
             Ok((touch, indigo)) => Ok(Self {
                 screen: screen.portrait(),
                 rotation: Rotation::Portrait,
+                contact: None,
                 stream: Some(stream),
                 touch,
                 indigo,
@@ -180,7 +182,9 @@ impl HidSession {
         let (hx, hy) = self.hid_point((x, y));
         let state = if contact { TOUCHSCREEN_STATE_CONTACT } else { TOUCHSCREEN_STATE_RELEASE };
         limit(ictl_l10n::tr!("HID 触摸", "HID touch"), Duration::from_secs(5), async {
-            Ok(self.touch.send_touchscreen(state, hx, hy, None).await?)
+            self.touch.send_touchscreen(state, hx, hy, None).await?;
+            self.contact = contact.then_some((hx, hy));
+            Ok(())
         })
         .await
     }
@@ -229,6 +233,13 @@ impl HidSession {
 
     /// 停止屏幕媒体流。必须调用：直接丢掉的话手机端一直挂着这个会话（见 [`crate::Tunnel`]）
     pub async fn close(mut self) {
+        if let Some((x, y)) = self.contact.take() {
+            let _ = tokio::time::timeout(
+                Duration::from_millis(500),
+                self.touch.send_touchscreen(TOUCHSCREEN_STATE_RELEASE, x, y, None),
+            )
+            .await;
+        }
         if let Some(s) = self.stream.take() {
             s.stop().await;
         }

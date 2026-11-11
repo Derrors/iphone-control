@@ -3,7 +3,7 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
-use ictl_device::{Device, DeviceError, Tunnel, UsbDevice};
+use ictl_device::{Device, DeviceError, Rotation, ScreenSize, Tunnel, UsbDevice};
 use ictl_wda::{WdaClient, WdaError, WdaRunner, http::DeviceTransport};
 
 use crate::core::{Daemon, DeviceProfile, Inner, close_hid};
@@ -127,6 +127,39 @@ impl Daemon {
         self.publish(g);
     }
 
+    pub(crate) async fn sample_display(&self, g: &mut Inner, refresh_size: bool) {
+        let (size, rotation) = if let Some(wda) = self.wda(g) {
+            let size = if refresh_size { wda.measure_screen().await } else { wda.base_screen_size().await };
+            (size.ok().map(ScreenSize::portrait), wda.rotation().await.ok())
+        } else {
+            (None, None)
+        };
+        if let Some(r) = rotation {
+            g.dev.wda_rotation = Some((Instant::now(), r));
+        }
+        // Other clients use the last known size for HID even on WDA versions without /rotation.
+        if let (Some(size), Some(device)) = (size, &g.device)
+            && (g.persisted.screen != Some(size) || g.persisted.screen_udid.as_deref() != Some(&device.udid))
+        {
+            g.persisted.screen = Some(size);
+            g.persisted.screen_udid = Some(device.udid.clone());
+            g.persisted.save(&self.cfg.state_file());
+        }
+        self.update_display(g, size.zip(rotation)).await;
+    }
+
+    async fn update_display(&self, g: &mut Inner, sample: Option<(ScreenSize, Rotation)>) {
+        if crate::core::DisplayGeometry::update(&mut g.dev.display, sample) {
+            if g.dev.touch_rotation.is_some() {
+                close_hid(g).await;
+            } else if let Some((size, _)) = sample
+                && let Some(hid) = g.tunnel.as_mut().and_then(Tunnel::open_hid)
+            {
+                hid.screen = size;
+            }
+        }
+    }
+
     async fn offline(&self, g: &mut Inner) {
         let now = Instant::now();
         if g.device.take().is_some() {
@@ -145,6 +178,7 @@ impl Daemon {
     }
 
     pub(crate) async fn online(&self, g: &mut Inner, seen: &UsbDevice) {
+        g.info = g.infos.get(&seen.udid).cloned();
         // 只比 UDID 不够：断开几秒又接上（短于离线判定、落在两轮巡检之间）时 UDID 不变，
         // usbmuxd 却换了编号，旧句柄的每个连接都报 bad device，永远恢复不了
         if !g.device.as_ref().is_some_and(|d| d.is_connection(seen)) {
@@ -166,10 +200,6 @@ impl Daemon {
             // 同一台重新接入也清（App 列表重读很便宜，日志流经的旧连接已经断了）
             self.forget_device(g).await;
             let d = Device::from_usb(seen);
-            g.info = d.info().await.ok();
-            if let Some(i) = &g.info {
-                g.infos.insert(seen.udid.clone(), i.clone());
-            }
             let model =
                 g.info.as_ref().map(|i| format!(" {} iOS {}", i.product_type, i.product_version)).unwrap_or_default();
             self.log.log(&ictl_l10n::log_trf!("手机在线{model}", "Phone online{model}"));
@@ -191,7 +221,10 @@ impl Daemon {
                     self.refresh_device_profile(g).await;
                 }
             }
-            Ok(false) => return self.set_state(g, DeviceState::NeedsTrust),
+            Ok(false) => {
+                self.update_display(g, None).await;
+                return self.set_state(g, DeviceState::NeedsTrust);
+            }
             // usbmuxd 出错：这一轮不下结论
             Err(e) => {
                 return tracing::debug!(
@@ -215,7 +248,7 @@ impl Daemon {
         };
         if ready {
             g.wda_misses.reset();
-            self.refresh_hid_rotation(g).await;
+            self.sample_display(g, true).await;
             if g.state != DeviceState::Ready {
                 if g.state == DeviceState::NeedsAutomationPin || g.dedup.was_sent("pin") {
                     g.dedup.clear("pin");
@@ -223,17 +256,10 @@ impl Daemon {
                 }
                 self.set_state(g, DeviceState::Ready);
                 g.backoff.reset();
-                if let Some(w) = g.wda.as_mut()
-                    && let Ok(s) = w.screen_size().await
-                {
-                    // 存竖放尺寸：WDA 在横屏时就绪的话这里拿到的是横的
-                    g.persisted.screen = Some(s.portrait());
-                    g.persisted.screen_udid = g.device.as_ref().map(|d| d.udid.clone());
-                    g.persisted.save(&self.cfg.state_file());
-                }
             }
             return;
         }
+        self.update_display(g, None).await;
         if runner_alive && !g.wda_misses.hit() {
             return;
         }

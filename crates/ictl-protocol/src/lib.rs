@@ -294,6 +294,8 @@ pub const CANCEL_ON_CLOSE: &str = "cancel_on_close";
 /// 请求里带上这个键（值为 UDID）：守护进程正在控制的不是这台就不执行。`iphone_batch` 用它防止中途换了设备
 /// （自动选设备时拔掉正在控制的那台，会改控另一台）后，剩下的步骤落到另一台上
 pub const EXPECT_UDID: &str = "expect_udid";
+/// The live view whose geometry was used to calculate a coordinate.
+pub const EXPECT_VIEW: &str = "expect_view";
 
 /// Request key carrying the client's language (`zh` / `en`). The daemon answers in it; requests without it
 /// (older clients) get Chinese, as before. Older daemons ignore the extra key
@@ -316,6 +318,27 @@ pub async fn call_expecting(
     timeout: Option<std::time::Duration>,
     expect_udid: Option<&str>,
 ) -> std::io::Result<Response> {
+    exchange_on(socket, req, timeout, expect_udid, None).await
+}
+
+/// Send a coordinate action only if this device and its measured geometry still match.
+pub async fn call_in_view(
+    socket: &std::path::Path,
+    req: &Request,
+    timeout: Option<std::time::Duration>,
+    udid: &str,
+    view: &str,
+) -> std::io::Result<Response> {
+    exchange_on(socket, req, timeout, Some(udid), Some(view)).await
+}
+
+async fn exchange_on(
+    socket: &std::path::Path,
+    req: &Request,
+    timeout: Option<std::time::Duration>,
+    expect_udid: Option<&str>,
+    expect_view: Option<&str>,
+) -> std::io::Result<Response> {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
     let exchange = async {
         let stream = tokio::net::UnixStream::connect(socket).await?;
@@ -324,6 +347,9 @@ pub async fn call_expecting(
         if let Some(o) = v.as_object_mut() {
             o.insert(CANCEL_ON_CLOSE.into(), true.into());
             o.insert(LANG.into(), ictl_l10n::lang().code().into());
+            if let Some(view) = expect_view {
+                o.insert(EXPECT_VIEW.into(), view.into());
+            }
             if let Some(u) = expect_udid {
                 o.insert(EXPECT_UDID.into(), u.into());
             }

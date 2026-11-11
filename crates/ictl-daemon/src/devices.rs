@@ -39,10 +39,32 @@ impl Daemon {
     /// 记下这一轮 USB 上接着的设备；新接上的读一次名字、型号
     pub(crate) async fn note_connected(&self, g: &mut Inner, devices: Vec<UsbDevice>) {
         for d in &devices {
-            if !g.infos.contains_key(&d.udid)
-                && let Ok(i) = Device::from_usb(d).info().await
-            {
-                g.infos.insert(d.udid.clone(), i);
+            // A reattached USB connection may now have a different name or OS version.
+            if !g.connected.contains(d) {
+                g.infos.remove(&d.udid);
+            }
+            let device = Device::from_usb(d);
+            if let Some(cached) = g.infos.get(&d.udid) {
+                let complete =
+                    !cached.product_type.is_empty() && !cached.name.is_empty() && !cached.product_version.is_empty();
+                // Before trust, lockdown may only return a subset of the fields.
+                if complete || !device.paired().await.unwrap_or(false) {
+                    continue;
+                }
+            }
+            if let Ok(mut info) = device.info().await {
+                if let Some(cached) = g.infos.get(&d.udid) {
+                    for (field, previous) in [
+                        (&mut info.product_type, &cached.product_type),
+                        (&mut info.name, &cached.name),
+                        (&mut info.product_version, &cached.product_version),
+                    ] {
+                        if field.is_empty() {
+                            field.clone_from(previous);
+                        }
+                    }
+                }
+                g.infos.insert(d.udid.clone(), info);
             }
         }
         g.connected = devices;

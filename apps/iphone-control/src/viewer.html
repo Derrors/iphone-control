@@ -77,14 +77,14 @@
   --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px; --sp-5: 20px; --sp-6: 24px; --sp-8: 32px; --sp-10: 40px;
   --r-xs: 6px; --r-sm: 8px; --r-md: 10px; --r-lg: 14px; --r-xl: 18px; --r-2xl: 20px;
   --gutter: 0px;
-  --head-h: max(48px, 3.2rem);
-  --w-agent: 352px; --w-dev: 288px;
+  --head-h: max(44px, 2.75rem);
+  --w-agent: 292px; --w-dev: 232px;
   --dur-fast: 150ms; --dur: 220ms; --dur-slow: 300ms; --dur-exit: 150ms;
   --ease-out: cubic-bezier(.2, .7, .2, 1); --ease-in: cubic-bezier(.4, 0, 1, 1);
 
   /* 浅色外观 */
-  --canvas: #e7e8ea; --panel: #ffffff; --sunken: #f4f6f8; --hover: #eff2f4; --press: #e5e9ec;
-  --line: #e3e7ea; --line-strong: #cbd2d8; --panel-edge: rgba(16, 24, 32, .07);
+  --canvas: #f1f2f4; --panel: #ffffff; --sunken: #f6f7f8; --hover: #eff2f4; --press: #e5e9ec;
+  --line: #e5e7e9; --line-strong: #d7dbdf; --panel-edge: rgba(16, 24, 32, .07);
   --text: #11161a; --text-2: #3b444c; --muted: #5f6a73;
   --accent: #365b7c; --accent-hover: #294965; --on-accent: #ffffff; --accent-soft: #e2eaf1; --accent-line: #bfcedc; --accent-text: #2e4e69;
   --user: #2457d6; --user-soft: #e9effc; --user-text: #1f48b3;
@@ -97,7 +97,7 @@
   --shadow-xs: 0 1px 2px rgba(16, 24, 32, .06);
   --shadow-panel: 0 1px 2px rgba(16, 24, 32, .04), 0 8px 24px rgba(16, 24, 32, .05);
   --shadow-float: 0 2px 6px rgba(16, 24, 32, .06), 0 12px 32px rgba(16, 24, 32, .10);
-  --shadow-phone: 0 4px 10px rgba(16, 24, 32, .08), 0 36px 64px -16px rgba(16, 24, 32, .32);
+  --shadow-phone: 0 2px 4px rgba(16, 24, 32, .12), 0 14px 24px -10px rgba(16, 24, 32, .24);
 }
 :root[data-scheme="dark"] {
     color-scheme: dark;
@@ -210,13 +210,14 @@ body.resizing .stage, body.resizing iframe { pointer-events: none; }
 
 /* ================= 右栏：AI 助手 ================= */
 .convo { padding: var(--sp-8) var(--sp-6) var(--sp-4); display: flex; flex-direction: column; gap: var(--sp-6); }
-.intro { display: flex; flex-direction: column; gap: var(--sp-5); }
-.intro-title { font-size: var(--fs-xl); font-weight: 700; letter-spacing: -.02em; line-height: 1.25; outline-offset: 4px; }
-.intro-text { color: var(--text-2); }
-.caps { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--sp-3) var(--sp-4); }
-.cap { display: flex; align-items: center; gap: 10px; font-size: var(--fs-sm); color: var(--text-2); min-width: 0; }
-.cap .ic { flex: none; width: 32px; height: 32px; display: grid; place-items: center; border-radius: 9px; background: var(--sunken); box-shadow: inset 0 0 0 1px var(--line); color: var(--accent-text); --od-icon-size: 16px; }
-.demo-note { font-size: var(--fs-xs); color: var(--warn-text); background: var(--warn-soft); padding: 10px var(--sp-3); border-radius: var(--r-md); }
+.intro { margin: auto; width: 100%; max-width: 280px; padding: 24px 6px; display: flex; flex-direction: column; align-items: center; text-align: center; }
+.intro-symbol { display: block; color: var(--muted); --od-icon-size: 26px; margin-bottom: 10px; }
+.intro-title { color: var(--text-2); font-size: var(--fs-md); font-weight: 600; letter-spacing: normal; line-height: 1.4; }
+.intro-text { margin-top: 5px; color: var(--muted); font-size: var(--fs-xs); line-height: 1.5; text-wrap: balance; }
+.agent-example { display: inline-flex; gap: 6px; align-items: center; margin-top: 10px; padding: 4px 2px; border: 0; background: transparent; cursor: pointer; color: var(--accent-text); font-size: var(--fs-xs); font-weight: 500; --od-icon-size: 14px; }
+.agent-example:hover { text-decoration: underline; text-underline-offset: 3px; }
+#agent-scroll .convo { min-height: 100%; }
+#agent-scroll .turns:empty { display: none; }
 
 .turns { display: flex; flex-direction: column; gap: var(--sp-8); }
 .turn { display: flex; flex-direction: column; gap: var(--sp-3); animation: rise var(--dur) var(--ease-out) both; }
@@ -288,7 +289,6 @@ body.resizing .stage, body.resizing iframe { pointer-events: none; }
 .textarea:focus-visible { outline: none; }
 .textarea:disabled { color: var(--muted); cursor: not-allowed; }
 .composer-row { display: flex; align-items: center; gap: var(--sp-2); padding: var(--sp-2) var(--sp-2) var(--sp-2) var(--sp-4); }
-.composer-hint { flex: 1; font-size: var(--fs-2xs); color: var(--muted); }
 .agent-pick { flex: none; }
 .agent-pick .select { min-height: 30px; max-width: 160px; padding: 0 26px 0 10px; border-radius: var(--r-sm); background: var(--sunken); color: var(--text-2); font-size: var(--fs-2xs); font-weight: 500; transition: background var(--dur-fast) var(--ease-out); }
 .agent-pick .select:hover:not(:disabled) { background: var(--hover); }
@@ -360,10 +360,26 @@ body.resizing .stage, body.resizing iframe { pointer-events: none; }
 .frame[data-kind="unknown"], .frame[data-kind="unknown"] .stage { border-radius: 10px; }
 .stage > * { grid-area: 1 / 1; }
 .stage img { width: 100%; height: 100%; object-fit: contain; display: block; -webkit-user-drag: none; }
-.stage-msg { place-self: center; padding: var(--sp-6); color: #d4d7dc; text-align: center; font-size: var(--fs-sm); max-width: 34ch; }
-.stage-msg code { font-family: var(--font-mono, ui-monospace, monospace); font-size: 0.92em; color: #fff; overflow-wrap: anywhere; }
-.stage-msg .btn { margin-top: var(--sp-3); }
-.stage-msg .stage-err { display: inline-block; margin-top: var(--sp-2); font-size: var(--fs-xs); color: #f2b8b5; overflow-wrap: anywhere; }
+.idle-canvas, .stage-wrap { grid-area: 1 / 1; }
+.idle-canvas { position:relative; isolation:isolate; min-height:0; min-width:0; overflow:auto; display:grid; padding:24px; background:var(--canvas); }
+.idle-canvas::before { content:""; position:absolute; z-index:-1; inset:0; pointer-events:none;
+  background-image:radial-gradient(circle, color-mix(in srgb,var(--muted) 24%,transparent) .8px, transparent .95px);
+  background-position:center; background-size:18px 18px; mask-image:radial-gradient(ellipse 63% 53% at 50% 48%,black 8%,transparent 100%); }
+.idle-content { margin:auto; display:flex; flex-direction:column; align-items:center; width:100%; padding:10px 0 30px; text-align:center; }
+.idle-device { width:clamp(150px,20vw,238px); max-width:70%; height:auto; max-height:30vh; object-fit:contain; margin:0 0 27px; }
+.idle-copy { max-width:31em; }
+.idle-copy h1 { margin:0; font-size:clamp(1.32rem,2vw,1.6rem); font-weight:620; letter-spacing:-.035em; line-height:1.35; }
+.stage-msg { margin:10px auto 0; color:var(--muted); font-size:var(--fs-sm); line-height:1.7; text-wrap:pretty; overflow-wrap:anywhere; }
+.stage-msg code { color:var(--text-2); font: .92em var(--font-mono); }
+.stage-msg .btn { margin-top:12px; } .stage-msg .stage-err { color:var(--danger-text); }
+.connection-help { margin-top:19px; padding:0 12px; gap:6px; color:var(--text-2); background:var(--panel); border:1px solid var(--line-strong); border-radius:7px; font-size:var(--fs-xs); font-weight:500; --od-icon-size:13px; }
+.connection-help .ic { transform:rotate(-90deg); }
+[data-scheme="dark"] .idle-device { filter:brightness(.85); }
+.canvas-label { display:flex; align-items:center; gap:8px; font-size:var(--fs-xs); font-weight:550; color:var(--text-2); --od-icon-size:16px; }
+.canvas-label .ic { color:var(--muted); }
+.pane-stage[data-vacant="true"] .stage-foot:not(:has(#guard:not([hidden]))) { display:none; }
+.pane-stage[data-vacant="true"] #dock, .pane-stage[data-vacant="true"] .meta-row { display:none; }
+
 .marks { width: 100%; height: 100%; pointer-events: none; overflow: visible; }
 /* 操作结果：画面下方淡入淡出的小提示，不占布局 */
 .toast {
@@ -437,28 +453,49 @@ body.resizing .stage, body.resizing iframe { pointer-events: none; }
 .empty-note { font-size: var(--fs-sm); color: var(--muted); padding: var(--sp-4); border-radius: var(--r-lg); background: var(--sunken); }
 .empty-note.err { color: var(--danger-text); background: var(--danger-soft); }
 
-.device-card { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 14px; align-items: center; padding: var(--sp-4); border-radius: var(--r-lg); background: var(--sunken); }
-.device-ic { width: 48px; height: 48px; border-radius: 12px; background: var(--panel); box-shadow: var(--shadow-xs), 0 0 0 1px var(--panel-edge); display: grid; place-items: center; color: var(--accent-text); --od-icon-size: 24px; }
-.device-name { display: block; font-weight: 700; font-size: var(--fs-lg); line-height: 1.3; }
-.device-sub { display: block; font-size: var(--fs-xs); color: var(--muted); }
-.facts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--sp-2); }
-.fact { padding: 10px var(--sp-3); border-radius: var(--r-md); box-shadow: inset 0 0 0 1px var(--line); display: grid; gap: 2px; min-width: 0; }
-.fact-k { display: block; font-size: var(--fs-2xs); color: var(--muted); }
-.fact-v { display: block; font-size: var(--fs-sm); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.fact-v.mono { font-size: var(--fs-2xs); font-weight: 500; }
-.checks { display: flex; flex-direction: column; padding: 14px 14px 2px; border-radius: var(--r-lg); background: var(--sunken); }
-.check { display: grid; grid-template-columns: 24px minmax(0, 1fr); column-gap: var(--sp-3); }
-.check-rail { display: flex; flex-direction: column; align-items: center; }
-.check-dot { width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center; --od-icon-size: 14px; }
-.check-dot.pending { box-shadow: inset 0 0 0 1.5px var(--line-strong); color: var(--muted); }
-.check-line { flex: 1; width: 1.5px; background: var(--line-strong); opacity: .6; min-height: 10px; margin: 2px 0; }
-.check:last-child .check-line { visibility: hidden; }
-.check-body { padding: 2px 0 var(--sp-3); display: grid; gap: 2px; min-width: 0; }
-.check-name { display: block; font-size: var(--fs-sm); font-weight: 600; }
-.check.pending .check-name { color: var(--muted); font-weight: 500; }
-.check-hint { display: block; font-size: var(--fs-xs); color: var(--text-2); }
-.check-hint code { font-size: var(--fs-2xs); padding: 1px 6px; border-radius: 4px; background: var(--panel); box-shadow: inset 0 0 0 1px var(--line); }
-.check-err { display: block; font-size: var(--fs-2xs); color: var(--danger-text); font-family: var(--font-mono); overflow-wrap: anywhere; }
+#pane-dev { background: var(--sunken); }
+#pane-dev .pane-head { background: transparent; padding: 0 14px; }
+#pane-dev .seg { flex: 1; background: transparent; padding: 0; gap: 4px; }
+#pane-dev .seg button { min-height: 32px; padding: 3px 5px; font-weight: 500; border-radius: 6px; }
+#pane-dev .seg [aria-selected="true"] { background: var(--press); box-shadow: none; color: var(--text); font-weight: 600; }
+@media (min-width: 1280px) { #pane-dev .dev-close { display: none; } }
+#pane-dev .tabpanel { padding: 18px 14px; gap: 20px; }
+#pane-dev #tp-status { min-height: 100%; gap: 18px; }
+.nav-caption { margin: 0 6px 8px; font-size: var(--fs-xs); font-weight: 600; color: var(--muted); }
+.nav-device-list { display: grid; gap: 3px; }
+.nav-device { width: 100%; display: flex; align-items: center; gap: 9px; min-height: 40px; padding: 7px 8px; border: 0; border-radius: 7px; background: transparent; color: var(--text-2); text-align: left; }
+button.nav-device { cursor: pointer; }
+button.nav-device:hover { background: var(--hover); }
+button.nav-device[aria-current="true"] { background: var(--accent-soft); color: var(--accent-text); }
+button.nav-device:disabled { cursor: default; }
+.nav-device > svg { flex: none; --od-icon-size: 18px; }
+.nav-device-copy { min-width: 0; display: grid; gap: 2px; }
+.device-name { font-size: var(--fs-sm); font-weight: 600; line-height: 1.35; overflow-wrap: anywhere; }
+.device-sub { font-size: var(--fs-xs); color: var(--muted); overflow-wrap: anywhere; }
+.nav-device-empty { color: var(--muted); font-size: var(--fs-sm); padding-block: 5px; }
+.nav-readout { display: grid; gap: 7px; margin: 0 6px; }
+.fact { display: grid; grid-template-columns: minmax(0, .9fr) minmax(0, 1.3fr); gap: 10px; align-items: baseline; }
+.fact-k { color: var(--muted); font-size: var(--fs-xs); }
+.fact-v { margin: 0; text-align: right; color: var(--text-2); font-size: var(--fs-sm); overflow-wrap: anywhere; }
+.fact-v.mono { font-size: var(--fs-xs); }
+.nav-disclosure { border-top: 1px solid var(--line); margin: 0 6px; padding-top: 6px; }
+.nav-disclosure > summary { display: flex; align-items: center; gap: 7px; min-height: 36px; width: fit-content; font-size: var(--fs-xs); font-weight: 600; color: var(--text-2); cursor: pointer; list-style: none; }
+.nav-disclosure > summary::-webkit-details-marker { display: none; }
+.nav-disclosure > summary::before { content: ""; width: 6px; height: 6px; transform: rotate(45deg); border-top: 1.5px solid currentColor; border-right: 1.5px solid currentColor; margin: 0 3px 0 1px; }
+.nav-disclosure[open] > summary::before { transform: rotate(135deg); }
+.nav-disclosure .nav-readout { margin: 3px 0 8px; }
+#connection-checks { margin-top: auto; }
+.nav-check-list { display: grid; gap: 10px; padding: 4px 0; }
+.nav-check-list li { display: grid; grid-template-columns: 16px minmax(0,1fr); column-gap: 6px; align-items: start; }
+.nav-check-list svg { margin-top: 2px; --od-icon-size: 14px; color: var(--muted); }
+.nav-check-list .check-ok { color: var(--ok-text); }
+.check-name, .check-hint, .check-err { display: block; font-size: var(--fs-xs); overflow-wrap: anywhere; }
+.check-name { font-weight: 500; }
+.check-hint { margin-top: 3px; color: var(--muted); }
+.check-err { color: var(--danger-text); }
+.nav-offline-panel { display: none; color: var(--muted); font-size: var(--fs-sm); }
+#pane-dev[data-no-device="true"] :is(#tp-apps, #tp-elements) > .sec { display: none; }
+#pane-dev[data-no-device="true"] .nav-offline-panel { display: block; }
 
 .url-row { display: flex; gap: var(--sp-2); }
 .search { display: grid; }
@@ -592,8 +629,16 @@ body.resizing .stage, body.resizing iframe { pointer-events: none; }
 
 /* A single toolbar aligns the window above all three panes. */
 .shell { position:relative; }
-.workspace-bar { display:flex; align-items:center; gap:8px; min-height:46px; padding:3px 12px; background:var(--panel); border-bottom:1px solid var(--line-strong); }
+.workspace-brand { display:flex; align-items:center; gap:9px; flex-shrink:0; }
+.workspace-brand .brand-name { font-size:.95rem; letter-spacing:-.025em; font-weight:620; }
+.app-glyph { display:grid; place-items:center; width:26px; height:26px; border-radius:7px; background:#252a30; color:#fff; --od-icon-size:19px; box-shadow:inset 0 0 0 1px #ffffff20; }
+.workspace-bar { display:flex; align-items:center; gap:14px; min-height:50px; padding:3px 16px; background:var(--panel); border-bottom:1px solid var(--line-strong); }
+.workspace-bar #dev-toggle { margin-left:4px; }
 .workspace-bar #dev-toggle .ic { transform:scaleX(-1); }
+.workspace-bar .btn { font-weight:500; color:var(--text-2); }
+.workspace-bar #appearance-btn { gap:6px; }
+.workspace-bar #lang-btn { font-variant-numeric:tabular-nums; }
+.workspace-actions #agent-toggle { width:auto; padding:0 10px; margin-left:6px; gap:6px; border:1px solid var(--line); background:var(--sunken); --od-icon-size:15px; }
 .workspace-bar .workspace-actions { margin-left:auto; display:flex; align-items:center; gap:2px; }
 .workspace-bar .btn[aria-expanded="true"] { color:var(--accent-text); }
 .pane-dev { border-right:1px solid var(--line-strong); }
@@ -610,15 +655,17 @@ body.resizing .stage, body.resizing iframe { pointer-events: none; }
 .dock,.composer,.composer:focus-within { box-shadow:none; }
 .dock { padding:0; border-radius:0; }
 .convo,.tabpanel { padding:16px; }
-.intro { gap:12px; }
-.intro-title { font-weight:600; letter-spacing:normal; }
+#pane-agent .agent-foot { border-top: 0; padding: 8px 12px 12px; }
+#pane-agent .composer { border-radius: 12px; background: var(--panel); border-color: var(--line-strong); }
+#pane-agent .composer:focus-within { border-color: var(--accent); }
+#pane-agent .composer.invalid { border-color: var(--danger); }
+#pane-agent .composer-row { justify-content: space-between; padding: 0 6px 6px 8px; }
+#pane-agent .textarea { min-height: 52px; padding: 11px 12px 4px; font-size: var(--fs-sm); }
+#pane-agent .agent-pick { max-width: calc(100% - 42px); }
+#pane-agent .agent-pick .select { background: transparent; max-width: 100%; }
+#pane-agent .send { margin-left: auto; width: 32px; min-height: 32px; height: 32px; border-radius: 50%; --od-icon-size: 16px; }
+@media (pointer:coarse) { #pane-agent .send { width: 44px; height: 44px; } }
 .sec-title { letter-spacing:normal; }
-.device-card { padding:0; background:transparent; border-radius:0; gap:10px; }
-.device-ic { width:30px; height:38px; background:transparent; box-shadow:none; }
-.facts { display:flex; flex-direction:column; gap:0; }
-.fact { display:grid; grid-template-columns: minmax(0,.85fr) minmax(0,1.15fr); align-items:baseline; gap:8px; padding:6px 0; border-radius:0; box-shadow:none; }
-.fact-v { text-align:right; white-space:normal; overflow-wrap:anywhere; }
-.checks { padding:0; background:transparent; }
 .appearance-options { display:grid; gap:14px; }
 .appearance-options label { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1.5fr); gap:12px; align-items:center; }
 .appearance-options select { border:1px solid var(--line-strong); }
@@ -674,7 +721,7 @@ body.resizing .stage, body.resizing iframe { pointer-events: none; }
   .stage-head { padding: 0 var(--sp-4); }
 }
 @media (max-width: 767.98px) {
-  .workspace-bar { min-height:44px; }
+  .workspace-bar { min-height:46px; padding-inline:12px; }
   .workspace-bar .btn,.mbar .seg button { min-height:40px; }
   .mbar { padding:3px 8px; }
   .mbar .seg { flex-basis: 100%; }
@@ -694,7 +741,25 @@ body.resizing .stage, body.resizing iframe { pointer-events: none; }
   .type-field .input { width: auto; flex: 1; }
   .convo { padding: var(--sp-6) var(--sp-4) var(--sp-4); }
   .tabpanel { padding: var(--sp-4); }
-  .caps { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width:767.98px) {
+  .idle-canvas { padding:16px; }
+  .idle-device { width:155px; max-height:24vh; margin-bottom:20px; }
+  .canvas-label { padding-left:6px; }
+}
+@media (max-width:767.98px) {
+  .mbar { padding:0 10px; background:var(--panel); border-bottom:1px solid var(--line); }
+  .mbar .seg { border:0; border-radius:0; padding:0; box-shadow:none; background:transparent; }
+  .mbar .seg button { min-height:39px; border:0; border-bottom:2px solid transparent; border-radius:0; box-shadow:none; background:transparent; font-size:var(--fs-xs); }
+  .mbar .seg button[aria-selected="true"] { color:var(--text); border-bottom-color:var(--accent-text); background:transparent; box-shadow:none; }
+  .pane-stage[data-vacant="true"]:has(#canvas-label:not([hidden])) { grid-template-rows:minmax(0,1fr) auto; }
+  .pane-stage[data-vacant="true"] .stage-head:has(#canvas-label:not([hidden])) { display:none; }
+}
+@media (max-width:420px) {
+  .workspace-bar { gap:8px; }
+  .workspace-bar #appearance-btn { width:36px; padding:0; }
+  .workspace-bar #appearance-btn span:not(.ic) { position:absolute; inline-size:1px; block-size:1px; overflow:hidden; clip-path:inset(50%); }
+  .workspace-bar #lang-btn { padding:0 8px; }
 }
 /* A short landscape viewport has room beside the picture for the two toolbars. */
 @media (orientation:landscape) and (min-width:540px) and (max-width:1023.98px) and (max-height:520px) {
@@ -712,6 +777,14 @@ body.resizing .stage, body.resizing iframe { pointer-events: none; }
   .type-field .input { min-width:0; }
   .keys,.type-field { justify-content:center; }
 }
+@media (orientation:landscape) and (min-width:540px) and (max-width:1023.98px) and (max-height:520px) {
+  .pane-stage[data-vacant="true"] { grid-template-columns:1fr; grid-template-rows:minmax(0,1fr); }
+  .pane-stage[data-vacant="true"] .stage-head { display:none; }
+  .pane-stage[data-vacant="true"] .stage-area { grid-area:1 / 1; }
+  .idle-content { flex-direction:row; justify-content:center; gap:30px; padding:4px 0; text-align:left; }
+  .idle-device { width:135px; max-height:45vh; margin:0; }
+  .idle-copy { max-width:22em; } .connection-help { margin-top:10px; }
+}
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 1ms !important; animation-iteration-count: 1 !important; transition-duration: 1ms !important; }
   .spin { animation: none !important; }
@@ -720,20 +793,20 @@ body.resizing .stage, body.resizing iframe { pointer-events: none; }
 </head>
 <body>
 <header class="workspace-bar">
+  <div class="workspace-brand"><span class="app-glyph" aria-hidden="true" data-icon="control"></span><span class="brand-name">iPhone Control</span></div>
   <button type="button" class="btn btn-ghost btn-sm btn-icon pane-switch" id="dev-toggle" aria-controls="pane-dev" aria-expanded="true" aria-label="设备面板" title="设备面板"><span class="ic" data-icon="panel"></span></button>
-  <span class="brand-name">iPhone Control</span>
   <div class="workspace-actions">
-    <button type="button" class="btn btn-ghost btn-sm" id="appearance-btn" aria-haspopup="dialog" aria-controls="appearance">外观</button>
+    <button type="button" class="btn btn-ghost btn-sm" id="appearance-btn" aria-haspopup="dialog" aria-controls="appearance" title="外观"><span class="ic" data-icon="appearance"></span><span>外观</span></button>
     <button type="button" class="btn btn-ghost btn-sm" id="lang-btn" aria-label="切换语言" title="切换语言">EN</button>
-    <button type="button" class="btn btn-ghost btn-sm btn-icon pane-switch" id="agent-toggle" aria-controls="pane-agent" aria-expanded="true" aria-label="AI 助手" title="AI 助手"><span class="ic" data-icon="panel"></span></button>
+    <button type="button" class="btn btn-ghost btn-sm btn-icon pane-switch" id="agent-toggle" aria-controls="pane-agent" aria-expanded="true" aria-label="AI 助手" title="AI 助手"><span class="ic" data-icon="chat"></span><span>AI 助手</span></button>
   </div>
 </header>
 <div class="shell" id="shell" data-view="screen" data-dev-open="false">
   <header class="mbar">
     <div class="seg" role="tablist" aria-label="切换视图">
-      <button type="button" role="tab" id="vt-agent" aria-selected="false" aria-controls="pane-agent" data-action="view" data-view="agent"><span id="vt-agent-label">AI 助手</span></button>
-      <button type="button" role="tab" id="vt-screen" aria-selected="true" aria-controls="pane-stage" data-action="view" data-view="screen">屏幕</button>
       <button type="button" role="tab" id="vt-device" aria-selected="false" aria-controls="pane-dev" data-action="view" data-view="device">设备</button>
+      <button type="button" role="tab" id="vt-screen" aria-selected="true" aria-controls="pane-stage" data-action="view" data-view="screen">屏幕</button>
+      <button type="button" role="tab" id="vt-agent" aria-selected="false" aria-controls="pane-agent" data-action="view" data-view="agent"><span id="vt-agent-label">AI 助手</span></button>
     </div>
   </header>
 
@@ -749,8 +822,18 @@ body.resizing .stage, body.resizing iframe { pointer-events: none; }
       <button type="button" class="btn btn-ghost btn-icon dev-close" id="dev-close" data-action="dev-close" aria-label="隐藏设备面板" title="隐藏设备面板"><span class="ic" data-icon="panel"></span></button>
     </div>
     <div class="pane-body">
-      <section class="tabpanel" id="tp-status" role="tabpanel" aria-labelledby="tab-status"></section>
+      <section class="tabpanel" id="tp-status" role="tabpanel" aria-labelledby="tab-status">
+        <div><h2 class="nav-caption">设备列表</h2><ul class="nav-device-list" id="nav-devices"></ul></div>
+        <dl class="nav-readout" id="nav-facts" hidden></dl>
+        <details class="nav-disclosure" id="device-identifiers" hidden>
+          <summary>设备标识</summary><dl class="nav-readout" id="nav-ids"></dl>
+        </details>
+        <details class="nav-disclosure" id="connection-checks">
+          <summary>连接检查</summary><div id="nav-checks"></div>
+        </details>
+      </section>
       <section class="tabpanel" id="tp-apps" role="tabpanel" aria-labelledby="tab-apps" hidden>
+        <p class="nav-offline-panel">连接设备后可查看应用。</p>
         <div class="sec">
           <label class="label" for="url">打开链接</label>
           <div class="url-row">
@@ -766,6 +849,7 @@ body.resizing .stage, body.resizing iframe { pointer-events: none; }
         </div>
       </section>
       <section class="tabpanel" id="tp-elements" role="tabpanel" aria-labelledby="tab-elements" hidden>
+        <p class="nav-offline-panel">连接设备后可查看界面元素。</p>
         <div class="sec">
           <div class="sec-head"><span class="sec-title">当前界面的元素</span><span class="count" id="el-count"></span></div>
           <div class="panel-tools">
@@ -786,8 +870,9 @@ body.resizing .stage, body.resizing iframe { pointer-events: none; }
     </div>
   </aside>
   <!-- 中：设备舞台 -->
-  <main class="pane pane-stage" id="pane-stage" aria-label="设备屏幕">
+  <main class="pane pane-stage" id="pane-stage" data-vacant="true" aria-label="设备屏幕">
     <div class="pane-head stage-head">
+      <span class="canvas-label" id="canvas-label"><span class="ic" data-icon="display"></span><span>设备画面</span></span>
       <div class="statusbar">
         <div class="dev-select">
           <label class="label" for="device">控制设备</label>
@@ -809,13 +894,22 @@ body.resizing .stage, body.resizing iframe { pointer-events: none; }
       </div>
     </div>
     <div class="stage-area">
-    <div class="stage-wrap" id="stage-wrap">
+      <section class="idle-canvas" id="idle-canvas" aria-labelledby="idle-title">
+        <div class="idle-content">
+          <img class="idle-device" src="viewer-idle.webp" width="600" height="522" alt="" draggable="false">
+          <div class="idle-copy">
+            <h1 id="idle-title">正在连接…</h1>
+            <div class="stage-msg" id="stage-msg"></div>
+            <button class="btn btn-sm connection-help" id="connection-help" type="button" data-action="connection-help" hidden><span>连接帮助</span><span class="ic" data-icon="chevron"></span></button>
+          </div>
+        </div>
+      </section>
+    <div class="stage-wrap" id="stage-wrap" hidden>
       <div class="frame" id="frame" data-ctl="user">
         <div class="stage" id="stage" role="group" aria-label="设备实时画面：单击轻点，拖动或滚动滚轮滑动，按住长按" aria-describedby="status">
           <img id="live" alt="设备的实时画面" draggable="false" hidden>
           <div id="demo" class="ph" aria-hidden="true" hidden></div>
           <svg id="marks" class="marks" viewBox="0 0 393 852" aria-hidden="true"></svg>
-          <div class="stage-msg" id="stage-msg">正在连接 iphone-control 服务…</div>
         </div>
       </div>
     </div>
@@ -851,23 +945,15 @@ body.resizing .stage, body.resizing iframe { pointer-events: none; }
     <div class="resizer resizer-left" id="resizer" role="separator" aria-orientation="vertical" aria-controls="pane-agent" aria-label="调整 AI 助手栏宽度" title="拖动调整宽度，双击恢复默认" tabindex="0"></div>
     <div class="pane-head">
       <h2>AI 助手</h2>
-      <span id="agent-badge"></span>
       <button type="button" class="btn btn-ghost btn-sm clear-btn" id="clear-btn" data-action="clear" data-focus="clear" hidden><span class="ic" data-icon="trash"></span><span>清空记录</span></button>
     </div>
     <div class="pane-body" id="agent-scroll">
       <div class="convo">
         <div class="intro" id="intro">
-          <h1 class="intro-title" tabindex="-1" id="intro-title">让 AI 操作你的 Apple 设备</h1>
-          <p class="intro-text">用一句话描述目标。AI 会看真实屏幕，用下面这些现成的操作一步步完成；遇到付款、删除、发消息这类操作会先停下来等你确认。</p>
-          <ul class="caps" aria-label="AI 能用的操作">
-            <li class="cap"><span class="ic" data-icon="eye"></span><span>看屏幕、读元素</span></li>
-            <li class="cap"><span class="ic" data-icon="tap"></span><span>点按、滑动、长按</span></li>
-            <li class="cap"><span class="ic" data-icon="keyboard"></span><span>输入文字</span></li>
-            <li class="cap"><span class="ic" data-icon="grid"></span><span>启动、关闭 App</span></li>
-            <li class="cap"><span class="ic" data-icon="link"></span><span>打开链接</span></li>
-            <li class="cap"><span class="ic" data-icon="home"></span><span>实体按键</span></li>
-          </ul>
-          <p class="demo-note" id="demo-note" hidden>演示模式：没有连上 iphone-control 服务。设备画面、App 列表、元素和 AI 的每一步都是本地模拟的。</p>
+          <span class="intro-symbol" data-icon="conversation" aria-hidden="true"></span>
+          <h3 class="intro-title" tabindex="-1" id="intro-title">暂无任务</h3>
+          <p class="intro-text" id="agent-empty-hint">执行步骤和确认请求会显示在这里。</p>
+          <button type="button" class="agent-example" id="agent-example" data-action="fill" data-prompt="打开时钟，启动秒表" title="将示例填入输入框" hidden><span>打开时钟，启动秒表</span><span data-icon="arrow" aria-hidden="true"></span></button>
         </div>
         <ol class="turns" id="turns" aria-label="任务记录"></ol>
       </div>
@@ -883,8 +969,8 @@ body.resizing .stage, body.resizing iframe { pointer-events: none; }
             <select class="select" id="agent" title="执行任务的本地 AI"></select>
             <span class="select-chev" data-icon="chevron"></span>
           </div>
-          <span class="composer-hint" id="composer-hint">Enter 发送 · Shift+Enter 换行</span>
-          <button type="button" class="btn btn-primary send" id="send" data-action="send" data-focus="send" aria-label="开始任务"><span class="ic" data-icon="send"></span></button>
+          <span class="sr-only" id="composer-hint">Enter 发送 · Shift+Enter 换行</span>
+          <button type="button" class="btn btn-primary send" id="send" data-action="send" data-focus="send" aria-label="开始任务" title="开始任务（Enter）" disabled><span class="ic" data-icon="send"></span></button>
         </div>
       </div>
       <p class="field-error" id="prompt-error" hidden></p>
@@ -936,7 +1022,21 @@ document.documentElement.lang = LANG === 'en' ? 'en' : 'zh-CN';
 const EN = {" · 演示数据":" · demo data"," 等":" and more","<div class=\"ph-kb\" data-type=\"Keyboard\">键盘</div>":"<div class=\"ph-kb\" data-type=\"Keyboard\">Keyboard</div>","<li class=\"empty-note\">打开这一页时会读取已安装的 App。</li>":"<li class=\"empty-note\">The installed apps are read when this tab opens.</li>","<li class=\"sr-only\">正在读取 App 列表…</li>":"<li class=\"sr-only\">Reading the app list…</li>","<li class=\"sr-only\">正在读取元素…</li>":"<li class=\"sr-only\">Reading elements…</li>","<option>没有可用的 AI</option>":"<option>No AI available</option>","<p class=\"empty-note\">正在连接 iphone-control 服务…</p>":"<p class=\"empty-note\">Connecting to the iphone-control service…</p>","<span class=\"chip\"><span class=\"chip-dot warn\"></span><span>演示模式</span></span>":"<span class=\"chip\"><span class=\"chip-dot warn\"></span><span>Demo</span></span>","AI 任务已停止":"AI task stopped","AI 任务已完成":"AI task done","AI 任务没有完成":"AI task not done","AI 任务的事件流断开了，正在重连…":"Lost the AI task's event stream, reconnecting…","AI 会立刻停下。已经在设备上做完的操作不会撤销。":"The AI stops right away. What it already did on the device isn't undone.","AI 助手":"AI assistant","AI 在等你确认一步操作":"The AI is waiting for you to confirm a step","AI 在等你确认一步操作，确认前画面保持锁定。":"The AI is waiting for you to confirm a step; the screen stays locked until you do.","AI 已暂停":"AI paused","AI 已暂停。交还后它会先重新看一遍屏幕。":"The AI is paused. When you hand back, it looks at the screen again first.","AI 正在操作这台设备":"The AI is operating this device","AI 正在操作这台设备。要自己操作，先点「接管」。":"The AI is operating this device. To act yourself, click “Take over” first.","AI 继续执行":"AI resumed","AI 能用的操作":"Actions the AI can use","Enter 发送 · Shift+Enter 换行":"Enter to send · Shift+Enter for a new line","HID 后备":"HID fallback","USB 连接":"USB connection","WDA 已签名安装":"WDA signed and installed","WDA 运行中":"WDA running","https://… 或 App 的 URL scheme":"https://… or an app's URL scheme","iMessage 信息":"iMessage","iOS 版本":"iOS Version","iPad mini（第 6 代）":"iPad mini (6th generation)","iphone-control 控制台":"iphone-control console","、":", ","。":".","。可以换个说法再试，或者接管后手动完成。":". Try rephrasing, or take over and finish by hand.","「":"“","」":"”","」。":"”.","」。界面可能已经变了，需要重新截图判断。":"” on the screen. It may have changed; take a new screenshot.","」出现，最多 5 秒":"” to appear, up to 5 s","」发给「":"” to “","」已在前台":"” is in front","」已经出现（":"” appeared (","」的 App。":"”.","」的元素。":"”.","」的对话":"”","」的对话。":"”.","」，能看到：":"”, showing: ","」：":"”: ","一共":"","上滑：":": ","与「":"Chat with “","世界时钟":"World Clock","个":"items","个带文字的元素":"elements with text","个步骤":"steps","个闹钟":"alarms","个闹钟：":"alarms: ","主屏幕":"Home Screen","乐":"M","交给 AI 的任务":"Task for the AI","交还 AI":"Hand back","今天":"Today","今天，−13 小时":"Today, −13 hours","今天，−8 小时":"Today, −8 hours","从":"Swipe up from","任务已交给 AI，画面的手动操作已锁定":"Task handed to the AI; manual control of the screen is locked","任务控制":"Task controls","任务没能交给 AI。手动操作和设备面板不受影响。":"The task couldn't be handed to the AI. Manual control and the device panel still work.","任务记录":"Task history","伦敦":"London","你刚才接管过设备，先重新看一下界面再继续。":"You took over the device just now, so first a fresh look at the screen.","你在接管":"You're in control","你已接管：现在可以直接在画面上操作。":"You're in control: act on the screen directly now.","你拒绝了发送。消息还留在输入框里，没有发出。":"You declined to send. The message is still in the text field, not sent.","你拒绝了这一步，没有执行。":"You rejected this step; it wasn't done.","例如：秒表":"e.g. Stopwatch","信":"M","信任这台电脑":"Trust this computer","信息":"Messages","停止":"Stop","停止任务":"Stop task","停止这个任务？":"Stop this task?","健康":"Health","像素":"px","元素":"Elements","先写下要 AI 做的事，例如「打开设置，查看系统版本」。":"First write what the AI should do, for example “Open Settings and check the iOS version”.","先填要打开的链接":"Enter the link to open first","先填要等的文字。":"Enter the text to wait for first.","先看一下设备现在的界面。":"First a look at the device's screen.","先输入要打到设备上的文字":"Enter the text to type on the device first","全部就绪":"All ready","关":"off","关于本机":"About","内容填好了。发消息需要你先确认。":"The message is ready. Sending it needs your confirmation.","再点「关于本机」。":"Then tap “About”.","切到「":"Switched to “","切换到实际尺寸（100%）":"Actual size (100%)","切换视图":"Switch view","切换语言":"Switch language","列表里没有闹钟":"No alarms in the list","删除":"Delete","删除这条记录":"Delete this record","刷新":"Refresh","刷新 App 列表":"Refresh the app list","刷新画面":"Refresh the picture","前台":"Front","前台 App":"Foreground app","助手":"assistant","包含系统 App":"Include system apps","北京":"Beijing","去确认":"Review","发给「":"To “","发送":"Send","发送消息":"Send message","取消":"Cancel","只清除任务和步骤记录，不会影响设备上已经做过的操作。清空后无法恢复。":"Only clears the tasks and steps on the left; nothing already done on the device changes. This can't be undone.","名称":"Name","向上轻扫以打开":"Swipe up to open","向设备输入文字":"Type on the device","启动":"Start","启动、关闭 App":"Open and quit apps","周末":"Weekends","回到「信息」列表":"Back to the Messages list","回到主屏幕":"Back to the Home Screen","图":"M","在第":"Stopped at step","在设备「设置 › 隐私与安全性 › 开发者模式」里打开，重启后确认。":"Turn it on in Settings › Privacy & Security › Developer Mode on the device, then confirm after the restart.","地图":"Maps","型号名称":"Model Name","型号未知":"Unknown model","备忘录":"Notes","复位":"Reset","天气":"Weather","失败":"Failed","妈妈":"Mom","它不是可点的控件，界面没有变化":"it isn't a control, nothing changed","完成":"Done","实体按键":"Hardware buttons","实时画面":"Live","容量":"Capacity","就绪":"Ready","就绪检查":"Readiness","屏幕":"Screen","屏幕尺寸":"Screen size","工作日":"Weekdays","已中止":"Stopped","已交还 AI，它会先重新看一遍屏幕":"Handed back to the AI; it looks at the screen again first","已停止":"Stopped","已切换到":"Switched to","已删除这条记录":"Record deleted","已刷新演示画面":"Demo screen refreshed","已发送给「":"Sent to “","已回到主屏幕。":"Back on the Home Screen.","已安装的 App":"Installed apps","已完成":"Done","已批准，AI 继续执行":"Approved, the AI continues","已把「":"Sent “","已拒绝":"Rejected","已拒绝这一步":"Step rejected","已改为自动选择：继续控制":"Switched to automatic: still controlling","已显示设备面板":"Device panel shown","已暂停":"Paused","已清空操作记录":"History cleared","已用 IPHONE_UDID 固定设备，不能切换":"IPHONE_UDID pins the device, so it can't be switched","已用 Safari 打开":"Opened in Safari:","已经在控制这台设备":"Already controlling this device","已结束「":"Quit “","已自动解锁，回到主屏幕":"Unlocked automatically, back to the Home Screen","已设置密码":"Passcode set","已输入「":"Typed “","已连接":"Connected","已连接的设备":"Connected device","已锁定":"Locked","已锁屏":"Locked","已隐藏设备面板，点左上角「设备面板」可以再打开":"Device panel hidden; open it again with “Device panel” at the top right","应用":"Apps","底部有「闹钟」标签，点它。":"There's an “Alarms” tab at the bottom; tap it.","康":"H","开":"on","开发者模式":"Developer Mode","开始任务":"Start task","当前任务结束后可以发新任务":"A new task can start when this one ends","当前任务结束后可以重新执行":"Can run again when the current task ends","当前在「":"Now on “","当前界面没有带文字的元素。":"No elements with text on the current screen.","当前界面的元素":"Elements on screen","当前缩放比例，点击切换到实际尺寸":"Current zoom; click for actual size","当前设备":"Current device","待确认":"Confirm","快递通知":"Delivery","您的包裹已到驿站，凭取件码取件":"Your parcel is at the pickup point; bring your pickup code","想让设备做什么？":"What should the device do?","我晚点到":"I'll be late","手动操作已锁定，避免和 AI 同时点击。":"Manual control is locked so you and the AI don't tap at once.","打开":"On","打开「":"Open “","打开了「":"Opened “","打开了与「":"Opened the chat with “","打开链接":"Open links","执行中":"Running","执行任务的 AI":"AI that runs the task","执行任务的本地 AI":"Local AI that runs the task","执行步骤":"Steps","批准并执行":"Approve","找到":"Found","拒绝":"Reject","拖动调整宽度，双击恢复默认":"Drag to resize, double-click to reset","按一下主屏幕键。":"Press the Home button.","按名字点「":"Tap by name “","按名称或 bundle id 搜索":"Search by name or bundle id","按文字或类型筛选":"Filter by text or type","按窗口大小自动适应":"Fit to the window","接管":"Take over","接管中":"You're in control","控制台":"console","控制设备":"Device","搜索":"Search","搜索 App":"Search apps","摄":"C","操作失败":"Action failed","操作往返":"round trip","操作没有生效：":"That didn't take effect: ","操作通道":"Route","收起步骤":"Hide steps","放大画面":"Zoom in","放大（也可以按住 Ctrl/⌘ 滚动滚轮）":"Zoom in (or Ctrl/⌘ + scroll)","无线局域网":"Wi-Fi","日历":"Calendar","日期与时间":"Date & Time","时":"C","时钟":"Clock","明天的评审改到上午十点了":"Tomorrow's review moved to 10 a.m.","昨天":"Yesterday","显示与亮度":"Display & Brightness","晚上回来吃饭吗？":"Coming home for dinner tonight?","晴":"W","暂停":"Pause","未就绪":"Not ready","未设置":"Not set","未锁定":"Unlocked","查看":"Show","次计次":"","正在打开":"Opening","正在挂开发者镜像、启动 WebDriverAgent，最长约 2 分钟。期间截图和点击会改走 HID 后备。":"Mounting the developer disk image and starting WebDriverAgent, up to about 2 minutes. Meanwhile screenshots and taps use the HID fallback.","正在查找…":"Looking…","正在连接 iphone-control 服务…":"Connecting to the iphone-control service…","正在连接…":"Connecting…","正在连接画面…":"Connecting to the screen…","正在重新连接画面…":"Reconnecting the picture…","步":"steps","步停下了。已经做完的操作不会撤销。":". What was already done isn't undone.","步时的屏幕截图":"screen","步没走通：":"failed: ","没找到「iOS 版本」":"“iOS Version” not found","没有你自己安装的 App。勾上「包含系统 App」可以看到系统自带的。":"No apps you installed yourself. Check “Include system apps” to see the built-in ones.","没有名称或 bundle id 含「":"No app whose name or bundle id contains “","没有含「":"No element contains “","没有完成":"Not done","没有弹出键盘：先在画面里点一下输入框。":"No keyboard on screen: tap a text field on the screen first.","没有画面：画面来自设备上的 WebDriverAgent，它现在没有运行。3 秒后自动重试…":"No picture: it comes from WebDriverAgent on the device, which isn't running right now. Retrying in 3 s…","没有设备":"No device","没有读到 App。":"No apps were read.","没有这个接口（":"has no such endpoint (","清空":"Clear","清空全部操作记录？":"Clear all history?","清空记录":"Clear history","滑动":"Swipe","演示模式":"Demo","演示模式只内置了几个示例：查系统版本、看闹钟、秒表、发信息、回主屏幕、看屏幕。这条在模拟画面上做不了。":"The demo only knows a few examples: check the iOS version, look at alarms, the stopwatch, send a message, go Home, look at the screen. This one can't be done on the simulated screen.","演示模式只模拟 http(s) 链接，URL scheme 要连上真机才能试":"The demo only simulates http(s) links; try URL schemes with a real device","演示模式只能跑内置示例。连上服务后，这条指令会交给真正的 agent。":"The demo only runs its built-in examples. Connected to the service, this task goes to a real agent.","演示模式没有模拟计时器":"The demo doesn't simulate timers","演示模式没有模拟这一页":"The demo doesn't simulate this page","演示模式没有模拟这个 App。按主屏幕键或从底部上滑返回。":"The demo doesn't simulate this app. Press Home or swipe up from the bottom to go back.","演示模式没有模拟这个任务":"The demo doesn't simulate this task","演示模式：没有连上 iphone-control 服务。设备画面、App 列表、元素和 AI 的每一步都是本地模拟的。":"Demo mode: not connected to the iphone-control service. The screen, app list, elements and every AI step are simulated locally.","演示模式：没有连上 iphone-control 服务，画面是本地模拟的。":"Demo mode: not connected to the iphone-control service; the screen is simulated locally.","演示画面 · 本地模拟":"Demo screen · simulated locally","点「启动」。":"Tap “Start”.","点「读取」列出当前界面上带文字的元素。鼠标移上去会在画面上框出位置。":"Click “Read” to list the elements with text on the current screen. Hover one to outline it on the picture.","点一下底部的输入框。":"Tap the text field at the bottom.","点了":"Tapped","点击重新执行这条指令":"Click to run this task again","点它":"Tap","点底部的「秒表」。":"Tap “Stopwatch” at the bottom.","点开和「":"Open the chat with “","点按、滑动、长按":"Tap, swipe, long press","照":"P","照片":"Photos","状态":"Status","王磊":"Wang Lei","现在在「":"Now on “","用 USB 连上设备，确认数据线能传数据。":"Connect the device over USB with a cable that carries data.","用一句话描述目标。AI 会看真实屏幕，用下面这些现成的操作一步步完成；遇到付款、删除、发消息这类操作会先停下来等你确认。":"Describe the goal in a sentence. The AI looks at the real screen and gets there step by step with the actions below; before paying, deleting, sending a message and the like it stops and waits for you to confirm.","电池":"Battery","电话":"Phone","画面仍为 AI 保留，要自己操作先接管。":"The screen stays reserved for the AI; take over to act yourself.","画面断开":"Picture lost","画面断开 · 自动重试中":"Picture lost · retrying","画面缩放":"Zoom","界面上没找到「":"Couldn't find “","界面变了，":"The screen changed. ","相机":"Camera","看屏幕、读元素":"See the screen, read elements","确认删除":"Delete","确认前画面保持锁定。":"The screen stays locked until you confirm.","确认已经在主屏幕。":"Check that the Home Screen is in front.","确认秒表在走。":"Check that the stopwatch runs.","秒内没有出现「":"s passed without “","秒表":"Stopwatch","秒表已停止":"Stopwatch stopped","秒表已复位":"Stopwatch reset","秒表已经在计时":"The stopwatch is already running","秒表已经开始计时。":"The stopwatch has started.","秒表开始计时":"Stopwatch started","秒表时间":"Stopwatch time","秒表正在计时：":"Stopwatch running: ","秒表没有在计时":"The stopwatch isn't running","秒）":" s)","秒：演示模式没有模拟长按菜单":"s: the demo doesn't simulate long-press menus","空闲":"Idle","第":"Step","等「":"Waiting for “","等一段文字出现":"Wait for text","等你确认":"Needs you","等待 5 秒":"Wait 5 s","等待中…":"Waiting…","等待前一步":"waiting for the step before","筛选元素":"Filter elements","系统":"System","系统版本在「通用 › 关于本机」里，先点「通用」。":"The version is under General › About; tap “General” first.","纽约":"New York","结束":"Quit","结束「":"Quit “","继续":"Resume","继续执行":"Keep running","缩小画面":"Zoom out","缩小（也可以按住 Ctrl/⌘ 滚动滚轮）":"Zoom out (or Ctrl/⌘ + scroll)","自动解锁":"Auto-unlock","自动选择":"Automatic","蓝牙":"Bluetooth","计时器":"Timers","计次":"Lap","让 AI 操作你的 Apple 设备":"Let AI operate your Apple device","记":"N","记了第":"Recorded lap","设":"S","设备":"Device","设备实时画面：单击轻点，拖动或滚动滚轮滑动，按住长按":"Live device screen: click to tap, drag or scroll to swipe, hold to long-press","设备屏幕":"Device screen","设备按键和输入":"Device buttons and typing","设备的实时画面":"Live picture of the device","设备重启后还没解锁过，需要在设备上手动解锁一次。":"The device hasn't been unlocked since it restarted; unlock it by hand once.","设备重启后首次启用 UI 自动化，请在设备上输入锁屏密码。":"UI automation is starting for the first time since the restart; enter the passcode on the device.","设备面板":"Device panel","设置":"Settings","话":"P","请求失败（":"Request failed (","读一下列表里的闹钟。":"Read the alarms in the list.","读一下界面上带文字的元素。":"Read the elements with text on the screen.","读出「iOS 版本」这一行。":"Read the “iOS Version” row.","读取":"Read","调整 AI 助手栏宽度":"Resize the AI assistant column","调整设备面板宽度":"Resize the device panel","软件更新":"Software Update","轻点":"Tap","输入":"Type","输入并回车":"Type and press Return","输入文字":"Type text","输入框":"Text field","输入框是空的，没有发出任何内容":"The text field is empty, nothing was sent","输入框获得焦点，弹出了键盘":"The text field has focus and the keyboard is up","输入要发的内容。":"Type the message.","运行 <code>iphone-control sign</code>，用免费 Apple ID 签名并安装。":"Run <code>iphone-control sign</code> to sign and install it with a free Apple ID.","还不知道屏幕尺寸，稍后再试":"The screen size isn't known yet; try again shortly","还停在「":"Still on “","还在读取可用的 AI，稍等一下再试。":"Still reading the available AIs; try again in a moment.","还在连接服务，稍等一下再开始":"Still connecting to the service; start in a moment","还没有拿到守护进程状态。":"No daemon status yet.","这个位置在画面外面":"That point is outside the screen","这台机器上没有可用的 AI。安装并登录 Claude Code 或 Codex，再重新运行 iphone-control viewer。":"No AI is available on this machine. Install and log in to Claude Code or Codex, then run iphone-control viewer again.","这台机器的 PATH 里没有 claude 或 codex":"Neither claude nor codex is on this machine's PATH","这台设备的系统版本是 iOS 18.1。":"This device runs iOS 18.1.","这里没有可点的东西":"nothing to tap here","进入「":"Opened “","进行中":"in progress","连接中":"Connecting","适应":"Fit","通用":"General","通道":"Route","邮":"M","邮件":"Mail","重新执行":"Run again","重新执行：":"Run again: ","钱":"W","钱包":"Wallet","锁定屏幕":"Lock Screen","锁屏":"Lock","键盘":"Keyboard","长按":"Long press","闹钟":"Alarms","闹钟 ":"Alarm ","闹钟，":"Alarm, ","隐私与安全性":"Privacy & Security","隐藏设备面板":"Hide the device panel","需要你确认：":"Needs your confirmation: ","需要处理":"needs attention","音乐":"Music","音量减":"Volume down","音量减（演示画面没有变化）":"Volume down (no change on the demo screen)","音量加":"Volume up","音量加（演示画面没有变化）":"Volume up (no change on the demo screen)","页面刷新时这个任务还在执行，刷新后页面不再跟踪它的进度。":"This task was still running when the page reloaded, so the page no longer follows it.","（":" (","（未安装）":" (not installed)","（演示画面不加载网页）":" (the demo doesn't load web pages)","（演示）":" (demo)","）":")","，":", ","：":": ","：演示画面不支持滚动":": the demo screen doesn't scroll","看一下屏幕":"Look at the screen","读取屏幕上的内容":"Read what's on the screen","查看手机状态":"Check the phone's status","点击屏幕":"Tap the screen","点击":"Tap","长按屏幕":"Long-press the screen","滑动屏幕":"Swipe the screen","按主屏幕键":"Press Home","按键":"Press a button","打开 App":"Open","关闭":"Quit","等待":"Wait for","出现":"to appear","查看已安装的 App":"List installed apps","查看已连接的设备":"List connected devices","连续执行几步操作":"Run a few steps in a row","请你确认":"Ask you to confirm","操作手机":"Operate the phone","这一步没成功":"This step didn't work","另一台设备":"another device","设备已在别处切换到":"The device was switched elsewhere to","，画面已跟过去":"; the picture follows it","没有连上设备：用数据线连上 iPhone，确认数据线能传数据。":"No device connected: connect the iPhone with a cable that carries data.","还没设置好（配对、开发者模式）。在终端运行":"isn’t set up yet (pairing, Developer Mode). In a terminal, run","，选「手机」。":" and pick Phone.","上还没装 WebDriverAgent。":"doesn’t have WebDriverAgent yet.","正在签名安装…":"Signing and installing…","签名并安装 WDA":"Sign and install WDA","上还没装 WebDriverAgent，需要先登录 Apple ID：在终端运行":"doesn’t have WebDriverAgent yet, and an Apple ID is needed to sign it: in a terminal, run","，选「Apple ID」。":" and pick Apple ID.","正在":"Starting WebDriverAgent on","上启动 WebDriverAgent，通常 10–60 秒…":"— usually 10–60 seconds…","设备重启后还没解锁过，在设备上手动解锁一次，画面就会出来。":"The device hasn’t been unlocked since it restarted. Unlock it once by hand and the picture appears.","正在签名并安装 WebDriverAgent，大约 1–2 分钟，保持手机解锁…":"Signing and installing WebDriverAgent, about 1–2 minutes; keep the phone unlocked…","运行 <code>iphone-control setup --reconfigure</code> 选「手机」，在设备上点「信任」。":"Run <code>iphone-control setup --reconfigure</code>, pick Phone, and tap “Trust” on the device.","：WebDriverAgent 启动失败，会自动重试":": WebDriverAgent failed to start; retrying automatically","不可用":"Unavailable","正在挂开发者镜像、启动 WebDriverAgent，最长约 2 分钟。这台设备低于 iOS 27，没有 HID 后备，期间不能截图和操作。":"Mounting the developer disk image and starting WebDriverAgent, up to about 2 minutes. This device is below iOS 27, so there is no HID fallback: no screenshots or actions until then.","重新签名并安装 WDA":"Re-sign and install WDA"};
 Object.assign(EN, {
   '外观':'Appearance', '界面字号':'Text size', '标准':'Standard', '大':'Large', '特大':'Extra large',
+  '暂无任务':'No tasks yet', '执行步骤和确认请求会显示在这里。':'Steps and approval requests appear here.',
+  '可以先写下任务，连接设备后再执行。':'Draft a task while waiting for a device.',
+  '任务将在模拟设备上运行。':'Tasks run on the simulated device.', '打开时钟，启动秒表':'Open Clock and start the stopwatch',
+  '将示例填入输入框':'Use this example', '开始任务（Enter）':'Start task (Enter)',
   '明暗':'Theme', '跟随系统':'System', '浅色':'Light', '深色':'Dark', '完成':'Done'
+});
+Object.assign(EN, {
+  '设备列表':'Devices', '设备标识':'Device identifiers', '连接检查':'Connection checks',
+  '连接设备后可查看应用。':'Connect a device to view its apps.',
+  '连接设备后可查看界面元素。':'Connect a device to inspect its interface.'
+});
+Object.assign(EN, {
+  '设备画面':'Device view', '连接你的设备':'Connect your device', '连接帮助':'Connection help',
+  '用 USB 数据线连接 iPhone 或 iPad，并在设备上轻点「信任」。':'Connect your iPhone or iPad with a USB cable, then tap Trust on the device.',
+  '等待设备画面':'Waiting for the screen', '正在连接本地服务':'Connecting to the local service'
 });
 /* 中文原文 → 当前语言 */
 Object.assign(EN, { '画面已连接 · 等待屏幕尺寸和方向，仅可观看':'Picture connected · waiting for screen dimensions and orientation (view only)', '没有收到设备画面，3 秒后自动重试。':'No picture received. Retrying in 3 seconds.' });
@@ -1005,6 +1105,10 @@ const fmtSw = ms => { const cs = Math.floor(ms / 10); return `${pad(Math.floor(c
 
 /* ---------- 图标：一套 24 网格描边图标 ---------- */
 const ICONS = {
+  control: '<rect x="5" y="2.5" width="12" height="19" rx="3"/><path d="m13.5 11 7.7 3.5-3.4 1.3-1.2 3.3z" fill="currentColor" stroke="#252a30" stroke-width="1"/>',
+  appearance: '<circle cx="12" cy="12" r="8.4"/><path d="M12 3.7a8.3 8.3 0 0 0 0 16.6Z" fill="currentColor" stroke="none"/>',
+  chat: '<path d="M20.5 13.5a3 3 0 0 1-3 3H10l-4.5 4V16a3 3 0 0 1-2-2.8V6.5a3 3 0 0 1 3-3h11a3 3 0 0 1 3 3z"/><path d="M8 8h8m-8 4h5"/>',
+  display: '<rect x="3" y="4.5" width="18" height="13" rx="2.4"/><path d="M8 20.5h8m-4-3v3"/>',
   home: '<path d="M3.5 10.5 12 3.5l8.5 7V20a1 1 0 0 1-1 1H15v-6H9v6H4.5a1 1 0 0 1-1-1z"/>',
   lock: '<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7.5a4 4 0 0 1 8 0V11"/>',
   voldown: '<path d="M11 5 6.5 9H3v6h3.5L11 19z"/><path d="M15.5 12h5"/>',
@@ -1036,6 +1140,7 @@ const ICONS = {
   search: '<circle cx="11" cy="11" r="6.5"/><path d="m16 16 4 4"/>',
   zoomin: '<circle cx="11" cy="11" r="6.5"/><path d="m16 16 4 4M8.5 11h5M11 8.5v5"/>',
   zoomout: '<circle cx="11" cy="11" r="6.5"/><path d="m16 16 4 4M8.5 11h5"/>',
+  conversation: '<path d="M6 4.5h12a2.5 2.5 0 0 1 2.5 2.5v8a2.5 2.5 0 0 1-2.5 2.5h-7l-5 3v-3A2.5 2.5 0 0 1 3.5 15V7A2.5 2.5 0 0 1 6 4.5Z"/><path d="M8 9h8M8 12.5h5"/>',
   bot: '<rect x="4.5" y="7.5" width="15" height="11" rx="3"/><path d="M12 3.5v4M9.5 12.5v1.5M14.5 12.5v1.5"/>'
 };
 function icon(name, extra = '') {
@@ -1617,7 +1722,7 @@ function applyInfo(v) {
   if (reconnect) {
     connect();
     loadDeviceState();
-    if (changed && S.devTab === 'apps') loadApps();
+    if (changed && S.udid && S.devTab === 'apps') loadApps();
   } else if (v.feed_open === false && S.stream === 'ok') {
     feedError();
   }
@@ -1631,7 +1736,7 @@ function signButton(label) {
 function stageNote() {
   const d = S.daemon, name = d?.device?.name || S.deviceName || tr('设备');
   switch (d?.state) {
-    case 'Absent': return esc(tr('没有连上设备：用数据线连上 iPhone，确认数据线能传数据。'));
+    case 'Absent': return esc(tr('用 USB 数据线连接 iPhone 或 iPad，并在设备上轻点「信任」。'));
     case 'NeedsTrust': case 'DeveloperModeOff':
       return `${esc(name)} ${esc(tr('还没设置好（配对、开发者模式）。在终端运行'))} <code>iphone-control setup --reconfigure</code>${esc(tr('，选「手机」。'))}`;
     case 'NeedsSigning':
@@ -1648,10 +1753,23 @@ function stageNote() {
     default: return esc(tr('没有收到设备画面，3 秒后自动重试。'));
   }
 }
-function showStageNote() {
-  if (S.mode !== 'live' || S.stream !== 'error') return;
-  const html = stageNote(); if (stageMsg.dataset.note !== html) { stageMsg.innerHTML = html; stageMsg.dataset.note = html; }  // 不变就不重画，免得按钮丢了焦点
-  stageMsg.hidden = false;
+function renderCanvas() {
+  const picture = S.mode === 'demo' || S.stream === 'ok';
+  const vacant = S.mode !== 'demo' && !S.udid;
+  $('#pane-stage').dataset.vacant = String(vacant);
+  $('#canvas-label').hidden = !vacant || !!S.devices.length;
+  $('#stage-wrap').hidden = !picture;
+  $('#idle-canvas').hidden = picture;
+  $('.stage-head .statusbar').hidden = !$('#canvas-label').hidden;
+  $('.stage-head .zoom').hidden = !picture;
+  if (picture) return;
+
+  const absent = vacant && S.daemon?.state === 'Absent';
+  const connecting = S.mode === 'detecting' || (!S.daemon && !S.udid);
+  $('#idle-title').textContent = tr(absent ? '连接你的设备' : connecting ? '正在连接本地服务' : '等待设备画面');
+  const note = connecting ? esc(S.infoWarning || tr('正在连接 iphone-control 服务…')) : stageNote();
+  if (stageMsg.innerHTML !== note) stageMsg.innerHTML = note;
+  $('#connection-help').hidden = !absent;
 }
 async function loadInfo() {
   const seq = ++infoSequence, epoch = feedEpoch;
@@ -1675,7 +1793,7 @@ function feedError() {
   clearTimeout(firstFrameTimer); S.stream = 'error'; S.rtt = null;
   live.style.visibility = 'hidden'; live.removeAttribute('src');
   marks.replaceChildren(); hoverDot = null; S.elements = []; S.elState = 'idle'; renderElements();
-  applyZoom(); showStageNote(); renderFeed(); renderChips();
+  applyZoom(); renderFeed(); renderChips();
   const epoch = feedEpoch;
   retryTimer = setTimeout(async () => {
     await loadInfo();
@@ -1690,7 +1808,7 @@ function refreshFrame() {
     loadInfo();
   }
   clearTimeout(firstFrameTimer);
-  S.stream = 'ok'; stageMsg.hidden = true; live.style.visibility = '';
+  S.stream = 'ok'; live.style.visibility = '';
   frameWidth = live.naturalWidth; frameHeight = live.naturalHeight;
   setRatio(frameWidth, frameHeight); syncMarksBox(); renderElements(); renderFeed(); renderChips();
 }
@@ -1700,7 +1818,6 @@ function connect() {
   feedId = crypto.randomUUID();
   S.stream = 'connecting'; frameWidth = frameHeight = 0;
   applyZoom();
-  stageMsg.textContent = tr('正在连接画面…'); delete stageMsg.dataset.note; stageMsg.hidden = false;
   const next = live.cloneNode(false); next.removeAttribute('src'); next.hidden = false; next.style.visibility = 'hidden';
   live.replaceWith(next); live.removeAttribute('src'); live = next;
   if (!S.udid) { feedError(); return; }
@@ -1711,6 +1828,7 @@ function connect() {
   renderFeed(); renderChips();
 }
 function renderFeed() {
+  renderCanvas();
   const dot = $('#feed-dot'), txt = $('#feed-text');
   dot.className = 'feed-dot';
   if (S.mode === 'demo') { txt.textContent = tr('演示画面 · 本地模拟'); return; }
@@ -1753,12 +1871,13 @@ async function loadDeviceState() {
     S.statusErr = d.status === 'rejected' ? String(d.reason.message) : s.status === 'rejected' ? String(s.reason.message) : '';
     if (l.status === 'fulfilled') { S.devices = l.value.devices || []; S.devicesFixed = !!l.value.fixed; S.devicesErr = ''; } else { S.devices = []; S.devicesErr = String(l.reason.message); }
   }
-  renderDevices(); renderChips(); renderFeed(); showStageNote(); if (S.devTab === 'status') renderStatusPanel();
+  $('#pane-dev').dataset.noDevice = String(S.mode === 'live' && !S.udid);
+  renderAgentIntro(); renderDevices(); renderChips(); renderFeed(); if (S.devTab === 'status') renderStatusPanel();
 }
 /* 新设备上还没装 WDA：用已登录的 Apple ID 签名并安装，大约 1–2 分钟 */
 async function signWda() {
   if (S.signing) return;
-  S.signing = true; showStageNote(); if (S.devTab === 'status') renderStatusPanel();
+  S.signing = true; renderFeed(); if (S.devTab === 'status') renderStatusPanel();
   show(tr('正在签名并安装 WebDriverAgent，大约 1–2 分钟，保持手机解锁…'));
   try { await act('/api/sign', {}); } finally { S.signing = false; await loadDeviceState(); }
 }
@@ -1780,8 +1899,13 @@ function renderDevices() {
   deviceEl.disabled = guarded() || S.switching || S.devicesFixed;
   deviceEl.title = [deviceEl.selectedOptions[0]?.textContent, S.devicesFixed && tr('已用 IPHONE_UDID 固定设备，不能切换')].filter(Boolean).join(' · ');
 }
-deviceEl.addEventListener('change', async () => {
-  const v = deviceEl.value;
+deviceEl.addEventListener('change', () => selectDevice(deviceEl.value));
+$('#nav-devices').addEventListener('click', ev => {
+  const row = ev.target.closest('button[data-device]');
+  if (row && !row.disabled && row.getAttribute('aria-current') !== 'true') selectDevice(row.dataset.device);
+});
+async function selectDevice(v) {
+  if (guarded() || S.switching || S.devicesFixed) return;
   if (S.mode === 'demo') {
     const next = v === 'auto' ? demoDev : DEMO_DEVICES.find(d => d.udid === v);
     if (!next || next === demoDev) { show(v === 'auto' ? `${tr('已改为自动选择：继续控制')} ${demoDev.name}` : tr('已经在控制这台设备')); return; }
@@ -1797,7 +1921,7 @@ deviceEl.addEventListener('change', async () => {
     // /api/info 确认当前设备后才重新启用输入
     if (r.ok) { const u = S.udid; await loadInfo(); if (S.udid === u) show(r.message || tr('已经在控制这台设备')); }
   } finally { S.switching = false; renderFeed(); renderElements(); await loadDeviceState(); }
-});
+}
 function renderChips() {
   const c = $('#chips'), d = S.daemon, s = S.dstatus;
   if (S.mode === 'detecting') { c.innerHTML = ''; return; }
@@ -1811,40 +1935,57 @@ function renderChips() {
   if (S.mode === 'demo') chips.push(tr('<span class="chip"><span class="chip-dot warn"></span><span>演示模式</span></span>'));
   c.innerHTML = chips.join('');
 }
+// Keep the native disclosures and focused device buttons intact between status polls.
+function navigatorHTML(id, html) {
+  const node = $(id);
+  if (node.navMarkup !== html) { node.innerHTML = html; node.navMarkup = html; }
+}
 function renderStatusPanel() {
-  const p = $('#tp-status'), d = S.daemon, s = S.dstatus;
-  if (S.mode === 'detecting') { p.innerHTML = tr('<p class="empty-note">正在连接 iphone-control 服务…</p>'); return; }
-  const dev = d?.device || {}, screen = dims();
-  const hasDevice = !!(dev.udid || S.udid);
-  const deviceTitle = dev.name || (hasDevice ? tr('已连接的设备') : tr('没有设备'));
-  const model = dev.model_name || dev.model || tr('型号未知');
-  const subtitle = [model !== dev.name && model, osVersion(dev), S.mode === 'demo' && tr('演示模式')].filter(Boolean).join(' · ');
+  const d = S.daemon, s = S.dstatus, dev = d?.device;
+  const list = S.devices.length ? S.devices : dev?.udid ? [dev] : [];
+  const selected = dev?.udid || S.udid;
+  const entries = list.map(item => {
+    const active = !!item.controlled || item.udid === selected;
+    const title = item.name || item.model_name || item.model || item.udid;
+    const model = item.model_name || item.model;
+    const duplicate = list.some(other => other.udid !== item.udid && deviceOptionLabel(other) === deviceOptionLabel(item));
+    const sub = [model && model !== title && model, osVersion(item), duplicate && item.udid].filter(Boolean).join(' · ');
+    return `<li><button type="button" class="nav-device" data-device="${esc(item.udid)}" aria-current="${active}" ${S.devicesFixed || guarded() || S.switching ? 'disabled' : ''}>
+      ${icon(item.family === 'ipad' ? 'tablet' : 'phone')}<span class="nav-device-copy"><span class="device-name">${esc(title)}</span>${sub ? `<span class="device-sub">${esc(sub)}</span>` : ''}</span></button></li>`;
+  });
+  const empty = S.mode === 'detecting' ? tr('正在查找…') : S.devicesErr ? tr('不可用') : tr('没有设备');
+  navigatorHTML('#nav-devices', entries.join('') || `<li class="nav-device nav-device-empty">${icon('phone')}${esc(empty)}</li>`);
+
+  const screen = dims();
+  const fact = ([k, v], mono = false) => `<div class="fact"><dt class="fact-k">${esc(k)}</dt><dd class="fact-v${mono ? ' mono' : ''}">${esc(v)}</dd></div>`;
   const facts = [
-    [tr('前台 App'), s?.foreground || '—'], [tr('屏幕'), s && s.locked != null ? (s.locked ? tr('已锁定') : tr('未锁定')) : '—'],
-    [tr('操作通道'), s ? (s.route === 'hid' ? tr('HID 后备') : s.route === 'none' ? tr('不可用') : 'WDA') : '—'], [tr('屏幕尺寸'), screen ? `${screen.W}×${screen.H} pt` : '—'],
-    [tr('自动解锁'), d ? (d.auto_unlock ? tr('已设置密码') : tr('未设置')) : '—'], [tr('系统'), osVersion(dev) || '—']
-  ];
-  let checks = '';
-  if (d) {
-    const failAt = d.state === 'Ready' ? -1 : CHECKS.findIndex(c => c.fail.includes(d.state));
-    checks = CHECKS.map((c, i) => {
-      const st = failAt === -1 || i < failAt ? 'ok' : i === failAt ? (d.state === 'WdaStarting' ? 'busy' : 'bad') : 'pending';
-      // iOS 27 以下没有 HID 后备，别说「改走 HID」
-      const hint = i === failAt ? (c.hint || (d.state === 'WdaStarting' && S.dstatus?.route === 'none' ? STARTING_NO_HID : STARTING_HINT[d.state]) || '') : '';
-      const dot = st === 'ok' ? `<span class="check-dot tone-ok">${icon('check')}</span>` : st === 'busy' ? `<span class="check-dot tone-accent">${icon('loader', 'spin')}</span>` : st === 'bad' ? `<span class="check-dot tone-warn">${icon('alert')}</span>` : '<span class="check-dot pending"></span>';
-      const label = st === 'ok' ? tr('已完成') : st === 'busy' ? tr('进行中') : st === 'bad' ? tr('需要处理') : tr('等待前一步');
-      return `<li class="check${st === 'pending' ? ' pending' : ''}"><div class="check-rail">${dot}<span class="check-line"></span></div>
-        <div class="check-body"><span class="check-name">${c.name}<span class="sr-only">${tr('：')}${label}</span></span>${hint ? `<span class="check-hint">${hint}</span>` : ''}${i === failAt && c.action === 'sign' && d.signed_in ? `<span><button type="button" class="btn btn-sm" data-action="sign"${S.signing ? ' disabled' : ''}>${esc(S.signing ? tr('正在签名安装…') : tr('签名并安装 WDA'))}</button></span>` : ''}${i === failAt && d.last_error ? `<span class="check-err">${esc(d.last_error)}</span>` : ''}</div></li>`;
-    }).join('');
-  }
-  p.innerHTML = `
-    <div class="device-card"><span class="device-ic">${icon(dev.family === 'ipad' || frame.dataset.kind === 'ipad' ? 'tablet' : 'phone')}</span>
-      <div class="od-field"><span class="device-name od-truncate">${esc(deviceTitle)}</span><span class="device-sub od-truncate" ${hasDevice ? '' : 'hidden'}>${esc(subtitle)}</span></div></div>
-    <div class="facts" ${hasDevice ? '' : 'hidden'}>${facts.map(([k, v]) => `<div class="fact"><span class="fact-k">${k}</span><span class="fact-v">${esc(v)}</span></div>`).join('')}
-      <div class="fact" style="grid-column:1/-1"><span class="fact-k">ProductType</span><span class="fact-v mono">${esc(dev.model || '—')}</span></div>
-      <div class="fact" style="grid-column:1/-1"><span class="fact-k">UDID</span><span class="fact-v mono">${esc(dev.udid || '—')}</span></div></div>
-    <div class="sec"><div class="sec-head"><span class="sec-title">${tr('就绪检查')}</span>${d ? badge(d.state === 'Ready' ? { label: tr('全部就绪'), tone: 'ok', icon: 'check' } : { label: tr('未就绪'), tone: 'warn', icon: 'alert' }) : ''}</div>
-      ${d ? `<ol class="checks">${checks}</ol>` : `<p class="empty-note${S.statusErr ? ' err' : ''}">${esc(S.statusErr || tr('还没有拿到守护进程状态。'))}</p>`}</div>`;
+    [tr('前台 App'), s?.foreground], [tr('屏幕'), s?.locked != null && (s.locked ? tr('已锁定') : tr('未锁定'))],
+    [tr('操作通道'), s?.route === 'wda' ? 'WDA' : s?.route === 'hid' ? tr('HID 后备') : null],
+    [tr('屏幕尺寸'), screen && `${screen.W} × ${screen.H} pt`], [tr('自动解锁'), d && (d.auto_unlock ? tr('已设置密码') : tr('未设置'))]
+  ].filter(([,v]) => v);
+  $('#nav-facts').hidden = !selected || !facts.length;
+  navigatorHTML('#nav-facts', facts.map(row => fact(row)).join(''));
+  const ids = [['ProductType', dev?.model], ['UDID', selected]].filter(([,v]) => v);
+  $('#device-identifiers').hidden = !ids.length;
+  navigatorHTML('#nav-ids', ids.map(row => fact(row, true)).join(''));
+
+  const error = S.statusErr || S.devicesErr;
+  const failAt = CHECKS.findIndex(check => check.fail.includes(d?.state));
+  const checks = d?.state === 'Ready' ? CHECKS : CHECKS.slice(0, failAt + 1);
+  const rows = checks.map((c,i) => {
+    const issue = i === failAt;
+    const busy = issue && d.state === 'WdaStarting';
+    const hint = issue && (c.hint || (busy && s?.route === 'none' ? STARTING_NO_HID : STARTING_HINT[d.state]));
+    const label = issue ? (busy ? tr('进行中') : tr('需要处理')) : tr('已完成');
+    const sign = issue && c.action === 'sign' && d.signed_in;
+    return `<li>${icon(issue ? (busy ? 'loader' : 'info') : 'check', issue ? (busy ? 'spin' : '') : 'check-ok')}
+      <div><span class="check-name">${c.name}<span class="sr-only">${tr('：')}${label}</span></span>
+      ${hint ? `<span class="check-hint">${hint}</span>` : ''}
+      ${sign ? `<button type="button" class="btn btn-sm" data-action="sign"${S.signing ? ' disabled' : ''}>${esc(S.signing ? tr('正在签名安装…') : tr('签名并安装 WDA'))}</button>` : ''}
+      ${issue && d.last_error ? `<span class="check-err">${esc(d.last_error)}</span>` : ''}</div></li>`;
+  });
+  navigatorHTML('#nav-checks', (rows.length ? `<ol class="nav-check-list">${rows.join('')}</ol>` : '') +
+    (error || !d ? `<p class="check-hint">${esc(error || tr('还没有拿到守护进程状态。'))}</p>` : ''));
 }
 
 /* ================================================================
@@ -1978,7 +2119,7 @@ function setDevTab(tab) {
     $(`#tp-${t}`).hidden = t !== tab;
   });
   if (tab === 'status') renderStatusPanel();
-  if (tab === 'apps' && S.appsState === 'idle' && S.mode !== 'detecting') loadApps(); else if (tab === 'apps') renderApps();
+  if (tab === 'apps' && S.appsState === 'idle' && (S.mode === 'demo' || S.udid)) loadApps(); else if (tab === 'apps') renderApps();
   if (tab === 'elements') renderElements();
 }
 
@@ -2131,7 +2272,8 @@ async function liveControl(task, action, body) {
 
 /* ---------- 发送、控制、确认 ---------- */
 function clearPromptError() { promptErr.hidden = true; promptErr.textContent = ''; promptEl.removeAttribute('aria-invalid'); $('#composer').classList.remove('invalid'); }
-function autosize() { promptEl.style.height = 'auto'; promptEl.style.height = Math.min(promptEl.scrollHeight, 176) + 'px'; }
+function syncSend() { $('#send').disabled = promptEl.disabled || !promptEl.value.trim(); }
+function autosize() { promptEl.style.height = 'auto'; promptEl.style.height = Math.min(promptEl.scrollHeight, 176) + 'px'; syncSend(); }
 function sendPrompt() {
   if (activeTask()) return;
   const text = promptEl.value.trim();
@@ -2294,6 +2436,13 @@ function turnHtml(t) {
       ${t.steps.length ? `<ol class="steps" id="steps-${t.id}" aria-label="${tr('执行步骤')}"${open ? '' : ' hidden'}>${t.steps.map(stepHtml).join('')}</ol>` : ''}
     </div></li>`;
 }
+function renderAgentIntro() {
+  const demo = S.mode === 'demo';
+  const connected = demo || !!S.udid;
+  $('#agent-empty-hint').textContent = demo ? tr('任务将在模拟设备上运行。')
+    : connected ? tr('执行步骤和确认请求会显示在这里。') : tr('可以先写下任务，连接设备后再执行。');
+  $('#agent-example').hidden = !(demo || (connected && S.daemon?.state === 'Ready' && S.agent));
+}
 function renderTurns(follow) {
   const sc = $('#agent-scroll'), near = sc.scrollHeight - sc.scrollTop - sc.clientHeight < 120;
   keepFocus(() => { turnsEl.innerHTML = S.tasks.map(turnHtml).join(''); });
@@ -2317,11 +2466,10 @@ function renderRunbar() {
     bar.hidden = false;
   }
   const busy = !!t;
-  promptEl.disabled = busy; $('#send').disabled = busy;
+  promptEl.disabled = busy; syncSend();
   promptEl.placeholder = busy ? tr('当前任务结束后可以发新任务') : tr('想让设备做什么？');
   const clear = $('#clear-btn');
   clear.hidden = !S.tasks.length || busy;
-  $('#agent-badge').innerHTML = badge(t ? TASK_STATUS[t.status] : { label: S.mode === 'demo' ? tr('演示模式') : tr('空闲'), tone: S.mode === 'demo' ? 'warn' : 'muted', icon: S.mode === 'demo' ? 'info' : 'dot' });
 }
 function renderGuard() {
   const t = activeTask(), g = $('#guard');
@@ -2353,6 +2501,7 @@ function renderManual() {
   typeEl.disabled = deviceUnavailable; $('#type-btn').disabled = deviceUnavailable; $('#type-submit').disabled = deviceUnavailable;
   $('#url').disabled = deviceUnavailable; $('#url-btn').disabled = deviceUnavailable;
   deviceEl.disabled = lock || S.switching || !S.devices.length || !!S.devicesFixed;
+  $$('#nav-devices button').forEach(row => { row.disabled = lock || S.switching || !!S.devicesFixed; });
   const t = activeTask();
   $('#vt-agent-label').textContent = t ? `AI · ${{ running: tr('执行中'), waiting: tr('待确认'), paused: tr('已暂停'), takeover: tr('接管中') }[t.status]}` : tr('AI 助手');
 }
@@ -2397,9 +2546,9 @@ function setView(v) {
   if (v === 'device') setDevTab(S.devTab);
   syncInert();
 }
-function setDevOpen(open) {
+function setDevOpen(open, moveFocus = true) {
   S.devOpen = open; shell.dataset.devOpen = String(open); $('#dev-toggle').setAttribute('aria-expanded', String(open)); syncInert();
-  if (open) { setDevTab(S.devTab); setTimeout(() => $(`#tab-${S.devTab}`).focus(), 320); } else $('#dev-toggle').focus();
+  if (open) { setDevTab(S.devTab); if (moveFocus) setTimeout(() => $(`#tab-${S.devTab}`).focus(), 320); } else $('#dev-toggle').focus();
 }
 mqDrawer.addEventListener('change', syncInert);
 mqTabs.addEventListener('change', syncInert);
@@ -2411,7 +2560,7 @@ document.addEventListener('click', ev => {
   const a = b.dataset.action;
   switch (a) {
     case 'send': sendPrompt(); break;
-    case 'fill': if (activeTask()) return; promptEl.value = b.dataset.prompt; autosize(); clearPromptError(); promptEl.focus(); promptEl.setSelectionRange(promptEl.value.length, promptEl.value.length); break;
+    case 'fill': if (activeTask()) return; promptEl.value = tr(b.dataset.prompt); autosize(); clearPromptError(); promptEl.focus(); promptEl.setSelectionRange(promptEl.value.length, promptEl.value.length); break;
     case 'pause': case 'resume': case 'takeover': case 'handback': control(a); break;
     case 'approve': answerConfirm(true); break;
     case 'reject': answerConfirm(false); break;
@@ -2428,6 +2577,16 @@ document.addEventListener('click', ev => {
     case 'zoom-actual': setZoom(1); break;
     case 'zoom-fit': setZoom('fit'); break;
     case 'toggle-steps': { const id = b.dataset.id; if (S.expanded.has(id)) S.expanded.delete(id); else S.expanded.add(id); renderTurns(); break; }
+    case 'connection-help': {
+      if (mqTabs.matches) setView('device');
+      else if (mqDrawer.matches) setDevOpen(true, false);
+      else if (devHidden) setDevHidden(false, false);
+      setDevTab('status');
+      const checks = $('#connection-checks');
+      checks.open = true;
+      checks.querySelector('summary').focus();
+      break;
+    }
     case 'view': setView(b.dataset.view); break;
     case 'dev-open': if (isThreeCol()) setDevHidden(false, true); else setDevOpen(true); break;
     case 'dev-close': if (isThreeCol()) setDevHidden(true, true); else setDevOpen(false); break;
@@ -2498,12 +2657,16 @@ async function detect() {
       S.mode = 'live';
     } else {
       S.mode = 'demo'; S.stream = 'ok';
-      stageMsg.hidden = true; live.hidden = true; demoEl.hidden = false; $('#demo-note').hidden = false;
+      live.hidden = true; demoEl.hidden = false;
       applyDemoGeometry(); renderDemo();
       show(tr('演示模式：没有连上 iphone-control 服务，画面是本地模拟的。'));
     }
   }
   if (S.mode === 'live') {
+    if (!S.udid && !S.tasks.length && !shell.hasAttribute('data-agent-hidden')) {
+      shell.dataset.agentHidden = 'true';
+      syncInert();
+    }
     connect(); loadAgents();
     setInterval(refreshFrame, 250);
     setTimeout(pollInfo, 2000);
@@ -2523,6 +2686,7 @@ async function loadAgents() {
   renderAgentPick();
 }
 function renderAgentPick() {
+  renderAgentIntro();
   const wrap = $('#agent-pick'), sel = $('#agent');
   wrap.hidden = S.mode !== 'live';
   if (wrap.hidden) return;
@@ -2625,13 +2789,13 @@ function makeResizer({ handle, pane, cssVar, def, min, key, edge, maxFn }) {
   return r;
 }
 const agentRS = makeResizer({
-  handle: $('#resizer'), pane: $('#pane-agent'), cssVar: '--w-agent', def: 352, min: 300, key: 'ictl.agentWidth', edge: 'left',
-  maxFn: () => Math.max(300, Math.min(760, window.innerWidth - (isThreeCol() && !devHidden ? devRS.w : 0) - MIN_STAGE))
+  handle: $('#resizer'), pane: $('#pane-agent'), cssVar: '--w-agent', def: 292, min: 268, key: 'ictl.agentWidth', edge: 'left',
+  maxFn: () => Math.max(268, Math.min(760, window.innerWidth - (isThreeCol() && !devHidden ? devRS.w : 0) - MIN_STAGE))
 });
 const devRS = makeResizer({
-  handle: $('#resizer-dev'), pane: $('#pane-dev'), cssVar: '--w-dev', def: 288, min: 260, key: 'ictl.devWidth', edge: 'right',
+  handle: $('#resizer-dev'), pane: $('#pane-dev'), cssVar: '--w-dev', def: 232, min: 212, key: 'ictl.devWidth', edge: 'right',
   // 三栏时给 AI 助手和设备画面留够位置；1024–1279px 的抽屉最宽占视口 90%
-  maxFn: () => isThreeCol() ? Math.max(260, Math.min(600, window.innerWidth - agentRS.w - MIN_STAGE)) : Math.max(260, Math.min(600, window.innerWidth * 0.9))
+  maxFn: () => isThreeCol() ? Math.max(212, Math.min(600, window.innerWidth - agentRS.w - MIN_STAGE)) : Math.max(212, Math.min(600, window.innerWidth * 0.9))
 });
 function fitPanes() { devRS.set(devRS.w, false); agentRS.set(agentRS.w, false); }
 window.addEventListener('resize', fitPanes);

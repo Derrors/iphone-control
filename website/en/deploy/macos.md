@@ -17,10 +17,12 @@ Verified on a MacBook Pro (Apple M3 Pro) / macOS 26.6.2 with an iPhone 15 Pro Ma
 ### One command (recommended)
 
 ```bash
-curl -fsSL https://github.com/Derrors/iphone-control/releases/latest/download/install.sh | sh
+curl -fsSLo iphone-control-install.sh https://github.com/Derrors/iphone-control/releases/latest/download/install.sh && sh iphone-control-install.sh
 ```
 
-It downloads the latest release, verifies the Ed25519 release manifest and archive SHA-256 (Python 3 and OpenSSL 3 required), installs `~/.local/bin/iphone-control` and a launchd user service (`~/Library/LaunchAgents/io.github.derrors.iphone-control.plist`) that starts the daemon at login, restarts it after a crash, reads `~/.config/iphone-control/env` and logs to `~/Library/Logs/iphone-control/daemon.log`. Options go after `sh -s --`: `--version vX.Y.Z` (a release with a signed macOS manifest), `--prefix DIR` (installs into `DIR/bin`), `--no-service` (only the binary, no service).
+It downloads the latest release, verifies the Ed25519 release manifest and archive SHA-256 (Python 3 and OpenSSL 3 required), installs `~/.local/bin/iphone-control` and a launchd user service (`~/Library/LaunchAgents/io.github.derrors.iphone-control.plist`) that starts the daemon at login, restarts it after a crash, reads `~/.config/iphone-control/env` and logs to `~/Library/Logs/iphone-control/daemon.log`. Pass `--version vX.Y.Z` for a specific release with a signed macOS manifest, `--prefix DIR` to install into `DIR/bin`, or `--no-service` to install only the binary.
+
+For upstream v0.2.0, follow the [legacy installation and migration steps](../guide/getting-started#legacy-script).
 
 ### Homebrew
 
@@ -119,7 +121,7 @@ iphone-control service restart
 
 ## Uninstall
 
-Installed with the one command: `curl -fsSL https://github.com/Derrors/iphone-control/releases/latest/download/install.sh | sh -s -- --uninstall`. Homebrew: `brew services stop iphone-control && brew uninstall iphone-control`. From source: `iphone-control service uninstall && cargo uninstall iphone-control`.
+For a signed script installation, run `sh iphone-control-install.sh --uninstall` with your original prefix. For v0.2.0, use the [tagged uninstall script](../guide/getting-started#legacy-script). Homebrew: `brew services stop iphone-control && brew uninstall iphone-control`. From source: `iphone-control service uninstall && cargo uninstall iphone-control`.
 
 All of them keep your data and settings. To remove them too:
 

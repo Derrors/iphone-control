@@ -13,7 +13,7 @@ All notable changes to this project are documented here. The format is based on 
 ### Added
 
 - Experimental `ICTL_WDA_DETACHED=1`: WebDriverAgent is launched in the background without an XCTest session, so it also starts while the phone is locked and keeps running when the daemon restarts. See [WDA dependency research](docs/dev/wda-dependency-research.md).
-- Check for host software updates with `iphone-control update check` or **About & updates** in the viewer. Both show the latest stable release from the build's publisher and upgrade instructions for your installation.
+- Check for host software updates with `iphone-control update check` or **About & updates** in the viewer. A red dot marks a newer stable release from the build's publisher. Open the panel to see the version and copy the upgrade command for your installation when available.
 - User services installed from a signed release can upgrade with `iphone-control update apply` and roll back with `iphone-control update rollback`. They check for updates by default. Opt in with `iphone-control update policy auto-patch` to install signed patches while idle and restore the previous version if the daemon fails its health check.
 
 ## [0.2.0] - 2026-11-11

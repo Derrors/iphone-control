@@ -20,10 +20,10 @@ Pick one of the three. Install as your regular user; don't run `iphone-control` 
 **One command** (macOS or Linux, with Python 3 and OpenSSL 3 on PATH)
 
 ```bash
-curl -fsSL https://github.com/Derrors/iphone-control/releases/latest/download/install.sh | sh
+curl -fsSLo iphone-control-install.sh https://github.com/Derrors/iphone-control/releases/latest/download/install.sh && sh iphone-control-install.sh
 ```
 
-It installs the program into `~/.local/bin` and the daemon as a per-user service (launchd on macOS, a systemd user service on Linux) that starts when you log in. Run `iphone-control update check` for upgrade instructions. Options go after `sh -s --`: `--version vX.Y.Z` installs that release, `--prefix DIR` installs into `DIR/bin`, `--no-service` installs only the program.
+It installs the program into `~/.local/bin` and the daemon as a per-user service (launchd on macOS, a systemd user service on Linux) that starts when you log in. Run `iphone-control update check` for upgrade instructions. Pass `--version vX.Y.Z` for a specific signed release, `--prefix DIR` to install into `DIR/bin`, or `--no-service` to install only the program. For upstream v0.2.0, use the [legacy script instructions](#legacy-script).
 
 **Homebrew** (macOS, Linux):
 
@@ -46,6 +46,22 @@ Talking to the phone over USB goes through the system's usbmuxd: `sudo apt insta
 :::
 
 Intel Macs have no prebuilt binary and need a build from source, as does development. See [Build from Source](../deploy/source).
+
+### Upstream v0.2.0 script installation and migration {#legacy-script}
+
+The v0.2.0 release uses archive checksums and has no signed installer asset. To install this version, use its tagged script and specify the same release for the binary.
+
+```sh
+curl -fsSLo iphone-control-v0.2.0-install.sh https://raw.githubusercontent.com/Derrors/iphone-control/v0.2.0/install.sh && sh iphone-control-v0.2.0-install.sh --version v0.2.0
+```
+
+To migrate an existing v0.2.0 script installation, first confirm the signed release includes `install.sh`, your platform's manifest and its signature. Close Viewer and MCP clients, stop the daemon, then remove the old binary and service with the v0.2.0 script. This keeps your settings and device data.
+
+```sh
+curl -fsSLo iphone-control-v0.2.0-install.sh https://raw.githubusercontent.com/Derrors/iphone-control/v0.2.0/install.sh && sh iphone-control-v0.2.0-install.sh --uninstall
+```
+
+Then run the [signed installer](#install). If your old installation used `--prefix DIR`, pass the same option to both the uninstall and the new installation.
 
 ## 2. Plug in the phone and run iphone-control {#first-run}
 
@@ -107,7 +123,8 @@ Something wrong? See the [FAQ](../troubleshoot/faq).
 
 | Installed with | Uninstall |
 |---|---|
-| One command | `curl -fsSL https://github.com/Derrors/iphone-control/releases/latest/download/install.sh \| sh -s -- --uninstall` |
+| Signed installer | Run `sh iphone-control-install.sh --uninstall` using the script downloaded above and your original prefix |
+| v0.2.0 script | Use the [v0.2.0 uninstall command](#legacy-script) |
 | Homebrew | `brew services stop iphone-control`, then `brew uninstall iphone-control` |
 | .deb | `systemctl --user disable --now iphone-control`, then `sudo apt remove iphone-control` |
 

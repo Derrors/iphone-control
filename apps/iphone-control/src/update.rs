@@ -100,6 +100,7 @@ pub struct Report {
     pub published_at: Option<String>,
     pub release_url: Option<String>,
     pub guidance: String,
+    pub upgrade_command: Option<String>,
     pub last_update: Option<transaction::Outcome>,
 }
 
@@ -108,7 +109,10 @@ impl Report {
         self.policy == Policy::AutoPatch
             && self.error_code.is_none()
             && self.availability == Availability::Available
-            && self.available_version.as_deref().is_some_and(|v| transaction::eligible(VERSION, v, true).is_ok())
+            && self.available_version.as_deref().is_some_and(|v| {
+                transaction::eligible(self.installed_version.as_deref().unwrap_or(self.running_version), v, true)
+                    .is_ok()
+            })
     }
 }
 
@@ -182,7 +186,7 @@ fn deb_asset(version: &str, platform: &str) -> Option<String> {
 }
 
 fn availability(
-    running: &str,
+    local_version: &str,
     method: InstallMethod,
     platform: Option<&str>,
     release: Option<&Release>,
@@ -193,8 +197,8 @@ fn availability(
     }
     let Some(latest) = release else { return Unchecked };
     let Some(version) = release::stable_tag(&latest.tag) else { return Unchecked };
-    let running = semver::Version::parse(running).expect("Cargo version");
-    match version.cmp_precedence(&running) {
+    let installed = semver::Version::parse(local_version).expect("validated installation or Cargo version");
+    match version.cmp_precedence(&installed) {
         Ordering::Less => return Ahead,
         Ordering::Equal => return Current,
         Ordering::Greater => {}
@@ -217,7 +221,8 @@ fn availability(
     // Presence allows the CLI to attempt verified installation. It verifies the exact
     // manifest bytes, signature and archive before handing anything to the installer.
     if method == InstallMethod::Managed
-        && (option_env!("ICTL_UPDATE_PUBLIC_KEYS").unwrap_or("").is_empty()
+        && (!installed.pre.is_empty()
+            || option_env!("ICTL_UPDATE_PUBLIC_KEYS").unwrap_or("").is_empty()
             || !latest.assets.contains(&format!("{base}.manifest.json"))
             || !latest.assets.contains(&format!("{base}.manifest.json.sig")))
     {
@@ -226,10 +231,42 @@ fn availability(
     Available
 }
 
+fn upgrade_command(
+    status: Availability,
+    installation: &Installation,
+    exe: Option<&Path>,
+    release: Option<&Release>,
+    platform: Option<&str>,
+    tap: Option<&str>,
+) -> Option<String> {
+    match (status, installation.method) {
+        (Availability::Available, InstallMethod::Managed) => {
+            let exe = crate::shell_quote(exe?.to_str()?);
+            Some(if installation.pinned? {
+                format!("{exe} update unpin && {exe} update apply")
+            } else {
+                format!("{exe} update apply")
+            })
+        }
+        (Availability::BrewCheck, InstallMethod::Homebrew) => {
+            let tap = tap.filter(|tap| repository(tap))?;
+            let brew = install::brew_program(exe?.ancestors().nth(4)?)?;
+            let brew = crate::shell_quote(brew.to_str()?);
+            Some(format!("{brew} update && {brew} upgrade {tap}/iphone-control"))
+        }
+        (Availability::Available, InstallMethod::Debian) => {
+            let version = release::stable_tag(&release?.tag)?;
+            let asset = deb_asset(&version.to_string(), platform?)?;
+            Some(format!("sudo apt install ./{asset}"))
+        }
+        _ => None,
+    }
+}
+
 fn guidance(status: Availability, method: InstallMethod, version: Option<&str>, pinned: Option<bool>) -> String {
     match status {
         Availability::Development => {
-            tr!("开发构建。在当前源码仓库检出所需版本，再运行 cargo build --release --locked -p iphone-control。", "Development build. Check out the desired revision in your source repository, then run cargo build --release --locked -p iphone-control.").into()
+            tr!("开发构建。在对应源码仓库检出目标版本，按原来的构建或安装方式更新本机程序。", "Development build. Check out the desired revision in its source repository and update this copy using its original build or install method.").into()
         }
         Availability::Unsupported => tr!(
             "此平台没有预编译包。请查看发行说明并从源码构建。",
@@ -242,38 +279,37 @@ fn guidance(status: Availability, method: InstallMethod, version: Option<&str>, 
         )
         .into(),
         Availability::ManualOnly => tr!(
-            "此版本缺少受信更新材料。请按发行说明手动升级。",
-            "Verified installation is unavailable for this release. Follow the manual release instructions."
+            "当前安装无法应用此版本的受管升级。请按发行说明手动升级。",
+            "A managed upgrade is unavailable for this installation and release. Follow the manual release instructions."
         )
         .into(),
-        Availability::Current => tr!("已是最新稳定版。", "Running the latest stable release.").into(),
+        Availability::Current => tr!("已安装最新稳定版。", "The latest stable release is installed.").into(),
         Availability::Ahead => {
-            tr!("当前版本领先于最新公开稳定版。", "Running ahead of the latest public stable release.").into()
+            tr!("本机版本领先于最新公开稳定版。", "The local version is ahead of the latest public stable release.").into()
         }
         Availability::Unchecked => tr!("尚无成功检查记录。", "No successful release check yet.").into(),
         Availability::BrewCheck => {
-            let tap = tap().unwrap_or_default();
-            trf!(
-                "在主机上运行 brew update 和 brew outdated --formula {tap}/iphone-control，确认后运行 brew upgrade {tap}/iphone-control。",
-                "Run brew update and brew outdated --formula {tap}/iphone-control on the host, then brew upgrade {tap}/iphone-control if eligible."
-            )
+            tr!(
+                "在主机终端运行 Homebrew 命令。可安装版本取决于 tap 的发布进度及本机是否固定了版本。",
+                "Run the Homebrew command in a terminal on the host. The local tap and Homebrew pin determine the upgrade."
+            ).into()
         }
         Availability::Available => match method {
             InstallMethod::Managed if pinned == Some(true) => tr!(
-                "安装已固定到指定版本。如需升级，先在主机上运行 iphone-control update unpin，再运行 iphone-control update apply。安装前会验证签名并检查回退兼容性。",
-                "This installation is pinned. To upgrade, run iphone-control update unpin on the host, then iphone-control update apply. It verifies the signature and checks rollback compatibility before installing."
+                "安装已固定到指定版本。此命令会解除固定并升级。先退出 Viewer 和 MCP 客户端，等待任务完成，再在主机终端运行。安装前会验证签名并检查回退兼容性。",
+                "This command unpins and upgrades the installation. Close Viewer and MCP clients and let tasks finish before running it in a host terminal. It verifies the signature and checks rollback compatibility before installing."
             )
             .into(),
             InstallMethod::Managed => tr!(
-                "空闲时在主机上运行 iphone-control update apply。安装前会验证签名并检查回退兼容性。",
-                "When idle, run iphone-control update apply on the host. It verifies the signature and checks rollback compatibility before installing."
+                "先退出 Viewer 和 MCP 客户端，等待任务完成，再在主机终端运行升级命令。安装前会验证签名并检查回退兼容性。",
+                "Close Viewer and MCP clients and let tasks finish before running the upgrade command in a host terminal. It verifies the signature and checks rollback compatibility before installing."
             )
             .into(),
             InstallMethod::Debian => {
                 let asset = deb_asset(version.unwrap_or_default(), target().unwrap_or_default()).unwrap_or_default();
                 trf!(
-                    "从发行页下载并校验 {asset}，然后运行 sudo apt install ./{asset}。",
-                    "Download and verify {asset} from the release, then run sudo apt install ./{asset}."
+                    "从发行页下载并校验 {asset}，在下载目录中运行安装命令。",
+                    "Download and verify {asset} from the release, then run the install command in the download directory."
                 )
             }
             _ => tr!(
@@ -304,6 +340,7 @@ fn manual_migration(
 }
 
 struct Local {
+    source_command: Option<String>,
     exe: Option<PathBuf>,
     install: Installation,
     policy: Policy,
@@ -311,10 +348,20 @@ struct Local {
 
 impl Local {
     fn load() -> Result<Self> {
-        let exe = std::env::current_exe().ok().and_then(|path| path.canonicalize().ok());
-        let install = install::detect(exe.as_deref());
+        let exe = std::env::current_exe().ok().as_deref().and_then(install::installed_executable);
+        let mut install = install::detect(exe.as_deref());
+        let source_command = if install.method == InstallMethod::Development && unsafe { libc::geteuid() } != 0 {
+            exe.as_deref().and_then(|exe| install::cargo_source(exe, Path::new(env!("CARGO_MANIFEST_DIR")))).map(
+                |(version, command)| {
+                    install.version = Some(version);
+                    command
+                },
+            )
+        } else {
+            None
+        };
         let policy = policy(publisher(), exe.as_deref(), &install)?;
-        Ok(Self { exe, install, policy })
+        Ok(Self { exe, install, policy, source_command })
     }
 
     fn report(self, cache: Cache) -> Result<Report> {
@@ -322,7 +369,8 @@ impl Local {
         let release = cache.release.as_ref().filter(|r| release::stable_tag(&r.tag).is_some());
         let version = release.and_then(|r| r.tag.strip_prefix('v')).map(str::to_owned);
         let last_update = self.exe.as_deref().map(transaction::outcome).transpose()?.flatten();
-        let status = availability(VERSION, self.install.method, target(), release);
+        let local_version = self.install.version.as_deref().unwrap_or(VERSION);
+        let status = availability(local_version, self.install.method, target(), release);
         let (status, mut guidance) = if status == Availability::Available
             && manual_migration(&self.install, last_update.as_ref(), version.as_deref(), repo, target())
         {
@@ -333,9 +381,29 @@ impl Local {
         } else {
             (status, guidance(status, self.install.method, version.as_deref(), self.install.pinned))
         };
+        let command = if self.source_command.is_some() {
+            guidance = tr!(
+                "Cargo 源码安装。先在命令所指的本机源码仓库检出目标版本，再运行命令重新安装。完成后重新打开 Viewer，如有后台服务也请重启。",
+                "Installed with Cargo from source. First check out the desired revision in the local repository shown in the command, then run the command to reinstall. Reopen Viewer and restart the service if you use it."
+            ).into();
+            self.source_command
+        } else if cache.error_code.is_some() {
+            guidance =
+                tr!("检查更新失败。请稍后重试，再决定是否升级。", "The release check failed. Retry before upgrading.")
+                    .into();
+            None
+        } else {
+            upgrade_command(status, &self.install, self.exe.as_deref(), release, target(), tap())
+        };
+        if status == Availability::Current && self.install.version.as_deref().is_some_and(|v| v != VERSION) {
+            guidance.push_str(tr!(
+                " 重新打开正在运行的旧版客户端，并按需重启后台服务。",
+                " Reopen clients still running the old version and restart the service if needed."
+            ));
+        }
         if self.policy == Policy::AutoPatch
             && status == Availability::Available
-            && version.as_deref().is_some_and(|v| transaction::eligible(VERSION, v, true).is_err())
+            && version.as_deref().is_some_and(|v| transaction::eligible(local_version, v, true).is_err())
         {
             guidance.push_str(tr!(
                 " 此版本跨越补丁范围，不会自动安装。",
@@ -361,6 +429,7 @@ impl Local {
             published_at: release.and_then(|r| r.published_at.clone()),
             release_url: repo.zip(release).map(|(repo, r)| format!("https://github.com/{repo}/releases/tag/{}", r.tag)),
             guidance,
+            upgrade_command: command,
             last_update,
         })
     }
@@ -448,7 +517,11 @@ impl fmt::Display for Report {
                 outcome.detail
             )?;
         }
-        write!(f, "{}", self.guidance)
+        write!(f, "{}", self.guidance)?;
+        if let Some(command) = &self.upgrade_command {
+            write!(f, "\n{command}")?;
+        }
+        Ok(())
     }
 }
 
@@ -529,7 +602,64 @@ mod tests {
     }
 
     #[test]
-    fn availability_follows_running_version_and_install_channel() {
+    fn an_old_viewer_does_not_offer_to_upgrade_the_current_installation() {
+        let local = Local {
+            source_command: None,
+            exe: None,
+            install: Installation { method: InstallMethod::Debian, version: Some("9.4.2".into()), pinned: None },
+            policy: Policy::Manual,
+        };
+        let mut cache = Cache::default();
+        cache.release = Some(Release { tag: "v9.4.2".into(), published_at: None, assets: vec![] });
+        let report = local.report(cache).unwrap();
+        assert_eq!(report.availability, Availability::Current);
+        assert!(report.upgrade_command.is_none());
+    }
+
+    #[test]
+    fn upgrade_commands_follow_the_verified_channel_and_release_state() {
+        let exe = Path::new("/Users/it's me/bin/iphone-control");
+        let release = Release { tag: "v0.2.1".into(), published_at: None, assets: vec![] };
+        let brew = Path::new("/opt/homebrew/bin/brew");
+        let keg = Path::new("/opt/homebrew/Cellar/iphone-control/0.2.0/bin/iphone-control");
+        let command = |method, pinned, status, platform, tap| {
+            let exe = if method == InstallMethod::Homebrew { keg } else { exe };
+            let installation = Installation { method, version: Some("0.2.0".into()), pinned };
+            upgrade_command(status, &installation, Some(exe), Some(&release), Some(platform), tap)
+        };
+        use Availability::*;
+        use InstallMethod::{Debian, Homebrew, Managed, Script, Unknown};
+        let quoted = crate::shell_quote(exe.to_str().unwrap());
+        for (pinned, expected) in [
+            (false, format!("{quoted} update apply")),
+            (true, format!("{quoted} update unpin && {quoted} update apply")),
+        ] {
+            assert_eq!(command(Managed, Some(pinned), Available, "macos-arm64", None), Some(expected));
+        }
+        assert_eq!(
+            command(Homebrew, None, BrewCheck, "macos-arm64", Some("Example/tap")),
+            Some(format!(
+                "{brew} update && {brew} upgrade Example/tap/iphone-control",
+                brew = crate::shell_quote(brew.to_str().unwrap())
+            ))
+        );
+        assert!(command(Homebrew, None, BrewCheck, "macos-arm64", Some("unverified tap")).is_none());
+        for (target, arch) in [("linux-aarch64", "arm64"), ("linux-x86_64", "amd64")] {
+            assert_eq!(
+                command(Debian, None, Available, target, None),
+                Some(format!("sudo apt install ./iphone-control_0.2.1_{arch}.deb"))
+            );
+        }
+        for method in [Unknown, Script] {
+            assert!(command(method, None, Available, "macos-arm64", None).is_none());
+        }
+        for status in [Development, Unchecked, Current, Ahead, PlatformPending, Unsupported, ManualOnly] {
+            assert!(command(Managed, Some(false), status, "macos-arm64", None).is_none());
+        }
+    }
+
+    #[test]
+    fn availability_follows_local_version_and_install_channel() {
         let release = Release {
             tag: "v0.2.1".into(),
             published_at: None,

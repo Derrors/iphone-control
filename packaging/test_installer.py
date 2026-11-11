@@ -104,7 +104,9 @@ class InstallerTest(unittest.TestCase):
             installer.main()
 
     def test_install_and_uninstall(self):
-        self.install()
+        with contextlib.redirect_stdout(io.StringIO()) as output:
+            self.install()
+        self.assertIn(f"export PATH='{self.binary.parent}':\"$PATH\"", output.getvalue())
         self.assertEqual(json.loads(self.receipt.read_text()), dict(
             schema=1, publisher=REPO, binary_path=str(self.binary), target=self.target, version=VERSION,
             service=installer.service_files(self.config)[0], pinned=False,
@@ -130,7 +132,10 @@ class InstallerTest(unittest.TestCase):
         self.assertIn(f'Environment="XDG_CONFIG_HOME={self.config.parent}"', unit)
 
     def test_fixed_manual_install(self):
-        self.install("--version", VERSION, "--no-service")
+        with patch.dict(os.environ, PATH=str(self.binary.parent) + os.pathsep + os.environ["PATH"]):
+            with contextlib.redirect_stdout(io.StringIO()) as output:
+                self.install("--version", VERSION, "--no-service")
+        self.assertNotIn("export PATH=", output.getvalue())
         data = json.loads(self.receipt.read_text())
         self.assertTrue(data["pinned"])
         self.assertEqual(data["service"], "none")

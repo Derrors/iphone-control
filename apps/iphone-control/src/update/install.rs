@@ -111,6 +111,59 @@ pub(super) struct Installation {
     pub pinned: Option<bool>,
 }
 
+/// Cargo records the source directory, binary names and build options beside its bin directory.
+/// A development executable copied elsewhere has no corresponding installation record.
+pub(super) fn cargo_source(exe: &Path, manifest_dir: &Path) -> Option<(String, String)> {
+    if exe.file_name()? != "iphone-control" || exe.parent()?.file_name()? != "bin" {
+        return None;
+    }
+    let root = exe.parent()?.parent()?;
+    let source = manifest_dir.canonicalize().ok()?;
+    if !source.join("Cargo.toml").is_file() {
+        return None;
+    }
+    let data: serde_json::Value = serde_json::from_reader(File::open(root.join(".crates2.json")).ok()?).ok()?;
+    let mut owners = data["installs"].as_object()?.iter().filter(|(_, entry)| {
+        entry["bins"].as_array().is_some_and(|bins| bins.iter().any(|bin| bin.as_str() == Some("iphone-control")))
+    });
+    let (id, entry) = owners.next()?;
+    if owners.next().is_some() {
+        return None;
+    }
+    let (version, url) = id.strip_prefix("iphone-control ")?.strip_suffix(')')?.split_once(" (path+")?;
+    let recorded_source = reqwest::Url::parse(url).ok()?.to_file_path().ok()?;
+    if recorded_source.canonicalize().ok()? != source {
+        return None;
+    }
+    let version = Version::parse(version).ok()?.to_string();
+    let mut command = format!(
+        "cd {} && cargo install --locked --path . --root {}",
+        crate::shell_quote(source.to_str()?),
+        crate::shell_quote(root.to_str()?),
+    );
+    match entry["profile"].as_str()? {
+        "release" => {}
+        "debug" | "dev" => command.push_str(" --debug"),
+        profile => command.push_str(&format!(" --profile {}", crate::shell_quote(profile))),
+    }
+    if entry["all_features"].as_bool()? {
+        command.push_str(" --all-features");
+    }
+    if entry["no_default_features"].as_bool()? {
+        command.push_str(" --no-default-features");
+    }
+    let features = entry["features"].as_array()?.iter().map(|f| f.as_str()).collect::<Option<Vec<_>>>()?;
+    if !features.is_empty() {
+        command.push_str(&format!(" --features {}", crate::shell_quote(&features.join(","))));
+    }
+    let target = entry["target"].as_str()?;
+    let host = entry["rustc"].as_str()?.lines().find_map(|line| line.strip_prefix("host: "))?;
+    if target != host {
+        command.push_str(&format!(" --target {}", crate::shell_quote(target)));
+    }
+    Some((version, command))
+}
+
 fn brew_keg(exe: &Path, cellar: &Path, tap: &str) -> Option<String> {
     let version = exe.strip_prefix(cellar.join("iphone-control")).ok()?.components().next()?.as_os_str();
     let keg = cellar.join("iphone-control").join(version);
@@ -126,6 +179,19 @@ fn brew_keg(exe: &Path, cellar: &Path, tap: &str) -> Option<String> {
     Some(Version::parse(version.to_str()?.split('_').next()?).ok()?.to_string())
 }
 
+pub(super) fn brew_program(cellar: &Path) -> Option<PathBuf> {
+    // GUI processes need not inherit Homebrew's PATH. Only use a neighboring
+    // executable for known Homebrew prefixes; custom installations use the host PATH.
+    match cellar.to_str()? {
+        "/opt/homebrew/Cellar" | "/usr/local/Cellar" | "/home/linuxbrew/.linuxbrew/Cellar" => {
+            return Some(cellar.parent()?.join("bin/brew"));
+        }
+        _ => {}
+    }
+    let path = std::env::var_os("PATH")?;
+    std::env::split_paths(&path).filter(|p| p.is_absolute()).map(|p| p.join("brew")).find(|p| p.is_file())
+}
+
 fn brew_installation(exe: &Path, tap: &str) -> Option<String> {
     // First match the exact keg and its tap receipt. Never start a package manager
     // for a source checkout, a plain copy, or an installation in another tap.
@@ -133,20 +199,19 @@ fn brew_installation(exe: &Path, tap: &str) -> Option<String> {
     let version = brew_keg(exe, cellar, tap)?;
     static CELLAR: OnceLock<Option<PathBuf>> = OnceLock::new();
     let actual = CELLAR.get_or_init(|| {
-        // GUI processes need not inherit Homebrew's PATH. Custom prefixes use PATH.
-        let brew = match cellar.to_str()? {
-            "/opt/homebrew/Cellar" => "/opt/homebrew/bin/brew",
-            "/usr/local/Cellar" => "/usr/local/bin/brew",
-            "/home/linuxbrew/.linuxbrew/Cellar" => "/home/linuxbrew/.linuxbrew/bin/brew",
-            _ => "brew",
-        };
+        let brew = brew_program(cellar)?;
         let output = Command::new(brew).arg("--cellar").env("HOMEBREW_NO_AUTO_UPDATE", "1").output().ok()?;
         if !output.status.success() {
             return None;
         }
         Path::new(std::str::from_utf8(&output.stdout).ok()?.trim()).canonicalize().ok()
     });
-    (actual.as_deref() == Some(cellar)).then_some(version)
+    if actual.as_deref() != Some(cellar) {
+        return None;
+    }
+    // The old Viewer may still run from a retained keg after Homebrew relinks opt.
+    let active = cellar.parent()?.join("opt/iphone-control/bin/iphone-control");
+    Some(active.canonicalize().ok().and_then(|p| brew_keg(&p, cellar, tap)).unwrap_or(version))
 }
 
 fn deb_package(exe: &Path) -> Option<String> {
@@ -166,6 +231,18 @@ fn deb_package(exe: &Path) -> Option<String> {
     let version = installed.strip_prefix("ii  ")?.trim();
     let upstream = version.rsplit_once('-').map_or(version, |(upstream, _)| upstream);
     Some(Version::parse(upstream).ok()?.to_string())
+}
+
+/// Linux marks /proc/self/exe as deleted when Cargo, dpkg or an installer atomically
+/// replaces the binary under a running Viewer. Inspect the replacement at its original path.
+pub(super) fn installed_executable(running: &Path) -> Option<PathBuf> {
+    running.canonicalize().ok().or_else(|| {
+        if cfg!(target_os = "linux") && running.file_name()? == "iphone-control (deleted)" {
+            running.with_file_name("iphone-control").canonicalize().ok()
+        } else {
+            None
+        }
+    })
 }
 
 pub(super) fn detect(exe: Option<&Path>) -> Installation {
@@ -204,6 +281,38 @@ pub(super) fn detect(exe: Option<&Path>) -> Installation {
 mod tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn cargo_commands_require_the_recorded_source_and_preserve_install_options() {
+        let dir = tempfile::tempdir().unwrap();
+        let dir = dir.path().canonicalize().unwrap();
+        let root = dir.join("install root");
+        let source = dir.join("my fork's $source");
+        fs::create_dir_all(root.join("bin")).unwrap();
+        fs::create_dir(&source).unwrap();
+        fs::write(source.join("Cargo.toml"), b"").unwrap();
+        let exe = root.join("bin/iphone-control");
+        let package = format!("iphone-control 0.2.1 (path+{})", reqwest::Url::from_file_path(&source).unwrap());
+        let data = serde_json::json!({ "installs": { package: {
+            "bins": ["iphone-control"], "features": ["debug-cmds"], "profile": "debug", "all_features": false,
+            "no_default_features": true, "target": "aarch64-apple-darwin", "rustc": "host: aarch64-apple-darwin"
+        } } });
+        fs::write(root.join(".crates2.json"), data.to_string()).unwrap();
+        let (version, command) = cargo_source(&exe, &source).unwrap();
+        assert_eq!(version, "0.2.1");
+        assert_eq!(
+            command,
+            format!(
+                "cd {} && cargo install --locked --path . --root {} --debug --no-default-features --features debug-cmds",
+                crate::shell_quote(source.to_str().unwrap()),
+                crate::shell_quote(root.to_str().unwrap())
+            )
+        );
+        assert!(cargo_source(&dir.join("other/bin/iphone-control"), &source).is_none());
+        assert!(cargo_source(&exe, &root).is_none());
+        fs::write(root.join(".crates2.json"), "{}").unwrap();
+        assert!(cargo_source(&exe, &source).is_none());
+    }
 
     #[test]
     fn only_identifies_the_receipted_file() {

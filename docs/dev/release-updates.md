@@ -8,7 +8,7 @@ Set these GitHub Actions **repository variables** before pushing a release tag.
 
 | Variable | Value |
 | --- | --- |
-| `ICTL_UPDATE_PUBLISHER` | Exact, case-sensitive `owner/repo` of this repository. For a release from `Julian0197/iphone-control`, use that value. |
+| `ICTL_UPDATE_PUBLISHER` | Exact, case-sensitive `owner/repo` of this repository. For upstream releases use `Derrors/iphone-control`. A fork uses its own repository name. |
 | `ICTL_UPDATE_PUBLIC_KEYS` | Comma-separated Ed25519 public keys. Each is the lowercase hex encoding of the raw 32-byte public key. |
 | `ICTL_UPDATE_TAP` | Optional `owner/tap` Homebrew identity. For `owner/tap`, the push target is `owner/homebrew-tap`. Configure the repository-specific write deploy key in the `HOMEBREW_TAP_DEPLOY_KEY` secret. |
 
@@ -36,10 +36,10 @@ For key rotation, publish a normally signed release with both the current and ne
 
 ## Bootstrap and migration
 
-Use the standalone `install.sh` **release asset** with Python 3 and OpenSSL 3 on PATH. It embeds the release publisher and its public keys. For a fork, select the fork's Releases page and check that its signing job published an installer and the target's manifest and signature. For example, after this fork publishes its first signed release, the install command is
+Use the standalone `install.sh` **release asset** with Python 3 and OpenSSL 3 on PATH. It embeds the release publisher and its public keys. For a fork, select the fork's Releases page and check that its signing job published an installer and the target's manifest and signature. For example, after upstream publishes its first signed release, the install command is
 
 ```sh
-curl -fsSL https://github.com/Julian0197/iphone-control/releases/latest/download/install.sh | sh
+curl -fsSL https://github.com/Derrors/iphone-control/releases/latest/download/install.sh | sh
 ```
 
 A custom prefix and an explicit version can be supplied using `sh -s -- --prefix "$HOME/tools" --version v0.2.1`. A version-selected installation records a pin. `--no-service` is available for a manually started daemon. The source-tree script carries no publisher keys.

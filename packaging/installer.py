@@ -445,6 +445,9 @@ def bootstrap(binary, config, receipt, data, target, requested, no_service):
             if new["service"] != "none":
                 subprocess.run([binary, "update", "schedule"], check=True)
     print(f"Installed iphone-control {version} at {binary} ({new['service']}).")
+    if str(binary.parent) not in map(os.path.realpath, os.get_exec_path()):
+        print("To run iphone-control by name, run this command and add it to your shell profile.")
+        print(f'  export PATH={shlex.quote(str(binary.parent))}:"$PATH"')
 
 
 def main():

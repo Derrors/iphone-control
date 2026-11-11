@@ -58,6 +58,17 @@ pub struct Persisted {
     /// 运行中选定要控制的设备（`iphone-control select`、`iphone_select_device`）；None 是自动选。
     /// 设了 `IPHONE_UDID` 时以它为准，这个不起作用
     pub selected_udid: Option<String>,
+    /// 实验（`ICTL_WDA_DETACHED`）：后台启动的 WDA 是哪台设备上的哪个进程。守护进程重启后据此直接接上它，
+    /// 不重新启动；关掉实验开关后据此结束它（不然它一直占着 8100 端口，新 runner 的 HTTP 服务起不来）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detached_wda: Option<DetachedWda>,
+}
+
+/// 后台启动的 WDA 进程
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DetachedWda {
+    pub udid: String,
+    pub pid: u64,
 }
 
 /// 一次重签的结果

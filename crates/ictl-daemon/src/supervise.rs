@@ -3,10 +3,10 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
-use ictl_device::{Device, DeviceError, Tunnel, UsbDevice};
+use ictl_device::{Device, DeviceError, LogStream, Tunnel, UsbDevice};
 use ictl_wda::{WdaClient, WdaError, WdaRunner, http::DeviceTransport};
 
-use crate::core::{Daemon, DeviceProfile, Inner, close_hid};
+use crate::core::{Daemon, DetachedWda, DeviceProfile, Inner, close_hid};
 use crate::machine::DeviceState;
 use crate::notify::Event;
 
@@ -28,6 +28,25 @@ const SESSION_CHECK_TIMEOUT: Duration = Duration::from_secs(3 * 60);
 const RESIGN_CHECK_AFTER_CONNECT: Duration = Duration::from_secs(60);
 /// 因为证书自动重签同一台设备的最短间隔：重签也治不好时（例如其实是没信任开发者）不反复签
 pub(crate) const CERT_HEAL_EVERY: Duration = Duration::from_secs(6 * 3600);
+/// 实验开关：接上已在运行的后台 WDA 时等 `/status` 的时限。它本该马上应答，等不到就当它坏了，下一次重新启动
+const ADOPT_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// 实验开关（`ICTL_WDA_DETACHED`）下，这次的 WDA 是怎么来的
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Detached {
+    /// 之前后台启动的、还在运行，直接接上
+    Adopted(u64),
+    /// 这次后台启动的
+    Launched(u64),
+}
+
+impl Detached {
+    fn pid(self) -> u64 {
+        match self {
+            Self::Adopted(p) | Self::Launched(p) => p,
+        }
+    }
+}
 
 /// 后台启动 WDA 的结果
 pub(crate) enum StartOutcome {
@@ -35,6 +54,8 @@ pub(crate) enum StartOutcome {
         runner: WdaRunner,
         client: WdaClient<DeviceTransport>,
         mounted: Option<String>,
+        /// 实验开关开着时：后台 WDA 是接上的还是新启动的
+        detached: Option<Detached>,
     },
     NeedsUnlock,
     /// 开发者镜像没准备好。`mount_failed`：是挂载这一步失败（才可能是缓存坏了）；
@@ -44,6 +65,9 @@ pub(crate) enum StartOutcome {
         mount_failed: bool,
     },
     Wda(WdaError),
+    /// 实验开关：手机拒绝后台启动 WDA（多半是证书被吊销或还没信任开发者）。和 XCTest 会话启动时的
+    /// `unexpected response` 一样处理：查证书，有问题就自动重签
+    Refused(String),
 }
 
 impl Daemon {
@@ -260,11 +284,23 @@ impl Daemon {
         if !matches!(g.state, DeviceState::NeedsAutomationPin | DeviceState::NeedsUnlock) {
             self.set_state(g, DeviceState::WdaStarting { last_error: None });
         }
-        self.log.log(ictl_l10n::log_tr!("启动 WDA", "Starting WDA"));
+        let detached = self.cfg.wda_detached;
+        self.log.log(if detached {
+            ictl_l10n::log_tr!(
+                "启动 WDA（实验：后台启动，不持有 XCTest 会话）",
+                "Starting WDA (experimental: launched in the background, no XCTest session)"
+            )
+        } else {
+            ictl_l10n::log_tr!("启动 WDA", "Starting WDA")
+        });
+        let known = g.persisted.detached_wda.as_ref().filter(|d| d.udid == device.udid).map(|d| d.pid);
         let (cache, url, user_dir) = (self.cfg.ddi_cache(), self.cfg.ddi_url.clone(), self.cfg.ddi_dir.clone());
         g.starting = Some(tokio::task::spawn_local(async move {
-            // 手机重启后开发者镜像可能掉了；已挂载时只是一次查询。错误带上「是不是挂载这一步」
-            let ddi: Result<Option<String>, (DeviceError, bool)> = async {
+            // 手机重启后开发者镜像可能掉了；已挂载时只是一次查询。错误带上「是不是挂载这一步」。
+            // 镜像好了再在同一条隧道上处理后台 WDA（见 prepare_detached）
+            // 挂上的镜像版本、后台 WDA 的处理结果、启动前打开的系统日志流
+            type Ready = (Option<String>, Result<Option<Detached>, DeviceError>, Option<LogStream>);
+            let ddi: Result<Ready, (DeviceError, bool)> = async {
                 let mut t = device.open_tunnel().await.map_err(|e| (e, false))?;
                 let r = async {
                     if t.ddi_mounted().await.map_err(|e| (e, false))?.is_some() {
@@ -278,17 +314,45 @@ impl Daemon {
                     Ok(Some(t.mount_ddi(&dir).await.map_err(|e| (e, true))?))
                 }
                 .await;
+                let r = match r {
+                    Ok(m) => {
+                        // 后台启动前先开系统日志流：认「Enable UI Automation」密码框靠它（见 WdaRunner::attach）
+                        let log = if detached { open_log(&device).await } else { None };
+                        Ok((m, prepare_detached(&mut t, detached, known, &bundle).await, log))
+                    }
+                    Err(e) => Err(e),
+                };
                 t.close().await;
                 r
             }
             .await;
-            let mounted = match ddi {
+            let (mounted, prepared, log) = match ddi {
                 Ok(v) => v,
                 Err((DeviceError::PasswordProtected, _)) => return StartOutcome::NeedsUnlock,
                 Err((e, mount_failed)) => return StartOutcome::Ddi { error: e.to_string(), mount_failed },
             };
-            match WdaRunner::start(device.provider(), &bundle, WDA_START_TIMEOUT).await {
-                Ok((runner, client)) => StartOutcome::Ready { runner, client, mounted },
+            let prepared = match prepared {
+                Ok(p) => p,
+                Err(e @ DeviceError::LaunchRefused(_)) => {
+                    return StartOutcome::Refused(ictl_l10n::trf!(
+                        "后台启动 WDA 失败：{e}（第一次在这台设备上装 WDA 的：到 设置 → 通用 → VPN 与设备管理 里信任你的 Apple ID 开发者；已经信任过的，多半是签名证书被吊销了：运行 iphone-control sign 重签这台）",
+                        "Launching WDA in the background failed: {e} (first WDA install on this device: trust your Apple ID developer under Settings → General → VPN & Device Management; already trusted: the signing certificate was most likely revoked, run iphone-control sign to re-sign this device)"
+                    ));
+                }
+                Err(e) => {
+                    return StartOutcome::Wda(WdaError::StartFailed(ictl_l10n::trf!(
+                        "后台启动 WDA 失败：{e}",
+                        "Launching WDA in the background failed: {e}"
+                    )));
+                }
+            };
+            let started = match prepared {
+                Some(Detached::Adopted(_)) => WdaRunner::attach(device.provider(), ADOPT_TIMEOUT, None).await,
+                Some(Detached::Launched(_)) => WdaRunner::attach(device.provider(), WDA_START_TIMEOUT, log).await,
+                None => WdaRunner::start(device.provider(), &bundle, WDA_START_TIMEOUT).await,
+            };
+            match started {
+                Ok((runner, client)) => StartOutcome::Ready { runner, client, mounted, detached: prepared },
                 Err(e) => StartOutcome::Wda(e),
             }
         }));
@@ -303,10 +367,29 @@ impl Daemon {
         let outcome = h.await.unwrap_or_else(|e| {
             StartOutcome::Wda(WdaError::StartFailed(ictl_l10n::trf!("启动任务异常：{e}", "Start task failed: {e}")))
         });
+        // 后台启动被拒绝和 XCTest 会话启动被拒绝（unexpected response）走同一条路：记失败，查证书
         match outcome {
-            StartOutcome::Ready { runner, mut client, mounted } => {
+            StartOutcome::Ready { runner, mut client, mounted, detached } => {
                 if let Some(v) = mounted {
                     self.log.log(&ictl_l10n::log_trf!("开发者镜像已挂载 {v}", "Developer disk image mounted {v}"));
+                }
+                match detached {
+                    Some(Detached::Adopted(pid)) => self.log.log(&ictl_l10n::log_trf!(
+                        "接上手机上已在运行的后台 WDA（进程 {pid}），没有重新启动",
+                        "Attached to the background WDA already running on the phone (pid {pid}) without restarting it"
+                    )),
+                    Some(Detached::Launched(pid)) => self.log.log(&ictl_l10n::log_trf!(
+                        "已在后台启动 WDA（进程 {pid}，不持有 XCTest 会话）",
+                        "Launched WDA in the background (pid {pid}, no XCTest session)"
+                    )),
+                    None => {}
+                }
+                let record = detached
+                    .zip(g.device.as_ref())
+                    .map(|(d, dev)| DetachedWda { udid: dev.udid.clone(), pid: d.pid() });
+                if g.persisted.detached_wda != record {
+                    g.persisted.detached_wda = record;
+                    g.persisted.save(&self.cfg.state_file());
                 }
                 g.dev.ddi_failures = 0;
                 g.runner = Some(runner);
@@ -347,15 +430,25 @@ impl Daemon {
                 self.set_state(g, DeviceState::NeedsAutomationPin);
                 self.notify(g, Event::NeedsAutomationPin);
             }
-            StartOutcome::Wda(e) => {
+            failed @ (StartOutcome::Wda(_) | StartOutcome::Refused(_)) => {
+                // 后台启动被拒绝和 XCTest 会话启动被拒绝（unexpected response）走同一条路：记失败，查证书
+                let (e, refused_in_background) = match failed {
+                    StartOutcome::Refused(m) => (WdaError::StartFailed(m), true),
+                    StartOutcome::Wda(e) => (e, false),
+                    _ => unreachable!("上面只匹配了这两种"),
+                };
                 g.backoff.failed(Instant::now());
+                // 接上的后台 WDA 没应答：忘掉它，下一次重新后台启动（会先结束它）
+                if self.cfg.wda_detached && g.persisted.detached_wda.take().is_some() {
+                    g.persisted.save(&self.cfg.state_file());
+                }
                 // StartFailed 自己就以「WDA 启动失败：」开头，日志和状态里再加一遍就重复了
                 let e = match e {
                     WdaError::StartFailed(m) => m,
                     e => e.to_string(),
                 };
                 self.log.log(&ictl_l10n::log_trf!("WDA 启动失败：{e}", "WDA failed to start: {e}"));
-                let refused = ictl_wda::runner::launch_refused(&e);
+                let refused = refused_in_background || ictl_wda::runner::launch_refused(&e);
                 self.set_state(g, DeviceState::WdaStarting { last_error: Some(e) });
                 if refused {
                     self.maybe_heal_certificate(g);
@@ -665,4 +758,56 @@ impl Daemon {
 
 fn now_secs() -> u64 {
     std::time::SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs()
+}
+
+/// 实验开关（`ICTL_WDA_DETACHED`）的那一步，在挂镜像的隧道上做：
+/// - 开着：`known` 那个进程还是 WDA 就直接接上；否则在后台启动一个（会先结束已在运行的 WDA，包括 XCTest 会话启动的）
+/// - 关着：结束之前后台启动、还在运行的那个。它不随守护进程退出，留着就一直占着 8100 端口
+async fn prepare_detached(
+    t: &mut Tunnel,
+    detached: bool,
+    known: Option<u64>,
+    bundle: &str,
+) -> Result<Option<Detached>, DeviceError> {
+    fn is_wda(procs: &[(u64, String)], pid: u64) -> bool {
+        procs.iter().any(|(p, path)| *p == pid && path.contains("WebDriverAgentRunner"))
+    }
+    match (detached, known) {
+        (true, Some(pid)) if is_wda(&t.processes().await?, pid) => Ok(Some(Detached::Adopted(pid))),
+        (true, _) => Ok(Some(Detached::Launched(t.launch_in_background(bundle).await?))),
+        (false, Some(pid)) => {
+            if is_wda(&t.processes().await.unwrap_or_default(), pid) {
+                tracing::info!(
+                    "{}",
+                    ictl_l10n::log_trf!(
+                        "结束之前后台启动的 WDA（进程 {pid}）",
+                        "Stopping the WDA launched in the background earlier (pid {pid})"
+                    )
+                );
+                if let Err(e) = t.kill(pid).await {
+                    tracing::warn!("kill {pid}: {e}");
+                }
+                tokio::time::sleep(Duration::from_secs(1)).await;
+            }
+            Ok(None)
+        }
+        (false, None) => Ok(None),
+    }
+}
+
+/// 打开手机系统日志流；打不开只记一笔（后台启动照样进行，只是认不出密码框）
+async fn open_log(device: &Device) -> Option<LogStream> {
+    match device.log_stream().await {
+        Ok(l) => Some(l),
+        Err(e) => {
+            tracing::warn!(
+                "{}",
+                ictl_l10n::log_trf!(
+                    "打不开手机系统日志，认不出「Enable UI Automation」密码框：{e}",
+                    "Couldn't open the phone's log, so the “Enable UI Automation” passcode prompt can't be detected: {e}"
+                )
+            );
+            None
+        }
+    }
 }

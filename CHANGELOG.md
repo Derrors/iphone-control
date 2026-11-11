@@ -10,6 +10,7 @@ All notable changes to this project are documented here. The format is based on 
 
 - On iOS 27 and later the control page shows the phone's own hardware-encoded video (the CoreDevice screen media stream, HEVC): about 60 frames a second at native resolution, nothing encoded on this machine and no capturing by WDA; the picture turns with the screen. Browsers that can't decode HEVC (Firefox, Chrome on most Linux machines) and older iOS fall back to H.264 or MJPEG. `IPHONE_CONTROL_VIEWER_CODEC=device` uses only this stream.
 - The control page shows the picture as H.264 at about 1/15 of the traffic: on macOS with VideoToolbox called directly (the JPEG decoded by the hardware too), no ffmpeg needed; on Linux with ffmpeg installed, GPU encoding first (NVENC, VAAPI, QSV, V4L2, else x264); on a slow link the frame rate drops instead of the picture falling further behind. Without ffmpeg it stays MJPEG, now without repeated frames. Settings: `IPHONE_CONTROL_VIEWER_CODEC`, `IPHONE_CONTROL_VIEWER_QP`.
+- Experimental `ICTL_WDA_DETACHED=1`: WebDriverAgent is launched in the background without an XCTest session, so it also starts while the phone is locked and keeps running when the daemon restarts. See [WDA dependency research](docs/dev/wda-dependency-research.md).
 
 ### Fixed
 

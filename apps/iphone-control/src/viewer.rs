@@ -171,7 +171,6 @@ async fn handle(mut client: TcpStream, ctx: &Ctx, head: Vec<u8>, req: Head, mut 
     let path = req.path.as_str();
     match (req.method.as_str(), path) {
         ("GET", "/") => reply(&mut client, 200, "text/html; charset=utf-8", ctx.page.as_bytes()).await,
-        ("GET", "/viewer-idle.webp") => reply(&mut client, 200, "image/webp", include_bytes!("viewer-idle.webp")).await,
         ("GET", "/stream") => {
             // the device the page shows (`?udid=`), so a page that hasn't noticed a switch keeps its own picture
             // instead of silently showing another phone. Looked up again each time: after a replug usbmuxd gives the

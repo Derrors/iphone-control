@@ -54,6 +54,8 @@ struct Ctx {
     /// The device the page shows and acts on
     udid: Mutex<String>,
     agents: Arc<Agents>,
+    checking: Arc<tokio::sync::Mutex<()>>,
+    check_error: Arc<Mutex<Option<String>>>,
     /// Bundle id → display name, for the foreground app
     names: tokio::sync::Mutex<HashMap<String, String>>,
 }
@@ -122,6 +124,8 @@ pub async fn run(socket: &Path, data_dir: &Path, port: u16) -> anyhow::Result<()
         port,
         udid: Mutex::new(udid),
         agents,
+        checking: Arc::default(),
+        check_error: Arc::default(),
         names: tokio::sync::Mutex::default(),
         page: page_in(ictl_l10n::lang()),
     });
@@ -200,6 +204,7 @@ async fn handle(mut client: TcpStream, ctx: &Ctx, head: Vec<u8>, req: Head, mut 
             let v = match &p[5..] {
                 // always an answer: the page falls back to its offline demo when this one fails
                 "info" => Ok(info(ctx).await.unwrap_or_else(|m| json!({"width": null, "height": null, "warning": m}))),
+                "updates" => updates(ctx).await,
                 "daemon" => daemon(ctx).await,
                 "status" => status(ctx).await,
                 "devices" => devices(ctx).await,
@@ -240,10 +245,38 @@ async fn handle(mut client: TcpStream, ctx: &Ctx, head: Vec<u8>, req: Head, mut 
     }
 }
 
+/// The release cache belongs to the host user; process versions belong to this Viewer and socket.
+async fn updates(ctx: &Ctx) -> Result<Value, String> {
+    let lang = ictl_l10n::lang();
+    let mut report = tokio::task::spawn_blocking(move || ictl_l10n::with_lang(lang, crate::update::cached))
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())?;
+    crate::report_daemon(&mut report, &ctx.socket).await;
+    let mut v = json!(report);
+    v["checking"] = json!(ctx.checking.try_lock().is_err());
+    v["check_error"] = json!(*ctx.check_error.lock().unwrap_or_else(|p| p.into_inner()));
+    Ok(v)
+}
+
 /// A POST under `/api/`: status code and JSON answer
 /// `device`: the one the page shows (`X-Ictl-Device`); actions only go to it
 async fn post(ctx: &Ctx, name: &str, b: &Value, device: Option<&str>) -> (u16, Value) {
     let conflict = |m: String| (409, json!({"ok": false, "message": m}));
+    if name == "updates/check" {
+        if !b.as_object().is_some_and(serde_json::Map::is_empty) {
+            return (400, json!({"message": "Expected {}"}));
+        }
+        if let Ok(guard) = ctx.checking.clone().try_lock_owned() {
+            let error = ctx.check_error.clone();
+            tokio::spawn(async move {
+                let result = crate::update::check(false).await;
+                *error.lock().unwrap_or_else(|p| p.into_inner()) = result.err().map(|e| e.to_string());
+                drop(guard);
+            });
+        }
+        return (202, json!({"checking": true}));
+    }
     if name == "agent/tasks" {
         let prompt = b["prompt"].as_str().unwrap_or_default();
         let backend = b["agent"].as_str().unwrap_or("claude");
@@ -350,6 +383,7 @@ async fn json_reply(client: &mut TcpStream, status: u16, v: &Value) -> anyhow::R
 async fn reply(client: &mut TcpStream, status: u16, kind: &str, body: &[u8]) -> anyhow::Result<()> {
     let reason = match status {
         200 => "OK",
+        202 => "Accepted",
         400 => "Bad Request",
         403 => "Forbidden",
         404 => "Not Found",

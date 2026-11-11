@@ -20,10 +20,10 @@ Pick one of the three. Install as your regular user; don't run `iphone-control` 
 **One command** (macOS, Linux):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Derrors/iphone-control/main/install.sh | sh
+curl -fsSL https://github.com/Derrors/iphone-control/releases/latest/download/install.sh | sh
 ```
 
-It installs the program into `~/.local/bin` and the daemon as a per-user service (launchd on macOS, a systemd user service on Linux) that starts when you log in. Running it again upgrades. Options go after `sh -s --`: `--version vX.Y.Z` installs that release, `--prefix DIR` installs into `DIR/bin`, `--no-service` installs only the program.
+It installs the program into `~/.local/bin` and the daemon as a per-user service (launchd on macOS, a systemd user service on Linux) that starts when you log in. Run `iphone-control update check` for upgrade instructions. Options go after `sh -s --`: `--version vX.Y.Z` installs that release, `--prefix DIR` installs into `DIR/bin`, `--no-service` installs only the program.
 
 **Homebrew** (macOS, Linux):
 
@@ -107,7 +107,7 @@ Something wrong? See the [FAQ](../troubleshoot/faq).
 
 | Installed with | Uninstall |
 |---|---|
-| One command | `curl -fsSL https://raw.githubusercontent.com/Derrors/iphone-control/main/install.sh \| sh -s -- --uninstall` |
+| One command | `curl -fsSL https://github.com/Derrors/iphone-control/releases/latest/download/install.sh \| sh -s -- --uninstall` |
 | Homebrew | `brew services stop iphone-control`, then `brew uninstall iphone-control` |
 | .deb | `systemctl --user disable --now iphone-control`, then `sudo apt remove iphone-control` |
 

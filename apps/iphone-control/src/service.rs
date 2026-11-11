@@ -6,10 +6,11 @@
 //! commands act on whichever is there. The service reads `~/.config/iphone-control/env`, starts at login and is
 //! restarted after a crash.
 
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-use anyhow::{Context, bail};
+use anyhow::{Context, bail, ensure};
 
 use crate::envfile::home;
 
@@ -104,6 +105,118 @@ pub fn find() -> Option<Service> {
         }
     }
     None
+}
+
+/// Identify the user service recorded by the script installer. Package-managed services have
+/// their own upgrade lifecycle, even when they use the same systemd unit name.
+pub fn managed(exe: &Path, method: &str) -> anyhow::Result<Service> {
+    let (file, service) = match method {
+        "launchd" if cfg!(target_os = "macos") => {
+            (our_plist(), Service::Launchd { label: LABEL.into(), plist: our_plist(), ours: true })
+        }
+        "systemd" if cfg!(target_os = "linux") => (our_unit(), Service::Systemd { unit: UNIT.into(), ours: true }),
+        _ => bail!("a script-managed user service is required"),
+    };
+    let meta = file.symlink_metadata()?;
+    ensure!(meta.is_file() && meta.uid() == uid() && meta.mode() & 0o022 == 0, "untrusted service file");
+    let exe = exe.to_str().context("invalid executable path")?;
+    match &service {
+        Service::Launchd { label, .. } => {
+            let plist = plist::Value::from_file(&file)?;
+            let dict = plist.as_dictionary().context("invalid service plist")?;
+            let args = dict.get("ProgramArguments").and_then(|v| v.as_array()).context("missing service arguments")?;
+            let script = format!(
+                r#"set -a; f="$HOME/.config/iphone-control/env"; [ -f "$f" ] && . "$f"; set +a; exec "{exe}" daemon"#
+            );
+            ensure!(
+                dict.get("Label").and_then(|v| v.as_string()) == Some(label.as_str())
+                    && !dict.contains_key("Program")
+                    && (args.iter().map(|v| v.as_string()).eq([Some(exe), Some("daemon")])
+                        || args.iter().map(|v| v.as_string()).eq([Some("/bin/sh"), Some("-c"), Some(script.as_str())])),
+                "the launch agent does not start the recorded binary"
+            );
+        }
+        Service::Systemd { .. } => {
+            let unit = std::fs::read_to_string(&file)?;
+            let mut commands = unit.lines().filter_map(|line| line.trim().strip_prefix("ExecStart="));
+            let command = commands.next().context("missing ExecStart")?;
+            ensure!(
+                commands.next().is_none()
+                    && (command == format!(r#""{exe}" daemon"#)
+                        || (!exe.contains(char::is_whitespace) && command == format!("{exe} daemon"))),
+                "the systemd unit does not start the recorded binary"
+            );
+        }
+    }
+    Ok(service)
+}
+
+/// The effective service owner matters during replacement. A foreground daemon can answer the
+/// same socket. Reject transitional manager states and stale/overridden user service definitions.
+pub fn managed_pid(service: &Service, stopping: bool) -> anyhow::Result<Option<u32>> {
+    match service {
+        Service::Launchd { label, plist, .. } => {
+            let out = Command::new("launchctl")
+                .args(["print", &format!("gui/{}/{label}", uid())])
+                .env("LC_ALL", "C")
+                .output()?;
+            if !out.status.success() {
+                ensure!(
+                    String::from_utf8_lossy(&out.stderr).contains("Could not find service"),
+                    "cannot query launchd"
+                );
+                return Ok(None);
+            }
+            let info = std::str::from_utf8(&out.stdout)?;
+            let field = |key: &str| info.lines().find_map(|line| line.strip_prefix('\t')?.strip_prefix(key));
+            ensure!(field("path = ").map(Path::new) == Some(plist), "launchd loaded a different plist");
+            if stopping && field("pid = ").is_none() {
+                return Ok(None);
+            }
+            ensure!(stopping || field("state = ") == Some("running"), "launchd service is transitioning");
+            Ok(Some(field("pid = ").context("no launchd PID")?.parse()?))
+        }
+        Service::Systemd { unit, .. } => {
+            let out = Command::new("systemctl")
+                .args([
+                    "--user",
+                    "show",
+                    "--all",
+                    unit,
+                    "--all", // include an empty DropInPaths (absence is not proof of ownership)
+                    "--property=ActiveState,LoadState,MainPID,FragmentPath,DropInPaths,NeedDaemonReload",
+                ])
+                .output()?;
+            ensure!(out.status.success(), "cannot query systemd user service");
+            let info = std::str::from_utf8(&out.stdout)?;
+            let field = |key: &str| info.lines().find_map(|line| line.strip_prefix(key));
+            ensure!(
+                field("LoadState=") == Some("loaded")
+                    && field("NeedDaemonReload=") == Some("no")
+                    && field("FragmentPath=").map(Path::new) == Some(our_unit().as_path())
+                    && field("DropInPaths=") == Some(""),
+                "systemd unit is stale or overridden"
+            );
+            match (field("ActiveState="), field("MainPID=")) {
+                (Some("inactive" | "failed"), Some("0")) => Ok(None),
+                (Some("active"), Some(pid)) => {
+                    Ok(Some(pid.parse::<u32>().ok().filter(|p| *p > 0).context("missing MainPID")?))
+                }
+                (_, Some(pid)) if stopping => Ok(pid.parse::<u32>().ok().filter(|p| *p > 0)),
+                _ => bail!("systemd service is transitioning"),
+            }
+        }
+    }
+}
+
+/// Restart exactly the service we stopped without changing the user's enable-at-login setting.
+pub fn start_managed(s: &Service) -> anyhow::Result<()> {
+    if let Service::Systemd { unit, .. } = s {
+        ensure!(systemctl(&["start", unit]), "could not start systemd user service");
+        Ok(())
+    } else {
+        start(s)
+    }
 }
 
 fn launchd_loaded(label: &str) -> bool {

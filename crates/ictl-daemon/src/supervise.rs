@@ -75,6 +75,10 @@ impl Daemon {
 
     /// 每 10 秒一次。有请求在用设备就跳过这一轮（巡检不排队，下一轮再来）
     pub async fn tick(self: Arc<Self>) {
+        let Ok(_lease) = crate::maintenance::shared() else {
+            self.heartbeat.beat();
+            return;
+        };
         let Ok(mut g) = self.inner.try_lock() else { return };
         let g = &mut *g;
 
@@ -292,7 +296,9 @@ impl Daemon {
         });
         let known = g.persisted.detached_wda.as_ref().filter(|d| d.udid == device.udid).map(|d| d.pid);
         let (cache, url, user_dir) = (self.cfg.ddi_cache(), self.cfg.ddi_url.clone(), self.cfg.ddi_dir.clone());
+        let Ok(lease) = crate::maintenance::shared() else { return };
         g.starting = Some(tokio::task::spawn_local(async move {
+            let _lease = lease;
             // 手机重启后开发者镜像可能掉了；已挂载时只是一次查询。错误带上「是不是挂载这一步」。
             // 镜像好了再在同一条隧道上处理后台 WDA（见 prepare_detached）
             // 挂上的镜像版本、后台 WDA 的处理结果、启动前打开的系统日志流
@@ -471,6 +477,7 @@ impl Daemon {
     }
 
     async fn heal_certificate(self: Arc<Self>, udid: String, foreign: Option<bool>) {
+        let Ok(_lease) = crate::maintenance::shared() else { return };
         if self.account().selected_email().await.is_err() {
             return;
         }
@@ -551,6 +558,7 @@ impl Daemon {
     // ------------------------------------------------------------------ 重签与会话
 
     async fn check_session(self: Arc<Self>) {
+        let Ok(_lease) = crate::maintenance::shared() else { return };
         let account = self.account();
         // plume_core 的 future 不是 Send，放到阻塞线程里 block_on（同重签）；也不持锁
         // 会话好的话顺便查本机的签名证书还在不在团队里（同一次登录）
@@ -612,6 +620,7 @@ impl Daemon {
 
     /// 检查描述文件并按需重签（`force` 立即重签）。分三段：持锁取参数 → 不持锁签名、安装（几十秒）→ 持锁写结果
     pub(crate) async fn resign_now(self: &Arc<Self>, force: bool) -> Result<String, String> {
+        let _lease = crate::maintenance::shared().map_err(|e| e.to_string())?;
         let (device, name) = {
             let mut g = self.inner.lock().await;
             let g = &mut *g;

@@ -20,10 +20,10 @@
 **一行命令**（macOS、Linux）：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Derrors/iphone-control/main/install.sh | sh
+curl -fsSL https://github.com/Derrors/iphone-control/releases/latest/download/install.sh | sh
 ```
 
-程序装到 `~/.local/bin`，守护进程装成用户服务（macOS 是 launchd，Linux 是 systemd 用户服务），登录后自动启动。再运行一次就是升级。可以在 `sh` 后面加 `-s --` 再跟选项：`--version vX.Y.Z` 装指定版本，`--prefix DIR` 装到 `DIR/bin`，`--no-service` 只装程序、不装服务。
+程序装到 `~/.local/bin`，守护进程装成用户服务（macOS 是 launchd，Linux 是 systemd 用户服务），登录后自动启动。运行 `iphone-control update check` 查看升级指引。可以在 `sh` 后面加 `-s --` 再跟选项：`--version vX.Y.Z` 装指定版本，`--prefix DIR` 装到 `DIR/bin`，`--no-service` 只装程序、不装服务。
 
 **Homebrew**（macOS、Linux）：
 
@@ -107,7 +107,7 @@ iphone-control doctor   # 逐层诊断，每项失败都给出修复办法
 
 | 安装方式 | 卸载 |
 |---|---|
-| 一行命令 | `curl -fsSL https://raw.githubusercontent.com/Derrors/iphone-control/main/install.sh \| sh -s -- --uninstall` |
+| 一行命令 | `curl -fsSL https://github.com/Derrors/iphone-control/releases/latest/download/install.sh \| sh -s -- --uninstall` |
 | Homebrew | `brew services stop iphone-control`，再 `brew uninstall iphone-control` |
 | deb 包 | `systemctl --user disable --now iphone-control`，再 `sudo apt remove iphone-control` |
 

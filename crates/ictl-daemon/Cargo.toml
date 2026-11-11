@@ -10,6 +10,7 @@ homepage.workspace = true
 description = "守护进程：状态机、usbmuxd 看护、重签、通知、控制接口"
 
 [dependencies]
+libc.workspace = true
 ictl-l10n.workspace = true
 ictl-webinspector.workspace = true
 ictl-device.workspace = true

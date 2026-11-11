@@ -17,10 +17,10 @@ Verified on a MacBook Pro (Apple M3 Pro) / macOS 26.6.2 with an iPhone 15 Pro Ma
 ### One command (recommended)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Derrors/iphone-control/main/install.sh | sh
+curl -fsSL https://github.com/Derrors/iphone-control/releases/latest/download/install.sh | sh
 ```
 
-It downloads the latest release, checks its sha256, installs `~/.local/bin/iphone-control` and a launchd user service (`~/Library/LaunchAgents/io.github.derrors.iphone-control.plist`) that starts the daemon at login, restarts it after a crash, reads `~/.config/iphone-control/env` and logs to `~/Library/Logs/iphone-control/daemon.log`. Options go after `sh -s --`: `--version v0.2.0`, `--prefix DIR` (installs into `DIR/bin`), `--no-service` (only the binary, no service).
+It downloads the latest release, verifies the Ed25519 release manifest and archive SHA-256 (Python 3 and OpenSSL 3 required), installs `~/.local/bin/iphone-control` and a launchd user service (`~/Library/LaunchAgents/io.github.derrors.iphone-control.plist`) that starts the daemon at login, restarts it after a crash, reads `~/.config/iphone-control/env` and logs to `~/Library/Logs/iphone-control/daemon.log`. Options go after `sh -s --`: `--version v0.2.0`, `--prefix DIR` (installs into `DIR/bin`), `--no-service` (only the binary, no service).
 
 ### Homebrew
 
@@ -109,7 +109,7 @@ sudo launchctl kickstart -k system/com.apple.usbmuxd
 
 Read the upgrade notes in the [changelog](https://github.com/Derrors/iphone-control/blob/main/CHANGELOG.md) first.
 
-Installed with the one command: run it again; it stops the service, replaces the binary and starts it again. Homebrew: `brew upgrade iphone-control && brew services restart iphone-control`. From source:
+For a managed script installation, close active clients and run `iphone-control update apply`. Homebrew: `brew upgrade iphone-control && brew services restart iphone-control`. From source:
 
 ```bash
 cd iphone-control && git pull
@@ -119,7 +119,7 @@ iphone-control service restart
 
 ## Uninstall
 
-Installed with the one command: `curl -fsSL https://raw.githubusercontent.com/Derrors/iphone-control/main/install.sh | sh -s -- --uninstall`. Homebrew: `brew services stop iphone-control && brew uninstall iphone-control`. From source: `iphone-control service uninstall && cargo uninstall iphone-control`.
+Installed with the one command: `curl -fsSL https://github.com/Derrors/iphone-control/releases/latest/download/install.sh | sh -s -- --uninstall`. Homebrew: `brew services stop iphone-control && brew uninstall iphone-control`. From source: `iphone-control service uninstall && cargo uninstall iphone-control`.
 
 All of them keep your data and settings. To remove them too:
 

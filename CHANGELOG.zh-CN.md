@@ -9,6 +9,12 @@
 ### 新增
 
 - 实验开关 `ICTL_WDA_DETACHED=1`：在后台启动 WebDriverAgent、不持有 XCTest 会话，锁屏时也能启动，守护进程重启时它不跟着断。见 [WDA 依赖调研](docs/dev/wda-dependency-research.md)。
+- 运行 `iphone-control update check` 或打开控制台的「关于与更新」，可查看当前构建的发布者提供的最新稳定版，以及适合本机安装方式的升级步骤。
+- 通过签名安装脚本部署的用户服务可用 `iphone-control update apply` 升级，用 `iphone-control update rollback` 回滚。默认仅检查更新。运行 `iphone-control update policy auto-patch` 后，服务会在空闲时自动安装签名补丁，新守护进程健康检查失败时恢复旧版本。
+
+### 升级注意事项
+
+- 使用脚本新装时，请从发布者的已签名 GitHub Release 下载 `install.sh`，需要 Python 3 和 OpenSSL 3。旧版脚本用户请先停止服务，用原安装脚本卸载，再运行新版签名安装脚本。设置和设备数据都会保留。
 
 ## [0.2.0] - 2026-11-11
 

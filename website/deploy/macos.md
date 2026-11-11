@@ -17,10 +17,10 @@ iphone-control 也能直接跑在 Mac 上：用 macOS 自带的 usbmuxd，不需
 ### 一行命令（推荐）
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Derrors/iphone-control/main/install.sh | sh
+curl -fsSL https://github.com/Derrors/iphone-control/releases/latest/download/install.sh | sh
 ```
 
-它会下载最新版本、校验 sha256，装到 `~/.local/bin/iphone-control`，再装一个 launchd 用户服务（`~/Library/LaunchAgents/io.github.derrors.iphone-control.plist`）：登录后自动启动守护进程，崩溃后自动重启，读取 `~/.config/iphone-control/env`，日志在 `~/Library/Logs/iphone-control/daemon.log`。可选参数写在 `sh -s --` 后面：`--version v0.2.0`（指定版本）、`--prefix 目录`（装到 `目录/bin`）、`--no-service`（只装程序，不装服务）。
+它会下载最新版本、用 Python 3 和 OpenSSL 3 验证发行清单签名和安装包 SHA-256，装到 `~/.local/bin/iphone-control`，再装一个 launchd 用户服务（`~/Library/LaunchAgents/io.github.derrors.iphone-control.plist`）：登录后自动启动守护进程，崩溃后自动重启，读取 `~/.config/iphone-control/env`，日志在 `~/Library/Logs/iphone-control/daemon.log`。可选参数写在 `sh -s --` 后面：`--version v0.2.0`（指定版本）、`--prefix 目录`（装到 `目录/bin`）、`--no-service`（只装程序，不装服务）。
 
 ### Homebrew
 
@@ -109,7 +109,7 @@ sudo launchctl kickstart -k system/com.apple.usbmuxd
 
 升级前先看[更新日志](https://github.com/Derrors/iphone-control/blob/main/CHANGELOG.zh-CN.md)里的升级注意事项。
 
-一行命令安装的：重新运行同一条命令，它会先停服务、换程序、再启动。Homebrew：`brew upgrade iphone-control && brew services restart iphone-control`。从源码编译：
+受管脚本安装：关闭 Viewer、MCP 等客户端后，运行 `iphone-control update apply`。Homebrew：`brew upgrade iphone-control && brew services restart iphone-control`。从源码编译：
 
 ```bash
 cd iphone-control && git pull
@@ -119,7 +119,7 @@ iphone-control service restart
 
 ## 卸载
 
-一行命令安装的：`curl -fsSL https://raw.githubusercontent.com/Derrors/iphone-control/main/install.sh | sh -s -- --uninstall`。Homebrew：`brew services stop iphone-control && brew uninstall iphone-control`。从源码编译的：`iphone-control service uninstall && cargo uninstall iphone-control`。
+一行命令安装的：`curl -fsSL https://github.com/Derrors/iphone-control/releases/latest/download/install.sh | sh -s -- --uninstall`。Homebrew：`brew services stop iphone-control && brew uninstall iphone-control`。从源码编译的：`iphone-control service uninstall && cargo uninstall iphone-control`。
 
 都会保留数据目录和设置。要彻底删除：
 

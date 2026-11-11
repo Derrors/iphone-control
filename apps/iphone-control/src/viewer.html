@@ -1611,6 +1611,7 @@ function applyInfo(v) {
   }
   const reconnect = feedId && (changed || S.display?.id !== display?.id);
   S.udid = udid; S.display = display;
+  if (changed) renderManual();
   S.family = v.family || 'unknown'; frame.dataset.kind = S.family; S.deviceName = v.device || '';
   S.liveTouch = T.fails < 2 && !!v.live_touch;
   if (reconnect) {
@@ -1764,7 +1765,7 @@ async function signWda() {
 function renderDevices() {
   if (S.mode === 'detecting') return;
   if (!S.devices.length) {
-    deviceEl.innerHTML = `<option>${esc(S.mode === 'live' ? tr('当前设备') : tr('没有设备'))}</option>`; deviceEl.disabled = true;
+    deviceEl.innerHTML = `<option>${esc(S.udid ? tr('当前设备') : tr('没有设备'))}</option>`; deviceEl.disabled = true;
     deviceEl.title = S.devicesErr || ''; return;
   }
   const cur = S.devices.find(d => d.controlled);
@@ -1814,6 +1815,8 @@ function renderStatusPanel() {
   const p = $('#tp-status'), d = S.daemon, s = S.dstatus;
   if (S.mode === 'detecting') { p.innerHTML = tr('<p class="empty-note">正在连接 iphone-control 服务…</p>'); return; }
   const dev = d?.device || {}, screen = dims();
+  const hasDevice = !!(dev.udid || S.udid);
+  const deviceTitle = dev.name || (hasDevice ? tr('已连接的设备') : tr('没有设备'));
   const model = dev.model_name || dev.model || tr('型号未知');
   const subtitle = [model !== dev.name && model, osVersion(dev), S.mode === 'demo' && tr('演示模式')].filter(Boolean).join(' · ');
   const facts = [
@@ -1836,8 +1839,8 @@ function renderStatusPanel() {
   }
   p.innerHTML = `
     <div class="device-card"><span class="device-ic">${icon(dev.family === 'ipad' || frame.dataset.kind === 'ipad' ? 'tablet' : 'phone')}</span>
-      <div class="od-field"><span class="device-name od-truncate">${esc(dev.name || (S.mode === 'live' ? tr('已连接的设备') : '—'))}</span><span class="device-sub od-truncate">${esc(subtitle)}</span></div></div>
-    <div class="facts">${facts.map(([k, v]) => `<div class="fact"><span class="fact-k">${k}</span><span class="fact-v">${esc(v)}</span></div>`).join('')}
+      <div class="od-field"><span class="device-name od-truncate">${esc(deviceTitle)}</span><span class="device-sub od-truncate" ${hasDevice ? '' : 'hidden'}>${esc(subtitle)}</span></div></div>
+    <div class="facts" ${hasDevice ? '' : 'hidden'}>${facts.map(([k, v]) => `<div class="fact"><span class="fact-k">${k}</span><span class="fact-v">${esc(v)}</span></div>`).join('')}
       <div class="fact" style="grid-column:1/-1"><span class="fact-k">ProductType</span><span class="fact-v mono">${esc(dev.model || '—')}</span></div>
       <div class="fact" style="grid-column:1/-1"><span class="fact-k">UDID</span><span class="fact-v mono">${esc(dev.udid || '—')}</span></div></div>
     <div class="sec"><div class="sec-head"><span class="sec-title">${tr('就绪检查')}</span>${d ? badge(d.state === 'Ready' ? { label: tr('全部就绪'), tone: 'ok', icon: 'check' } : { label: tr('未就绪'), tone: 'warn', icon: 'alert' }) : ''}</div>
@@ -2345,9 +2348,10 @@ function renderGuard() {
 }
 function renderManual() {
   const lock = guarded() || S.mode === 'detecting';
-  $$('[data-key]').forEach(b => { b.disabled = lock; });
-  typeEl.disabled = lock; $('#type-btn').disabled = lock; $('#type-submit').disabled = lock;
-  $('#url').disabled = lock; $('#url-btn').disabled = lock;
+  const deviceUnavailable = lock || (S.mode === 'live' && !S.udid);
+  $$('[data-key]').forEach(b => { b.disabled = deviceUnavailable; });
+  typeEl.disabled = deviceUnavailable; $('#type-btn').disabled = deviceUnavailable; $('#type-submit').disabled = deviceUnavailable;
+  $('#url').disabled = deviceUnavailable; $('#url-btn').disabled = deviceUnavailable;
   deviceEl.disabled = lock || S.switching || !S.devices.length || !!S.devicesFixed;
   const t = activeTask();
   $('#vt-agent-label').textContent = t ? `AI · ${{ running: tr('执行中'), waiting: tr('待确认'), paused: tr('已暂停'), takeover: tr('接管中') }[t.status]}` : tr('AI 助手');

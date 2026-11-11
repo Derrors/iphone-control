@@ -247,6 +247,9 @@ async fn handle(mut client: TcpStream, ctx: &Ctx, head: Vec<u8>, req: Head, mut 
 
 /// The release cache belongs to the host user; process versions belong to this Viewer and socket.
 async fn updates(ctx: &Ctx) -> Result<Value, String> {
+    // Sample before reading cached metadata: a check that finishes while this GET
+    // awaits the daemon still needs one final poll to display its committed result.
+    let checking = ctx.checking.try_lock().is_err();
     let lang = ictl_l10n::lang();
     let mut report = tokio::task::spawn_blocking(move || ictl_l10n::with_lang(lang, crate::update::cached))
         .await
@@ -254,7 +257,7 @@ async fn updates(ctx: &Ctx) -> Result<Value, String> {
         .map_err(|e| e.to_string())?;
     crate::report_daemon(&mut report, &ctx.socket).await;
     let mut v = json!(report);
-    v["checking"] = json!(ctx.checking.try_lock().is_err());
+    v["checking"] = json!(checking);
     v["check_error"] = json!(*ctx.check_error.lock().unwrap_or_else(|p| p.into_inner()));
     Ok(v)
 }
@@ -758,6 +761,36 @@ fn screen_of(p: &ictl_daemon::core::Persisted, udid: &str) -> Option<ictl_device
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn update_poll_keeps_polling_if_refresh_finishes_after_cache_read() {
+        let temp = tempfile::tempdir_in("/tmp").unwrap();
+        let socket = temp.path().join("daemon.sock");
+        let daemon = tokio::net::UnixListener::bind(&socket).unwrap();
+        let ctx = Ctx {
+            agents: Agents::new(&socket, temp.path().join("gate")).unwrap(),
+            socket,
+            data_dir: temp.path().into(),
+            port: 0,
+            page: String::new(),
+            checking: Arc::default(),
+            check_error: Arc::default(),
+            names: Default::default(),
+            udid: Default::default(),
+        };
+        let guard = ctx.checking.lock().await;
+        let finish_check = async {
+            // The GET has consumed the release cache when its daemon snapshot begins.
+            let (peer, _) = daemon.accept().await.unwrap();
+            drop(guard);
+            drop(peer);
+        };
+        let (report, ()) =
+            tokio::time::timeout(Duration::from_secs(5), async { tokio::join!(updates(&ctx), finish_check) })
+                .await
+                .unwrap();
+        assert_eq!(report.unwrap()["checking"], true);
+    }
 
     fn head(s: &str) -> Head {
         Head::parse(s.as_bytes()).unwrap()

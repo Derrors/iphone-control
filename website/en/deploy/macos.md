@@ -8,7 +8,7 @@ Verified on a MacBook Pro (Apple M3 Pro) / macOS 26.6.2 with an iPhone 15 Pro Ma
 
 ## You need
 
-- An Apple Silicon Mac: the one command and Homebrew install the built program, nothing else needed. Intel Macs have no prebuilt package and build from source (Xcode Command Line Tools and Rust 1.88+). Full Xcode is **not** needed
+- An Apple Silicon Mac. The script installer requires Python 3 and OpenSSL 3 on PATH. Intel Macs have no prebuilt package and build from source (Xcode Command Line Tools and Rust 1.88+). Full Xcode is **not** needed
 - An iPhone or iPad on iOS 17+, connected with a cable that carries **data**
 - A free Apple ID (a dedicated one is recommended)
 
@@ -20,7 +20,7 @@ Verified on a MacBook Pro (Apple M3 Pro) / macOS 26.6.2 with an iPhone 15 Pro Ma
 curl -fsSL https://github.com/Derrors/iphone-control/releases/latest/download/install.sh | sh
 ```
 
-It downloads the latest release, verifies the Ed25519 release manifest and archive SHA-256 (Python 3 and OpenSSL 3 required), installs `~/.local/bin/iphone-control` and a launchd user service (`~/Library/LaunchAgents/io.github.derrors.iphone-control.plist`) that starts the daemon at login, restarts it after a crash, reads `~/.config/iphone-control/env` and logs to `~/Library/Logs/iphone-control/daemon.log`. Options go after `sh -s --`: `--version v0.2.0`, `--prefix DIR` (installs into `DIR/bin`), `--no-service` (only the binary, no service).
+It downloads the latest release, verifies the Ed25519 release manifest and archive SHA-256 (Python 3 and OpenSSL 3 required), installs `~/.local/bin/iphone-control` and a launchd user service (`~/Library/LaunchAgents/io.github.derrors.iphone-control.plist`) that starts the daemon at login, restarts it after a crash, reads `~/.config/iphone-control/env` and logs to `~/Library/Logs/iphone-control/daemon.log`. Options go after `sh -s --`: `--version vX.Y.Z` (a release with a signed macOS manifest), `--prefix DIR` (installs into `DIR/bin`), `--no-service` (only the binary, no service).
 
 ### Homebrew
 

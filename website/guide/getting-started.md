@@ -17,7 +17,7 @@
 
 三种方式任选一种，都以普通用户安装，不要用 root 或 sudo 运行 `iphone-control`。
 
-**一行命令**（macOS、Linux）：
+**一行命令**（macOS 或 Linux，需在 PATH 中提供 Python 3 和 OpenSSL 3）
 
 ```bash
 curl -fsSL https://github.com/Derrors/iphone-control/releases/latest/download/install.sh | sh

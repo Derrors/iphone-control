@@ -254,7 +254,7 @@ async fn update_command(action: UpdateAction, socket: &Path) -> anyhow::Result<(
             Ok(())
         }
         UpdateAction::Policy { policy } => schedule::set_policy(socket, policy),
-        UpdateAction::Schedule => schedule::configure(socket, update::cached()?.policy),
+        UpdateAction::Schedule => schedule::configure(socket),
         UpdateAction::Apply => transaction::apply(socket, false).await,
         UpdateAction::Unpin => transaction::unpin(),
         UpdateAction::Rollback => transaction::rollback(socket).await,

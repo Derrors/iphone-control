@@ -1604,7 +1604,8 @@ function drawUpdates(r) {
   $('#update-policy').textContent = r.install_method === 'managed' && !r.pinned ?
     t('本机策略：', 'Local policy: ') + 'iphone-control update policy ' + (r.policy === 'auto-patch' ? 'manual' : 'auto-patch') : '';
   const outcomes = { installed: t('安装成功', 'Installed'), rolled_back: t('已手动回滚', 'Rolled back'), restored: t('升级失败，已恢复旧版本', 'Previous version restored'),
-    failed: t('更新失败', 'Update failed'), busy: t('等待空闲', 'Waiting for idle'), recovery_failed: t('需要手动恢复', 'Recovery needs attention') };
+    failed: t('更新失败', 'Update failed'), manual_migration: t('需要手动迁移', 'Manual migration required'),
+    busy: t('等待空闲', 'Waiting for idle'), recovery_failed: t('需要手动恢复', 'Recovery needs attention') };
   $('#update-outcome').textContent = r.last_update ? [r.last_update.target_version, outcomes[r.last_update.status] || r.last_update.status, r.last_update.detail].filter(Boolean).join(' · ') : '';
   $('#update-mismatch').textContent = [r.installed_version, r.daemon_version].some(v => v && v !== r.running_version) ?
     t('进程版本不同。重新打开 Viewer，重连 MCP 客户端，并按安装渠道重启 daemon。', 'Versions differ. Reopen Viewer, reconnect MCP clients and restart the daemon through its installation channel.') : '';

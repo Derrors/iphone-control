@@ -8,7 +8,7 @@ iphone-control 也能直接跑在 Mac 上：用 macOS 自带的 usbmuxd，不需
 
 ## 需要
 
-- Apple Silicon 的 Mac：一行命令和 Homebrew 装的是编好的程序，什么都不用另外装。Intel Mac 没有预编译包，要从源码编译（Xcode 命令行工具和 Rust 1.88 以上）。都**不需要**完整的 Xcode
+- Apple Silicon 的 Mac。用脚本安装时，PATH 中需要有 Python 3 和 OpenSSL 3。Intel Mac 要从源码编译，需 Xcode 命令行工具和 Rust 1.88 以上。
 - 一部 iOS 17 以上的 iPhone 或 iPad，用能**传数据**的线连接
 - 一个免费 Apple ID（建议专门注册一个）
 
@@ -20,7 +20,7 @@ iphone-control 也能直接跑在 Mac 上：用 macOS 自带的 usbmuxd，不需
 curl -fsSL https://github.com/Derrors/iphone-control/releases/latest/download/install.sh | sh
 ```
 
-它会下载最新版本、用 Python 3 和 OpenSSL 3 验证发行清单签名和安装包 SHA-256，装到 `~/.local/bin/iphone-control`，再装一个 launchd 用户服务（`~/Library/LaunchAgents/io.github.derrors.iphone-control.plist`）：登录后自动启动守护进程，崩溃后自动重启，读取 `~/.config/iphone-control/env`，日志在 `~/Library/Logs/iphone-control/daemon.log`。可选参数写在 `sh -s --` 后面：`--version v0.2.0`（指定版本）、`--prefix 目录`（装到 `目录/bin`）、`--no-service`（只装程序，不装服务）。
+它会下载最新版本、用 Python 3 和 OpenSSL 3 验证发行清单签名和安装包 SHA-256，装到 `~/.local/bin/iphone-control`，再装一个 launchd 用户服务（`~/Library/LaunchAgents/io.github.derrors.iphone-control.plist`）：登录后自动启动守护进程，崩溃后自动重启，读取 `~/.config/iphone-control/env`，日志在 `~/Library/Logs/iphone-control/daemon.log`。可选参数写在 `sh -s --` 后面：`--version vX.Y.Z`（指定带 macOS 签名清单的发行版）、`--prefix 目录`（装到 `目录/bin`）、`--no-service`（只装程序，不装服务）。
 
 ### Homebrew
 

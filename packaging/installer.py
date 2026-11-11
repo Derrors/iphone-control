@@ -10,6 +10,7 @@ from pathlib import Path
 import platform
 import plistlib
 import re
+import shlex
 import shutil
 import stat
 import subprocess
@@ -201,18 +202,28 @@ def owns_service(path, binary, kind):
         return False
     if kind == "launchd":
         data = plistlib.loads(path.read_bytes())
-        return (data.get("Label") == LABEL and "Program" not in data
-                and data.get("ProgramArguments") == [str(binary), "daemon"])
+        args = data.get("ProgramArguments")
+        script = f'set -a; f="$HOME/.config/iphone-control/env"; [ -f "$f" ] && . "$f"; set +a; exec "{binary}" daemon'
+        # 'service install' can recreate a removed definition using the older shell form.
+        shell_safe = not any(c in str(binary) for c in '\\"$`\n\r')
+        return (data.get("Label") == LABEL and "Program" not in data and
+                (args == [str(binary), "daemon"] or (shell_safe and args == ["/bin/sh", "-c", script])))
     lines = path.read_text().splitlines()
     commands = [line.strip() for line in lines if line.strip().startswith("ExecStart=")]
-    return "# Installed by install.sh" in lines and commands == [f'ExecStart="{binary}" daemon']
+    if "# Installed by install.sh" in lines:
+        return commands == [f'ExecStart="{binary}" daemon']
+    return (bool(lines) and lines[0].startswith("# Written by iphone-control. Settings: ")
+            and not any(c.isspace() or c in '\\"$%' for c in str(binary))
+            and commands == [f"ExecStart={binary} daemon"])
 
 
 def launchd_loaded(path):
     result = subprocess.run(["launchctl", "print", f"gui/{os.getuid()}/{LABEL}"],
-                            text=True, capture_output=True)
+                            env={**os.environ, "LC_ALL": "C"}, text=True, capture_output=True)
     if result.returncode:
-        return False
+        if "Could not find service" in result.stderr:
+            return False
+        raise ValueError("could not query the launchd user service")
     if f"\tpath = {path}" not in result.stdout.splitlines():
         raise ValueError("another launch agent owns this service label")
     return True
@@ -223,6 +234,22 @@ def systemd_owner(path):
                             text=True, check=True, capture_output=True)
     if f"FragmentPath={path}" not in result.stdout.splitlines() or "DropInPaths=" not in result.stdout.splitlines():
         raise ValueError("systemd loaded another unit or an override for this service")
+
+
+def service_removed(kind, path):
+    if path.exists() or path.is_symlink():
+        return False
+    # A missing definition may still be loaded, or systemd may have selected a
+    # package's unit of the same name. Leave either service alone.
+    if kind == "launchd":
+        if launchd_loaded(path):
+            raise ValueError("daemon service is still loaded without its definition")
+    else:
+        result = subprocess.run(["systemctl", "--user", "show", "iphone-control", "-p", "LoadState",
+                                 "-p", "ActiveState"], text=True, capture_output=True)
+        if not {"LoadState=not-found", "ActiveState=inactive"}.issubset(result.stdout.splitlines()):
+            raise ValueError("could not confirm removal of the recorded systemd service")
+    return True
 
 
 def start_service(binary, config):
@@ -284,31 +311,100 @@ def read_receipt(path, binary, target):
     return data
 
 
+def remove_update_state(binary):
+    state = binary.parent / ".iphone-control-update"
+    if state.is_symlink() or not state.is_dir():
+        return
+    meta = state.stat()
+    if meta.st_uid != os.getuid() or meta.st_mode & 0o077:
+        return
+
+    # The caller holds the prefix lock and has verified the installation receipt.
+    # Only unlink regular updater files in its private directory. Leave user files
+    # and links untouched, including anything unrecognized in an interrupted stage.
+    def remove_files(directory, names):
+        for name in names:
+            path = directory / name
+            if not path.is_symlink() and path.is_file() and path.stat().st_uid == os.getuid():
+                path.unlink()
+
+    remove_files(state, ("recovery", "previous", "previous.json", "swap-link", "outcome.json"))
+    stage = state / "stage"
+    if not stage.is_symlink() and stage.is_dir() and stage.stat().st_uid == os.getuid() and not stage.stat().st_mode & 0o077:
+        remove_files(stage, ("archive", "candidate"))
+        if not any(stage.iterdir()):
+            stage.rmdir()
+    if not any(state.iterdir()):
+        state.rmdir()
+
+
+def owns_update_job(binary, config):
+    launcher = config / "update-job.sh"
+    if (not launcher.is_symlink() and launcher.is_file() and launcher.stat().st_uid == os.getuid()
+            and not launcher.stat().st_mode & 0o022):
+        with launcher.open(errors="replace") as f:
+            header = (f.readline(), f.readline())
+            try:
+                assignment = shlex.split(f.readline())
+            except ValueError:
+                assignment = []
+        return header == ("#!/bin/sh\n", "# iphone-control update job\n") and assignment == ["exe=" + str(binary)]
+    return False
+
+
+@contextlib.contextmanager
+def disabled_update_job(binary, config):
+    if owns_update_job(binary, config):
+        subprocess.run([binary, "update", "policy", "manual"], check=True)
+    # The CLI acquires this lock itself. Recheck after it exits, and keep the
+    # lock through receipt changes/deletion so a concurrent CLI cannot re-arm.
+    fd = os.open(config / "update-schedule.lock", os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, "rb+") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        if owns_update_job(binary, config):
+            raise ValueError("update schedule was re-enabled during removal; retry")
+        clear_update_policy(binary, config)
+        yield
+
+
+def clear_update_policy(binary, config):
+    # The updater keys script policy by publisher and canonical executable path.
+    # A fresh install at this prefix must get its default policy, even if a
+    # previous installation explicitly disabled its schedule during removal.
+    key = hashlib.sha256(os.fsencode(binary)).hexdigest()
+    policy = config / "updates" / PUBLISHER / (key + ".json")
+    if (policy.is_file() and policy.resolve() == config.resolve() / policy.relative_to(config)
+            and policy.stat().st_uid == os.getuid()):
+        policy.unlink()
+
+
 def uninstall(binary, config, receipt, data):
     if data is None:
         raise ValueError("no receipted installation at this prefix")
     kind, path = service_files(config)
     # A first install may have been interrupted between writing the unit and recording its activation.
     owned = owns_service(path, binary, kind)
-    if data["service"] != "none" or owned:
-        if not owned or data["service"] not in (kind, "none"):
-            raise ValueError("daemon service no longer matches this installation")
-        loaded = launchd_loaded(path) if kind == "launchd" else False
-        if kind == "systemd":
-            systemd_owner(path)
-        if data["service"] != "none":
-            subprocess.run([binary, "update", "policy", "manual"], check=True)
-        if kind == "launchd":
-            domain = f"gui/{os.getuid()}/{LABEL}"
-            if loaded:
-                subprocess.run(["launchctl", "bootout", domain], check=True)
-        else:
-            subprocess.run(["systemctl", "--user", "disable", "--now", "iphone-control"], check=True)
-        path.unlink()
-        if kind == "systemd":
-            subprocess.run(["systemctl", "--user", "daemon-reload"], check=True)
-    binary.unlink()
-    receipt.unlink()
+    if data["service"] not in (kind, "none"):
+        raise ValueError("unexpected service in the installation receipt")
+    if data["service"] != "none" and not owned and not service_removed(kind, path):
+        raise ValueError("daemon service no longer matches this installation")
+    loaded = owned and kind == "launchd" and launchd_loaded(path)
+    if owned and kind == "systemd":
+        systemd_owner(path)
+    with disabled_update_job(binary, config):
+        if owned:
+            if kind == "launchd":
+                domain = f"gui/{os.getuid()}/{LABEL}"
+                if loaded:
+                    subprocess.run(["launchctl", "bootout", domain], check=True)
+            else:
+                subprocess.run(["systemctl", "--user", "disable", "--now", "iphone-control"], check=True)
+            path.unlink()
+            if kind == "systemd":
+                subprocess.run(["systemctl", "--user", "daemon-reload"], check=True)
+        remove_update_state(binary)
+        binary.unlink()
+        receipt.unlink()
     print("Removed iphone-control. Your configuration and device data are preserved.")
 
 
@@ -391,14 +487,40 @@ def main():
                 uninstall(binary, config, receipt, data)
                 return
             if not data or data["service"] == "none":
-                bootstrap(binary, config, receipt, data, target, args.version, args.no_service)
+                requested = args.version or (data["version"] if data and data["pinned"] else None)
+                bootstrap(binary, config, receipt, data, target, requested, args.no_service)
                 return
             if args.version and (args.version not in (data["version"], "v" + data["version"]) or not data["pinned"]):
                 raise ValueError("managed installation: use the local update CLI to change versions or pinning")
+            kind, path = service_files(config)
+            if data["service"] != kind:
+                raise ValueError("unexpected service in the installation receipt")
+            if service_removed(kind, path):
+                if args.no_service:
+                    with disabled_update_job(binary, config):
+                        data["service"] = "none"
+                        write_receipt(receipt, data)
+                    return
+                if start_service(binary, config) != kind:
+                    raise ValueError("could not restore the recorded user service")
+            elif not owns_service(path, binary, kind):
+                raise ValueError("daemon service no longer matches this installation")
+            elif kind == "launchd":
+                launchd_loaded(path)
+            else:
+                systemd_owner(path)
         # The updater acquires the same per-prefix lock.
         subprocess.run([binary, "update", "schedule"], check=True)
-        if not args.version:
-            subprocess.run([binary, "update", "apply"], check=True)
+        if data["pinned"]:
+            print(f"Keeping pinned iphone-control {data['version']}.")
+            return
+        report = json.loads(subprocess.check_output([binary, "update", "check", "--json"]))
+        if report["availability"] in ("current", "ahead"):
+            print(report["guidance"])
+            return
+        if report["availability"] != "available" or report["install_method"] != "managed":
+            raise ValueError(report["guidance"])
+        subprocess.run([binary, "update", "apply"], check=True)
 
 
 

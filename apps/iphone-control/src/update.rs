@@ -122,15 +122,17 @@ fn state_dir(repo: &str) -> PathBuf {
         .join(target().unwrap_or("unsupported"))
 }
 
-fn policy_file(repo: &str, exe: &Path) -> PathBuf {
-    // One user's policy for a custom prefix must not silently enable another install.
-    let id = Sha256::digest(exe.as_os_str().as_encoded_bytes());
+fn policy_file(repo: &str, exe: &Path, method: InstallMethod) -> PathBuf {
+    // A verified keg is Cellar/formula/version/bin/iphone-control. Its formula
+    // directory survives upgrades and still distinguishes separate installations.
+    let installation = if method == InstallMethod::Homebrew { exe.ancestors().nth(3).unwrap_or(exe) } else { exe };
+    let id = Sha256::digest(installation.as_os_str().as_encoded_bytes());
     crate::envfile::config_dir().join("updates").join(repo).join(format!("{id:x}.json"))
 }
 
 fn policy(repo: Option<&str>, exe: Option<&Path>, installation: &Installation) -> Result<Policy> {
     let (Some(repo), Some(exe)) = (repo, exe) else { return Ok(Policy::Manual) };
-    read_policy(&policy_file(repo, exe), installation)
+    read_policy(&policy_file(repo, exe, installation.method), installation)
 }
 
 fn read_policy(file: &Path, installation: &Installation) -> Result<Policy> {
@@ -159,15 +161,15 @@ pub fn set_policy(value: Policy) -> Result<()> {
         return Ok(());
     };
     let exe = std::env::current_exe()?.canonicalize()?;
+    let installation = install::detect(Some(&exe));
     if value == Policy::AutoPatch {
-        let installation = install::detect(Some(&exe));
         ensure!(
             installation.method == InstallMethod::Managed && installation.pinned == Some(false),
             "{}",
             tr!("自动补丁更新需要未固定版本的受管用户服务", "Auto-patch requires an unpinned, managed user service")
         );
     }
-    release::write_json(&policy_file(repo, &exe), &value)
+    release::write_json(&policy_file(repo, &exe, installation.method), &value)
 }
 
 fn deb_asset(version: &str, platform: &str) -> Option<String> {
@@ -258,13 +260,13 @@ fn guidance(status: Availability, method: InstallMethod, version: Option<&str>, 
         }
         Availability::Available => match method {
             InstallMethod::Managed if pinned == Some(true) => tr!(
-                "安装已固定到指定版本。要升级，请在主机上运行 iphone-control update unpin，再运行 iphone-control update apply。",
-                "This installation is pinned. To upgrade, run iphone-control update unpin on the host, then iphone-control update apply."
+                "安装已固定到指定版本。如需升级，先在主机上运行 iphone-control update unpin，再运行 iphone-control update apply。安装前会验证签名并检查回退兼容性。",
+                "This installation is pinned. To upgrade, run iphone-control update unpin on the host, then iphone-control update apply. It verifies the signature and checks rollback compatibility before installing."
             )
             .into(),
             InstallMethod::Managed => tr!(
-                "空闲时在主机上运行 iphone-control update apply。",
-                "When idle, run iphone-control update apply on the host."
+                "空闲时在主机上运行 iphone-control update apply。安装前会验证签名并检查回退兼容性。",
+                "When idle, run iphone-control update apply on the host. It verifies the signature and checks rollback compatibility before installing."
             )
             .into(),
             InstallMethod::Debian => {
@@ -281,6 +283,24 @@ fn guidance(status: Availability, method: InstallMethod, version: Option<&str>, 
             .into(),
         },
     }
+}
+
+fn manual_migration(
+    installation: &Installation,
+    outcome: Option<&transaction::Outcome>,
+    latest: Option<&str>,
+    repo: Option<&str>,
+    platform: Option<&str>,
+) -> bool {
+    let (Some(outcome), Some(from), Some(repo), Some(platform)) =
+        (outcome, installation.version.as_deref(), repo, platform)
+    else {
+        return false;
+    };
+    installation.method == InstallMethod::Managed
+        && outcome.status == "manual_migration"
+        && Some(outcome.target_version.as_str()) == latest
+        && outcome.migration_source.as_ref().is_some_and(|source| source.matches(repo, platform, from))
 }
 
 struct Local {
@@ -300,9 +320,19 @@ impl Local {
     fn report(self, cache: Cache) -> Result<Report> {
         let repo = publisher();
         let release = cache.release.as_ref().filter(|r| release::stable_tag(&r.tag).is_some());
-        let status = availability(VERSION, self.install.method, target(), release);
         let version = release.and_then(|r| r.tag.strip_prefix('v')).map(str::to_owned);
-        let mut guidance = guidance(status, self.install.method, version.as_deref(), self.install.pinned);
+        let last_update = self.exe.as_deref().map(transaction::outcome).transpose()?.flatten();
+        let status = availability(VERSION, self.install.method, target(), release);
+        let (status, mut guidance) = if status == Availability::Available
+            && manual_migration(&self.install, last_update.as_ref(), version.as_deref(), repo, target())
+        {
+            (Availability::ManualOnly, tr!(
+                "已验证的发行清单要求从当前安装版本手动迁移。请按发行说明中的步骤升级。",
+                "The verified release manifest requires a manual migration from the installed version. Follow the release notes to upgrade."
+            ).into())
+        } else {
+            (status, guidance(status, self.install.method, version.as_deref(), self.install.pinned))
+        };
         if self.policy == Policy::AutoPatch
             && status == Availability::Available
             && version.as_deref().is_some_and(|v| transaction::eligible(VERSION, v, true).is_err())
@@ -312,7 +342,6 @@ impl Local {
                 " This is not a patch in the current series; it will not be installed automatically."
             ));
         }
-        let last_update = self.exe.as_deref().map(transaction::outcome).transpose()?.flatten();
         Ok(Report {
             running_version: VERSION,
             daemon_version: None,
@@ -426,6 +455,50 @@ impl fmt::Display for Report {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn verified_migration_decision_only_applies_to_the_same_upgrade() {
+        let mut install =
+            Installation { method: InstallMethod::Managed, version: Some("0.2.0".into()), pinned: Some(false) };
+        let outcome: transaction::Outcome = serde_json::from_value(serde_json::json!({
+            "status": "manual_migration", "target_version": "0.2.2", "detail": "", "suppressed_version": "0.2.2",
+            "migration_source": { "publisher": "acme/tools", "target": "macos-arm64", "version": "0.2.0" }
+        }))
+        .unwrap();
+        let matches = |install: &Installation, latest, repo, platform| {
+            manual_migration(install, Some(&outcome), Some(latest), Some(repo), Some(platform))
+        };
+        assert!(matches(&install, "0.2.2", "acme/tools", "macos-arm64"));
+        assert!(!matches(&install, "0.2.3", "acme/tools", "macos-arm64"));
+        assert!(!matches(&install, "0.2.2", "other/tools", "macos-arm64"));
+        assert!(!matches(&install, "0.2.2", "acme/tools", "linux-aarch64"));
+        install.version = Some("0.2.1".into());
+        assert!(!matches(&install, "0.2.2", "acme/tools", "macos-arm64"));
+        install.version = Some("0.2.0".into());
+        install.method = InstallMethod::Unknown;
+        assert!(!matches(&install, "0.2.2", "acme/tools", "macos-arm64"));
+    }
+
+    #[test]
+    fn managed_guidance_explains_verification_before_installation() {
+        ictl_l10n::with_lang(ictl_l10n::Lang::En, || {
+            for pinned in [false, true] {
+                let guide = guidance(Availability::Available, InstallMethod::Managed, Some("0.2.1"), Some(pinned));
+                assert!(guide.contains("signature") && guide.contains("rollback compatibility"), "{guide}");
+            }
+        });
+    }
+
+    #[test]
+    fn homebrew_policy_survives_a_keg_upgrade() {
+        let old = Path::new("/opt/homebrew/Cellar/iphone-control/0.2.0/bin/iphone-control");
+        let new = Path::new("/opt/homebrew/Cellar/iphone-control/0.2.1/bin/iphone-control");
+        let policy = |exe, method| policy_file("owner/repo", exe, method);
+        assert_eq!(policy(old, InstallMethod::Homebrew), policy(new, InstallMethod::Homebrew));
+        assert_ne!(policy(old, InstallMethod::Unknown), policy(new, InstallMethod::Unknown));
+        let other = Path::new("/usr/local/Cellar/iphone-control/0.2.1/bin/iphone-control");
+        assert_ne!(policy(new, InstallMethod::Homebrew), policy(other, InstallMethod::Homebrew));
+    }
 
     #[test]
     fn policy_defaults_to_notify_only_for_managed_and_disables_auto_when_ownership_changes() {

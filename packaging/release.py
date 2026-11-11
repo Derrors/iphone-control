@@ -84,11 +84,19 @@ def main():
     size = archive.stat().st_size
     if not 0 < size <= 128 * 1024 * 1024:
         raise ValueError("release archive exceeds client limits")
+    compatible = os.environ.get("ICTL_ROLLBACK_COMPATIBLE_TAG") == tag
+    rollback_from = None
+    if compatible:
+        rollback_from = os.environ.get("ICTL_ROLLBACK_FROM_VERSION", "")
+        if not re.fullmatch(STABLE, "v" + rollback_from):
+            raise ValueError("set ICTL_ROLLBACK_FROM_VERSION to the exact tested source version (X.Y.Z)")
+        if tuple(map(int, rollback_from.split("."))) >= tuple(map(int, tag[1:].split("."))):
+            raise ValueError("the tested source version must precede the release")
     manifest.write_text(json.dumps(dict(
         schema=1, publisher=repo, version=tag[1:], target=args.target, asset=archive.name,
         sha256=hashlib.sha256(archive.read_bytes()).hexdigest(), size=size,
         unattended=os.environ.get("ICTL_UNATTENDED_TAG") == tag,
-        rollback_compatible=os.environ.get("ICTL_ROLLBACK_COMPATIBLE_TAG") == tag,
+        rollback_compatible=compatible, rollback_from=rollback_from,
     ), separators=(",", ":")) + "\n")
     # The signing key is a PKCS#8 PEM from the protected signing environment.
     with tempfile.TemporaryDirectory() as private:

@@ -15,7 +15,7 @@ const MAX_ARCHIVE: u64 = 128 << 20;
 const MAX_EXPANDED: u64 = 256 << 20;
 const MAX_MANIFEST: u64 = 16 << 10;
 
-#[derive(Deserialize)]
+#[derive(Debug, Deserialize)]
 struct Manifest {
     schema: u32,
     publisher: String,
@@ -26,7 +26,19 @@ struct Manifest {
     size: u64,
     unattended: bool,
     rollback_compatible: bool,
+    rollback_from: Option<String>,
 }
+
+#[derive(Debug)]
+pub(super) struct ManualMigration(String);
+
+impl std::fmt::Display for ManualMigration {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "release does not support rollback to installed version {}; see the release notes", self.0)
+    }
+}
+
+impl std::error::Error for ManualMigration {}
 
 fn trusted(url: &Url) -> bool {
     url.scheme() == "https"
@@ -86,6 +98,7 @@ fn verify(
     publisher: &str,
     target: &str,
     version: &str,
+    installed_version: &str,
 ) -> anyhow::Result<Manifest> {
     ensure!(
         keys.split(',').filter_map(key_bytes).any(|key| UnparsedPublicKey::new(&ED25519, key).verify(raw, sig).is_ok()),
@@ -106,7 +119,9 @@ fn verify(
             && m.sha256.bytes().all(|b| !b.is_ascii_uppercase()),
         "invalid signed digest or size"
     );
-    ensure!(m.rollback_compatible, "release needs a manual migration; see the release notes");
+    if !m.rollback_compatible || m.rollback_from.as_deref() != Some(installed_version) {
+        return Err(ManualMigration(installed_version.into()).into());
+    }
     Ok(m)
 }
 
@@ -156,22 +171,21 @@ fn unpack(m: &Manifest, stage: &Path) -> anyhow::Result<PathBuf> {
 
 pub(super) async fn stage(
     dir: &Path,
-    publisher: &str,
-    target: &str,
+    receipt: &super::Receipt,
     version: &str,
     automatic: bool,
 ) -> anyhow::Result<PathBuf> {
     let keys = option_env!("ICTL_UPDATE_PUBLIC_KEYS")
         .filter(|s| !s.is_empty())
         .context("this build has no update trust key")?;
-    let base = format!("https://github.com/{publisher}/releases/download/v{version}");
-    let manifest_url = format!("{base}/iphone-control-v{version}-{target}.manifest.json");
+    let base = format!("https://github.com/{}/releases/download/v{version}", receipt.publisher);
+    let manifest_url = format!("{base}/iphone-control-v{version}-{}.manifest.json", receipt.target);
     let client = client()?;
     let mut raw = Vec::new();
     let mut sig = Vec::new();
     download(&client, &manifest_url, MAX_MANIFEST, &mut raw).await?;
     download(&client, &format!("{manifest_url}.sig"), 64, &mut sig).await?;
-    let m = verify(&raw, &sig, keys, publisher, target, version)?;
+    let m = verify(&raw, &sig, keys, &receipt.publisher, &receipt.target, version, &receipt.version)?;
     ensure!(!automatic || m.unattended, "release requires an operator");
     download(&client, &format!("{base}/{}", m.asset), m.size, File::create_new(dir.join("archive"))?).await?;
     let candidate = unpack(&m, dir)?;
@@ -231,11 +245,12 @@ mod tests {
         let digest = super::super::digest(&file).unwrap();
         let mut doc = json!({"schema":1,"publisher":"example/update","target":"macos-arm64","version":"0.2.1",
             "asset":format!("{ROOT}.tar.gz"),"sha256":digest,"size":file.metadata().unwrap().len(),
-            "unattended":true,"rollback_compatible":true});
+            "unattended":true,"rollback_compatible":true,"rollback_from":"0.2.0"});
         let key = key();
         let trusted = hex(&key);
-        let check =
-            |doc: &[u8], sig: &[u8], keys: &str| verify(doc, sig, keys, "example/update", "macos-arm64", "0.2.1");
+        let check = |doc: &[u8], sig: &[u8], keys: &str| {
+            verify(doc, sig, keys, "example/update", "macos-arm64", "0.2.1", "0.2.0")
+        };
         let bytes = serde_json::to_vec(&doc).unwrap();
         let sig = key.sign(&bytes);
         let m = check(&bytes, sig.as_ref(), &trusted).unwrap();
@@ -252,14 +267,19 @@ mod tests {
             ("size", json!(MAX_ARCHIVE + 1)),
             ("publisher", json!("elsewhere/other")),
             ("rollback_compatible", json!(false)),
+            ("rollback_from", json!("0.1.9")),
             ("asset", json!("other.tar.gz")),
         ] {
             let original = doc[field].clone();
             doc[field] = value;
             let bad = serde_json::to_vec(&doc).unwrap();
-            assert!(verify(&bad, key.sign(&bad).as_ref(), &trusted, "example/update", "macos-arm64", "0.2.1").is_err());
+            let err = check(&bad, key.sign(&bad).as_ref(), &trusted).unwrap_err();
+            assert_eq!(err.is::<ManualMigration>(), matches!(field, "rollback_from" | "rollback_compatible"));
             doc[field] = original;
         }
+        doc.as_object_mut().unwrap().remove("rollback_from");
+        let legacy = serde_json::to_vec(&doc).unwrap();
+        assert!(check(&legacy, key.sign(&legacy).as_ref(), &trusted).is_err_and(|e| e.is::<ManualMigration>()));
         std::fs::write(file, vec![0; m.size as usize]).unwrap();
         assert!(unpack(&m, root.path()).is_err());
     }

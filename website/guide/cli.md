@@ -21,12 +21,13 @@
 | `mcp` | MCP stdio 服务，由 AI 客户端拉起 |
 | `mcp-config` | 打印把 MCP 注册到 Claude Code 的命令。程序路径用升级后不变的那个（Homebrew 用 `opt` 下的链接） |
 
-
 ## 主机软件更新
 
 `iphone-control update check [--json]` 和 Viewer 的「关于与更新」读取同一份本地缓存。未绑定发布者的源码构建不会联网；网络检查失败会保留上次成功的结果。Homebrew 和 Debian 安装分别给出各自渠道的升级指引。
 
-有签名收据的受管脚本用户服务默认只做后台检查。本机运行 `update apply` 安装，`update rollback` 恢复上一份已验证的程序。替换意外中断时可运行 `update recover`。用安装器 `--version` 固定的版本需先 `update unpin`。
+Viewer 只监听本机回环地址。同机其他用户也能查看安装信息、触发版本检查。安装、回滚和更改策略都通过本机 CLI 执行。
+
+由发行版安装脚本部署的受管用户服务默认只做后台检查。本机运行 `update apply` 安装，`update rollback` 恢复上一份已验证的程序。替换意外中断时可运行 `update recover`。用安装器 `--version` 固定的版本需先 `update unpin`。
 
 主动运行 `iphone-control update policy auto-patch` 后，服务只在空闲时自动安装兼容补丁。请退出 Viewer、MCP 和直连设备的客户端；暂停的任务也视为占用。新 daemon 健康检查失败会恢复旧程序，失败版本须手动重试。`update policy notify` 改回仅检查，`update policy manual` 移除定时任务。
 

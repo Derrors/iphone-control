@@ -17,7 +17,7 @@ Don't run two copies of iphone-control, or other usbmuxd-based tools (go-ios, py
 
 Pick one of the three. Install as your regular user; don't run `iphone-control` as root or with sudo.
 
-**One command** (macOS, Linux):
+**One command** (macOS or Linux, with Python 3 and OpenSSL 3 on PATH)
 
 ```bash
 curl -fsSL https://github.com/Derrors/iphone-control/releases/latest/download/install.sh | sh

@@ -150,7 +150,7 @@ iphone-control
 
 全部命令和参数见[命令行](https://derrors.github.io/iphone-control/guide/cli)。
 
-在 Viewer「关于与更新」或通过 `iphone-control update check --json` 检查。受管用户服务用 `iphone-control update apply` 升级。需要空闲时自动安装签名补丁，可主动运行 `iphone-control update policy auto-patch`；用 `iphone-control update policy manual` 关闭。其他渠道：`brew upgrade iphone-control`，或装上新的 `.deb`；从源码编译的见[从源码编译](https://derrors.github.io/iphone-control/deploy/source)。升级前先看[更新日志](CHANGELOG.zh-CN.md)里的升级注意事项。卸载：`install.sh --uninstall`、`brew uninstall iphone-control` 或 `sudo apt remove iphone-control`，数据保留。设置在 `~/.config/iphone-control/env`，由设置引导写好；手改后运行 `iphone-control service restart`，见[配置说明](https://derrors.github.io/iphone-control/guide/configuration)。所有状态都在 `~/.local/share/iphone-control`：Apple ID 会话和签名私钥，开启自动解锁时还有锁屏密码。**要备份，不要提交或分享。**
+在 Viewer「关于与更新」或通过 `iphone-control update check --json` 检查。受管用户服务用 `iphone-control update apply` 升级。需要空闲时自动安装签名补丁，可主动运行 `iphone-control update policy auto-patch`。用 `iphone-control update policy notify` 恢复为只检查。其他渠道：`brew upgrade iphone-control`，或装上新的 `.deb`；从源码编译的见[从源码编译](https://derrors.github.io/iphone-control/deploy/source)。升级前先看[更新日志](CHANGELOG.zh-CN.md)里的升级注意事项。卸载：`install.sh --uninstall`、`brew uninstall iphone-control` 或 `sudo apt remove iphone-control`，数据保留。设置在 `~/.config/iphone-control/env`，由设置引导写好；手改后运行 `iphone-control service restart`，见[配置说明](https://derrors.github.io/iphone-control/guide/configuration)。所有状态都在 `~/.local/share/iphone-control`：Apple ID 会话和签名私钥，开启自动解锁时还有锁屏密码。**要备份，不要提交或分享。**
 
 ## 文档
 

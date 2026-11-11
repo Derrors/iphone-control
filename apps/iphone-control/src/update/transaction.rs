@@ -21,6 +21,36 @@ pub struct Outcome {
     pub target_version: String,
     pub detail: String,
     pub suppressed_version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub migration_source: Option<MigrationSource>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub struct MigrationSource {
+    pub publisher: String,
+    pub target: String,
+    pub version: String,
+}
+
+impl MigrationSource {
+    pub(super) fn matches(&self, publisher: &str, target: &str, version: &str) -> bool {
+        self.publisher == publisher && self.target == target && self.version == version
+    }
+
+    fn from_receipt(receipt: &Receipt) -> Self {
+        Self { publisher: receipt.publisher.clone(), target: receipt.target.clone(), version: receipt.version.clone() }
+    }
+}
+
+impl Outcome {
+    fn suppression_for(self, receipt: &Receipt) -> Option<String> {
+        if let Some(src) = self.migration_source
+            && !src.matches(&receipt.publisher, &receipt.target, &receipt.version)
+        {
+            return None;
+        }
+        self.suppressed_version
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -119,7 +149,14 @@ impl Store {
         self.dir.join("transaction.json")
     }
 
-    fn record(&self, status: &str, version: &str, detail: impl ToString, suppressed: Option<String>) -> Result<()> {
+    fn record(
+        &self,
+        status: &str,
+        version: &str,
+        detail: impl ToString,
+        suppressed: Option<String>,
+        migration_source: Option<MigrationSource>,
+    ) -> Result<()> {
         write_json(
             &self.dir.join("outcome.json"),
             &Outcome {
@@ -127,6 +164,7 @@ impl Store {
                 target_version: version.into(),
                 detail: detail.to_string(),
                 suppressed_version: suppressed,
+                migration_source,
             },
         )
     }
@@ -164,7 +202,7 @@ impl Store {
         }
         let (status, suppressed) =
             if tx.rollback { ("rolled_back", Some(tx.old.version.clone())) } else { ("installed", None) };
-        self.record(status, &tx.new.version, "installation confirmed", suppressed)?;
+        self.record(status, &tx.new.version, "installation confirmed", suppressed, None)?;
         self.clear()
     }
 
@@ -341,7 +379,7 @@ async fn restore(store: &Store, host: &impl Services, tx: &Transaction, why: &st
         host.start_healthy(&tx.old.version).await?;
     }
     write_json(&store.receipt, &tx.old)?;
-    store.record("restored", &tx.new.version, why, Some(tx.new.version.clone()))?;
+    store.record("restored", &tx.new.version, why, Some(tx.new.version.clone()), None)?;
     store.clear()
 }
 
@@ -364,8 +402,8 @@ async fn replace(
     let (_lease, running) = match activity {
         Ok(activity) => activity,
         Err(e) => {
-            let suppressed = outcome(&store.binary)?.and_then(|o| o.suppressed_version);
-            store.record("busy", &new.version, format!("{e:#}"), suppressed)?;
+            let suppressed = outcome(&store.binary)?.and_then(|o| o.suppression_for(&old));
+            store.record("busy", &new.version, format!("{e:#}"), suppressed, None)?;
             return Err(e);
         }
     };
@@ -416,7 +454,7 @@ async fn restore_or_report(store: &Store, host: &impl Services, tx: &Transaction
             tx.old.version,
             store.dir.join("recovery").display()
         );
-        store.record("recovery_failed", &tx.new.version, &detail, Some(tx.new.version.clone()))?;
+        store.record("recovery_failed", &tx.new.version, &detail, Some(tx.new.version.clone()), None)?;
         bail!(detail);
     }
     Ok(())
@@ -457,16 +495,13 @@ pub async fn apply(socket: &Path, background: bool) -> Result<()> {
     ensure!(!receipt.pinned, "this installation is pinned; unpin it locally first");
     let report = super::check(background).await?;
     ensure!(report.error_code.is_none(), "release check failed: {:?}", report.error_code);
-    ensure!(
-        matches!(report.availability, super::Availability::Available),
-        "release is not ready for this installation"
-    );
+    ensure!(matches!(report.availability, super::Availability::Available), "{}", report.guidance);
     let version = report.available_version.context("no stable release is available")?;
     eligible(&receipt.version, &version, background)?;
     let host = Host { service, socket, binary: &store.binary };
     if background {
         ensure!(matches!(report.policy, super::Policy::AutoPatch), "automatic installation is disabled");
-        let suppressed = outcome(&store.binary)?.and_then(|o| o.suppressed_version);
+        let suppressed = outcome(&store.binary)?.and_then(|o| o.suppression_for(&receipt));
         ensure!(
             suppressed.as_ref() != Some(&version),
             "automatic retry suppressed for {version}; run update apply to retry"
@@ -474,21 +509,23 @@ pub async fn apply(socket: &Path, background: bool) -> Result<()> {
         // An always-open client may stay busy for days. The lease here is deliberately
         // short-lived; replacement reacquires it and rechecks identity after download.
         if let Err(e) = host.exclusive() {
-            store.record("busy", &version, format!("{e:#}"), suppressed)?;
+            store.record("busy", &version, format!("{e:#}"), suppressed, None)?;
             return Err(e);
         }
     }
     let stage = store.stage()?;
     let work = async {
-        let candidate = match archive::stage(&stage, &receipt.publisher, &receipt.target, &version, background).await {
+        let candidate = match archive::stage(&stage, &receipt, &version, background).await {
             Ok(candidate) => candidate,
             Err(e) => {
                 let suppressed = if e.downcast_ref::<reqwest::Error>().is_some() {
-                    outcome(&store.binary)?.and_then(|o| o.suppressed_version)
+                    outcome(&store.binary)?.and_then(|o| o.suppression_for(&receipt))
                 } else {
                     Some(version.clone())
                 };
-                store.record("failed", &version, format!("{e:#}"), suppressed)?;
+                let status = if e.is::<archive::ManualMigration>() { "manual_migration" } else { "failed" };
+                let source = e.is::<archive::ManualMigration>().then(|| MigrationSource::from_receipt(&receipt));
+                store.record(status, &version, format!("{e:#}"), suppressed, source)?;
                 return Err(e);
             }
         };

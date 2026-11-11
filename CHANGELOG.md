@@ -6,15 +6,15 @@ All notable changes to this project are documented here. The format is based on 
 
 ## [Unreleased]
 
+### Upgrade notes
+
+- For a new script installation, use the `install.sh` asset from your publisher's signed GitHub Release. It requires Python 3 and OpenSSL 3. To migrate an older script installation, stop the service and uninstall it with the original installer, then run the new installer. For 0.2.0, use the original publisher's script at the `v0.2.0` tag and pass `--uninstall` with your original prefix. Your settings and device data are kept.
+
 ### Added
 
 - Experimental `ICTL_WDA_DETACHED=1`: WebDriverAgent is launched in the background without an XCTest session, so it also starts while the phone is locked and keeps running when the daemon restarts. See [WDA dependency research](docs/dev/wda-dependency-research.md).
 - Check for host software updates with `iphone-control update check` or **About & updates** in the viewer. Both show the latest stable release from the build's publisher and upgrade instructions for your installation.
-- User services installed by the signed installer can upgrade with `iphone-control update apply` and roll back with `iphone-control update rollback`. They check for updates by default. Opt in with `iphone-control update policy auto-patch` to install signed patches while idle and restore the previous version if the daemon fails its health check.
-
-### Upgrade notes
-
-- For a new script installation, use the `install.sh` asset from your publisher's signed GitHub Release. It requires Python 3 and OpenSSL 3. To migrate an older script installation, stop the service and uninstall it with the original installer, then run the signed installer. Your settings and device data are kept.
+- User services installed from a signed release can upgrade with `iphone-control update apply` and roll back with `iphone-control update rollback`. They check for updates by default. Opt in with `iphone-control update policy auto-patch` to install signed patches while idle and restore the previous version if the daemon fails its health check.
 
 ## [0.2.0] - 2026-11-11
 

@@ -1,7 +1,9 @@
 //! Run checks outside the daemon so that stopping the daemon cannot kill its updater.
 //! The launcher selects the *old* executable for crash recovery, even if the new one cannot start.
-use std::fs;
+use std::fs::{self, File};
 use std::io::Write;
+use std::os::fd::AsRawFd;
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
 use std::process::Command;
 
@@ -14,9 +16,9 @@ const TIMER: &str = "iphone-control-updates.timer";
 const UNIT: &str = "iphone-control-updates.service";
 
 pub fn set_policy(socket: &Path, policy: update::Policy) -> Result<()> {
-    let _lease = ictl_daemon::maintenance::shared()?;
+    let _locks = configuration_locks()?;
     update::set_policy(policy)?;
-    if let Err(e) = configure(socket, policy) {
+    if let Err(e) = configure_job(socket, policy) {
         // A partial timer install must not later run with unintended permission to replace files.
         update::set_policy(update::Policy::Manual)?;
         bail!("Update policy is manual; could not configure the user job: {e:#}")
@@ -29,6 +31,30 @@ pub fn set_policy(socket: &Path, policy: update::Policy) -> Result<()> {
     Ok(())
 }
 
+// Keep concurrent policy writes and service-manager changes in the same order. The shared
+// maintenance lease also prevents launchctl bootout from terminating an active replacement.
+fn configuration_locks() -> Result<(File, File)> {
+    let config = envfile::config_dir();
+    fs::create_dir_all(&config)?;
+    let lock = File::options()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(config.join("update-schedule.lock"))?;
+    if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX) } != 0 {
+        return Err(std::io::Error::last_os_error()).context("could not lock the update schedule");
+    }
+    Ok((lock, ictl_daemon::maintenance::shared()?))
+}
+
+pub fn configure(socket: &Path) -> Result<()> {
+    let _locks = configuration_locks()?;
+    configure_job(socket, update::cached()?.policy)
+}
+
 fn write_file(path: &Path, bytes: &[u8]) -> Result<()> {
     let dir = path.parent().context("invalid job path")?;
     fs::create_dir_all(dir)?;
@@ -36,6 +62,7 @@ fn write_file(path: &Path, bytes: &[u8]) -> Result<()> {
     tmp.write_all(bytes)?;
     tmp.as_file().sync_all()?;
     tmp.persist(path)?;
+    File::open(dir)?.sync_all()?;
     Ok(())
 }
 
@@ -84,7 +111,7 @@ fn systemd_path(path: &Path) -> Result<String> {
     ))
 }
 
-pub fn configure(socket: &Path, policy: update::Policy) -> Result<()> {
+fn configure_job(socket: &Path, policy: update::Policy) -> Result<()> {
     let config = envfile::config_dir();
     let launcher_file = config.join("update-job.sh");
     let mac = cfg!(target_os = "macos");
@@ -117,12 +144,14 @@ pub fn configure(socket: &Path, policy: update::Policy) -> Result<()> {
         let domain = format!("gui/{}", unsafe { libc::geteuid() });
         let id = format!("{domain}/{LABEL}");
         let loaded = Command::new("launchctl").args(["print", &id]).env("LC_ALL", "C").output()?;
-        if loaded.status.success() {
+        let loaded = if loaded.status.success() {
             let listing = std::str::from_utf8(&loaded.stdout)?;
             let path = listing.lines().find_map(|line| line.strip_prefix('\t')?.strip_prefix("path = "));
             ensure!(path.map(Path::new) == Some(&job), "launchd loaded a different updater plist");
-            run("launchctl", &["bootout", &id])?;
-        }
+            true
+        } else {
+            false
+        };
         if enabled {
             let mut xml = Vec::new();
             plist::to_writer_xml(
@@ -132,8 +161,16 @@ pub fn configure(socket: &Path, policy: update::Policy) -> Result<()> {
                     "StartInterval": 3600, "RunAtLoad": true,
                 }),
             )?;
+            if loaded && job.try_exists()? && fs::read(&job)? == xml {
+                return Ok(());
+            }
+            if loaded {
+                run("launchctl", &["bootout", &id])?;
+            }
             write_file(&job, &xml)?;
             run("launchctl", &["bootstrap", &domain, path_str(&job)?])?;
+        } else if loaded {
+            run("launchctl", &["bootout", &id])?;
         }
     } else if enabled {
         let unit = format!(
@@ -169,6 +206,64 @@ pub fn configure(socket: &Path, policy: update::Policy) -> Result<()> {
 mod tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn configuration_worker() {
+        let Some(test_home) = std::env::var_os("ICTL_TEST_SCHEDULE_HOME") else { return };
+        let home = Path::new(&test_home);
+        assert_eq!(envfile::home(), home);
+        let socket = home.join("daemon.sock");
+        let lease = ictl_daemon::maintenance::exclusive().unwrap();
+        assert!(configure(&socket).is_err());
+        assert!(set_policy(&socket, update::Policy::Manual).is_err());
+        assert!(!envfile::config_dir().join("update-job.sh").exists());
+        drop(lease);
+
+        configure_job(&socket, update::Policy::Notify).unwrap();
+        configure_job(&socket, update::Policy::Notify).unwrap();
+        let calls = fs::read_to_string(home.join("manager.log")).unwrap();
+        assert!(!calls.contains("bootout") && !calls.contains("disable"));
+        if cfg!(target_os = "macos") {
+            assert_eq!(calls.matches("bootstrap").count(), 1);
+        }
+    }
+
+    #[test]
+    fn configuring_jobs_respects_maintenance_and_leaves_an_active_job_running() {
+        if ictl_daemon::protocol::running_as_root() {
+            return;
+        }
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path();
+        let (name, script) = if cfg!(target_os = "macos") {
+            (
+                "launchctl",
+                r#"#!/bin/sh
+echo "$1" >> "$HOME/manager.log"
+case "$1" in
+print) [ -f "$HOME/loaded" ] || exit 1
+       printf '\tpath = %s\n' "$HOME/Library/LaunchAgents/io.github.iphone-control.updates.plist" ;;
+bootstrap) : > "$HOME/loaded";;
+*) exit 1;;
+esac
+"#,
+            )
+        } else {
+            ("systemctl", "#!/bin/sh\necho \"$*\" >> \"$HOME/manager.log\"\n")
+        };
+        let manager = home.join(name);
+        fs::write(&manager, script).unwrap();
+        fs::set_permissions(&manager, fs::Permissions::from_mode(0o700)).unwrap();
+        let status = Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "schedule::tests::configuration_worker"])
+            .env("HOME", home)
+            .env("ICTL_TEST_SCHEDULE_HOME", home)
+            .env("XDG_CONFIG_HOME", home.join("config"))
+            .env("PATH", home)
+            .status()
+            .unwrap();
+        assert!(status.success());
+    }
 
     #[test]
     fn launcher_can_recover_without_starting_a_broken_installed_binary() {

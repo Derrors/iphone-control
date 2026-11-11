@@ -101,6 +101,15 @@ pub async fn run(socket: &Path, data_dir: &Path, port: u16) -> anyhow::Result<()
             if udid.is_empty() { ictl_l10n::tr!("跟随守护进程", "whichever the daemon controls") } else { &udid }
         )
     );
+    if crate::video::device_allowed() {
+        println!(
+            "{}",
+            ictl_l10n::tr!(
+                "画面:iOS 27 及以上直接用手机自己编的视频(HEVC,约 60 帧/秒,本机不编码);浏览器解不了 HEVC 或更早的系统用下面这种",
+                "Picture: on iOS 27 and later the phone's own video (HEVC, about 60 fps, nothing encoded here); browsers that can't decode HEVC and older systems get the one below"
+            )
+        );
+    }
     let video = match crate::video::Encoders::detect().await {
         Ok(e) => {
             println!("{}", ictl_l10n::trf!("画面编码:H.264,{}", "Picture: H.264, {}", e.describe()));
@@ -193,6 +202,30 @@ async fn handle(mut client: TcpStream, ctx: &Ctx, head: Vec<u8>, req: Head, mut 
     let path = req.path.as_str();
     match (req.method.as_str(), path) {
         ("GET", "/") => reply(&mut client, 200, "text/html; charset=utf-8", ctx.page.as_bytes()).await,
+        // the phone's own screen video (iOS 27 and later), see `crate::video::device`
+        ("GET", "/video") if req.query("src").as_deref() == Some("device") => {
+            if !crate::video::device_allowed() {
+                return reply(&mut client, 404, "text/plain", b"turned off by IPHONE_CONTROL_VIEWER_CODEC").await;
+            }
+            let udid = req.query("udid").filter(|u| !u.is_empty()).unwrap_or_else(|| ctx.udid());
+            if udid.is_empty() {
+                return reply(&mut client, 503, "text/plain", b"no device yet").await;
+            }
+            match crate::video::device::open(&ctx.socket, &udid).await {
+                // the page takes 404 as "not this way" and falls back to H.264 or MJPEG
+                Err(e) => reply(&mut client, 404, "text/plain; charset=utf-8", e.as_bytes()).await,
+                Ok((src, w)) => {
+                    client
+                        .write_all(
+                            b"HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nCache-Control: no-store\r\n\
+                              X-Content-Type-Options: nosniff\r\nConnection: close\r\n\r\n",
+                        )
+                        .await?;
+                    crate::video::device::serve(src, w, ctx.acks.clone(), client).await;
+                    Ok(())
+                }
+            }
+        }
         ("GET", "/stream" | "/video") => {
             let video = if path == "/video" {
                 match ctx.video.clone().filter(|e| e.label().is_some()) {
@@ -603,16 +636,19 @@ async fn info(ctx: &Ctx) -> Result<Value, String> {
     }
     let udid = ctx.udid();
     let screen = screen_of(&s.persisted, &udid);
+    let live_touch = s.device.as_ref().is_some_and(|d| d.major_version() >= 27);
     Ok(json!({
         "width": screen.map(|s| s.width),
         "height": screen.map(|s| s.height),
         "udid": udid,
         // the picture's pointer drives a finger over CoreDevice HID (iOS 27 and later); older phones get whole gestures
-        "live_touch": s.device.as_ref().is_some_and(|d| d.major_version() >= 27),
+        "live_touch": live_touch,
         "device": s.device.map(|d| d.name),
         "state": state_of(&s.state).0,
         // the picture as H.264 (`/video`) and with which encoder; null: MJPEG only
         "video": ctx.video.as_ref().and_then(|e| e.label()),
+        // the phone's own screen video can be tried (`/video?src=device`): iOS 27 and later, not turned off
+        "device_video": crate::video::device_allowed() && live_touch,
     }))
 }
 

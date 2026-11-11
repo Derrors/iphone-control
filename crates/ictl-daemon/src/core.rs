@@ -261,6 +261,9 @@ pub(crate) struct Inner {
     pub offline_since: Option<Instant>,
     /// HID 会话最近一次使用的时间；空闲超过 [`crate::supervise::HID_IDLE`] 就关掉（它持有屏幕媒体流）
     pub hid_used: Option<Instant>,
+    /// Control pages watching the screen media stream (`screen.rs`): while there are any, the HID session (which owns
+    /// the stream) stays open however long it is idle
+    pub screen_viewers: usize,
     /// 最近一次读到的元素树。只在调用方允许（max_age_ms）时复用；改变界面的操作做完就清掉
     pub elements_cache: Option<(Instant, ictl_wda::elements::Tree)>,
     /// 滑动等列表停下时最后读到的树（[`crate::tools`] 的 `settle` 拿来当比较的起点）
@@ -369,6 +372,7 @@ impl Daemon {
             list_errors: 0,
             offline_since: Some(now),
             hid_used: None,
+            screen_viewers: 0,
             elements_cache: None,
             swiped_tree: None,
             dedup: Dedup::default(),
@@ -646,6 +650,10 @@ impl Daemon {
         let mut outcome = crate::protocol::Outcome::default();
         let r = match req {
             Request::Status => Ok(self.status_text(g).await),
+            // streams on its own connection (`lib::serve_conn` hands it to `screen::stream`); never queued here
+            Request::ScreenStream => {
+                Err("screen_stream is a streaming request: open it with open_screen_stream".into())
+            }
             Request::Screenshot { region } => {
                 let resp = self.screenshot(g, region).await.unwrap_or_else(Response::error);
                 self.publish(g);
@@ -740,6 +748,7 @@ fn lane(req: &Request) -> Lane {
         Request::WebTargets | Request::WebEval { .. } => Lane::Web,
         Request::InstallApp { .. } => Lane::Install,
         Request::Status
+        | Request::ScreenStream
         | Request::Screenshot { .. }
         | Request::ListElements { .. }
         | Request::Tap { .. }

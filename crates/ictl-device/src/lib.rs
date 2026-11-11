@@ -39,6 +39,7 @@ use idevice::{
 
 pub use apps::AppInfo;
 pub use hid::{Button, HidSession};
+pub use media::{ScreenFeed, ScreenFrame, hevc_codec};
 
 /// A running log stream from the phone; see [`Device::log_stream`]
 pub struct LogStream(oslog::OsLogStream);

@@ -62,11 +62,15 @@ iphone-control doctor    # 逐层检查，每项失败都给出修复办法
 
 ## 控制台画面卡、流量大
 
-看画面下方写的编码方式。是 MJPEG 的话，装上 ffmpeg 再重启 `iphone-control viewer`，画面改用 H.264，流量约为原来的 1/15；启动时终端里会写用的是哪个编码器，`doctor` 会检查 ffmpeg 和显卡能不能用。已经是 H.264、链路又很慢时，画面帧率会下降，但不会越来越滞后；还嫌慢，可以把 `IPHONE_CONTROL_VIEWER_QP` 调大一些（比如 `24`）。见[控制台的画面](../guide/cli#viewer-picture)。
+看画面下方写的编码方式。iOS 27 及以上、浏览器能解 HEVC 时是「HEVC iPhone」，约每秒 60 帧；浏览器解不了时换 Mac 上的 Chrome 或 Safari。是 MJPEG 的话，装上 ffmpeg 再重启 `iphone-control viewer`，画面改用 H.264，流量约为原来的 1/15；启动时终端里会写用的是哪个编码器，`doctor` 会检查 ffmpeg 和显卡能不能用。已经是 H.264、链路又很慢时，画面帧率会下降，但不会越来越滞后；还嫌慢，可以把 `IPHONE_CONTROL_VIEWER_QP` 调大一些（比如 `24`）。见[控制台的画面](../guide/cli#viewer-picture)。
+
+## 控制台开着时 WDA 每隔几分钟重启一次
+
+iOS 27 以下（或浏览器解不了 HEVC、改用 H.264/MJPEG）时，画面靠 WDA 一直截图，WDA 的 CPU 占到一个核以上。iOS 对一个进程的限额是一分钟平均 80%，超过就把它杀掉：手机上会有 `WebDriverAgentRunner-Runner.cpu_resource_fatal` 崩溃报告，守护进程记「WDA 不可用」，约 10 秒后重新拉起。期间操作会失败。不看的时候关掉控制台页面；iOS 27 及以上用手机自己的视频就没有这个问题（WDA 的 CPU 约 3%）。
 
 ## 灵动岛一直显示「配对的电脑」、手机不自动锁屏
 
-HID 后备路线使用时会开一个屏幕镜像会话，空闲 30 秒自动关闭。图标一直不消失时，重启一下守护进程（`iphone-control service restart`）。
+HID 后备路线使用时，以及控制台在显示手机自己的视频（iOS 27 及以上）时，会开一个屏幕镜像会话；不再使用（关掉控制台页面）30 秒后自动关闭。图标一直不消失时，重启一下守护进程（`iphone-control service restart`）。
 
 ## 报告问题
 

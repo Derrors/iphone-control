@@ -120,7 +120,7 @@ impl Daemon {
     }
 
     /// HID 会话（WDA 不可用时的后备路线）。开不起来就丢掉隧道，下次重建
-    async fn hid<'a>(&self, g: &'a mut Inner) -> Result<&'a mut HidSession, String> {
+    pub(crate) async fn hid<'a>(&self, g: &'a mut Inner) -> Result<&'a mut HidSession, String> {
         // 低版本建隧道只会报 service not found：直接说清楚
         if !hid_supported(g.info.as_ref()) {
             return Err(wda_down(&g.state, g.info.as_ref()));

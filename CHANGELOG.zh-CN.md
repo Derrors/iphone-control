@@ -8,7 +8,12 @@
 
 ### 新增
 
+- iOS 27 及以上，控制台的画面直接用手机自己硬件编码的视频（CoreDevice 屏幕媒体流，HEVC）：约每秒 60 帧、原生分辨率，本机不编码，WDA 也不用截图；转屏时画面跟着转正。浏览器解不了 HEVC（Firefox、多数 Linux 上的 Chrome）或设备低于 iOS 27 时自动改用 H.264 或 MJPEG。`IPHONE_CONTROL_VIEWER_CODEC=device` 只用这条流。
 - 控制台的画面改用 H.264，流量约为原来的 1/15：macOS 上本程序直接调 VideoToolbox（JPEG 也由硬件解码），不需要 ffmpeg；Linux 上装了 ffmpeg 时显卡编码优先（NVENC、VAAPI、QSV、V4L2，都不行用 x264）；链路慢时降帧率，画面不会越来越滞后。没有 ffmpeg 时仍是 MJPEG，静止时不再重复发同一张。设置：`IPHONE_CONTROL_VIEWER_CODEC`、`IPHONE_CONTROL_VIEWER_QP`。
+
+### 修复
+
+- 控制台开着时 WDA 不再每隔几分钟被 iOS 杀掉（iOS 27 及以上）：WDA 一直截图给画面用，CPU 超过一个核，iOS 按一分钟平均超过 80% 杀掉它，守护进程随之重启 WDA，期间操作失败。改用手机自己的视频后 WDA 的 CPU 约 3%。iOS 27 以下仍靠 WDA 截图，不看时请关掉控制台页面。
 
 ## [0.2.0] - 2026-11-11
 

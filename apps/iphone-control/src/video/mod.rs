@@ -24,6 +24,7 @@
 //! The queue to the page full (a page that doesn't report): frames are dropped until a keyframe, and a new encoder
 //! session starts for one.
 
+pub mod device;
 mod ffmpeg;
 mod flv;
 mod mjpeg;
@@ -42,6 +43,12 @@ use tokio::sync::{mpsc, watch};
 
 pub use ffmpeg::Encoders;
 use flv::Packet;
+
+/// `IPHONE_CONTROL_VIEWER_CODEC` allows the phone's own screen video ([`device`]): `auto` (the default) or `device`
+pub fn device_allowed() -> bool {
+    ictl_daemon::config::env("IPHONE_CONTROL_VIEWER_CODEC")
+        .is_none_or(|v| v.eq_ignore_ascii_case("auto") || v.eq_ignore_ascii_case("device"))
+}
 
 /// Messages waiting for the page; more means it is falling behind
 const QUEUE: usize = 8;

@@ -55,6 +55,11 @@ pub enum TouchPhase {
 pub enum Request {
     /// MCP 的 iphone_status：与 toolkit 相同的文字
     Status,
+    /// The phone's own screen video (CoreDevice screen media stream, HEVC, iOS 27 and later) for the control page.
+    /// Streaming: the daemon answers one line ([`Response::Text`] when it streams, [`Response::Error`] when it
+    /// can't), then sends [`ScreenMsg`] messages on the same connection until either side closes it. The client may
+    /// write [`SCREEN_KEYFRAME`] to ask for a keyframe. Use [`open_screen_stream`]
+    ScreenStream,
     /// 区域单位为点；None 表示整屏
     Screenshot {
         region: Option<(f64, f64, f64, f64)>,
@@ -244,6 +249,7 @@ impl Request {
             | Self::UninstallApp { .. }
             | Self::WebEval { .. } => true,
             Self::Status
+            | Self::ScreenStream
             | Self::Screenshot { .. }
             | Self::ListElements { .. }
             | Self::ListApps { .. }
@@ -260,6 +266,77 @@ impl Request {
             | Self::WebTargets => false,
         }
     }
+}
+
+/// Messages after a [`Request::ScreenStream`] answer: one type byte, a 4-byte big-endian length, the payload
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum ScreenMsg {
+    /// JSON: `codec` (WebCodecs string), before the first frame and whenever it changes
+    Config = 0,
+    /// A keyframe, Annex-B, with its parameter sets
+    Key = 1,
+    /// Any other frame, Annex-B
+    Delta = 2,
+    /// JSON: `rotation` in degrees (0, 90, 180, 270: how far the portrait top edge has turned clockwise), when it
+    /// becomes known or changes. The video itself is always portrait
+    Info = 3,
+}
+
+impl ScreenMsg {
+    pub fn from_byte(b: u8) -> Option<Self> {
+        Some(match b {
+            0 => Self::Config,
+            1 => Self::Key,
+            2 => Self::Delta,
+            3 => Self::Info,
+            _ => return None,
+        })
+    }
+
+    /// The message with its header
+    pub fn frame(self, payload: &[u8]) -> Vec<u8> {
+        let mut m = Vec::with_capacity(5 + payload.len());
+        m.push(self as u8);
+        m.extend_from_slice(&(payload.len() as u32).to_be_bytes());
+        m.extend_from_slice(payload);
+        m
+    }
+}
+
+/// The byte a [`Request::ScreenStream`] client writes to ask for a keyframe
+pub const SCREEN_KEYFRAME: u8 = b'K';
+
+/// Opens a [`Request::ScreenStream`]: `Ok(Ok(..))` with the reading half (buffered: it may already hold the first
+/// messages) and the writing half, `Ok(Err(why))` when the daemon can't stream, `Err` when it can't be reached
+pub async fn open_screen_stream(
+    socket: &std::path::Path,
+    expect_udid: Option<&str>,
+) -> std::io::Result<
+    Result<(tokio::io::BufReader<tokio::net::unix::OwnedReadHalf>, tokio::net::unix::OwnedWriteHalf), String>,
+> {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    let stream = tokio::net::UnixStream::connect(socket).await?;
+    let (r, mut w) = stream.into_split();
+    let mut v = serde_json::to_value(Request::ScreenStream)?;
+    if let Some(o) = v.as_object_mut() {
+        o.insert(LANG.into(), ictl_l10n::lang().code().into());
+        if let Some(u) = expect_udid {
+            o.insert(EXPECT_UDID.into(), u.into());
+        }
+    }
+    let mut line = v.to_string();
+    line.push('\n');
+    w.write_all(line.as_bytes()).await?;
+    let mut r = BufReader::with_capacity(256 * 1024, r);
+    let mut first = String::new();
+    tokio::time::timeout(std::time::Duration::from_secs(30), r.read_line(&mut first))
+        .await
+        .map_err(|_| std::io::Error::new(std::io::ErrorKind::TimedOut, "screen stream: no answer"))??;
+    Ok(match serde_json::from_str::<Response>(&first).map_err(std::io::Error::other)? {
+        Response::Error { message } => Err(message),
+        _ => Ok((r, w)),
+    })
 }
 
 /// 工具结果里报告系统弹窗挡着屏幕的固定写法（后面接「弹窗文字」）。MCP 端据此判断结果里是否已经报过弹窗，

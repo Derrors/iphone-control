@@ -345,12 +345,18 @@ impl Encoders {
         if want == Some("mjpeg") {
             return Err(ictl_l10n::tr!("IPHONE_CONTROL_VIEWER_CODEC=mjpeg", "IPHONE_CONTROL_VIEWER_CODEC=mjpeg").into());
         }
+        // only the phone's own video (`super::device`), MJPEG where it can't be used
+        if want == Some("device") {
+            return Err(
+                ictl_l10n::tr!("IPHONE_CONTROL_VIEWER_CODEC=device", "IPHONE_CONTROL_VIEWER_CODEC=device").into()
+            );
+        }
         let mut list = candidates();
         if let Some(w) = want {
             if !IDS.contains(&w) {
                 return Err(ictl_l10n::trf!(
-                    "IPHONE_CONTROL_VIEWER_CODEC={w} 不认识,可以是 auto、mjpeg、{}",
-                    "IPHONE_CONTROL_VIEWER_CODEC={w} isn't known; it can be auto, mjpeg, {}",
+                    "IPHONE_CONTROL_VIEWER_CODEC={w} 不认识,可以是 auto、device、mjpeg、{}",
+                    "IPHONE_CONTROL_VIEWER_CODEC={w} isn't known; it can be auto, device, mjpeg, {}",
                     IDS.join("、")
                 ));
             }

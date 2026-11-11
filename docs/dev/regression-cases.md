@@ -92,3 +92,7 @@
 | 86 | VideoToolbox 把奇数尺寸的最后一列、一行裁掉（481×1041 编成 480×1040） | JPEG 解码时就拉成偶数尺寸（482×1042），和 ffmpeg 的 `scale` 一样 | 单测 odd_sizes_grow_to_even；无头 Chrome 用 WebCodecs 解出 482×1042 |
 | 87 | 比 macOS 11 新的 VideoToolbox 键直接链接的话，旧系统上程序起不来 | `MinAllowedFrameQP` 等运行时用 `dlsym` 找，没有就按 `Quality` 近似 qp | 代码审查 |
 | 88 | 页面画面滞后 4 帧，手势结束后停在动作中间那一帧（Chrome 的硬件解码器扣着帧等后面的帧来挤） | VideoToolbox 的 SPS 没有 VUI，解码器按 Level 4.2 的缓冲最坏情况扣 4 帧；发给页面前改写 avcC 里的 SPS，写明 `max_num_reorder_frames=0`（`video/sps.rs`），已经写明的不动 | 单测 videotoolbox_sps_gets_no_reordering、vui_without_restriction_keeps_its_fields；无头 Chrome 逐帧喂：硬件解码器从扣 4 帧变为 0 帧 |
+| 89 | 控制台开着时 WDA 每隔几分钟被 iOS 杀掉（`cpu_resource_fatal`：一分钟平均 84%，限额 80%），守护进程跟着记「WDA 不可用」 | iOS 27 及以上改用手机自己的视频（`ScreenStream`），WDA 不再截图 | 真机：页面看了 70 秒，WDA 的 CPU 平均 3%、最高 11%（原来 110～120%），没有再重启 |
+| 90 | 新页面一直黑屏：刚开流时要的关键帧手机不理，流自带的第一个关键帧在订阅前就过去了 | 没收到关键帧时每 250 毫秒再要一次 | 真机：刚开流 1.6～1.8 秒出第一帧 |
+| 91 | 手机按请求补发的关键帧不带参数集，新页面从它开始解不了 | 组帧时记下 VPS/SPS/PPS，补到这样的关键帧前面 | 单测 keyframes_get_the_parameter_sets |
+| 92 | 横屏时页面上的画面上下颠倒（转正方向写反） | 按「竖放顶边顺时针转过的角度」同向转回来；方向每秒问一次 | 真机：向左、向右横屏的画面和手机截图一致，1.1～2.7 秒跟上；横屏点地址栏点中 |

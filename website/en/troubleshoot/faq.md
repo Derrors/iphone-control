@@ -64,12 +64,15 @@ The picture area says why: not connected; pairing or Developer Mode still needed
 
 ## The control page's picture stutters or uses a lot of traffic
 
-Look at the encoding shown under the picture. If it says MJPEG, install ffmpeg and restart `iphone-control viewer`: the picture switches to H.264 at about 1/15 of the traffic. The terminal says which encoder it uses when it starts, and `doctor` checks ffmpeg and access to the GPU. If it is already H.264 and the link is very slow, the frame rate drops but the picture doesn't fall further behind; to go further, raise `IPHONE_CONTROL_VIEWER_QP` a little (e.g. `24`). See [the control page's picture](../guide/cli#viewer-picture).
+On iOS 27 and later with a browser that decodes HEVC, the line under the picture says "HEVC iPhone" and the picture runs at about 60 frames a second; if your browser can't decode HEVC, use Chrome or Safari on a Mac. Look at the encoding shown under the picture. If it says MJPEG, install ffmpeg and restart `iphone-control viewer`: the picture switches to H.264 at about 1/15 of the traffic. The terminal says which encoder it uses when it starts, and `doctor` checks ffmpeg and access to the GPU. If it is already H.264 and the link is very slow, the frame rate drops but the picture doesn't fall further behind; to go further, raise `IPHONE_CONTROL_VIEWER_QP` a little (e.g. `24`). See [the control page's picture](../guide/cli#viewer-picture).
+
+## WDA restarts every few minutes while the control page is open
+
+Below iOS 27 (or when the browser can't decode HEVC and gets H.264 or MJPEG), the picture comes from WDA capturing the screen all the time, which takes WDA over one CPU core. iOS kills a process that averages more than 80 % over a minute: the phone keeps a `WebDriverAgentRunner-Runner.cpu_resource_fatal` crash report, the daemon logs "WDA unavailable" and starts it again about 10 seconds later, and actions fail meanwhile. Close the control page when you aren't watching; on iOS 27 and later the phone's own video avoids this (WDA stays around 3 %).
 
 ## "Paired computer" icon stays and the phone won't auto-lock
 
-The HID fallback opens a screen-mirroring session while in use and closes it after 30 seconds idle. If the icon doesn't go away, restart the daemon (`iphone-control service restart`).
-
+The HID fallback, and the control page while it shows the phone's own video (iOS 27 and later), open a screen mirroring session; it closes 30 seconds after it was last used (after the page closes). If the icon doesn't go away, restart the daemon (`iphone-control service restart`).
 ## Reporting a problem
 
 [Open an issue](https://github.com/Derrors/iphone-control/issues/new/choose) with the phone model, iOS version, how you installed it (one command, Homebrew, .deb or source), and the `doctor` output — with UDID, Apple ID and notification keys removed.

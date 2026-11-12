@@ -57,3 +57,30 @@ async fn viewer_and_cli_share_the_unbound_report() -> Result<()> {
     viewer.kill().await?;
     Ok(())
 }
+
+/// `iphone-control status | head -1`: the reader is gone before the command writes. It ends quietly on SIGPIPE
+/// like other command-line tools instead of panicking (exit 101 and a panic message on stderr)
+#[test]
+fn a_closed_stdout_ends_printing_commands_quietly() -> Result<()> {
+    use std::os::unix::process::ExitStatusExt;
+    let temp = tempfile::tempdir_in("/tmp")?;
+    let dir = temp.path();
+    for args in [&["mcp-config"][..], &["update", "check"]] {
+        // the read end is closed before the command starts, so its first write already fails
+        let (reader, writer) = std::io::pipe()?;
+        drop(reader);
+        let out = std::process::Command::new(env!("CARGO_BIN_EXE_iphone-control"))
+            .args(args)
+            .env_clear()
+            .env("HOME", dir)
+            .env("PATH", "/usr/bin:/bin")
+            .env("ICTL_SOCKET", dir.join("daemon.sock"))
+            .stdout(writer)
+            .stderr(Stdio::piped())
+            .output()?;
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.signal(), Some(libc::SIGPIPE), "{args:?}: {:?} {stderr}", out.status);
+        assert!(!stderr.contains("panicked"), "{args:?}: {stderr}");
+    }
+    Ok(())
+}

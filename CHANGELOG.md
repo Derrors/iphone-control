@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format is based on 
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-11-12
+
 ### Upgrade notes
 
 - For a new script installation, use the `install.sh` asset from your publisher's signed GitHub Release. It requires Python 3 and OpenSSL 3. To migrate an older script installation, stop the service and uninstall it with the original installer, then run the new installer. For 0.2.0, use the original publisher's script at the `v0.2.0` tag and pass `--uninstall` with your original prefix. Your settings and device data are kept.
@@ -14,6 +16,12 @@ All notable changes to this project are documented here. The format is based on 
 
 - Check for host software updates with `iphone-control update check` or **About & updates** in the viewer. A red dot marks a newer stable release from the build's publisher. Open the panel to see the version and copy the upgrade command for your installation when available.
 - User services installed from a signed release can upgrade with `iphone-control update apply` and roll back with `iphone-control update rollback`. They check for updates by default. Opt in with `iphone-control update policy auto-patch` to install signed patches while idle and restore the previous version if the daemon fails its health check.
+- A redesigned control page: a workspace that fits wide and narrow windows, frosted panels (solid with high contrast or reduced transparency), and the task input, executor and settings together at the foot of the sidebar. Devices show their product name (iPhone 15 Pro rather than `iPhone16,1`) in an iPhone or iPad frame, and the status bar tells apart waiting for a device, connecting, view only, live and disconnected.
+
+### Fixed
+
+- Taps, swipes and live touch from the control page are bound to the device and picture you see: after a device switch, a rotation or a lost picture they are refused instead of landing at the old position. A brief WDA hiccup no longer resets the picture or lifts a finger mid-drag, and WDA builds without `/rotation` read the orientation from SpringBoard.
+- Picture connections from closed or frozen tabs are released, so many reconnects no longer use up the control page's connections.
 
 ## [0.2.1] - 2026-11-12
 
@@ -198,7 +206,8 @@ First public release.
 - Docker image (single binary plus Debian's usbmuxd, not privileged) with a generated third-party license list, published to `ghcr.io/derrors/iphone-control` for linux/amd64 and linux/arm64.
 - Running without Docker, from source or from the prebuilt Linux binaries (x86_64, aarch64): as a regular user with the system usbmuxd, XDG data and socket paths, the unsigned WebDriverAgent downloaded and checksum-verified before the first signing, `mcp-config` printing a direct command, and a systemd user service.
 
-[Unreleased]: https://github.com/Derrors/iphone-control/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/Derrors/iphone-control/compare/v0.2.2...HEAD
+[0.2.2]: https://github.com/Derrors/iphone-control/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/Derrors/iphone-control/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/Derrors/iphone-control/compare/v0.1.5...v0.2.0
 [0.1.5]: https://github.com/Derrors/iphone-control/compare/v0.1.4...v0.1.5

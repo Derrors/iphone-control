@@ -21,6 +21,18 @@ These go before the command, for example `iphone-control --socket /path/ctl.sock
 | `mcp` | MCP stdio server, started by the AI client |
 | `mcp-config` | Prints the command that registers the MCP server with Claude Code, with a program path that stays the same across upgrades (Homebrew's `opt` link) |
 
+## Host software updates
+
+`iphone-control update check [--json]` and **About & updates** in Viewer share the local release cache. A source build without a publisher makes no network request. A failed check keeps the previous successful result. A red dot on **About & updates** indicates a newer stable release. Open the panel to see its version and copy the command for your installation. For Homebrew, the tap determines when the upgrade is available. For Debian or Ubuntu, download the listed package before running the command.
+
+Viewer listens on loopback. Other users on the same host can see installation information and request a version check. Installation, rollback and policy changes use the local CLI.
+
+A managed per-user service installed by the release script checks in the background by default. Use `update apply` to install from the terminal, `update rollback` for the previous verified executable, or `update recover` after an interrupted replacement. A version selected with `install.sh --version` remains pinned until `update unpin`.
+
+Run `iphone-control update policy auto-patch` to opt in to installing compatible patches when idle. Viewer, MCP and direct device clients (including paused tasks) must exit before the service can restart. If the new daemon fails its health checks the updater restores the old executable and holds the failed version for an explicit retry. `update policy notify` checks without installing; `update policy manual` removes the scheduled job.
+
+If the new executable cannot start, invoke `<prefix>/bin/.iphone-control-update/recovery update recover` directly. For a custom socket, add `--socket <path>` before `update`.
+
 ## Background service
 
 The daemon runs as a per-user service: launchd on macOS, a systemd user service on Linux. It starts when you log in and restarts after a crash. No root needed.

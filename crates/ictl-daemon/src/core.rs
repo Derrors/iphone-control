@@ -202,6 +202,13 @@ pub struct CallCtx {
 /// 快照：`iphone-control status` 显示
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Snapshot {
+    /// Older daemons do not report process identity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pid: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub maintenance: Option<bool>,
     pub state: DeviceState,
     pub device: Option<DeviceInfo>,
     /// USB 上接着的全部设备（读不到名字的只有 UDID）
@@ -394,6 +401,9 @@ impl Daemon {
             next_session_check: now + Duration::from_secs(90),
         };
         let first = Snapshot {
+            version: Some(env!("CARGO_PKG_VERSION").into()),
+            pid: Some(std::process::id()),
+            maintenance: None,
             state: DeviceState::Absent,
             device: None,
             devices: Vec::new(),
@@ -563,6 +573,9 @@ impl Daemon {
         let unlock = self.unlock_cfg(g.device.as_ref().map(|d| d.udid.as_str()));
         let pinned = self.pinned(g);
         self.snap.send_replace(Snapshot {
+            version: Some(env!("CARGO_PKG_VERSION").into()),
+            pid: Some(std::process::id()),
+            maintenance: None,
             state: g.state.clone(),
             device: g.info.clone(),
             devices: self.connected_infos(g),
@@ -588,6 +601,7 @@ impl Daemon {
             s.unlock_disabled = unlock.disabled_by_failure();
             s.auto_unlock = unlock.enabled();
             s.log_tail = self.log.tail(15);
+            s.maintenance = crate::maintenance::active();
             return Response::text(serde_json::to_string_pretty(&s).unwrap_or_default());
         }
         if let Err(e) = check_request(&req) {

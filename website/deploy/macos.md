@@ -8,7 +8,7 @@ iphone-control 也能直接跑在 Mac 上：用 macOS 自带的 usbmuxd，不需
 
 ## 需要
 
-- Apple Silicon 的 Mac：一行命令和 Homebrew 装的是编好的程序，什么都不用另外装。Intel Mac 没有预编译包，要从源码编译（Xcode 命令行工具和 Rust 1.88 以上）。都**不需要**完整的 Xcode
+- Apple Silicon 的 Mac。用脚本安装时，PATH 中需要有 Python 3 和 OpenSSL 3。Intel Mac 要从源码编译，需 Xcode 命令行工具和 Rust 1.88 以上。
 - 一部 iOS 17 以上的 iPhone 或 iPad，用能**传数据**的线连接
 - 一个免费 Apple ID（建议专门注册一个）
 
@@ -17,10 +17,12 @@ iphone-control 也能直接跑在 Mac 上：用 macOS 自带的 usbmuxd，不需
 ### 一行命令（推荐）
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Derrors/iphone-control/main/install.sh | sh
+curl -fsSLo iphone-control-install.sh https://github.com/Derrors/iphone-control/releases/latest/download/install.sh && sh iphone-control-install.sh
 ```
 
-它会下载最新版本、校验 sha256，装到 `~/.local/bin/iphone-control`，再装一个 launchd 用户服务（`~/Library/LaunchAgents/io.github.derrors.iphone-control.plist`）：登录后自动启动守护进程，崩溃后自动重启，读取 `~/.config/iphone-control/env`，日志在 `~/Library/Logs/iphone-control/daemon.log`。可选参数写在 `sh -s --` 后面：`--version v0.2.1`（指定版本）、`--prefix 目录`（装到 `目录/bin`）、`--no-service`（只装程序，不装服务）。
+它会下载最新版本，用 Python 3 和 OpenSSL 3 验证发行清单签名和安装包 SHA-256，装到 `~/.local/bin/iphone-control`，再装一个 launchd 用户服务（`~/Library/LaunchAgents/io.github.derrors.iphone-control.plist`）。守护进程在登录后自动启动，崩溃后自动重启，读取 `~/.config/iphone-control/env`，日志在 `~/Library/Logs/iphone-control/daemon.log`。给脚本传入 `--version vX.Y.Z` 可指定带 macOS 签名清单的发行版，`--prefix 目录` 可装到 `目录/bin`，`--no-service` 可只装程序。
+
+上游 v0.2.0 的安装和迁移步骤见[旧版脚本说明](../guide/getting-started#legacy-script)。
 
 ### Homebrew
 
@@ -109,7 +111,7 @@ sudo launchctl kickstart -k system/com.apple.usbmuxd
 
 升级前先看[更新日志](https://github.com/Derrors/iphone-control/blob/main/CHANGELOG.zh-CN.md)里的升级注意事项。
 
-一行命令安装的：重新运行同一条命令，它会先停服务、换程序、再启动。Homebrew：`brew upgrade iphone-control && brew services restart iphone-control`。从源码编译：
+受管脚本安装：关闭 Viewer、MCP 等客户端后，运行 `iphone-control update apply`。Homebrew：`brew upgrade iphone-control && brew services restart iphone-control`。从源码编译：
 
 ```bash
 cd iphone-control && git pull
@@ -119,7 +121,7 @@ iphone-control service restart
 
 ## 卸载
 
-一行命令安装的：`curl -fsSL https://raw.githubusercontent.com/Derrors/iphone-control/main/install.sh | sh -s -- --uninstall`。Homebrew：`brew services stop iphone-control && brew uninstall iphone-control`。从源码编译的：`iphone-control service uninstall && cargo uninstall iphone-control`。
+签名脚本安装的，运行 `sh iphone-control-install.sh --uninstall`，若安装时指定了前缀，传入相同的前缀。v0.2.0 使用[该版本的卸载脚本](../guide/getting-started#legacy-script)。Homebrew：`brew services stop iphone-control && brew uninstall iphone-control`。从源码编译的：`iphone-control service uninstall && cargo uninstall iphone-control`。
 
 都会保留数据目录和设置。要彻底删除：
 

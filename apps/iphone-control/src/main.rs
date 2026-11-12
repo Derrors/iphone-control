@@ -18,7 +18,9 @@ mod agent;
 mod debug;
 mod envfile;
 mod guide;
+mod schedule;
 mod service;
+mod update;
 mod video;
 mod viewer;
 
@@ -38,6 +40,11 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    #[command(about = ictl_l10n::tr!("检查和管理主机软件更新", "Check for and manage host software updates"))]
+    Update {
+        #[command(subcommand)]
+        action: UpdateAction,
+    },
     #[command(about = ictl_l10n::tr!("常驻守护进程（安装时装成用户服务：macOS 是 launchd，Linux 是 systemd；也可以手动启动）", "The long-running daemon (installed as a user service: launchd on macOS, systemd on Linux; can also be started by hand)"))]
     Daemon,
     #[command(about = ictl_l10n::tr!("MCP stdio 服务（由 agent 拉起）", "MCP stdio server (started by the agent)"))]
@@ -107,6 +114,32 @@ enum Command {
 }
 
 #[derive(Subcommand)]
+enum UpdateAction {
+    /// Check the latest stable release for this build and installation
+    Check {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Save the local update policy and configure its user job
+    Policy { policy: update::Policy },
+    /// Install a verified compatible release (managed user service only)
+    Apply,
+    /// Release an explicit installer version pin without enabling automatic updates
+    Unpin,
+    /// Restore the verified previous executable
+    Rollback,
+    /// Recover an interrupted replacement
+    Recover {
+        #[arg(long, hide = true)]
+        scheduled: bool,
+    },
+    #[command(hide = true)]
+    Schedule,
+    #[command(hide = true)]
+    Run,
+}
+
+#[derive(Subcommand)]
 enum ServiceAction {
     #[command(about = ictl_l10n::tr!("装成登录后自动启动的后台服务并启动（已有就直接启动）", "Set up the service that starts at login and start it (just start it if it exists)"))]
     Install,
@@ -159,8 +192,15 @@ async fn run() -> anyhow::Result<()> {
         .with_env_filter(filter)
         .init();
 
+    // Lifetime clients hold this through pauses and confirmations, and direct-device CLI
+    // commands participate even when they bypass the daemon.
+    let _client = match &cli.command {
+        Some(Command::Daemon | Command::Update { .. } | Command::McpConfig | Command::Status) => None,
+        _ => Some(ictl_daemon::maintenance::shared()?),
+    };
     let Some(command) = cli.command.take() else { return guide::first_run(&cli).await };
     match command {
+        Command::Update { action } => update_command(action, &cli.socket).await,
         Command::Daemon => {
             let mut cfg = ictl_daemon::Config::from_env(&cli.data_dir);
             cfg.socket = cli.socket;
@@ -187,6 +227,46 @@ async fn run() -> anyhow::Result<()> {
         #[cfg(feature = "debug-cmds")]
         Command::Debug(args) => debug::run(env_nonempty("IPHONE_UDID").as_deref(), args).await,
         Command::NotifyTest { event } => notify_test(&cli.data_dir, event.as_deref()).await,
+    }
+}
+
+async fn report_daemon(report: &mut update::Report, socket: &Path) {
+    report.daemon_version = tokio::time::timeout(Duration::from_secs(1), snapshot(socket))
+        .await
+        .ok()
+        .and_then(Result::ok)
+        .and_then(|s| s.version);
+}
+
+async fn update_command(action: UpdateAction, socket: &Path) -> anyhow::Result<()> {
+    use update::transaction;
+    match action {
+        UpdateAction::Check { json } => {
+            let mut report = update::check(false).await?;
+            report_daemon(&mut report, socket).await;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                println!("{report}");
+            }
+            if let Some(code) = report.error_code {
+                bail!("Update check failed: {code}")
+            }
+            Ok(())
+        }
+        UpdateAction::Policy { policy } => schedule::set_policy(socket, policy),
+        UpdateAction::Schedule => schedule::configure(socket),
+        UpdateAction::Apply => transaction::apply(socket, false).await,
+        UpdateAction::Unpin => transaction::unpin(),
+        UpdateAction::Rollback => transaction::rollback(socket).await,
+        UpdateAction::Recover { scheduled } => transaction::recover(socket, scheduled).await,
+        UpdateAction::Run => {
+            let report = update::check(true).await?;
+            if report.automatic_patch() {
+                transaction::apply(socket, true).await?;
+            }
+            Ok(())
+        }
     }
 }
 

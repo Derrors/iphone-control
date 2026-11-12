@@ -12,3 +12,6 @@
 .venv/
 shots/
 THIRD_PARTY_LICENSES.html
+
+# Python release tooling
+/packaging/__pycache__/

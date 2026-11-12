@@ -6,6 +6,15 @@ All notable changes to this project are documented here. The format is based on 
 
 ## [Unreleased]
 
+### Upgrade notes
+
+- For a new script installation, use the `install.sh` asset from your publisher's signed GitHub Release. It requires Python 3 and OpenSSL 3. To migrate an older script installation, stop the service and uninstall it with the original installer, then run the new installer. For 0.2.0, use the original publisher's script at the `v0.2.0` tag and pass `--uninstall` with your original prefix. Your settings and device data are kept.
+
+### Added
+
+- Check for host software updates with `iphone-control update check` or **About & updates** in the viewer. A red dot marks a newer stable release from the build's publisher. Open the panel to see the version and copy the upgrade command for your installation when available.
+- User services installed from a signed release can upgrade with `iphone-control update apply` and roll back with `iphone-control update rollback`. They check for updates by default. Opt in with `iphone-control update policy auto-patch` to install signed patches while idle and restore the previous version if the daemon fails its health check.
+
 ## [0.2.1] - 2026-11-12
 
 ### Added

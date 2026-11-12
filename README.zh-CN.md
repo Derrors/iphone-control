@@ -68,11 +68,15 @@ iphone-control 在 Linux 或 macOS 上用**一个 Rust 二进制**把这些事�
 
 **macOS 或 Linux，一行命令安装**
 
+以下为上游示例；使用 fork 时，从该 fork 的签名发行版获取安装脚本。
+
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Derrors/iphone-control/main/install.sh | sh
+curl -fsSLo iphone-control-install.sh https://github.com/Derrors/iphone-control/releases/latest/download/install.sh && sh iphone-control-install.sh
 ```
 
-它会下载适合这台机器的版本、校验 sha256，把 `iphone-control` 装到 `~/.local/bin`，并把守护进程装成登录后自动启动的用户服务（macOS 用 launchd，Linux 用 systemd）。它不会以 root 运行。再运行一次就是升级；`… | sh -s -- --uninstall` 卸载，数据保留。国内网络下载 Release 慢的话，先在终端里设好 `HTTPS_PROXY` 再运行。
+安装器会下载适合这台机器的版本，用 Python 3 和 OpenSSL 3 验证发行清单签名和安装包 SHA-256，把 `iphone-control` 装到 `~/.local/bin`，并把守护进程装成登录后自动启动的用户服务（macOS 用 launchd，Linux 用 systemd）。以普通用户运行。受管服务用 `iphone-control update apply` 升级，用 `sh iphone-control-install.sh --uninstall` 卸载，数据保留。国内网络下载 Release 慢的话，先在终端里设好 `HTTPS_PROXY` 再运行。
+
+上游 v0.2.0 发布时还没有签名安装器。安装该版本，或从已有的脚本安装迁移，请按 [v0.2.0 安装与迁移说明](https://derrors.github.io/iphone-control/guide/getting-started#legacy-script)操作。
 
 **或者用包管理器**
 
@@ -148,7 +152,7 @@ iphone-control
 
 全部命令和参数见[命令行](https://derrors.github.io/iphone-control/guide/cli)。
 
-升级：再运行一次 `install.sh`、`brew upgrade iphone-control`，或装上新的 `.deb`；从源码编译的见[从源码编译](https://derrors.github.io/iphone-control/deploy/source)。升级前先看[更新日志](CHANGELOG.zh-CN.md)里的升级注意事项。卸载：`install.sh --uninstall`、`brew uninstall iphone-control` 或 `sudo apt remove iphone-control`，数据保留。设置在 `~/.config/iphone-control/env`，由设置引导写好；手改后运行 `iphone-control service restart`，见[配置说明](https://derrors.github.io/iphone-control/guide/configuration)。所有状态都在 `~/.local/share/iphone-control`：Apple ID 会话和签名私钥，开启自动解锁时还有锁屏密码。**要备份，不要提交或分享。**
+在 Viewer「关于与更新」或通过 `iphone-control update check --json` 检查。受管用户服务用 `iphone-control update apply` 升级。需要空闲时自动安装签名补丁，可主动运行 `iphone-control update policy auto-patch`。用 `iphone-control update policy notify` 恢复为只检查。其他渠道：`brew upgrade iphone-control`，或装上新的 `.deb`；从源码编译的见[从源码编译](https://derrors.github.io/iphone-control/deploy/source)。升级前先看[更新日志](CHANGELOG.zh-CN.md)里的升级注意事项。卸载：`sh iphone-control-install.sh --uninstall`、`brew uninstall iphone-control` 或 `sudo apt remove iphone-control`，数据保留。设置在 `~/.config/iphone-control/env`，由设置引导写好；手改后运行 `iphone-control service restart`，见[配置说明](https://derrors.github.io/iphone-control/guide/configuration)。所有状态都在 `~/.local/share/iphone-control`：Apple ID 会话和签名私钥，开启自动解锁时还有锁屏密码。**要备份，不要提交或分享。**
 
 ## 文档
 

@@ -56,6 +56,8 @@ struct Ctx {
     /// The device the page shows and acts on
     udid: Mutex<String>,
     agents: Arc<Agents>,
+    checking: Arc<tokio::sync::Mutex<()>>,
+    check_error: Arc<Mutex<Option<String>>>,
     /// Bundle id → display name, for the foreground app
     names: tokio::sync::Mutex<HashMap<String, String>>,
     /// H.264 for the picture; `None`: MJPEG only
@@ -154,6 +156,8 @@ pub async fn run(socket: &Path, data_dir: &Path, port: u16) -> anyhow::Result<()
         port,
         udid: Mutex::new(udid),
         agents,
+        checking: Arc::default(),
+        check_error: Arc::default(),
         names: tokio::sync::Mutex::default(),
         page: page_in(ictl_l10n::lang()),
         video,
@@ -277,6 +281,7 @@ async fn handle(mut client: TcpStream, ctx: &Ctx, head: Vec<u8>, req: Head, mut 
             let v = match &p[5..] {
                 // always an answer: the page falls back to its offline demo when this one fails
                 "info" => Ok(info(ctx).await.unwrap_or_else(|m| json!({"width": null, "height": null, "warning": m}))),
+                "updates" => updates(ctx).await,
                 "daemon" => daemon(ctx).await,
                 "status" => status(ctx).await,
                 "devices" => devices(ctx).await,
@@ -317,10 +322,41 @@ async fn handle(mut client: TcpStream, ctx: &Ctx, head: Vec<u8>, req: Head, mut 
     }
 }
 
+/// The release cache belongs to the host user; process versions belong to this Viewer and socket.
+async fn updates(ctx: &Ctx) -> Result<Value, String> {
+    // Sample before reading cached metadata: a check that finishes while this GET
+    // awaits the daemon still needs one final poll to display its committed result.
+    let checking = ctx.checking.try_lock().is_err();
+    let lang = ictl_l10n::lang();
+    let mut report = tokio::task::spawn_blocking(move || ictl_l10n::with_lang(lang, crate::update::cached))
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())?;
+    crate::report_daemon(&mut report, &ctx.socket).await;
+    let mut v = json!(report);
+    v["checking"] = json!(checking);
+    v["check_error"] = json!(*ctx.check_error.lock().unwrap_or_else(|p| p.into_inner()));
+    Ok(v)
+}
+
 /// A POST under `/api/`: status code and JSON answer
 /// `device`: the one the page shows (`X-Ictl-Device`); actions only go to it
 async fn post(ctx: &Ctx, name: &str, b: &Value, device: Option<&str>) -> (u16, Value) {
     let conflict = |m: String| (409, json!({"ok": false, "message": m}));
+    if name == "updates/check" {
+        if !b.as_object().is_some_and(serde_json::Map::is_empty) {
+            return (400, json!({"message": "Expected {}"}));
+        }
+        if let Ok(guard) = ctx.checking.clone().try_lock_owned() {
+            let error = ctx.check_error.clone();
+            tokio::spawn(async move {
+                let result = crate::update::check(false).await;
+                *error.lock().unwrap_or_else(|p| p.into_inner()) = result.err().map(|e| e.to_string());
+                drop(guard);
+            });
+        }
+        return (202, json!({"checking": true}));
+    }
     // how much of an H.264 stream the page has read (see `crate::video`)
     if name == "video/ack" {
         let ok = match (b["stream"].as_str(), b["bytes"].as_u64()) {
@@ -435,6 +471,7 @@ async fn json_reply(client: &mut TcpStream, status: u16, v: &Value) -> anyhow::R
 async fn reply(client: &mut TcpStream, status: u16, kind: &str, body: &[u8]) -> anyhow::Result<()> {
     let reason = match status {
         200 => "OK",
+        202 => "Accepted",
         400 => "Bad Request",
         403 => "Forbidden",
         404 => "Not Found",
@@ -814,6 +851,38 @@ fn screen_of(p: &ictl_daemon::core::Persisted, udid: &str) -> Option<ictl_device
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn update_poll_keeps_polling_if_refresh_finishes_after_cache_read() {
+        let temp = tempfile::tempdir_in("/tmp").unwrap();
+        let socket = temp.path().join("daemon.sock");
+        let daemon = tokio::net::UnixListener::bind(&socket).unwrap();
+        let ctx = Ctx {
+            agents: Agents::new(&socket, temp.path().join("gate")).unwrap(),
+            socket,
+            data_dir: temp.path().into(),
+            port: 0,
+            page: String::new(),
+            checking: Arc::default(),
+            check_error: Arc::default(),
+            names: Default::default(),
+            udid: Default::default(),
+            video: None,
+            acks: Arc::default(),
+        };
+        let guard = ctx.checking.lock().await;
+        let finish_check = async {
+            // The GET has consumed the release cache when its daemon snapshot begins.
+            let (peer, _) = daemon.accept().await.unwrap();
+            drop(guard);
+            drop(peer);
+        };
+        let (report, ()) =
+            tokio::time::timeout(Duration::from_secs(5), async { tokio::join!(updates(&ctx), finish_check) })
+                .await
+                .unwrap();
+        assert_eq!(report.unwrap()["checking"], true);
+    }
 
     fn head(s: &str) -> Head {
         Head::parse(s.as_bytes()).unwrap()

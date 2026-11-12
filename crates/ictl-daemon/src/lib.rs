@@ -13,6 +13,7 @@ mod doctor;
 pub mod eventlog;
 pub mod imaging;
 pub mod machine;
+pub mod maintenance;
 pub mod notify;
 mod screen;
 mod supervise;
@@ -123,18 +124,26 @@ async fn serve_conn(daemon: Arc<Daemon>, stream: tokio::net::UnixStream) {
         let resp = if line.len() as u64 > MAX_REQUEST_LINE {
             protocol::Response::error(ictl_l10n::tr!("请求太长", "request too long"))
         } else {
-            match parse_request(&line) {
-                // streams until either side closes: the connection is the stream's from here on
-                Ok((protocol::Request::ScreenStream, _, expect_udid, lang)) => {
-                    let w = w;
+            let parsed = parse_request(&line);
+            // Status snapshots remain available throughout maintenance (including health probes).
+            let needs_device = parsed.as_ref().is_ok_and(|(r, ..)| !matches!(r, protocol::Request::Daemon));
+            let lease = needs_device.then(maintenance::shared).transpose();
+            match (parsed, lease) {
+                (_, Err(e)) => protocol::Response::error(e.to_string()),
+                // Streams until either side closes: the connection is the stream's from here on. The lease is only
+                // checked when it opens (no stream starts during an update) and not held while it runs: a page
+                // watching for hours would otherwise keep the updater from ever finding the host idle. An update
+                // stops the daemon, which ends the stream; the viewer reconnects to the new one
+                (Ok((protocol::Request::ScreenStream, _, expect_udid, lang)), Ok(lease)) => {
+                    drop(lease);
                     ictl_l10n::scope(lang, daemon.screen_stream(reader, w, expect_udid)).await;
                     return;
                 }
-                Ok((req, false, expect_udid, lang)) => {
+                (Ok((req, false, expect_udid, lang)), Ok(_lease)) => {
                     let handling = daemon.handle(req, queued_at, core::CallCtx { gone: None, expect_udid });
                     ictl_l10n::scope(lang, handling).await
                 }
-                Ok((req, true, expect_udid, lang)) => {
+                (Ok((req, true, expect_udid, lang)), Ok(_lease)) => {
                     // 调用方断开（取消、超时）就告诉 handle：还在排队的话不再执行
                     let (gone_tx, gone_rx) = tokio::sync::oneshot::channel();
                     let mut gone_tx = Some(gone_tx);
@@ -156,7 +165,9 @@ async fn serve_conn(daemon: Arc<Daemon>, stream: tokio::net::UnixStream) {
                     }
                     resp
                 }
-                Err(e) => protocol::Response::error(ictl_l10n::trf!("请求格式错误：{e}", "malformed request: {e}")),
+                (Err(e), _) => {
+                    protocol::Response::error(ictl_l10n::trf!("请求格式错误：{e}", "malformed request: {e}"))
+                }
             }
         };
         let mut out = serde_json::to_string(&resp).unwrap_or_default();

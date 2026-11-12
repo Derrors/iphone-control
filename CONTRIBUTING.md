@@ -74,7 +74,9 @@ Notes:
 
 ## Required tests
 
-Every pull request must pass the three kinds of tests below, and its description must show it: the [pull request template](.github/PULL_REQUEST_TEMPLATE.md) has a section for each. A pull request without them is asked for them before review. The rules apply to maintainers too. 每个 PR 都必须通过下面三类测试，并在描述里写明结果。
+Every pull request must pass the tests below, and its description must show it: the [pull request template](.github/PULL_REQUEST_TEMPLATE.md) has a section for each. A pull request without them is asked for them before review. The rules apply to maintainers too. 每个 PR 都必须通过下面的测试，并在描述里写明结果。
+
+**Every bug fix and every new feature must be verified on a real device, with the results attached to the pull request ([part 4](#4-real-device-proof--every-bug-fix-and-every-feature)). Without them it is not merged. 所有 bug 修复和新功能都必须经过真机测试验证，并在 PR 里附上测试结果，否则不予合并。**
 
 ### 1. Unit tests — every pull request
 
@@ -85,7 +87,7 @@ Every pull request must pass the three kinds of tests below, and its description
 
 ### 2. Real-device regression — every pull request that touches the phone
 
-Needed when the change touches code that talks to a phone or changes what it does or how long it takes: anything under `crates/` and `apps/` except pure text changes (comments, translations that don't change meaning). Not needed for changes limited to documentation, the website, CI, packaging or other tests; say so in the template.
+Needed when the change touches code that talks to a phone or changes what it does or how long it takes: anything under `crates/` and `apps/` except pure text changes (comments, translations that don't change meaning). Not needed for changes limited to documentation, the website, CI, packaging or other tests; say so in the template. A bug fix or a feature always needs [part 4](#4-real-device-proof--every-bug-fix-and-every-feature), wherever the change is.
 
 - **Default steps:** build your branch, run its daemon and `tests/device/run.py` with the default steps on a real iPhone or iPad ([Testing on a real phone](#testing-on-a-real-phone)). Every call succeeds and the exit code is 0.
 - **No slower, no less stable:** on the same device, run the default steps once more on `main` (or the latest release), and paste both outputs. A step that became clearly slower (more than about 20 %, or by more than 0.5 s) needs a reason. A change that could affect long-running behaviour (WDA start-up and recovery, reconnecting, unlocking, the live picture, timers) also needs a longer run: repeat the default steps for at least an hour, e.g. `for i in $(seq 12); do .venv/bin/python tests/device/run.py || break; sleep 300; done`, and report failures and how the times developed.
@@ -101,10 +103,20 @@ Needed when the change touches code that talks to a phone or changes what it doe
 - Cases tested on a device (真机, headless Chrome, measured by hand) in the area you changed: run them again and list their numbers in the pull request. To find them, search the file for the module, tool or behaviour you changed; if none apply, say so.
 - A pull request that fixes a problem not in the list adds a row: the problem, the right behaviour, and how it is tested (the unit test's name, or the device steps).
 
+### 4. Real-device proof — every bug fix and every feature
+
+Part 2 checks that a change doesn't break what already works; this part shows that the fix or the feature itself works, on real hardware. It applies to every bug fix and every new feature, whatever part of the code it touches (daemon, MCP tools, CLI, Viewer, installer, updater, packaging). **A bug fix or feature without it is not merged.**
+
+- **Real device, real installation:** an iPhone or iPad connected over USB to the host, running your build. Unit tests, a fake or mocked daemon, simulated device states, fixtures and headless browsers are welcome in addition, but they are not the proof. Host-side changes (CLI, installer, updater, packages) are run on a real installation on a real host, the way a user runs them, with a phone connected.
+- **Bug fix: before and after.** Reproduce the bug on `main` (or the release that has it) and show it gone with your branch, on the same device and with the same steps. If the bug can only be reproduced under conditions you can't create, say what you did instead and why.
+- **Feature: end to end.** Exercise the new behaviour the way a user or an agent would (the MCP tool call, the CLI command, the action on the Viewer page), including the error and edge cases it is meant to handle (refused, not trusted, locked, disconnected, landscape, …).
+- **The right hardware and conditions:** the iOS version, device kind (iPhone, iPad), orientation and host OS (Linux, macOS) the change is about. If you don't have them, say which part is untested; the maintainers test it before merging, or the pull request waits.
+- **Attach the results** in the pull request: device model, iOS version, host OS, the exact steps, and their output (tool or command output, `run.py` lines, relevant daemon log lines, a screenshot or recording for anything visible). Remove private data.
+
 ## Pull requests
 
 - Keep them focused; describe what changed and why.
-- The tests above pass and are reported in the template ([Required tests](#required-tests)).
+- The tests above pass and are reported in the template ([Required tests](#required-tests)). Bug fixes and features without real-device results are not merged.
 - CI must pass: format, clippy with `-D warnings`, tests (on Linux and macOS), the MSRV check, gitleaks and the package checks (`.deb`, `install.sh`, the Homebrew formula).
 - User-visible changes get a line in [CHANGELOG.md](CHANGELOG.md) and [CHANGELOG.zh-CN.md](CHANGELOG.zh-CN.md) under *Unreleased* (a Chinese line is welcome but optional for outside contributors; maintainers add it before release).
 

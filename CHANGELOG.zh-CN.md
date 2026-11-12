@@ -6,6 +6,8 @@
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-11-12
+
 ### 升级注意事项
 
 - 使用脚本新装时，请从发布者的已签名 GitHub Release 下载 `install.sh`，需要 Python 3 和 OpenSSL 3。旧版脚本用户请先停止服务，用原安装脚本卸载，再运行新脚本。以 0.2.0 为例，从原发布仓库的 `v0.2.0` 标签取出旧脚本，传入 `--uninstall` 和原安装前缀。设置和设备数据都会保留。
@@ -14,6 +16,12 @@
 
 - 运行 `iphone-control update check` 或打开控制台的「关于与更新」，可查看当前构建的发布者提供的最新稳定版。发现新版后，Viewer 会在按钮上显示红点。打开面板即可查看版本号，并在有适用命令时一键复制。
 - 通过签名发行包的安装脚本部署的用户服务可用 `iphone-control update apply` 升级，用 `iphone-control update rollback` 回滚。默认仅检查更新。运行 `iphone-control update policy auto-patch` 后，服务会在空闲时自动安装签名补丁，新守护进程健康检查失败时恢复旧版本。
+- 控制台改版：工作区适配宽窄窗口，侧栏和浮层用磨砂表面（高对比度或减少透明度时为实色），任务输入、执行器和设置集中在侧栏底部。设备显示商品名（如 iPhone 15 Pro，而不是 `iPhone16,1`）并套用 iPhone 或 iPad 外框；状态栏区分等待设备、正在连接、仅可观看、实时画面和画面断开。
+
+### 修复
+
+- 控制台的点击、滑动和实时触控绑定到你看到的设备和画面：换机、转屏或断流后会被拒绝，不再点到旧位置。WDA 偶尔一次没响应不再重置画面、也不会在拖动中途松开手指；没有 `/rotation` 的 WDA 改从 SpringBoard 读方向。
+- 关闭或冻结的标签页留下的画面连接会被释放，反复重连不再占满控制台的连接数。
 
 ## [0.2.1] - 2026-11-12
 
@@ -196,7 +204,8 @@
 - `setup`、`doctor`、`status`、`mcp-config`、`wda-bridge`、`notify-test` 命令。
 - Docker 镜像（非 privileged，linux/amd64、linux/arm64）；也可不用 Docker，从源码或预编译二进制以普通用户运行，附 systemd 用户服务。
 
-[Unreleased]: https://github.com/Derrors/iphone-control/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/Derrors/iphone-control/compare/v0.2.2...HEAD
+[0.2.2]: https://github.com/Derrors/iphone-control/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/Derrors/iphone-control/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/Derrors/iphone-control/compare/v0.1.5...v0.2.0
 [0.1.5]: https://github.com/Derrors/iphone-control/compare/v0.1.4...v0.1.5

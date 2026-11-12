@@ -37,6 +37,23 @@ main / latest release:
 - [ ] All cases still hold; device cases in the changed area re-run: <!-- #numbers, or "none apply" -->
 - [ ] A newly fixed problem is added as a row: <!-- #number, or "not applicable" -->
 
+### 4. Real-device proof of the fix or feature
+
+<!-- Required for every bug fix and every new feature; without it the pull request is not merged. 所有 bug 修复和新功能都必须附真机测试结果，否则不予合并。Unit tests, mocks, simulated states and headless browsers don't count here. -->
+
+- Device, iOS version, host (Linux / macOS):
+- [ ] Bug fix: reproduced on `main` / the release, gone with this branch, same device and steps
+- [ ] Feature: exercised end to end (MCP tool, CLI command or Viewer action), including the error and edge cases it handles
+- Untested conditions (device kind, iOS version, orientation, host OS), if any:
+- [ ] Not applicable: no bug fix or feature (docs, CI, refactoring without behaviour change) — why:
+
+<details><summary>Steps and results (before / after, output, log lines, screenshots)</summary>
+
+```text
+```
+
+</details>
+
 ## Checklist
 
 - [ ] MCP tool names, parameters and default outputs stay compatible (docs/decisions.md D10)

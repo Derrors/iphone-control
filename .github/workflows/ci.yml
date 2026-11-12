@@ -67,7 +67,7 @@ jobs:
       - run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
       - run: cargo test --workspace --all-features --locked
 
-  # 安装方式能用：deb 打得出、装得上；install.sh 过 shellcheck、真能从最新的 Release 装上；Homebrew formula 能生成
+  # 安装方式能用：deb 打得出、装得上；用临时签名发行包校验 install.sh；Homebrew formula 能生成
   packages:
     needs: [changes]
     if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.changes.outputs.code == 'true') }}
@@ -100,14 +100,12 @@ jobs:
       - name: install.sh
         run: |
           shellcheck -s sh install.sh
-          sh install.sh --no-service --prefix "$RUNNER_TEMP/ictl"
-          "$RUNNER_TEMP/ictl/bin/iphone-control" --version
-          sh install.sh --uninstall --prefix "$RUNNER_TEMP/ictl"
-          test ! -e "$RUNNER_TEMP/ictl/bin/iphone-control"
+          python3 packaging/test_installer.py
       - name: Homebrew formula
         run: |
           shellcheck -s sh packaging/homebrew/formula.sh
-          sh packaging/homebrew/formula.sh v0.0.0 aaa bbb ccc > iphone-control.rb
+          ICTL_UPDATE_PUBLISHER="$GITHUB_REPOSITORY" sh packaging/homebrew/formula.sh v0.0.0 aaa bbb ccc > iphone-control.rb
+          grep -F "https://github.com/$GITHUB_REPOSITORY/releases/" iphone-control.rb
           ruby -c iphone-control.rb
 
   # Cargo.toml 声明的最低版本（rust-version）要真能编译

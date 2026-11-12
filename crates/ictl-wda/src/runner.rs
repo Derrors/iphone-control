@@ -3,6 +3,9 @@
 //! 用 idevice 的 `XCUITestService` 跑测试计划；它自己经 usbmuxd 建 CoreDeviceProxy 隧道，和设备层的隧道互不影响。
 //! 就绪判定 = 本进程持有的 runner 任务还活着 **且** `/status` ready（手机上残留的 WDA 在 runner 退出后还会响应几十秒）。
 //! 启动时还要等新 runner 开始执行测试计划后才问 `/status`：在那之前应答的只可能是残留的旧 WDA。
+//!
+//! 实验（`ICTL_WDA_DETACHED=1`）：守护进程在后台启动 runner、不持有 XCTest 会话（见 `ictl_device::Tunnel::launch_in_background`），
+//! 这里只用 [`WdaRunner::attach`] 等 `/status` ready。这样的 runner 不随主机进程退出，就绪判定只看 `/status`。
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -14,6 +17,8 @@ use idevice::{
     provider::IdeviceProvider,
 };
 use tokio::task::JoinHandle;
+
+use ictl_device::LogStream;
 
 use crate::http::DeviceTransport;
 use crate::{Result, WdaClient, WdaError, is_automation_pin_error};
@@ -27,6 +32,8 @@ const LOOKUP_TIMEOUT: Duration = Duration::from_secs(20);
 /// 一直没收到「开始执行测试计划」回调时，过了这么久也开始问 `/status`：
 /// 万一某个 iOS 版本上 idevice 解不出这个回调，不能因此永远起不来
 const PLAN_START_FALLBACK: Duration = Duration::from_secs(30);
+/// testmanagerd 开始启用 automation mode 后这么久还没完成，才在日志里说 runner 在等密码（已授权时同一秒就完成）
+const AUTOMATION_PROMPT_AFTER: Duration = Duration::from_secs(3);
 
 /// runner 调试日志里和「Enable UI Automation」相关的信号。
 /// 手机重启后 runner 一启动就进入 `enabling automation mode` 等待（手机上弹密码框），60 秒没输密码报
@@ -40,6 +47,54 @@ enum AutomationSignal {
     Done,
     /// UI 测试初始化失败，消息里带原因
     Failed,
+}
+
+/// 手机系统日志里 testmanagerd 关于 automation mode 的信号。后台启动的 runner 没有 XCTest 会话，收不到上面那些
+/// runner 调试日志（它们不进系统日志），只能看 testmanagerd 的：已授权时「Enabling…」和「Finished…」在同一秒；
+/// 手机重启后要先在手机上输密码，输之前一直没有「Finished」。字符串来自开发者镜像 27A5228h 里的 testmanagerd
+fn testmanagerd_signal(msg: &str) -> Option<AutomationSignal> {
+    if msg.to_ascii_lowercase().starts_with("failed to enable automation mode") {
+        Some(AutomationSignal::Failed)
+    } else if msg.starts_with("Enabling Automation Mode") {
+        Some(AutomationSignal::Waiting)
+    } else if msg.starts_with("Finished enabling Automation Mode") {
+        Some(AutomationSignal::Done)
+    } else {
+        None
+    }
+}
+
+/// 后台读系统日志的任务，丢掉就停
+struct Watcher(JoinHandle<()>);
+
+impl Drop for Watcher {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
+/// 读手机系统日志，把 testmanagerd 的 automation mode 信号记进 `progress`
+fn watch_automation(mut log: LogStream, progress: Arc<Mutex<Progress>>) -> Watcher {
+    Watcher(tokio::spawn(async move {
+        while let Ok(e) = log.next().await {
+            if !e.process.ends_with("/testmanagerd") {
+                continue;
+            }
+            let signal = testmanagerd_signal(&e.message);
+            if signal.is_some() {
+                tracing::debug!("testmanagerd: {}", e.message);
+            }
+            let mut p = progress.lock().unwrap();
+            match signal {
+                Some(AutomationSignal::Waiting) => {
+                    p.automation_wait.get_or_insert_with(tokio::time::Instant::now);
+                }
+                Some(AutomationSignal::Done) => p.automation_wait = None,
+                Some(AutomationSignal::Failed) => p.errors.push(e.message),
+                None => {}
+            }
+        }
+    }))
 }
 
 fn automation_signal(msg: &str) -> Option<AutomationSignal> {
@@ -146,7 +201,8 @@ impl XCUITestListener for ErrorListener {
 }
 
 pub struct WdaRunner {
-    task: JoinHandle<std::result::Result<(), IdeviceError>>,
+    /// None：后台启动的 runner，本进程没有 XCTest 会话（[`WdaRunner::attach`]）
+    task: Option<JoinHandle<std::result::Result<(), IdeviceError>>>,
 }
 
 impl WdaRunner {
@@ -179,7 +235,7 @@ impl WdaRunner {
                 async move { XCUITestService::new(provider).run(cfg, &mut ErrorListener(progress), None).await },
             )
         };
-        let mut runner = Self { task };
+        let mut runner = Self { task: Some(task) };
         let client = WdaClient::new(DeviceTransport::new(provider, WDA_PORT));
 
         let failure = |extra: Option<String>| {
@@ -214,8 +270,9 @@ impl WdaRunner {
                     );
                 }
             }
-            if runner.task.is_finished() {
-                let r = (&mut runner.task).await;
+            let task = runner.task.as_mut().expect("XCTest 会话");
+            if task.is_finished() {
+                let r = task.await;
                 let msg = match r {
                     Ok(Ok(())) => ictl_l10n::tr!("runner 提前结束", "the runner ended early").to_owned(),
                     Ok(Err(e)) => e.to_string(),
@@ -239,7 +296,7 @@ impl WdaRunner {
                 return Ok((runner, client));
             }
             if tokio::time::Instant::now() >= deadline {
-                runner.task.abort();
+                runner.stop();
                 return Err(failure(Some(
                     ictl_l10n::tr!("WDA 在限定时间内没有就绪", "WDA didn't become ready in time").to_owned(),
                 )));
@@ -248,19 +305,92 @@ impl WdaRunner {
         }
     }
 
-    /// runner 任务是否还活着。死了就算手机上的 WDA 还在响应也不能用
+    /// 接上一个本进程没有 XCTest 会话的 runner（后台启动的，或上一个守护进程启动后留下的）：等 `/status` ready。
+    ///
+    /// `log`：启动 runner **之前**打开的手机系统日志流。有它就能认出 runner 卡在「Enable UI Automation」密码框
+    /// （testmanagerd 开始启用 automation mode 后迟迟没完成），像 [`Self::start`] 一样等满 runner 的 60 秒、
+    /// 等不到报 [`WdaError::NeedsAutomationPin`]；没有就只能按超时报错
+    pub async fn attach(
+        provider: Arc<dyn IdeviceProvider>,
+        timeout: Duration,
+        log: Option<LogStream>,
+    ) -> Result<(Self, WdaClient<DeviceTransport>)> {
+        let client = WdaClient::new(DeviceTransport::new(provider, WDA_PORT));
+        let watching = log.is_some();
+        let progress = Arc::new(Mutex::new(Progress::default()));
+        let _watcher = log.map(|l| watch_automation(l, progress.clone()));
+        let mut deadline = tokio::time::Instant::now() + timeout;
+        let mut announced = false;
+        loop {
+            let (wait, failed) = {
+                let p = progress.lock().unwrap();
+                (p.automation_wait, p.errors.first().cloned())
+            };
+            // testmanagerd 启用 automation mode 失败：runner 起不来了（多半是密码框等超时或被取消）
+            if let Some(e) = failed {
+                tracing::info!("testmanagerd: {e}");
+                return Err(WdaError::NeedsAutomationPin);
+            }
+            if let Some(since) = wait {
+                deadline = deadline.max(since + AUTOMATION_WAIT);
+                if !announced && since.elapsed() >= AUTOMATION_PROMPT_AFTER {
+                    announced = true;
+                    tracing::info!(
+                        "{}",
+                        ictl_l10n::log_tr!(
+                            "后台启动的 runner 在等手机上的「Enable UI Automation」密码",
+                            "the runner launched in the background is waiting for the “Enable UI Automation” passcode on the phone"
+                        )
+                    );
+                }
+            }
+            if client.ready().await.unwrap_or(false) {
+                return Ok((Self { task: None }, client));
+            }
+            if tokio::time::Instant::now() >= deadline {
+                if wait.is_some() {
+                    return Err(WdaError::NeedsAutomationPin);
+                }
+                return Err(WdaError::StartFailed(if watching {
+                    ictl_l10n::trf!(
+                        "后台启动的 WDA {} 秒内没有就绪",
+                        "WDA launched in the background wasn't ready within {} s",
+                        timeout.as_secs()
+                    )
+                } else {
+                    ictl_l10n::trf!(
+                        "后台启动的 WDA {} 秒内没有就绪（手机重启后第一次启动要在手机上输入密码，允许 UI 自动化）",
+                        "WDA launched in the background wasn't ready within {} s (after a reboot the phone asks for its passcode to allow UI automation)",
+                        timeout.as_secs()
+                    )
+                }));
+            }
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        }
+    }
+
+    /// runner 任务是否还活着。死了就算手机上的 WDA 还在响应也不能用。
+    /// 后台启动的 runner 没有任务可看，总是 true，健康只看 `/status`
     pub fn alive(&self) -> bool {
-        !self.task.is_finished()
+        self.task.as_ref().is_none_or(|t| !t.is_finished())
+    }
+
+    /// 是不是后台启动、本进程没有 XCTest 会话的 runner
+    pub fn detached(&self) -> bool {
+        self.task.is_none()
     }
 
     /// 停掉 runner（即丢掉它，见 Drop）
     pub fn stop(self) {}
 }
 
-/// 丢掉就停：守护进程的后台启动任务可能在 start() 中途被取消，不能留下一个没人管的 XCTest 会话
+/// 丢掉就停：守护进程的后台启动任务可能在 start() 中途被取消，不能留下一个没人管的 XCTest 会话。
+/// 后台启动的 runner 不停（它本来就不依赖本进程），要停得结束手机上的进程
 impl Drop for WdaRunner {
     fn drop(&mut self) {
-        self.task.abort();
+        if let Some(t) = &self.task {
+            t.abort();
+        }
     }
 }
 
@@ -294,5 +424,28 @@ mod tests {
         // 创建 future 那一行不算开始等待（已授权时也有）
         assert_eq!(automation_signal("Creating future for 'enabling automation mode' with timeout 60.00"), None);
         assert_eq!(automation_signal("Loading test bundle at: file:///..."), None);
+    }
+
+    #[test]
+    fn automation_signals_from_testmanagerd_log() {
+        // iOS 27.0.1 真机系统日志里 testmanagerd 的原文（已授权时这两行在同一秒）
+        assert_eq!(testmanagerd_signal("Enabling Automation Mode..."), Some(AutomationSignal::Waiting));
+        assert_eq!(testmanagerd_signal("Finished enabling Automation Mode"), Some(AutomationSignal::Done));
+        // 失败的格式串来自开发者镜像 27A5228h 里的 testmanagerd
+        for m in [
+            "Failed to enable automation mode for test session with pid 3869: Error Domain=x Code=1",
+            "Failed to enable Automation Mode: Error Domain=x Code=1",
+        ] {
+            assert_eq!(testmanagerd_signal(m), Some(AutomationSignal::Failed), "{m}");
+        }
+        for m in [
+            "Test session with pid 3869 requesting automation mode",
+            "Automation already enabled, nothing to do.",
+            "Disabling Automation Mode...",
+            "Finished disabling Automation Mode",
+            "Added Automation Mode client <XCTestSession: 0x7a828cabc0> pid 3869. Total clients: 1",
+        ] {
+            assert_eq!(testmanagerd_signal(m), None, "{m}");
+        }
     }
 }

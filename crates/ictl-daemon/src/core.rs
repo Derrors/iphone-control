@@ -58,6 +58,17 @@ pub struct Persisted {
     /// 运行中选定要控制的设备（`iphone-control select`、`iphone_select_device`）；None 是自动选。
     /// 设了 `IPHONE_UDID` 时以它为准，这个不起作用
     pub selected_udid: Option<String>,
+    /// 实验（`ICTL_WDA_DETACHED`）：后台启动的 WDA 是哪台设备上的哪个进程。守护进程重启后据此直接接上它，
+    /// 不重新启动；关掉实验开关后据此结束它（不然它一直占着 8100 端口，新 runner 的 HTTP 服务起不来）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detached_wda: Option<DetachedWda>,
+}
+
+/// 后台启动的 WDA 进程
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DetachedWda {
+    pub udid: String,
+    pub pid: u64,
 }
 
 /// 一次重签的结果
@@ -216,6 +227,13 @@ impl DisplayGeometry {
 /// 快照：`iphone-control status` 显示
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Snapshot {
+    /// Older daemons do not report process identity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pid: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub maintenance: Option<bool>,
     pub state: DeviceState,
     pub device: Option<DeviceInfo>,
     /// USB 上接着的全部设备（读不到名字的只有 UDID）
@@ -289,6 +307,9 @@ pub(crate) struct Inner {
     pub offline_since: Option<Instant>,
     /// HID 会话最近一次使用的时间；空闲超过 [`crate::supervise::HID_IDLE`] 就关掉（它持有屏幕媒体流）
     pub hid_used: Option<Instant>,
+    /// Control pages watching the screen media stream (`screen.rs`): while there are any, the HID session (which owns
+    /// the stream) stays open however long it is idle
+    pub screen_viewers: usize,
     /// 最近一次读到的元素树。只在调用方允许（max_age_ms）时复用；改变界面的操作做完就清掉
     pub elements_cache: Option<(Instant, ictl_wda::elements::Tree)>,
     /// 滑动等列表停下时最后读到的树（[`crate::tools`] 的 `settle` 拿来当比较的起点）
@@ -399,6 +420,7 @@ impl Daemon {
             list_errors: 0,
             offline_since: Some(now),
             hid_used: None,
+            screen_viewers: 0,
             elements_cache: None,
             swiped_tree: None,
             dedup: Dedup::default(),
@@ -409,6 +431,9 @@ impl Daemon {
             next_session_check: now + Duration::from_secs(90),
         };
         let first = Snapshot {
+            version: Some(env!("CARGO_PKG_VERSION").into()),
+            pid: Some(std::process::id()),
+            maintenance: None,
             state: DeviceState::Absent,
             device: None,
             devices: Vec::new(),
@@ -589,6 +614,9 @@ impl Daemon {
                 .unwrap_or_else(|| DeviceInfo { udid: selected.udid.clone(), ..Default::default() })
         });
         self.snap.send_replace(Snapshot {
+            version: Some(env!("CARGO_PKG_VERSION").into()),
+            pid: Some(std::process::id()),
+            maintenance: None,
             state: g.state.clone(),
             device,
             devices,
@@ -615,6 +643,7 @@ impl Daemon {
             s.unlock_disabled = unlock.disabled_by_failure();
             s.auto_unlock = unlock.enabled();
             s.log_tail = self.log.tail(15);
+            s.maintenance = crate::maintenance::active();
             return Response::text(serde_json::to_string_pretty(&s).unwrap_or_default());
         }
         if let Err(e) = check_request(&req) {
@@ -689,6 +718,10 @@ impl Daemon {
         let mut outcome = crate::protocol::Outcome::default();
         let r = match req {
             Request::Status => Ok(self.status_text(g).await),
+            // streams on its own connection (`lib::serve_conn` hands it to `screen::stream`); never queued here
+            Request::ScreenStream => {
+                Err("screen_stream is a streaming request: open it with open_screen_stream".into())
+            }
             Request::Screenshot { region } => {
                 let resp = self.screenshot(g, region).await.unwrap_or_else(Response::error);
                 self.publish(g);
@@ -783,6 +816,7 @@ fn lane(req: &Request) -> Lane {
         Request::WebTargets | Request::WebEval { .. } => Lane::Web,
         Request::InstallApp { .. } => Lane::Install,
         Request::Status
+        | Request::ScreenStream
         | Request::Screenshot { .. }
         | Request::ListElements { .. }
         | Request::Tap { .. }

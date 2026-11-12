@@ -231,6 +231,11 @@ impl HidSession {
         Ok(())
     }
 
+    /// 屏幕媒体流的画面（控制台用）；流已经停了时为 None
+    pub fn screen_feed(&self) -> Option<crate::ScreenFeed> {
+        self.stream.as_ref().map(|s| s.feed())
+    }
+
     /// 停止屏幕媒体流。必须调用：直接丢掉的话手机端一直挂着这个会话（见 [`crate::Tunnel`]）
     pub async fn close(mut self) {
         if let Some((x, y)) = self.contact.take() {

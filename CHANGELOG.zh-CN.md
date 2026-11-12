@@ -6,6 +6,27 @@
 
 ## [Unreleased]
 
+### 升级注意事项
+
+- 使用脚本新装时，请从发布者的已签名 GitHub Release 下载 `install.sh`，需要 Python 3 和 OpenSSL 3。旧版脚本用户请先停止服务，用原安装脚本卸载，再运行新脚本。以 0.2.0 为例，从原发布仓库的 `v0.2.0` 标签取出旧脚本，传入 `--uninstall` 和原安装前缀。设置和设备数据都会保留。
+
+### 新增
+
+- 运行 `iphone-control update check` 或打开控制台的「关于与更新」，可查看当前构建的发布者提供的最新稳定版。发现新版后，Viewer 会在按钮上显示红点。打开面板即可查看版本号，并在有适用命令时一键复制。
+- 通过签名发行包的安装脚本部署的用户服务可用 `iphone-control update apply` 升级，用 `iphone-control update rollback` 回滚。默认仅检查更新。运行 `iphone-control update policy auto-patch` 后，服务会在空闲时自动安装签名补丁，新守护进程健康检查失败时恢复旧版本。
+
+## [0.2.1] - 2026-11-12
+
+### 新增
+
+- iOS 27 及以上，控制台的画面直接用手机自己硬件编码的视频（CoreDevice 屏幕媒体流，HEVC）：约每秒 60 帧、原生分辨率，本机不编码，WDA 也不用截图；转屏时画面跟着转正。浏览器解不了 HEVC（Firefox、多数 Linux 上的 Chrome）或设备低于 iOS 27 时自动改用 H.264 或 MJPEG。`IPHONE_CONTROL_VIEWER_CODEC=device` 只用这条流。
+- 控制台的画面改用 H.264，流量约为原来的 1/15：macOS 上本程序直接调 VideoToolbox（JPEG 也由硬件解码），不需要 ffmpeg；Linux 上装了 ffmpeg 时显卡编码优先（NVENC、VAAPI、QSV、V4L2，都不行用 x264）；链路慢时降帧率，画面不会越来越滞后。没有 ffmpeg 时仍是 MJPEG，静止时不再重复发同一张。设置：`IPHONE_CONTROL_VIEWER_CODEC`、`IPHONE_CONTROL_VIEWER_QP`。
+- 实验开关 `ICTL_WDA_DETACHED=1`：在后台启动 WebDriverAgent、不持有 XCTest 会话，锁屏时也能启动，守护进程重启时它不跟着断。见 [WDA 依赖调研](docs/dev/wda-dependency-research.md)。
+
+### 修复
+
+- 控制台开着时 WDA 不再每隔几分钟被 iOS 杀掉（iOS 27 及以上）：WDA 一直截图给画面用，CPU 超过一个核，iOS 按一分钟平均超过 80% 杀掉它，守护进程随之重启 WDA，期间操作失败。改用手机自己的视频后 WDA 的 CPU 约 3%。iOS 27 以下仍靠 WDA 截图，不看时请关掉控制台页面。
+
 ## [0.2.0] - 2026-11-11
 
 ### 升级注意事项
@@ -175,7 +196,8 @@
 - `setup`、`doctor`、`status`、`mcp-config`、`wda-bridge`、`notify-test` 命令。
 - Docker 镜像（非 privileged，linux/amd64、linux/arm64）；也可不用 Docker，从源码或预编译二进制以普通用户运行，附 systemd 用户服务。
 
-[Unreleased]: https://github.com/Derrors/iphone-control/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/Derrors/iphone-control/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/Derrors/iphone-control/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/Derrors/iphone-control/compare/v0.1.5...v0.2.0
 [0.1.5]: https://github.com/Derrors/iphone-control/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/Derrors/iphone-control/compare/v0.1.3...v0.1.4

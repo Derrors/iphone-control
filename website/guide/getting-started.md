@@ -17,13 +17,13 @@
 
 三种方式任选一种，都以普通用户安装，不要用 root 或 sudo 运行 `iphone-control`。
 
-**一行命令**（macOS、Linux）：
+**一行命令**（macOS 或 Linux，需在 PATH 中提供 Python 3 和 OpenSSL 3）
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Derrors/iphone-control/main/install.sh | sh
+curl -fsSLo iphone-control-install.sh https://github.com/Derrors/iphone-control/releases/latest/download/install.sh && sh iphone-control-install.sh
 ```
 
-程序装到 `~/.local/bin`，守护进程装成用户服务（macOS 是 launchd，Linux 是 systemd 用户服务），登录后自动启动。再运行一次就是升级。可以在 `sh` 后面加 `-s --` 再跟选项：`--version vX.Y.Z` 装指定版本，`--prefix DIR` 装到 `DIR/bin`，`--no-service` 只装程序、不装服务。
+程序装到 `~/.local/bin`，守护进程装成用户服务（macOS 用 launchd，Linux 用 systemd），登录后自动启动。运行 `iphone-control update check` 查看升级指引。给脚本传入 `--version vX.Y.Z` 可装指定的签名版本，`--prefix DIR` 可装到 `DIR/bin`，`--no-service` 可只装程序。上游 v0.2.0 请按[旧版脚本说明](#legacy-script)操作。
 
 **Homebrew**（macOS、Linux）：
 
@@ -45,7 +45,27 @@ systemctl --user enable --now iphone-control     # 以普通用户运行，每�
 和手机通过 USB 通信要用系统的 usbmuxd：`sudo apt install usbmuxd`（其他发行版用对应的包管理器）。deb 包会自动装上它。
 :::
 
+::: tip 可选：ffmpeg
+Linux 上装了 ffmpeg，控制台的画面改用 H.264，流量约为原来的 1/15，经隧道、走外网时更顺：`sudo apt install ffmpeg`。macOS 上不用装，直接就是 H.264。见[控制台的画面](./cli#viewer-picture)。
+:::
+
 Intel Mac 没有预编译版本，要从源码编译；参与开发也从源码运行。见[从源码编译](../deploy/source)。
+
+### 上游 v0.2.0 脚本安装与迁移 {#legacy-script}
+
+v0.2.0 使用安装包校验和，发行附件中没有签名安装器。要安装该版本，请下载 v0.2.0 标签里的脚本，并指定同一版本的程序。
+
+```sh
+curl -fsSLo iphone-control-v0.2.0-install.sh https://raw.githubusercontent.com/Derrors/iphone-control/v0.2.0/install.sh && sh iphone-control-v0.2.0-install.sh --version v0.2.0
+```
+
+要迁移已有的 v0.2.0 脚本安装，先确认新发行版已提供 `install.sh`、当前平台的清单及其签名。退出 Viewer 和 MCP 客户端，停止守护进程，再用 v0.2.0 的脚本卸载旧程序和服务。设置和设备数据会保留。
+
+```sh
+curl -fsSLo iphone-control-v0.2.0-install.sh https://raw.githubusercontent.com/Derrors/iphone-control/v0.2.0/install.sh && sh iphone-control-v0.2.0-install.sh --uninstall
+```
+
+然后运行上面的[签名安装器](#install)。如果旧版本装在自定义前缀，卸载和重新安装时都要传入原来的 `--prefix DIR`。
 
 ## 2. 接上手机，运行 iphone-control {#first-run}
 
@@ -107,7 +127,8 @@ iphone-control doctor   # 逐层诊断，每项失败都给出修复办法
 
 | 安装方式 | 卸载 |
 |---|---|
-| 一行命令 | `curl -fsSL https://raw.githubusercontent.com/Derrors/iphone-control/main/install.sh \| sh -s -- --uninstall` |
+| 签名安装器 | 用上面下载的脚本运行 `sh iphone-control-install.sh --uninstall`，若安装时指定了前缀，传入相同的前缀 |
+| v0.2.0 脚本 | 运行 [v0.2.0 卸载命令](#legacy-script) |
 | Homebrew | `brew services stop iphone-control`，再 `brew uninstall iphone-control` |
 | deb 包 | `systemctl --user disable --now iphone-control`，再 `sudo apt remove iphone-control` |
 

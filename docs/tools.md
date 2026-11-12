@@ -59,15 +59,15 @@ How `iphone_app_logs` records:
 
 See [SECURITY.md](../SECURITY.md#developer-tools) before turning these tools on.
 
-## Tasks from the web viewer
+## Tasks
 
-When `iphone-control viewer` runs an AI task, it starts the agent with this MCP server and two environment variables, `ICTL_AGENT_GATE` and `ICTL_AGENT_TOKEN`. With them set, every tool call is first reported to the viewer, which shows it as a step, holds it while the task is paused or the user has taken over, and refuses it once the task is stopped; the result (and the screenshot, if any) is reported back afterwards. One more tool is listed:
+An AI task (docs/task-control.md) is kept by the daemon. While one runs, only requests carrying its token act on the phone; anyone else may look (screenshots, elements, status) but is refused for actions until the user takes over. `iphone-control viewer` starts its agents in a task, and `iphone-control task run -- <command>` does the same for any other agent platform. Both hand the token to this MCP server in `IPHONE_CONTROL_TASK_TOKEN`. With it set, every tool call is first announced to the daemon, which records it as a step for the control page, holds it while the task is paused, taken over or waiting for a confirmation, and refuses it once the task ended; the result is reported back afterwards. One more tool is listed:
 
 | Tool | Parameters | Notes |
 |---|---|---|
-| `iphone_confirm` | `action`, `detail` | Asks the user on the page to confirm one step (paying, deleting, sending a message, changing account settings…) and waits for the answer. A normal result means approved; an error means rejected or the task ended, and the agent must not do the step |
+| `iphone_confirm` | `action`, `detail` | Asks the user to confirm one step (paying, deleting, sending a message, changing account settings…) and waits for the answer, given on the control page or with `iphone-control task approve` / `reject`. A normal result means approved; an error means rejected or the task ended, and the agent must not do the step |
 
-Without the variables, the tool list and every call are unchanged.
+Without the variable, the tool list and every call are unchanged; while a task runs, a plain MCP server's actions are refused with a message that says which task holds the phone.
 
 ## Auto-unlock and "read-only" tools
 

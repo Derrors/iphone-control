@@ -4,6 +4,7 @@
 //! - usbmuxd 用系统的（macOS 自带，Linux 是 usbmuxd 包，插上手机时由 udev 拉起）
 //! - 控制接口：Unix socket，每行一个 JSON（[`protocol`]），MCP 和 CLI 都通过它访问设备
 //! - 并发模型见 [`core`]
+//! - AI 任务（谁能在任务进行中操作手机）见 [`tasks`]
 
 pub mod config;
 pub mod core;
@@ -17,6 +18,7 @@ pub mod maintenance;
 pub mod notify;
 mod screen;
 mod supervise;
+pub mod tasks;
 mod tools;
 mod watchdog;
 mod wda_pkg;
@@ -139,6 +141,15 @@ async fn serve_conn(daemon: Arc<Daemon>, stream: tokio::net::UnixStream) {
                     ictl_l10n::scope(lang, daemon.screen_stream(reader, w, ctx.expect_udid)).await;
                     return;
                 }
+                // also streams; an opened task's connection is its lease, so it isn't held against updates either
+                (
+                    Ok((req @ (protocol::Request::TaskOpen { .. } | protocol::Request::TaskEvents { .. }), _, _, lang)),
+                    Ok(lease),
+                ) => {
+                    drop(lease);
+                    ictl_l10n::scope(lang, task_stream(&daemon, reader, w, req)).await;
+                    return;
+                }
                 (Ok((req, false, ctx, lang)), Ok(_lease)) => {
                     let handling = daemon.handle(req, queued_at, ctx);
                     ictl_l10n::scope(lang, handling).await
@@ -180,21 +191,103 @@ async fn serve_conn(daemon: Arc<Daemon>, stream: tokio::net::UnixStream) {
 /// No language (an older client) means Chinese, which is what those clients expect and parse
 fn parse_request(line: &[u8]) -> serde_json::Result<(protocol::Request, bool, core::CallCtx, ictl_l10n::Lang)> {
     let mut v: serde_json::Value = serde_json::from_slice(line)?;
-    let (cancel, udid, view, lang) = match v.as_object_mut() {
+    let (cancel, udid, view, lang, task, task_step) = match v.as_object_mut() {
         Some(o) => (
             o.remove(protocol::CANCEL_ON_CLOSE).is_some_and(|c| c == true),
             o.remove(protocol::EXPECT_UDID).and_then(|u| u.as_str().map(str::to_owned)),
             o.remove(protocol::EXPECT_VIEW).and_then(|v| v.as_str().map(str::to_owned)),
             o.remove(protocol::LANG).and_then(|l| l.as_str().and_then(ictl_l10n::parse)),
+            o.remove(protocol::TASK).and_then(|t| t.as_str().map(str::to_owned)),
+            o.remove(protocol::TASK_STEP).and_then(|s| s.as_u64()),
         ),
-        None => (false, None, None, None),
+        None => (false, None, None, None, None, None),
     };
     Ok((
         serde_json::from_value(v)?,
         cancel,
-        core::CallCtx { gone: None, expect_udid: udid, expect_view: view },
+        core::CallCtx { gone: None, expect_udid: udid, expect_view: view, task, task_step },
         lang.unwrap_or(ictl_l10n::Lang::Zh),
     ))
+}
+
+/// Serves [`protocol::Request::TaskOpen`] (the connection is the task's lease) or [`protocol::Request::TaskEvents`]:
+/// one answer line, then the task's events, one JSON line each, until it ends or the client goes away
+async fn task_stream(
+    daemon: &Arc<Daemon>,
+    mut reader: BufReader<tokio::net::unix::OwnedReadHalf>,
+    mut w: tokio::net::unix::OwnedWriteHalf,
+    req: protocol::Request,
+) {
+    async fn send<T: serde::Serialize>(w: &mut tokio::net::unix::OwnedWriteHalf, v: &T) -> bool {
+        let mut line = serde_json::to_string(v).unwrap_or_default();
+        line.push('\n');
+        w.write_all(line.as_bytes()).await.is_ok()
+    }
+    let found = match req {
+        protocol::Request::TaskOpen { title, owner } => {
+            daemon.tasks.open(&title, &owner, daemon.controlled_udid().as_deref()).map(|t| {
+                daemon.log.log(&ictl_l10n::log_trf!(
+                    "开始任务 {}（{owner}）：{title}",
+                    "Task {} started ({owner}): {title}",
+                    t.id
+                ));
+                let opened = protocol::TaskOpened { id: t.id.clone(), token: tasks::Tasks::token_of(&t).to_owned() };
+                (t, Some(opened))
+            })
+        }
+        protocol::Request::TaskEvents { id } => daemon
+            .tasks
+            .get(&id)
+            .map(|t| (t, None))
+            .ok_or_else(|| ictl_l10n::tr!("没有这个任务", "No such task").into()),
+        _ => Err("not a task stream".into()),
+    };
+    let (task, opened) = match found {
+        Ok(f) => f,
+        Err(m) => {
+            send(&mut w, &protocol::Response::error(m)).await;
+            return;
+        }
+    };
+    let lease = opened.is_some();
+    let first = match &opened {
+        Some(o) => serde_json::to_string(o).unwrap_or_default(),
+        None => "streaming".into(),
+    };
+    let (log, mut rx, ended) = task.subscribe();
+    let mut ok = send(&mut w, &protocol::Response::text(first)).await;
+    for e in &log {
+        ok = ok && send(&mut w, e).await;
+    }
+    if ok && !ended {
+        loop {
+            tokio::select! {
+                e = rx.recv() => match e {
+                    Ok(e) => {
+                        let done = e.event == "done";
+                        if !send(&mut w, &e).await {
+                            break;
+                        }
+                        if done {
+                            return;
+                        }
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
+                },
+                () = wait_closed(&mut reader) => break,
+            }
+        }
+    }
+    // the opener went away before the task ended
+    if lease && task.is_active() {
+        task.abandon();
+        daemon.log.log(&ictl_l10n::log_trf!(
+            "任务 {} 的发起方断开，任务中断",
+            "The opener of task {} went away; the task was interrupted",
+            task.id
+        ));
+    }
 }
 
 /// 等到调用方关掉连接（读到 EOF 或出错）。带 cancel_on_close 的客户端一个连接只发一个请求，之后不会再写
@@ -208,6 +301,58 @@ async fn wait_closed<R: tokio::io::AsyncRead + Unpin>(reader: &mut R) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The whole way through the socket: a task opened by a client holds the phone until its connection closes
+    #[tokio::test]
+    async fn an_opened_task_holds_the_phone_until_its_lease_goes() {
+        use protocol::{Request, Response};
+        let local = tokio::task::LocalSet::new();
+        local
+            .run_until(async {
+                let (d, dir) = core::tests::test_daemon("lease");
+                d.fake_controlled("00008150-000A");
+                let socket = dir.join("ctl.sock");
+                let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+                let daemon = d.clone();
+                tokio::task::spawn_local(async move {
+                    while let Ok((s, _)) = listener.accept().await {
+                        tokio::task::spawn_local(serve_conn(daemon.clone(), s));
+                    }
+                });
+                let (opened, mut events) = protocol::open_task(&socket, "看看设置", "test").await.unwrap();
+                assert_eq!(events.next().await.unwrap().event, "task");
+                assert!(protocol::open_task(&socket, "又一个", "test").await.is_err(), "one at a time");
+
+                let tap = Request::Tap { x: 1.0, y: 2.0 };
+                let r = protocol::call(&socket, &tap, None).await.unwrap();
+                assert!(matches!(&r, Response::Error { message, .. } if message.contains(&opened.id)), "{r:?}");
+                // the task's own request gets past the task (and then finds no phone in this test)
+                let r = protocol::as_task(Some(opened.token.clone()), None, protocol::call(&socket, &tap, None))
+                    .await
+                    .unwrap();
+                assert!(matches!(&r, Response::Error { message, .. } if !message.contains(&opened.id)), "{r:?}");
+                let step = Request::TaskStep { tool: "iphone_tap".into(), args: serde_json::json!({"x": 1, "y": 2}) };
+                let r = protocol::as_task(Some(opened.token.clone()), None, protocol::call(&socket, &step, None))
+                    .await
+                    .unwrap();
+                assert_eq!(r, Response::text("2"), "step 1 was the tap above, recorded on its own");
+
+                let mut follower = protocol::task_events(&socket, &opened.id).await.unwrap();
+                drop(events);
+                let mut last = None;
+                while let Some(e) = follower.next().await {
+                    last = Some(e);
+                }
+                let last = last.unwrap();
+                assert_eq!((last.event.as_str(), last.data["outcome"].as_str()), ("done", Some("abandoned")));
+                let list = protocol::task_list(&socket).await.unwrap();
+                assert_eq!(list.last().unwrap().state, "abandoned");
+                let r = protocol::call(&socket, &tap, None).await.unwrap();
+                assert!(matches!(&r, Response::Error { message, .. } if !message.contains(&opened.id)), "free again");
+                std::fs::remove_dir_all(dir).unwrap();
+            })
+            .await;
+    }
 
     #[test]
     fn request_options_are_taken_out_before_parsing() {
@@ -223,7 +368,9 @@ mod tests {
         assert_eq!(lang, Lang::En);
         // 旧版本客户端：没有这几个键；没说语言就是中文（它们按中文的固定写法认结果）
         let (_, cancel, expect, lang) = parse_request(br#"{"op":"status"}"#).unwrap();
-        assert!(!cancel && expect.expect_udid.is_none());
+        assert!(!cancel && expect.expect_udid.is_none() && expect.task.is_none() && expect.task_step.is_none());
+        let (_, _, ctx, _) = parse_request(br#"{"op":"tap","x":1.0,"y":2.0,"task":"T","task_step":3}"#).unwrap();
+        assert_eq!((ctx.task.as_deref(), ctx.task_step), (Some("T"), Some(3)));
         assert_eq!(lang, Lang::Zh);
         let (_, _, _, lang) = parse_request(br#"{"op":"status","lang":"klingon"}"#).unwrap();
         assert_eq!(lang, Lang::Zh);

@@ -6,9 +6,19 @@ All notable changes to this project are documented here. The format is based on 
 
 ## [Unreleased]
 
+### Added
+
+- AI tasks for any agent platform: `iphone-control task run -- <command>` runs a command in a task, and an `iphone-control mcp` it starts takes part (the control page shows its steps and can pause, take over, stop and confirm). `task list`, `task events`, `task pause`/`resume`/`takeover`/`handback`/`stop` and `task approve`/`reject` follow and steer tasks from the command line.
+- The control page picks up a task in progress: after a reload, and for tasks started elsewhere.
+
 ### Changed
 
 - On the control page the picture zooms only with the − and + buttons above it: pinching on a trackpad or touch screen, or Ctrl/⌘ + scroll, no longer zooms it (a drag easily turned into a zoom).
+- AI tasks are kept by the daemon instead of the control page. While a task runs, other clients (another MCP server, the command line) can look, but their actions and device switches are refused until the user takes over; the task stays on the device it started on. Tasks are logged in the data directory (`tasks/`, the last 50); one that was running when the daemon stopped shows as interrupted.
+
+### Removed
+
+- The `ICTL_AGENT_GATE` / `ICTL_AGENT_TOKEN` variables of the MCP server: a task's MCP server gets `IPHONE_CONTROL_TASK_TOKEN` instead.
 
 ### Fixed
 

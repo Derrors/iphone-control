@@ -18,7 +18,7 @@ use rmcp::{
 };
 use serde_json::{Map, Value, json};
 
-pub mod gate;
+pub mod task;
 
 /// 服务说明（发给客户端的 instructions）：toolkit 的那段，加上自动解锁范围、多设备的说明
 pub fn instructions() -> &'static str {
@@ -150,15 +150,15 @@ pub fn tools_with(dev: bool) -> Vec<Tool> {
     v
 }
 
-/// [`gate::CONFIRM_TOOL`], listed only for a task started from the web viewer
+/// [`task::CONFIRM_TOOL`], listed only while working for a task (see [`task`])
 pub fn confirm_tool() -> Tool {
     Tool::new(
-        gate::CONFIRM_TOOL,
+        task::CONFIRM_TOOL,
         ictl_l10n::tr!(
-            "请用户在网页上确认一步操作,一直等到用户回答。\n\n何时用:付款、购买、下单、转账;删除或清空数据;发送消息、邮件、评论、帖子;\
+            "请用户确认一步操作(在控制台页面或发起任务的地方),一直等到用户回答。\n\n何时用:付款、购买、下单、转账;删除或清空数据;发送消息、邮件、评论、帖子;\
 修改账号、密码、隐私或安全设置;其他不可撤销的操作。在真正点下那一步之前调用。\n\n\
 返回:用户同意时是普通结果,接着执行;用户拒绝时是错误结果,这时不要执行这一步,也不要换个方式绕过,停下来说明情况。",
-            "Ask the user on the web page to confirm one action, and wait for the answer.\n\nWhen to use: payments, purchases, orders, transfers; deleting or clearing data; sending messages, emails, comments, posts; changing account, password, privacy or security settings; anything else that can't be undone. Call it right before the step that does it.\n\nReturns: a normal result when the user approves, then go ahead; an error when the user rejects, then don't do that step or work around it: stop and explain."
+            "Ask the user to confirm one action (on the control page or wherever the task was started), and wait for the answer.\n\nWhen to use: payments, purchases, orders, transfers; deleting or clearing data; sending messages, emails, comments, posts; changing account, password, privacy or security settings; anything else that can't be undone. Call it right before the step that does it.\n\nReturns: a normal result when the user approves, then go ahead; an error when the user rejects, then don't do that step or work around it: stop and explain."
         )
         .to_owned(),
         schema(
@@ -847,7 +847,17 @@ pub fn wants_alert_check(req: &Request) -> bool {
         | Request::ListDevices
         | Request::AppLogs { .. }
         | Request::CrashReports { .. }
-        | Request::WebTargets => false,
+        | Request::WebTargets
+        // tasks: not tools, nothing on the screen
+        | Request::TaskOpen { .. }
+        | Request::TaskEvents { .. }
+        | Request::TaskList
+        | Request::TaskControl { .. }
+        | Request::TaskStep { .. }
+        | Request::TaskStepDone { .. }
+        | Request::TaskConfirm { .. }
+        | Request::TaskNote { .. }
+        | Request::TaskFinish { .. } => false,
     }
 }
 
@@ -865,8 +875,8 @@ pub fn to_result(r: Response) -> CallToolResult {
 #[derive(Debug, Clone)]
 pub struct McpServer {
     pub socket: PathBuf,
-    /// Set for a task started from the web viewer (see [`gate`])
-    pub gate: Option<gate::Gate>,
+    /// Working for a task (see [`task`])
+    pub task: bool,
 }
 
 impl ServerHandler for McpServer {
@@ -880,7 +890,7 @@ impl ServerHandler for McpServer {
         _context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, ErrorData> {
         let mut t = tools();
-        if self.gate.is_some() {
+        if self.task {
             t.push(confirm_tool());
         }
         Ok(ListToolsResult::with_all_items(t))
@@ -891,28 +901,30 @@ impl ServerHandler for McpServer {
         request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, ErrorData> {
-        let Some(gate) = &self.gate else { return self.call_tool_cancellable(request, &context).await };
-        // a task from the web viewer: the viewer sees every call and can hold or refuse it (see `gate`)
+        if !self.task {
+            return self.call_tool_cancellable(request, &context).await;
+        }
+        // working for a task: the daemon holds or refuses the calls; announce each so the page shows the tool
         let args = request.arguments.clone().unwrap_or_default();
         let work = async {
-            if request.name == gate::CONFIRM_TOOL {
-                let r = match gate.confirm(&args).await {
+            if request.name == task::CONFIRM_TOOL {
+                let r = match task::confirm(&self.socket, &args).await {
                     Ok(m) => CallToolResult::success(vec![ContentBlock::text(m)]),
                     Err(m) => CallToolResult::error(vec![ContentBlock::text(m)]),
                 };
                 return Ok(r.into());
             }
-            match gate.before(&request.name, &args).await {
-                gate::Before::Go(step) => {
+            match task::before(&self.socket, &request.name, &args).await {
+                task::Before::Go(step) => {
                     let t0 = std::time::Instant::now();
-                    let r = self.call_tool_inner(request).await;
+                    let r = protocol::as_task(None, Some(step), self.call_tool_inner(request)).await;
                     if let Ok(CallToolResponse::Complete(c)) = &r {
                         let v = serde_json::to_value(c).unwrap_or_default();
-                        gate.after(step, &v, t0.elapsed().as_millis() as u64).await;
+                        task::after(&self.socket, step, &v, t0.elapsed().as_millis() as u64).await;
                     }
                     r
                 }
-                gate::Before::Refuse(m) => Ok(CallToolResult::error(vec![ContentBlock::text(m)]).into()),
+                task::Before::Refuse(m) => Ok(CallToolResult::error(vec![ContentBlock::text(m)]).into()),
             }
         };
         tokio::select! {
@@ -979,15 +991,15 @@ impl McpServer {
         // 守护进程正忙（例如在自动解锁）时会排队；最多等 150 秒，免得 agent 一直挂着。An install uploads the package and
         // can take several minutes on its own
         let wait = if matches!(req, Request::InstallApp { .. }) { 660 } else { 150 };
-        protocol::call_expecting(&self.socket, req, Some(Duration::from_secs(wait)), expect_udid).await.unwrap_or_else(
-            |e| {
-                Response::error(ictl_l10n::trf!(
-                    "连不上守护进程({}):{e};确认守护进程在运行(iphone-control status)",
-                    "Can't reach the daemon ({}): {e}; make sure the daemon is running (iphone-control status)",
-                    self.socket.display()
-                ))
-            },
-        )
+        // in a task the daemon holds calls while the user has paused or taken over, as long as that takes
+        let wait = (!self.task).then(|| Duration::from_secs(wait));
+        protocol::call_expecting(&self.socket, req, wait, expect_udid).await.unwrap_or_else(|e| {
+            Response::error(ictl_l10n::trf!(
+                "连不上守护进程({}):{e};确认守护进程在运行(iphone-control status)",
+                "Can't reach the daemon ({}): {e}; make sure the daemon is running (iphone-control status)",
+                self.socket.display()
+            ))
+        })
     }
 
     /// 操作完成后：按 then 等界面稳定，再附上元素列表或截图（等稳定时顺带提醒弹窗）。
@@ -1109,7 +1121,7 @@ impl McpServer {
 
 /// 在 stdin/stdout 上运行 MCP 服务直到客户端断开
 pub async fn serve_stdio(socket: PathBuf) -> anyhow::Result<()> {
-    let running = McpServer { socket, gate: gate::Gate::from_env() }.serve(rmcp::transport::stdio()).await?;
+    let running = McpServer { socket, task: task::join_from_env() }.serve(rmcp::transport::stdio()).await?;
     running.waiting().await?;
     Ok(())
 }

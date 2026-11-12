@@ -20,6 +20,7 @@ mod envfile;
 mod guide;
 mod schedule;
 mod service;
+mod task;
 mod update;
 mod video;
 mod viewer;
@@ -103,6 +104,11 @@ enum Command {
     Viewer {
         #[arg(long, default_value_t = 8200)]
         port: u16,
+    },
+    #[command(about = ictl_l10n::tr!("AI 任务：在任务里运行外部 agent（task run），查看、暂停、接管、停止、确认任务", "AI tasks: run an external agent in a task (task run); list, pause, take over, stop and confirm tasks"))]
+    Task {
+        #[command(subcommand)]
+        action: task::TaskAction,
     },
     #[command(about = ictl_l10n::tr!("真机诊断（开发用，要用 `--features debug-cmds` 编译）。`wda`/`e2e`/`hid` 会和守护进程抢 XCTest、HID，先停掉守护进程", "Real-device diagnostics (for development, build with `--features debug-cmds`). `wda`/`e2e`/`hid` compete with the daemon for XCTest and HID, so stop the daemon first"))]
     #[cfg(feature = "debug-cmds")]
@@ -190,7 +196,7 @@ fn prints_and_exits(command: Option<&Command>) -> bool {
                 | Command::NotifyTest { .. }
                 | Command::Update { action: Some(UpdateAction::Check { .. }), .. }
         )
-    )
+    ) || matches!(command, Some(Command::Task { action }) if task::prints_and_exits(action))
 }
 
 /// Rust starts every program with SIGPIPE ignored, so once the reader of stdout has gone (`iphone-control status |
@@ -258,6 +264,7 @@ async fn run() -> anyhow::Result<()> {
         Command::Select { device } => print_text(&cli.socket, Request::SelectDevice { device }).await,
         Command::WdaBridge { port } => wda_bridge(&cli.socket, port).await,
         Command::Viewer { port } => viewer::run(&cli.socket, &cli.data_dir, port).await,
+        Command::Task { action } => task::run(&cli.socket, action).await,
         #[cfg(feature = "debug-cmds")]
         Command::Debug(args) => debug::run(env_nonempty("IPHONE_UDID").as_deref(), args).await,
         Command::NotifyTest { event } => notify_test(&cli.data_dir, event.as_deref()).await,

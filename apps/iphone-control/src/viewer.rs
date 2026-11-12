@@ -732,7 +732,7 @@ fn state_of(s: &DeviceState) -> (&'static str, Option<String>) {
         DeviceState::DeveloperModeOff => ("DeveloperModeOff", None),
         DeviceState::NeedsUnlock => ("NeedsUnlock", None),
         DeviceState::NeedsSigning => ("NeedsSigning", None),
-        DeviceState::WdaStarting { last_error } => ("WdaStarting", last_error.clone()),
+        DeviceState::WdaStarting { last_error, .. } => ("WdaStarting", last_error.clone()),
         DeviceState::NeedsAutomationPin => ("NeedsAutomationPin", None),
         DeviceState::Ready => ("Ready", None),
     }
@@ -753,6 +753,7 @@ async fn daemon(ctx: &Ctx) -> Result<Value, String> {
         "state": state,
         "state_text": s.state.describe(),
         "last_error": last_error,
+        "wda_start_notice": s.state.wda_start_hint().map(|h| json!({ "kind": h, "message": h.message() })),
         "device": s.device.as_ref().map(device_json),
         "auto_unlock": s.auto_unlock && !s.unlock_disabled,
         // the page offers to sign and install WDA (NeedsSigning) only with an Apple ID to sign with
@@ -952,6 +953,38 @@ mod tests {
             video: None,
             acks: Arc::default(),
             feeds: Mutex::default(),
+        }
+    }
+
+    #[tokio::test]
+    async fn startup_notice_uses_the_request_language_and_preserves_the_error() {
+        use tokio::io::AsyncBufReadExt;
+
+        let temp = tempfile::tempdir_in("/tmp").unwrap();
+        let socket = temp.path().join("daemon.sock");
+        let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+        let ctx = test_ctx(temp.path(), &socket);
+        let error = "手机拒绝启动（NSError code 9）";
+        let snapshot = json!({
+            "state": { "state": "wda_starting", "last_error": error, "hint": "launch_refused" },
+            "device": null, "persisted": {}, "auto_unlock": false, "unlock_disabled": false,
+            "notify_configured": false, "log_tail": []
+        });
+        for (lang, expected) in [(ictl_l10n::Lang::En, "The device refused"), (ictl_l10n::Lang::Zh, "设备拒绝启动")]
+        {
+            let reply = async {
+                let (peer, _) = listener.accept().await.unwrap();
+                let (reader, mut writer) = peer.into_split();
+                let mut request = String::new();
+                tokio::io::BufReader::new(reader).read_line(&mut request).await.unwrap();
+                let response = json!({ "kind":"text", "text":snapshot.to_string() });
+                writer.write_all(format!("{response}\n").as_bytes()).await.unwrap();
+            };
+            let (result, ()) = tokio::join!(ictl_l10n::scope(lang, daemon(&ctx)), reply);
+            let v = result.unwrap();
+            assert_eq!(v["wda_start_notice"]["kind"], "launch_refused");
+            assert!(v["wda_start_notice"]["message"].as_str().unwrap().starts_with(expected));
+            assert_eq!(v["last_error"], error);
         }
     }
 

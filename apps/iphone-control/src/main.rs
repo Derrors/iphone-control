@@ -966,20 +966,27 @@ async fn device_setup(cli: &Cli) -> anyhow::Result<()> {
         println!(
             "{}",
             ictl_l10n::tr!(
-                "  首次安装:在手机 设置 → 通用 → VPN 与设备管理 里找到你的 Apple ID,点「信任」(需要联网)。",
-                "  First install: on the phone, open Settings → General → VPN & Device Management, find your Apple ID and tap “Trust” (needs internet)."
-            )
-        );
-        println!(
-            "{}",
-            ictl_l10n::tr!(
                 "  如果弹出「为 XCTest 输入 iPhone 密码」,输入锁屏密码。",
                 "  If “Enter iPhone passcode for XCTest” appears, enter the passcode."
             )
         );
     }
+    let shown = std::cell::RefCell::new(String::new());
     let ready = wait_until(Duration::from_secs(600), Duration::from_secs(10), || async {
-        snapshot(socket).await.map(|s| s.state == ictl_daemon::machine::DeviceState::Ready).unwrap_or(false)
+        let Ok(s) = snapshot(socket).await else { return false };
+        if !s.device.is_some_and(|d| d.udid == target) {
+            return false;
+        }
+        // Older daemons put their startup guidance in last_error.
+        if let ictl_daemon::machine::DeviceState::WdaStarting { last_error: Some(ref error), hint } = s.state {
+            let message = hint.map_or(error.as_str(), |h| h.message());
+            let mut previous = shown.borrow_mut();
+            if *previous != message {
+                println!("  {message}");
+                message.clone_into(&mut previous);
+            }
+        }
+        s.state == ictl_daemon::machine::DeviceState::Ready
     })
     .await;
     println!(

@@ -109,24 +109,14 @@ fn automation_signal(msg: &str) -> Option<AutomationSignal> {
     }
 }
 
-/// 设备拒绝启动 runner（见 [`launch_hint`]）：还没信任开发者，或签 WDA 的证书已被吊销。守护进程据此判断要不要重签
+/// XCTest can return an undecoded NSError when the device refuses the runner. This triggers a certificate check.
 pub fn launch_refused(msg: &str) -> bool {
     msg.contains("unexpected response")
 }
 
-/// 手机拒绝启动 runner 时回的是 NSError，但 idevice 收到的是没解开的归档（字段都是 `Uid(n)` 引用），读不出文字，
-/// 只报 `unexpected response`。首次安装后最常见的原因是还没信任开发者（iPad mini 5 / iPadOS 26.6.1 真机：
-/// 点「信任」之前这样报，之后下一次就能启动）；用过的设备则可能是签 WDA 的证书变了（给另一台设备重签时换了证书，
-/// 同一台 iPad 上点 runner 图标提示「无法验证 App」，重签这台后就能启动），两种都在报错里提示一句
-fn launch_hint(msg: String) -> String {
-    if launch_refused(&msg) {
-        ictl_l10n::trf!(
-            "{msg}(第一次在这台设备上装 WDA 的:到 设置 → 通用 → VPN 与设备管理 里信任你的 Apple ID 开发者,需要联网;已经信任过的,可能是签名证书变了:运行 iphone-control sign 重签这台)",
-            "{msg} (first WDA install on this device: trust your Apple ID developer under Settings → General → VPN & Device Management, which needs internet; already trusted: the signing certificate may have changed, run iphone-control sign to re-sign this device)"
-        )
-    } else {
-        msg
-    }
+/// An undecoded NSError ("unexpected response") does not identify the reason for refusal.
+pub fn developer_trust_required(msg: &str) -> bool {
+    msg.to_ascii_lowercase().contains("needs explicit user trust")
 }
 
 /// XCTest 过程中收集的信息：报错文字（识别密码框超时用），以及 runner 是否正在等 automation mode
@@ -247,7 +237,7 @@ impl WdaRunner {
             if is_automation_pin_error(&joined) || p.automation_wait.is_some() {
                 WdaError::NeedsAutomationPin
             } else {
-                WdaError::StartFailed(launch_hint(joined))
+                WdaError::StartFailed(joined)
             }
         };
 
@@ -399,13 +389,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn untrusted_developer_hint_only_for_unexpected_response() {
-        let m = launch_hint("unexpected response from device: unexpected response".into());
-        assert!(m.contains("VPN 与设备管理") && m.contains("iphone-control sign"), "{m}");
-        assert_eq!(launch_hint("WDA 在限定时间内没有就绪".into()), "WDA 在限定时间内没有就绪");
-        // 守护进程据此决定要不要查证书、自动重签：带不带提示都认
-        assert!(launch_refused("unexpected response from device: unexpected response"));
-        assert!(launch_refused(&m));
+    fn distinguishes_explicit_trust_from_an_undecoded_refusal() {
+        let refusal = "unexpected response from device: unexpected response";
+        assert!(launch_refused(refusal));
+        assert!(!developer_trust_required(refusal));
+        assert!(developer_trust_required("ApplicationVerificationFailed: Needs Explicit User Trust"));
+        assert!(!developer_trust_required("WDA 在限定时间内没有就绪"));
         assert!(!launch_refused("WDA 在限定时间内没有就绪"));
     }
 

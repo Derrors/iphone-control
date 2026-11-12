@@ -126,3 +126,28 @@ test('hovering keeps the HID session warm at most every 20 seconds', () => {
   context.S.liveTouch = false; now += 20000; touchWarm();
   assert.equal(sent.length, 2, 'no warm-up without live touch');
 });
+
+test('WDA guidance follows the selected device independently of its video', () => {
+  const notice = {}, message = {}, install = {};
+  const elements = { '#wda-start-notice': notice, '#wda-start-message': message, '#wda-install': install };
+  const S = { udid: 'PHONE', stream: 'ok', daemon: { state: 'WdaStarting', device: { udid: 'phone' }, signed_in: true,
+    wda_start_notice: { kind: 'trust_developer', message: 'Trust the developer' } } };
+  const { renderWdaNotice } = handlers(['renderWdaNotice'], { S, $: id => elements[id] });
+  renderWdaNotice();
+  assert.equal(notice.hidden, false);
+  assert.equal(message.textContent, 'Trust the developer');
+  assert.equal(install.hidden, true, 'a trust error should not offer to re-sign');
+  S.daemon.wda_start_notice = { kind: 'install_wda', message: 'Install WDA' };
+  renderWdaNotice();
+  assert.equal(install.hidden, false);
+  S.udid = 'other';
+  renderWdaNotice();
+  assert.equal(notice.hidden, true);
+  S.udid = 'phone';
+  S.daemon = { state: 'WdaStarting', device: { udid: 'phone' } }; // older daemon or an ordinary start
+  renderWdaNotice();
+  assert.equal(notice.hidden, true);
+  S.daemon = { state: 'Ready', device: { udid: 'phone' }, wda_start_notice: null };
+  renderWdaNotice();
+  assert.equal(notice.hidden, true);
+});

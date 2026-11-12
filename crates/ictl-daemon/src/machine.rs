@@ -2,6 +2,35 @@
 
 use std::time::{Duration, Instant};
 
+/// An action for the operator. Keep it separate from the original device error so each client
+/// can display it in its own language, including after the picture has connected.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WdaStartHint {
+    TrustDeveloper,
+    LaunchRefused,
+    InstallWda,
+}
+
+impl WdaStartHint {
+    pub fn message(self) -> &'static str {
+        match self {
+            Self::TrustDeveloper => ictl_l10n::tr!(
+                "在 iPhone 或 iPad 上打开「设置 → 通用 → VPN 与设备管理」，在「开发者 App」下选择签名用的 Apple ID，点「信任」。",
+                "On your iPhone or iPad, open Settings → General → VPN & Device Management. Under Developer App, select the Apple ID used for signing and tap Trust."
+            ),
+            Self::LaunchRefused => ictl_l10n::tr!(
+                "设备拒绝启动 WDA。请运行 iphone-control doctor 查看诊断信息。",
+                "The device refused to launch WDA. Run iphone-control doctor for diagnostics."
+            ),
+            Self::InstallWda => ictl_l10n::tr!(
+                "这台设备还没有安装 WDA。运行 iphone-control setup 安装。",
+                "WDA is not installed on this device. Run iphone-control setup to install it."
+            ),
+        }
+    }
+}
+
 /// 设备状态（docs/architecture.md §3）
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "state", rename_all = "snake_case")]
@@ -18,6 +47,8 @@ pub enum DeviceState {
     /// 正在建隧道、挂镜像、启动 WDA，或启动失败在退避
     WdaStarting {
         last_error: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        hint: Option<WdaStartHint>,
     },
     /// 手机重启后首次启用 UI 自动化，等用户在手机上输锁屏密码
     NeedsAutomationPin,
@@ -25,6 +56,13 @@ pub enum DeviceState {
 }
 
 impl DeviceState {
+    pub fn wda_start_hint(&self) -> Option<WdaStartHint> {
+        match self {
+            Self::WdaStarting { hint, .. } => *hint,
+            _ => None,
+        }
+    }
+
     pub fn describe(&self) -> String {
         match self {
             Self::Absent => ictl_l10n::tr!("手机未连接", "Phone not connected").into(),
@@ -32,8 +70,17 @@ impl DeviceState {
             Self::DeveloperModeOff => ictl_l10n::tr!("开发者模式未打开：运行 iphone-control setup", "Developer Mode is off: run iphone-control setup").into(),
             Self::NeedsUnlock => ictl_l10n::tr!("手机锁屏，隧道建不起来：请解锁手机", "The phone is locked, the tunnel can't be opened: unlock the phone").into(),
             Self::NeedsSigning => ictl_l10n::tr!("WDA 还没签名安装：运行 iphone-control sign", "WDA not signed and installed yet: run iphone-control sign").into(),
-            Self::WdaStarting { last_error: None } => ictl_l10n::tr!("正在启动 WDA", "Starting WDA").into(),
-            Self::WdaStarting { last_error: Some(e) } => ictl_l10n::trf!("WDA 启动失败，稍后重试：{e}", "WDA failed to start, retrying later: {e}"),
+            Self::WdaStarting { last_error, hint } => {
+                let mut text = match last_error {
+                    None => ictl_l10n::tr!("正在启动 WDA", "Starting WDA").to_owned(),
+                    Some(e) => ictl_l10n::trf!("WDA 启动失败，稍后重试：{e}", "WDA failed to start, retrying later: {e}"),
+                };
+                if let Some(hint) = hint {
+                    text.push('\n');
+                    text.push_str(hint.message());
+                }
+                text
+            }
             Self::NeedsAutomationPin => ictl_l10n::tr!("WDA 卡在手机上的「Enable UI Automation」密码框：请在手机上输入锁屏密码", "WDA is stuck at the “Enable UI Automation” passcode prompt on the phone: enter the passcode on the phone").into(),
             Self::Ready => ictl_l10n::tr!("就绪", "Ready").into(),
         }
@@ -191,7 +238,8 @@ mod tests {
 
     #[test]
     fn state_serializes_with_tag() {
-        let s = serde_json::to_string(&DeviceState::WdaStarting { last_error: None }).unwrap();
+        let s = serde_json::to_string(&DeviceState::WdaStarting { last_error: None, hint: None }).unwrap();
         assert_eq!(s, r#"{"state":"wda_starting","last_error":null}"#);
+        assert_eq!(serde_json::from_str::<DeviceState>(&s).unwrap().wda_start_hint(), None);
     }
 }

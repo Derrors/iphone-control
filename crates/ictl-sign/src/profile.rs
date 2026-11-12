@@ -9,7 +9,9 @@ pub struct Profile {
     pub expires: SystemTime,
     pub devices: Vec<String>,
     pub get_task_allow: bool,
-    /// 形如 `TEAMID.com.example.app`
+    /// The signing team IDs in TeamIdentifier. A legacy App ID prefix can differ from these.
+    pub team_ids: Vec<String>,
+    /// App ID prefix followed by the bundle identifier.
     pub application_identifier: String,
     /// 允许签名的证书（DER）。签名用的证书不在其中时手机拒装（0xe8008015）
     pub certificates: Vec<Vec<u8>>,
@@ -30,6 +32,11 @@ impl Profile {
                 .map(|a| a.iter().filter_map(|v| v.as_string().map(str::to_owned)).collect())
                 .unwrap_or_default(),
             get_task_allow: ent.and_then(|e| e.get("get-task-allow")).and_then(|v| v.as_boolean()).unwrap_or(false),
+            team_ids: d
+                .get("TeamIdentifier")
+                .and_then(|v| v.as_array())
+                .map(|a| a.iter().filter_map(|v| v.as_string().map(str::to_owned)).collect())
+                .unwrap_or_default(),
             application_identifier: ent
                 .and_then(|e| e.get("application-identifier"))
                 .and_then(|v| v.as_string())
@@ -91,6 +98,7 @@ pub(crate) mod tests {
         assert_eq!(p.devices, ["00000000-AAAA"]);
         assert!(p.get_task_allow);
         assert_eq!(p.expires, exp);
+        assert_eq!(p.team_ids, ["TEAM000000"]);
         assert!(p.application_identifier.starts_with("TEAM000000."));
         assert_eq!(p.certificates, [b"CERT-A".to_vec()]);
     }

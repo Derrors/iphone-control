@@ -176,10 +176,43 @@ fn main() -> anyhow::Result<()> {
     tokio::runtime::Runtime::new()?.block_on(run())
 }
 
+/// Commands that ask once, print the result and end; see [`restore_sigpipe`]
+fn prints_and_exits(command: Option<&Command>) -> bool {
+    matches!(
+        command,
+        Some(
+            Command::Status
+                | Command::Doctor
+                | Command::Devices
+                | Command::McpConfig
+                | Command::Select { .. }
+                | Command::UnlockReset
+                | Command::NotifyTest { .. }
+                | Command::Update { action: Some(UpdateAction::Check { .. }), .. }
+        )
+    )
+}
+
+/// Rust starts every program with SIGPIPE ignored, so once the reader of stdout has gone (`iphone-control status |
+/// head -1`), the next write is an EPIPE error and `println!` panics on it (exit 101 and a panic message). Commands
+/// that only print a result get the usual behaviour back: the reader going away ends the process quietly, like any
+/// other command-line tool. Not for the long-running commands (daemon, mcp, viewer, wda-bridge), nor for those
+/// that keep talking to the daemon across its restarts (update, service, setup): there a write to a socket or a
+/// child's pipe whose other end closed would end the process instead of returning an error it handles
+fn restore_sigpipe() {
+    // SAFETY: setting a signal's disposition back to its default, before any other thread exists that writes
+    unsafe {
+        libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+    }
+}
+
 async fn run() -> anyhow::Result<()> {
     // 依赖树里 rustls 的 ring 和 aws-lc-rs 都开着，不装默认 provider 的话第一个 HTTPS 请求就 panic
     let _ = rustls::crypto::ring::default_provider().install_default();
     let mut cli = Cli::parse();
+    if prints_and_exits(cli.command.as_ref()) {
+        restore_sigpipe();
+    }
     let quiet = matches!(cli.command, Some(Command::Mcp));
     // ICTL_LOG 留空（配置文件里常见的 `ICTL_LOG=`）当作没设；原来空值会生成一个什么都不放行的过滤器
     let filter =
@@ -1058,6 +1091,34 @@ mod tests {
     use super::{host_is_loopback, mcp_command};
     use ictl_l10n::{Lang, with_lang};
     use std::path::Path;
+
+    /// Only the commands that print once and end get SIGPIPE's default disposition back
+    #[test]
+    fn sigpipe_default_only_for_commands_that_print_and_end() {
+        use super::{Cli, prints_and_exits};
+        use clap::Parser;
+
+        let prints = |args: &[&str]| {
+            let cli = Cli::try_parse_from(std::iter::once("iphone-control").chain(args.iter().copied())).unwrap();
+            prints_and_exits(cli.command.as_ref())
+        };
+        for args in [&["status"][..], &["doctor"], &["devices"], &["mcp-config"], &["update", "check", "--json"]] {
+            assert!(prints(args), "{args:?}");
+        }
+        for args in [
+            &["daemon"][..],
+            &["mcp"],
+            &["viewer"],
+            &["wda-bridge"],
+            &["update"],
+            &["update", "apply"],
+            &["service", "restart"],
+            &["setup"],
+            &[],
+        ] {
+            assert!(!prints(args), "{args:?}");
+        }
+    }
 
     #[test]
     fn update_accepts_no_subcommand_and_preserves_read_only_check() {

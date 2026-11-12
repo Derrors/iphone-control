@@ -17,6 +17,10 @@ All notable changes to this project are documented here. The format is based on 
 - `iphone-control update rollback` and the previous executable kept after an upgrade. A new version that doesn't start is still replaced by the old one automatically.
 - The rollback compatibility mark in release manifests: any newer signed stable release can be installed directly, without stopping at "manual migration required".
 
+### Fixed
+
+- Piping output into a program that exits early, such as `iphone-control status | head -1`, no longer crashes with "Broken pipe"; the command ends quietly like other command-line tools.
+
 ## [0.2.2] - 2026-11-12
 
 ### Upgrade notes

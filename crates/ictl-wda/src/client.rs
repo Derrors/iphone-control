@@ -73,9 +73,16 @@ impl IdleSettings {
     pub const NO_COOL_OFF: Self = Self { wait_for_idle_timeout: 1.0, animation_cool_off_timeout: 0.0 };
 }
 
-/// Frames a second and size (percent) of WDA's MJPEG stream with [`WdaClient::fast_stream`]
+/// Frames a second and size (percent) of WDA's MJPEG stream with [`WdaClient::fast_stream`].
+///
+/// Full size, so WDA passes on the JPEG that testmanagerd encodes in hardware. Any other size makes WDA decode,
+/// scale (CoreGraphics) and re-encode every frame: at 75 % that was 86–93 % of a core on an iPhone 15 Pro Max
+/// (iOS 27.0.1), and iOS kills a process above 80 % over 60 s (`cpu_resource_fatal`), so with the picture open WDA
+/// was killed every 1.5–2.5 minutes. At 100 % it delivers the same ~34 fps there, with smaller frames
+/// (1290×2796, about 80 KB against 104 KB), and ran 15 minutes without being killed. Set explicitly: a WDA left
+/// running in the background (`ICTL_WDA_DETACHED`) keeps the value an older version set
 const MJPEG_FPS: u32 = 60;
-const MJPEG_SCALE: u32 = 75;
+const MJPEG_SCALE: u32 = 100;
 
 /// 主屏、锁屏、系统弹窗所属的进程
 pub const SPRINGBOARD: &str = "com.apple.springboard";
@@ -500,10 +507,9 @@ impl<T: Transport> WdaClient<T> {
         self.upright_stream = true;
     }
 
-    /// The MJPEG stream (the live viewer) at [`MJPEG_FPS`] frames a second and [`MJPEG_SCALE`]% of the screen's
-    /// pixels instead of WDA's 10 at full size, set with each new session: the picture follows a drag closely.
-    /// Measured on an iPhone 18 Pro Max (iOS 27.2.1): about 50 fps at 34 KB a frame, and element-tree reads no slower
-    /// while it streams. WDA only captures while a client is connected
+    /// The MJPEG stream (the live viewer) at up to [`MJPEG_FPS`] frames a second instead of WDA's 10, at full size
+    /// ([`MJPEG_SCALE`], why not smaller), set with each new session: the picture follows a drag closely. WDA only
+    /// captures while a client is connected
     pub fn fast_stream(&mut self) {
         self.fast_stream = true;
     }

@@ -6,6 +6,12 @@ All notable changes to this project are documented here. The format is based on 
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-11-13
+
+### Upgrade notes
+
+- Upgrading from 0.2.2: its CLI has no bare `update` yet. For a managed service installed by the signed script, run `iphone-control update apply`; on Homebrew, `brew upgrade iphone-control`; on Debian / Ubuntu, download the `.deb` for your architecture from the release and install it with `sudo apt install ./<file>`. From 0.2.3 on, `iphone-control update` does it.
+
 ### Added
 
 - Run `iphone-control update` to check for a new stable release and install it through your managed service, Homebrew or Debian package. It reports when you already have the latest version. `update check` remains available for a check only.
@@ -223,7 +229,8 @@ First public release.
 - Docker image (single binary plus Debian's usbmuxd, not privileged) with a generated third-party license list, published to `ghcr.io/derrors/iphone-control` for linux/amd64 and linux/arm64.
 - Running without Docker, from source or from the prebuilt Linux binaries (x86_64, aarch64): as a regular user with the system usbmuxd, XDG data and socket paths, the unsigned WebDriverAgent downloaded and checksum-verified before the first signing, `mcp-config` printing a direct command, and a systemd user service.
 
-[Unreleased]: https://github.com/Derrors/iphone-control/compare/v0.2.2...HEAD
+[Unreleased]: https://github.com/Derrors/iphone-control/compare/v0.2.3...HEAD
+[0.2.3]: https://github.com/Derrors/iphone-control/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/Derrors/iphone-control/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/Derrors/iphone-control/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/Derrors/iphone-control/compare/v0.1.5...v0.2.0

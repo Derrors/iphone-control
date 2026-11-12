@@ -183,6 +183,96 @@ pub enum Request {
         expression: String,
         timeout_ms: u64,
     },
+    /// Tasks (docs/task-control.md): opens a task bound to the controlled device. Streaming: the daemon answers one
+    /// line ([`Response::Text`] whose text is `{"id","token"}`, or [`Response::Error`]), then sends the task's
+    /// events (one JSON [`TaskEvent`] per line) until it ends. The connection is the task's lease: when it closes
+    /// before the task ended, the task is abandoned. Use [`open_task`]
+    TaskOpen {
+        title: String,
+        /// Who runs it, shown on the control page (`claude`, `codex`, the name of an external platform…)
+        #[serde(default)]
+        owner: String,
+    },
+    /// Streaming like [`Request::TaskOpen`]: the task's events so far, then new ones, until it ends
+    TaskEvents {
+        id: String,
+    },
+    /// Recent tasks, newest last, as a JSON array of [`TaskInfo`]
+    TaskList,
+    /// `pause` / `resume` / `takeover` / `handback` / `stop` / `confirm` (with `approve` and the waiting `step`)
+    TaskControl {
+        id: String,
+        action: String,
+        #[serde(default)]
+        step: Option<u64>,
+        #[serde(default)]
+        approve: bool,
+    },
+    /// With the task's token ([`TASK`]): a tool call starts. Waits while the task isn't running, then records the
+    /// step; the text is the step number. The calls the tool makes carry it ([`TASK_STEP`])
+    TaskStep {
+        tool: String,
+        #[serde(default)]
+        args: serde_json::Value,
+    },
+    /// With the task's token: the tool call's result, shown on the page
+    TaskStepDone {
+        step: u64,
+        ok: bool,
+        #[serde(default)]
+        ms: u64,
+        #[serde(default)]
+        text: String,
+    },
+    /// With the task's token: waits until the user approves (text) or rejects (error) a sensitive action
+    TaskConfirm {
+        action: String,
+        #[serde(default)]
+        detail: String,
+    },
+    /// With the task's token: what the agent says it is doing, shown with the next step
+    TaskNote {
+        text: String,
+    },
+    /// With the task's token: the task ended on its own
+    TaskFinish {
+        ok: bool,
+        #[serde(default)]
+        summary: String,
+    },
+}
+
+/// One event of a task, as the daemon streams it and the control page shows it: `step`, `confirm`, `state`, `done`
+/// (and `task`, the first one, with the task's [`TaskInfo`])
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TaskEvent {
+    pub event: String,
+    pub data: serde_json::Value,
+}
+
+/// A task as [`Request::TaskList`] lists it
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TaskInfo {
+    pub id: String,
+    pub title: String,
+    pub owner: String,
+    pub udid: String,
+    /// `running` / `paused` / `takeover` / `waiting`, or how it ended: `completed` / `failed` / `cancelled` /
+    /// `rejected` / `abandoned` / `interrupted`
+    pub state: String,
+    /// Unix milliseconds
+    pub started: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ended: Option<u64>,
+    /// Steps so far
+    #[serde(default)]
+    pub steps: u64,
+}
+
+impl TaskInfo {
+    pub fn active(&self) -> bool {
+        matches!(self.state.as_str(), "running" | "paused" | "takeover" | "waiting")
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -263,7 +353,16 @@ impl Request {
             | Self::ListDevices
             | Self::AppLogs { .. }
             | Self::CrashReports { .. }
-            | Self::WebTargets => false,
+            | Self::WebTargets
+            | Self::TaskOpen { .. }
+            | Self::TaskEvents { .. }
+            | Self::TaskList
+            | Self::TaskControl { .. }
+            | Self::TaskStep { .. }
+            | Self::TaskStepDone { .. }
+            | Self::TaskConfirm { .. }
+            | Self::TaskNote { .. }
+            | Self::TaskFinish { .. } => false,
         }
     }
 }
@@ -374,6 +473,44 @@ pub const EXPECT_UDID: &str = "expect_udid";
 /// The live view whose geometry was used to calculate a coordinate.
 pub const EXPECT_VIEW: &str = "expect_view";
 
+/// Request key carrying a task's token (docs/task-control.md): the request is part of that task. While a task is
+/// active the daemon only lets requests with its token act on the phone (and holds them while the task is paused or
+/// taken over); a token of a task that ended refuses everything. Set it with [`join_task`] or [`as_task`]
+pub const TASK: &str = "task";
+/// Request key with the step (from [`Request::TaskStep`]) a request belongs to; see [`as_task`]
+pub const TASK_STEP: &str = "task_step";
+/// The environment variable that hands a task's token to `iphone-control mcp` (and anything else using this crate)
+pub const TASK_TOKEN_ENV: &str = "IPHONE_CONTROL_TASK_TOKEN";
+
+static PROCESS_TASK: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+tokio::task_local! {
+    static CALL_TASK: (Option<String>, Option<u64>);
+}
+
+/// Every request this process sends from now on belongs to the task with `token` (the MCP server of an agent
+/// started for a task). Only the first call counts
+pub fn join_task(token: &str) {
+    let _ = PROCESS_TASK.set(token.to_owned());
+}
+
+/// The task this process joined ([`join_task`]), if any
+pub fn process_task() -> Option<&'static str> {
+    PROCESS_TASK.get().map(String::as_str)
+}
+
+/// Runs `f` with its requests sent as part of a task: `token` overrides the process's ([`join_task`]), `step` says
+/// which step they belong to
+pub async fn as_task<F: std::future::Future>(token: Option<String>, step: Option<u64>, f: F) -> F::Output {
+    let token = token.or_else(|| current_task().0);
+    CALL_TASK.scope((token, step), f).await
+}
+
+fn current_task() -> (Option<String>, Option<u64>) {
+    let (token, step) = CALL_TASK.try_with(Clone::clone).unwrap_or_default();
+    (token.or_else(|| process_task().map(str::to_owned)), step)
+}
+
 /// Request key carrying the client's language (`zh` / `en`). The daemon answers in it; requests without it
 /// (older clients) get Chinese, as before. Older daemons ignore the extra key
 pub const LANG: &str = "lang";
@@ -430,6 +567,7 @@ async fn exchange_on(
             if let Some(u) = expect_udid {
                 o.insert(EXPECT_UDID.into(), u.into());
             }
+            add_task_keys(o);
         }
         let mut line = v.to_string();
         line.push('\n');
@@ -446,6 +584,88 @@ async fn exchange_on(
                 ictl_l10n::trf!("守护进程 {} 秒内没有应答（可能正忙，例如正在启动 WDA 或重签）", "The daemon didn't answer within {} seconds (it may be busy, for example starting WDA or re-signing)", t.as_secs()),
             )
         })?,
+    }
+}
+
+fn add_task_keys(o: &mut serde_json::Map<String, serde_json::Value>) {
+    let (token, step) = current_task();
+    if let Some(t) = token {
+        o.insert(TASK.into(), t.into());
+    }
+    if let Some(s) = step {
+        o.insert(TASK_STEP.into(), s.into());
+    }
+}
+
+/// What [`open_task`] got back
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TaskOpened {
+    pub id: String,
+    pub token: String,
+}
+
+/// A task's events as the daemon streams them ([`Request::TaskOpen`], [`Request::TaskEvents`]). For an opened task
+/// this is also its lease: dropping it ends the task as abandoned unless it ended before
+pub struct TaskStream {
+    lines: tokio::io::Lines<tokio::io::BufReader<tokio::net::unix::OwnedReadHalf>>,
+    _w: tokio::net::unix::OwnedWriteHalf,
+}
+
+impl TaskStream {
+    /// The next event; `None` when the task ended (after its `done`) or the daemon went away
+    pub async fn next(&mut self) -> Option<TaskEvent> {
+        loop {
+            let line = self.lines.next_line().await.ok()??;
+            if let Ok(e) = serde_json::from_str(&line) {
+                return Some(e);
+            }
+        }
+    }
+}
+
+async fn open_stream(socket: &std::path::Path, req: &Request) -> std::io::Result<(Response, TaskStream)> {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    let stream = tokio::net::UnixStream::connect(socket).await?;
+    let (r, mut w) = stream.into_split();
+    let mut v = serde_json::to_value(req)?;
+    if let Some(o) = v.as_object_mut() {
+        o.insert(LANG.into(), ictl_l10n::lang().code().into());
+        add_task_keys(o);
+    }
+    let mut line = v.to_string();
+    line.push('\n');
+    w.write_all(line.as_bytes()).await?;
+    let mut lines = BufReader::new(r).lines();
+    let first = lines.next_line().await?.ok_or_else(|| std::io::Error::other("the daemon closed the connection"))?;
+    let resp = serde_json::from_str(&first).map_err(std::io::Error::other)?;
+    Ok((resp, TaskStream { lines, _w: w }))
+}
+
+/// Opens a task bound to the device the daemon controls now ([`Request::TaskOpen`]). `Err` is a message
+pub async fn open_task(socket: &std::path::Path, title: &str, owner: &str) -> Result<(TaskOpened, TaskStream), String> {
+    let req = Request::TaskOpen { title: title.to_owned(), owner: owner.to_owned() };
+    match open_stream(socket, &req).await.map_err(|e| e.to_string())? {
+        (Response::Text { text, .. }, s) => Ok((serde_json::from_str(&text).map_err(|e| e.to_string())?, s)),
+        (Response::Error { message, .. }, _) => Err(message),
+        (Response::Image { caption, .. }, _) => Err(caption),
+    }
+}
+
+/// Follows a task's events ([`Request::TaskEvents`]). `Err` is a message
+pub async fn task_events(socket: &std::path::Path, id: &str) -> Result<TaskStream, String> {
+    match open_stream(socket, &Request::TaskEvents { id: id.to_owned() }).await.map_err(|e| e.to_string())? {
+        (Response::Text { .. }, s) => Ok(s),
+        (Response::Error { message, .. }, _) => Err(message),
+        (Response::Image { caption, .. }, _) => Err(caption),
+    }
+}
+
+/// Recent tasks ([`Request::TaskList`])
+pub async fn task_list(socket: &std::path::Path) -> Result<Vec<TaskInfo>, String> {
+    match call(socket, &Request::TaskList, Some(std::time::Duration::from_secs(10))).await.map_err(|e| e.to_string())? {
+        Response::Text { text, .. } => serde_json::from_str(&text).map_err(|e| e.to_string()),
+        Response::Error { message, .. } => Err(message),
+        Response::Image { caption, .. } => Err(caption),
     }
 }
 

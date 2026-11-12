@@ -6,6 +6,19 @@
 
 ## [Unreleased]
 
+### 新增
+
+- 任何 agent 平台都能用 AI 任务：`iphone-control task run -- <命令>` 在任务里运行命令，它启动的 `iphone-control mcp` 自动加入任务（控制台能看到每一步，可以暂停、接管、停止、确认）。`task list`、`task events`、`task pause`/`resume`/`takeover`/`handback`/`stop`、`task approve`/`reject` 在命令行里查看和控制任务。
+- 控制台会接上正在进行的任务：页面刷新后，以及在别处开的任务。
+
+### 变更
+
+- AI 任务改由守护进程管理，不再由控制台管理。任务进行中，其他客户端（另一个 MCP 服务、命令行）可以看，但操作和切换设备都会被拒绝，用户接管后才放行；任务只操作开始时的那台设备。任务记录在数据目录（`tasks/`，最近 50 个）；守护进程停止时还在进行的任务显示为已中断。
+
+### 移除
+
+- MCP 服务的 `ICTL_AGENT_GATE` / `ICTL_AGENT_TOKEN` 环境变量：任务里的 MCP 服务改用 `IPHONE_CONTROL_TASK_TOKEN`。
+
 ### 修复
 
 - 部分 iPhone（如 iPhone 15 Pro Max，iOS 27.0.1）上锁屏不再每次要 10 秒左右：经 IOHID 短按电源键在这些设备上不起作用，守护进程会按设备记住，之后先用 WDA 的锁屏（约 2 秒）。

@@ -199,6 +199,10 @@ pub struct CallCtx {
     pub expect_udid: Option<String>,
     /// Identity of the measured display used for this coordinate.
     pub expect_view: Option<String>,
+    /// The token of the task this request belongs to ([`ictl_protocol::TASK`])
+    pub task: Option<String>,
+    /// The task's step it belongs to ([`ictl_protocol::TASK_STEP`])
+    pub task_step: Option<u64>,
 }
 
 /// Logical points measured on this connection. A different id invalidates queued coordinates.
@@ -339,6 +343,8 @@ pub struct Daemon {
     /// taps and screenshots; see [`crate::web`]
     pub(crate) web: Mutex<Option<crate::web::WebConn>>,
     pub(crate) heartbeat: crate::watchdog::Heartbeat,
+    /// AI tasks: who may act on the phone while one runs (see [`crate::tasks`])
+    pub(crate) tasks: crate::tasks::Tasks,
 }
 
 /// 停掉 HID 会话（屏幕媒体流），隧道保留。媒体流不停的话手机一直以为「配对的电脑」在看屏幕：
@@ -454,7 +460,16 @@ impl Daemon {
             log_tail: Vec::new(),
         };
         let (snap, _) = watch::channel(first);
-        Arc::new(Self { cfg, log, inner: Mutex::new(inner), snap, web: Mutex::new(None), heartbeat: Heartbeat::new() })
+        let tasks = crate::tasks::Tasks::load(Some(cfg.data_dir.join("tasks")));
+        Arc::new(Self {
+            cfg,
+            log,
+            inner: Mutex::new(inner),
+            snap,
+            web: Mutex::new(None),
+            heartbeat: Heartbeat::new(),
+            tasks,
+        })
     }
 
     /// 自动解锁配置：用设备 `udid` 自己的密码。没接设备时密码文件不存在（自动解锁不可用）
@@ -606,9 +621,21 @@ impl Daemon {
         ictl_sign::AccountDir { dir: self.cfg.account_dir(), anisette_url: self.cfg.anisette_url.clone() }
     }
 
+    /// The device being controlled, from the last published snapshot (no lock)
+    pub(crate) fn controlled_udid(&self) -> Option<String> {
+        self.snap.borrow().device.as_ref().map(|d| d.udid.clone()).filter(|u| !u.is_empty())
+    }
+
+    /// Tests: pretend the daemon controls `udid`
+    #[cfg(test)]
+    pub(crate) fn fake_controlled(&self, udid: &str) {
+        self.snap.send_modify(|s| s.device = Some(DeviceInfo { udid: udid.into(), ..Default::default() }));
+    }
+
     /// 发布快照给不拿锁的读者（`status`）。日志尾巴在读的时候再取
     pub(crate) fn publish(&self, g: &Inner) {
         self.heartbeat.beat();
+        self.tasks.device_is(g.device.as_ref().map(|d| d.udid.as_str()));
         let unlock = self.unlock_cfg(g.device.as_ref().map(|d| d.udid.as_str()));
         let pinned = self.pinned(g);
         let devices = self.connected_infos(g);
@@ -656,11 +683,46 @@ impl Daemon {
         if let Err(e) = check_request(&req) {
             return Response::error(e);
         }
+        if let Some(r) = self.tasks.handle(&req, ctx.task.as_deref(), &mut ctx.gone).await {
+            return r;
+        }
+        // while a task runs, only it acts on the phone (or the user, after taking over): see `crate::tasks`
+        let (admission, waited) =
+            match self.tasks.admit(&req, ctx.task.as_deref(), &mut ctx.expect_udid, &mut ctx.gone).await {
+                Ok(a) => a,
+                Err(r) => return r,
+            };
+        // held while the task was paused: the time in the queue starts now
+        let queued_at = if waited { Instant::now() } else { queued_at };
+        // an action of the task that no announced step covers is a step of its own
+        let auto = match &admission {
+            crate::tasks::Admission::Actor(t) if ctx.task_step.is_none() && req.is_device_action() => {
+                Some((t.clone(), self.tasks.auto_step(t, &req)))
+            }
+            _ => None,
+        };
+        let t0 = Instant::now();
+        // boxed: the request's state machine is large, and a connection's task shouldn't carry it on the stack
+        let resp = Box::pin(self.handle_admitted(req, queued_at, ctx)).await;
+        if let Some((t, step)) = auto {
+            self.tasks.auto_step_done(&t, step, &resp, t0.elapsed().as_millis() as u64);
+        }
+        resp
+    }
+
+    /// [`Self::handle`] once the tasks let the request through
+    async fn handle_admitted(self: &Arc<Self>, req: Request, queued_at: Instant, mut ctx: CallCtx) -> Response {
         let text = |r: Result<String, String>| {
             r.map(|t| Response::text_with(t, crate::protocol::Outcome::default())).unwrap_or_else(Response::error)
         };
         match lane(&req) {
             Lane::Snapshot => unreachable!("handled above"),
+            Lane::Task => {
+                return Response::error(ictl_l10n::tr!(
+                    "task_open、task_events 是流式请求，要用 open_task / task_events 打开",
+                    "task_open and task_events are streaming requests: open them with open_task / task_events"
+                ));
+            }
             // 重签自己分段持锁：签名、安装要几十秒，期间不挡住别的请求
             Lane::Resign => {
                 let Request::Resign { force } = req else { unreachable!("lane") };
@@ -800,7 +862,16 @@ impl Daemon {
             | Request::Resign { .. }
             | Request::InstallApp { .. }
             | Request::WebTargets
-            | Request::WebEval { .. } => unreachable!("other lanes"),
+            | Request::WebEval { .. }
+            | Request::TaskOpen { .. }
+            | Request::TaskEvents { .. }
+            | Request::TaskList
+            | Request::TaskControl { .. }
+            | Request::TaskStep { .. }
+            | Request::TaskStepDone { .. }
+            | Request::TaskConfirm { .. }
+            | Request::TaskNote { .. }
+            | Request::TaskFinish { .. } => unreachable!("other lanes"),
         };
         r.map(|t| Response::text_with(t, outcome)).unwrap_or_else(Response::error)
     }
@@ -828,6 +899,8 @@ enum Lane {
     Install,
     /// the device lock
     Device,
+    /// tasks: the streams are served by the connection (`lib::serve_conn`), the rest before any lane
+    Task,
 }
 
 fn lane(req: &Request) -> Lane {
@@ -836,6 +909,15 @@ fn lane(req: &Request) -> Lane {
         Request::Resign { .. } => Lane::Resign,
         Request::WebTargets | Request::WebEval { .. } => Lane::Web,
         Request::InstallApp { .. } => Lane::Install,
+        Request::TaskOpen { .. }
+        | Request::TaskEvents { .. }
+        | Request::TaskList
+        | Request::TaskControl { .. }
+        | Request::TaskStep { .. }
+        | Request::TaskStepDone { .. }
+        | Request::TaskConfirm { .. }
+        | Request::TaskNote { .. }
+        | Request::TaskFinish { .. } => Lane::Task,
         Request::Status
         | Request::ScreenStream
         | Request::Screenshot { .. }

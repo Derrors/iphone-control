@@ -80,3 +80,19 @@
 | 74 | 每次 HID 触摸前截图核对方向（几百毫秒），实时移动跟不上 | 只在 `down` 时核对一次（有 WDA 时读它的旋转角），移动、抬起直接用已开的会话 | 真机计时 |
 | 75 | WDA 的 MJPEG 默认每秒 10 帧，画面比操作慢 | 每秒 60 帧、75% 尺寸（`fast_stream`）；只在有客户端时采集 | 真机：约 48 fps、34 KB/帧，读元素树不变慢 |
 | 76 | viewer 页面只有中文 | 页面文字中英两套（`tr()`），默认跟着 `IPHONE_CONTROL_LANG`，可切换；请求带 `X-Ictl-Lang`，守护进程的提示和 AI 任务用同一种语言 | 单测（`the_page_says_its_default_language`）+ Playwright（英文页面除切换按钮和手机上的数据外没有中文；360×800 到 1920×1080 中英文都没有横向溢出）+ 真机（英文 AI 任务） |
+| 77 | 控制台画面每秒 4～10 MB，经隧道在外网看会卡 | 装了 ffmpeg 时改用 H.264（`/video`），显卡编码优先，约为 MJPEG 的 1/15 | 真机：设置里来回滚动，`/video` 约 250～430 KB/s，静止时为零 |
+| 78 | ffmpeg 扣住最新一帧，画面静止时最后一次变化一直出不来 | 每帧后面紧跟 K 份副本，K 在探测时测出 | 单测 encodes_with_the_local_ffmpeg；真机：每帧延迟 16 毫秒 |
+| 79 | 裸 H.264 流要等下一帧开头才知道这一帧结束 | ffmpeg 输出 FLV，每帧带长度 | 单测 tags_come_out_whole_however_the_bytes_arrive |
+| 80 | 链路慢时系统和 SSH 隧道的缓冲吞下几 MB，画面越来越滞后（每秒读 30 KB 落后 40 秒） | 页面每 100 毫秒回报收到多少；落后时新画面先不编码，追上后只编最新的 | 单测 behind_means_late_beyond_the_usual_round_trip、no_more_on_the_way_than_the_link_carries_in_the_slack；手动 slow_page_stays_close_to_live；真机：每秒 200 KB 时滚动停下后约 0.6 秒追上 |
+| 81 | 一次回报丢了，服务端一直等，画面卡住 | 页面收到确认才算报过；服务端 3 秒没收到回报就不再等 | 单测 behind_means_late_beyond_the_usual_round_trip |
+| 82 | 转屏后帧的尺寸变了 | 尺寸一变就开新的编码会话，页面按新的解码配置重新配置 | 真机：Safari 横竖屏切换，解码配置发 3 次，ffmpeg 解码无错 |
+| 83 | 浏览器没有 WebCodecs 或解不了 H.264 | 这一页从没出过画面就改用 MJPEG | 无头 Chrome：删掉 VideoDecoder 后画面是 MJPEG |
+| 84 | MJPEG 去重后画面静止时不显示（Chrome 要看到下一部分的头部才显示上一帧） | 每帧后面紧跟下一部分的分隔线和头部，不带 Content-Length | 无头 Chrome：静止画面下 MJPEG 有图 |
+| 85 | macOS 上要装 ffmpeg 才有 H.264 | 本程序直接调 VideoToolbox：JPEG 由它的硬件解码器解成 NV12，直接交给 H.264 编码器；ffmpeg 的 VideoToolbox 作备用 | 单测 encodes_natively_without_holding_frames、encodes_with_the_local_ffmpeg（没装 ffmpeg 也选中原生的）；真机（Apple 芯片）：从送进到出帧 3.5～6 毫秒；手机真实画面（990×2151）中位 17 毫秒，qp 20 时流量为 MJPEG 的 11.4%，SSIM 中位 0.9976（手动测试 measure_recording） |
+| 86 | VideoToolbox 把奇数尺寸的最后一列、一行裁掉（481×1041 编成 480×1040） | JPEG 解码时就拉成偶数尺寸（482×1042），和 ffmpeg 的 `scale` 一样 | 单测 odd_sizes_grow_to_even；无头 Chrome 用 WebCodecs 解出 482×1042 |
+| 87 | 比 macOS 11 新的 VideoToolbox 键直接链接的话，旧系统上程序起不来 | `MinAllowedFrameQP` 等运行时用 `dlsym` 找，没有就按 `Quality` 近似 qp | 代码审查 |
+| 88 | 页面画面滞后 4 帧，手势结束后停在动作中间那一帧（Chrome 的硬件解码器扣着帧等后面的帧来挤） | VideoToolbox 的 SPS 没有 VUI，解码器按 Level 4.2 的缓冲最坏情况扣 4 帧；发给页面前改写 avcC 里的 SPS，写明 `max_num_reorder_frames=0`（`video/sps.rs`），已经写明的不动 | 单测 videotoolbox_sps_gets_no_reordering、vui_without_restriction_keeps_its_fields；无头 Chrome 逐帧喂：硬件解码器从扣 4 帧变为 0 帧 |
+| 89 | 控制台开着时 WDA 每隔几分钟被 iOS 杀掉（`cpu_resource_fatal`：一分钟平均 84%，限额 80%），守护进程跟着记「WDA 不可用」 | iOS 27 及以上改用手机自己的视频（`ScreenStream`），WDA 不再截图 | 真机：页面看了 70 秒，WDA 的 CPU 平均 3%、最高 11%（原来 110～120%），没有再重启 |
+| 90 | 新页面一直黑屏：刚开流时要的关键帧手机不理，流自带的第一个关键帧在订阅前就过去了 | 没收到关键帧时每 250 毫秒再要一次 | 真机：刚开流 1.6～1.8 秒出第一帧 |
+| 91 | 手机按请求补发的关键帧不带参数集，新页面从它开始解不了 | 组帧时记下 VPS/SPS/PPS，补到这样的关键帧前面 | 单测 keyframes_get_the_parameter_sets |
+| 92 | 横屏时页面上的画面上下颠倒（转正方向写反） | 按「竖放顶边顺时针转过的角度」同向转回来；方向每秒问一次 | 真机：向左、向右横屏的画面和手机截图一致，1.1～2.7 秒跟上；横屏点地址栏点中 |

@@ -15,6 +15,7 @@ pub mod imaging;
 pub mod machine;
 pub mod maintenance;
 pub mod notify;
+mod screen;
 mod supervise;
 mod tools;
 mod watchdog;
@@ -129,6 +130,15 @@ async fn serve_conn(daemon: Arc<Daemon>, stream: tokio::net::UnixStream) {
             let lease = needs_device.then(maintenance::shared).transpose();
             match (parsed, lease) {
                 (_, Err(e)) => protocol::Response::error(e.to_string()),
+                // Streams until either side closes: the connection is the stream's from here on. The lease is only
+                // checked when it opens (no stream starts during an update) and not held while it runs: a page
+                // watching for hours would otherwise keep the updater from ever finding the host idle. An update
+                // stops the daemon, which ends the stream; the viewer reconnects to the new one
+                (Ok((protocol::Request::ScreenStream, _, expect_udid, lang)), Ok(lease)) => {
+                    drop(lease);
+                    ictl_l10n::scope(lang, daemon.screen_stream(reader, w, expect_udid)).await;
+                    return;
+                }
                 (Ok((req, false, expect_udid, lang)), Ok(_lease)) => {
                     let handling = daemon.handle(req, queued_at, core::CallCtx { gone: None, expect_udid });
                     ictl_l10n::scope(lang, handling).await

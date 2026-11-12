@@ -833,6 +833,7 @@ pub fn wants_alert_check(req: &Request) -> bool {
         | Request::UninstallApp { .. }
         | Request::WebEval { .. }
         | Request::Status
+        | Request::ScreenStream
         | Request::Screenshot { .. }
         | Request::ListElements { .. }
         | Request::ListApps { .. }

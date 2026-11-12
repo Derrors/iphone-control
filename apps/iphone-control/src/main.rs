@@ -21,6 +21,7 @@ mod guide;
 mod schedule;
 mod service;
 mod update;
+mod video;
 mod viewer;
 
 #[derive(Parser)]

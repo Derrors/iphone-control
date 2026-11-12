@@ -265,6 +265,7 @@ impl Daemon {
                     .into(),
             );
         }
+        out.push(viewer_picture().await);
         out.push(String::new());
         out.push(if fails == 0 {
             ictl_l10n::tr!("全部正常", "All good").into()
@@ -273,6 +274,68 @@ impl Daemon {
         });
         out.join("\n")
     }
+}
+
+/// 控制台（`iphone-control viewer`）的画面能不能用 H.264：macOS 上本程序直接调 VideoToolbox，不用 ffmpeg；
+/// 其他系统要有 ffmpeg，Linux 上用显卡编码还要能打开 `/dev/dri/renderD*`（`render` 组）。只看前提，不试编码：
+/// 用哪个编码器，`viewer` 启动时会说
+async fn viewer_picture() -> String {
+    if crate::config::env("IPHONE_CONTROL_VIEWER_CODEC").is_some_and(|v| v.eq_ignore_ascii_case("mjpeg")) {
+        return ictl_l10n::tr!(
+            "✅ 控制台画面按设置用 MJPEG(IPHONE_CONTROL_VIEWER_CODEC=mjpeg)",
+            "✅ Viewer picture uses MJPEG as set (IPHONE_CONTROL_VIEWER_CODEC=mjpeg)"
+        )
+        .into();
+    }
+    if cfg!(target_os = "macos") {
+        return ictl_l10n::tr!(
+            "✅ 控制台画面用 H.264(VideoToolbox,本程序直接调用,不需要 ffmpeg)",
+            "✅ The viewer's picture uses H.264 (VideoToolbox, called directly, no ffmpeg needed)"
+        )
+        .into();
+    }
+    let mut version = None;
+    for p in crate::config::ffmpeg_paths() {
+        let run = tokio::process::Command::new(&p).arg("-version").stdin(std::process::Stdio::null()).output();
+        if let Ok(Ok(o)) = tokio::time::timeout(Duration::from_secs(5), run).await
+            && o.status.success()
+        {
+            let line = String::from_utf8_lossy(&o.stdout).lines().next().unwrap_or_default().to_owned();
+            version = Some(line.split_whitespace().nth(2).unwrap_or("?").to_owned());
+            break;
+        }
+    }
+    let Some(version) = version else {
+        return ictl_l10n::trf!(
+            "⚠️  没找到 ffmpeg  控制台画面用 MJPEG,流量约为 H.264 的 15 倍,走外网会卡(可选:{})",
+            "⚠️  ffmpeg not found  the viewer's picture uses MJPEG, about 15 times the traffic of H.264, which stutters over the internet (optional: {})",
+            if cfg!(target_os = "macos") { "brew install ffmpeg" } else { "sudo apt install ffmpeg" }
+        );
+    };
+    if cfg!(target_os = "linux") {
+        let nodes: Vec<std::path::PathBuf> = std::fs::read_dir("/dev/dri")
+            .map(|d| {
+                d.flatten()
+                    .map(|e| e.path())
+                    .filter(|p| p.file_name().is_some_and(|n| n.to_string_lossy().starts_with("renderD")))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let usable = nodes.iter().any(|n| std::fs::OpenOptions::new().read(true).write(true).open(n).is_ok());
+        if !nodes.is_empty() && !usable {
+            return ictl_l10n::trf!(
+                "⚠️  ffmpeg {version} 在,但打不开显卡({}),控制台画面只能用 CPU 编码
+     → sudo usermod -aG render $USER,重新登录后生效",
+                "⚠️  ffmpeg {version} is there, but the GPU ({}) can't be opened, so the viewer's picture is encoded on the CPU
+     → sudo usermod -aG render $USER, then log in again",
+                nodes[0].display()
+            );
+        }
+    }
+    ictl_l10n::trf!(
+        "✅ 控制台画面可用 H.264(ffmpeg {version};用哪个编码器,运行 viewer 时显示)",
+        "✅ The viewer's picture can use H.264 (ffmpeg {version}; the encoder is shown when viewer starts)"
+    )
 }
 
 /// 多久以前，粗到分钟、小时

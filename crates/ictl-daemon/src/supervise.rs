@@ -461,10 +461,6 @@ impl Daemon {
                 }
                 g.dev.ddi_failures = 0;
                 g.runner = Some(runner);
-                // verified on an iPhone only; iPads keep what they did
-                if g.info.as_ref().is_some_and(|i| i.product_type.starts_with("iPhone")) {
-                    client.keep_stream_upright();
-                }
                 // the live viewer's picture at 60 fps, so it follows the pointer (see `WdaClient::fast_stream`)
                 client.fast_stream();
                 g.wda = Some(client);

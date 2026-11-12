@@ -73,9 +73,16 @@ impl IdleSettings {
     pub const NO_COOL_OFF: Self = Self { wait_for_idle_timeout: 1.0, animation_cool_off_timeout: 0.0 };
 }
 
-/// Frames a second and size (percent) of WDA's MJPEG stream with [`WdaClient::fast_stream`]
+/// Frames a second and size (percent) of WDA's MJPEG stream with [`WdaClient::fast_stream`].
+///
+/// Full size, so WDA passes on the JPEG that testmanagerd encodes in hardware. Any other size makes WDA decode,
+/// scale (CoreGraphics) and re-encode every frame: at 75 % that was 86–93 % of a core on an iPhone 15 Pro Max
+/// (iOS 27.0.1), and iOS kills a process above 80 % over 60 s (`cpu_resource_fatal`), so with the picture open WDA
+/// was killed every 1.5–2.5 minutes. At 100 % it delivers the same ~34 fps there, with smaller frames
+/// (1290×2796, about 80 KB against 104 KB), and ran 15 minutes without being killed. Set explicitly: a WDA left
+/// running in the background (`ICTL_WDA_DETACHED`) keeps the value an older version set
 const MJPEG_FPS: u32 = 60;
-const MJPEG_SCALE: u32 = 75;
+const MJPEG_SCALE: u32 = 100;
 
 /// 主屏、锁屏、系统弹窗所属的进程
 pub const SPRINGBOARD: &str = "com.apple.springboard";
@@ -124,7 +131,6 @@ pub struct WdaClient<T> {
     idle_baseline: Option<IdleSettings>,
     /// What WDA has now, as far as we know: sending the same again is a wasted round trip
     idle_current: Option<IdleSettings>,
-    upright_stream: bool,
     /// See [`Self::fast_stream`]
     fast_stream: bool,
 }
@@ -140,7 +146,6 @@ impl<T: Transport> WdaClient<T> {
             lock_state_trusted: false,
             idle_baseline: None,
             idle_current: None,
-            upright_stream: false,
             fast_stream: false,
         }
     }
@@ -197,15 +202,14 @@ impl<T: Transport> WdaClient<T> {
             .to_owned();
         self.session = Some(id.clone());
         self.idle_current = None;
-        if self.upright_stream || self.fast_stream {
-            let mut settings = serde_json::Map::new();
-            if self.fast_stream {
-                settings.insert("mjpegServerFramerate".into(), MJPEG_FPS.into());
-                settings.insert("mjpegScalingFactor".into(), MJPEG_SCALE.into());
-            }
-            if self.upright_stream {
-                settings.insert("mjpegFixOrientation".into(), true.into());
-            }
+        if self.fast_stream {
+            // fixOrientation explicitly off: a WDA left running in the background (`ICTL_WDA_DETACHED`) keeps what an
+            // older version set
+            let settings = json!({
+                "mjpegServerFramerate": MJPEG_FPS,
+                "mjpegScalingFactor": MJPEG_SCALE,
+                "mjpegFixOrientation": false,
+            });
             let path = format!("/session/{id}/appium/settings");
             if let Err(e) = self.call("POST", &path, Some(json!({"settings": settings})), DEFAULT_TIMEOUT).await {
                 tracing::debug!("MJPEG settings: {e}");
@@ -494,16 +498,12 @@ impl<T: Transport> WdaClient<T> {
         self.quick_gesture(&swipe_steps(from, to, ms), IdleSettings::NO_COOL_OFF).await
     }
 
-    /// Ask WDA to turn the MJPEG frames with the interface, set with each new session. On an iPhone they otherwise stay
-    /// portrait with sideways content when the screen is landscape, so the live viewer shows them wrong
-    pub fn keep_stream_upright(&mut self) {
-        self.upright_stream = true;
-    }
-
-    /// The MJPEG stream (the live viewer) at [`MJPEG_FPS`] frames a second and [`MJPEG_SCALE`]% of the screen's
-    /// pixels instead of WDA's 10 at full size, set with each new session: the picture follows a drag closely.
-    /// Measured on an iPhone 18 Pro Max (iOS 27.2.1): about 50 fps at 34 KB a frame, and element-tree reads no slower
-    /// while it streams. WDA only captures while a client is connected
+    /// The MJPEG stream (the live viewer) at up to [`MJPEG_FPS`] frames a second instead of WDA's 10, at full size
+    /// ([`MJPEG_SCALE`], why not smaller) and never turned upright, set with each new session: the picture follows a
+    /// drag closely. In landscape the frames stay portrait with the content sideways (on an iPhone; an iPad's are
+    /// already landscape) and the viewer page turns them by the interface rotation, as it does the phone's own video:
+    /// `mjpegFixOrientation` makes WDA decode, rotate and re-encode every frame, 92 % of a core on an iPhone 15 Pro Max
+    /// in landscape, and iOS killed it within two minutes. WDA only captures while a client is connected
     pub fn fast_stream(&mut self) {
         self.fast_stream = true;
     }

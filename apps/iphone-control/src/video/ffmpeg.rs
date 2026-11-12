@@ -184,7 +184,8 @@ fn bitrate(qp: u8) -> String {
 
 /// The full ffmpeg command line (without the program) for frames of `w`×`h`. `old`: ffmpeg before 5.1
 pub fn args(kind: &Kind, w: u32, h: u32, qp: u8, old: bool) -> Vec<String> {
-    // 4:2:0 needs even sizes (the phone's frames are 968×2097 at 75%): stretched by at most one pixel
+    // 4:2:0 needs even sizes (an odd one comes from a phone whose screen has one, or WDA scaling): stretched by at
+    // most one pixel
     let (w, h) = (w + (w & 1), h + (h & 1));
     let qp_s = qp.to_string();
     let sw_scale = format!("scale={w}:{h},format=nv12");

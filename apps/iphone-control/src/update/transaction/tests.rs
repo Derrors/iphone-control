@@ -1,6 +1,6 @@
 use super::*;
 use std::cell::{Cell, RefCell};
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::process::{Child, Command, Stdio};
@@ -349,4 +349,14 @@ async fn confirmed_checkpoint_finishes_metadata_and_unknown_disk_is_preserved() 
     assert_eq!(fs::read_to_string(&f.store.binary).unwrap(), "changed outside updater");
     assert_eq!(outcome(&f.store.binary).unwrap().unwrap().status, "recovery_failed");
     assert_eq!(digest(&f.store.dir.join("recovery")).unwrap(), f.old.sha256);
+}
+
+/// Staging failures and what is recorded: a release only not marked unattended is left to `update apply`,
+/// distinct from a broken download
+#[test]
+fn a_release_without_unattended_mark_is_not_a_failure() {
+    let e = anyhow::Error::from(archive::NeedsOperator("0.2.2".into()));
+    assert_eq!(failure_status(&e), "needs_operator");
+    assert!(e.to_string().contains("update apply"), "{e}");
+    assert_eq!(failure_status(&anyhow::anyhow!("archive digest mismatch")), "failed");
 }

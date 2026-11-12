@@ -40,6 +40,19 @@ impl std::fmt::Display for ManualMigration {
 
 impl std::error::Error for ManualMigration {}
 
+/// The automatic job found a release not marked for unattended installation: a normal release that is installed
+/// with `update apply`, not a failure
+#[derive(Debug)]
+pub(super) struct NeedsOperator(pub String);
+
+impl std::fmt::Display for NeedsOperator {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} is not marked for automatic installation; install it with: iphone-control update apply", self.0)
+    }
+}
+
+impl std::error::Error for NeedsOperator {}
+
 fn trusted(url: &Url) -> bool {
     url.scheme() == "https"
         && url.port_or_known_default() == Some(443)
@@ -186,7 +199,9 @@ pub(super) async fn stage(
     download(&client, &manifest_url, MAX_MANIFEST, &mut raw).await?;
     download(&client, &format!("{manifest_url}.sig"), 64, &mut sig).await?;
     let m = verify(&raw, &sig, keys, &receipt.publisher, &receipt.target, version, &receipt.version)?;
-    ensure!(!automatic || m.unattended, "release requires an operator");
+    if automatic && !m.unattended {
+        return Err(NeedsOperator(version.to_string()).into());
+    }
     download(&client, &format!("{base}/{}", m.asset), m.size, File::create_new(dir.join("archive"))?).await?;
     let candidate = unpack(&m, dir)?;
     preflight(&candidate, version).await?;

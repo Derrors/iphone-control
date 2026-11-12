@@ -68,14 +68,8 @@ pub(super) fn read(dir: &Path) -> Result<Cache> {
 }
 
 pub(super) fn write_json(path: &Path, data: &impl Serialize) -> Result<()> {
-    let dir = path.parent().context("missing update state directory")?;
-    fs::create_dir_all(dir)?;
-    let mut tmp = tempfile::NamedTempFile::new_in(dir)?;
-    serde_json::to_writer(&mut tmp, data)?;
-    tmp.as_file().sync_all()?;
-    tmp.persist(path)?;
-    File::open(dir)?.sync_all()?;
-    Ok(())
+    fs::create_dir_all(path.parent().context("missing update state directory")?)?;
+    super::write_json_atomic(path, data)
 }
 
 fn lock(dir: &Path) -> Result<File> {

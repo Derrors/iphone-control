@@ -75,6 +75,10 @@ class InstallerTest(unittest.TestCase):
                    b'  printf "#!/bin/sh\\n# iphone-control update job\\nexe=\'%s\'\\n" "$0" > "$job";;\n'
                    b'  "update policy manual") rm -f "$job";;\nesac\n'
                    b'if [ "$*" = "update check --json" ]; then\n'
+                   b'  if [ -n "$FIXTURE_CHECK_ERROR" ]; then\n'
+                   b'    printf \'{"availability":"available","install_method":"managed","error_code":"%s",\' "$FIXTURE_CHECK_ERROR"\n'
+                   b'    printf \'"guidance":"checked"}\\n\'; exit 1\n'
+                   b'  fi\n'
                    b'  printf \'{"availability":"%s","install_method":"managed","guidance":"checked"}\\n\' '
                    b'"${FIXTURE_AVAILABILITY:-available}"\nfi\n')
             for leaf, contents in [("iphone-control", exe), ("env.example", b"# Example\n")]:
@@ -154,6 +158,19 @@ class InstallerTest(unittest.TestCase):
         self.install()
         self.assertTrue(json.loads(self.receipt.read_bytes())["pinned"])
         self.assertNotIn("update check", self.log.read_text())
+        self.assertNotIn("update apply", self.log.read_text())
+
+    def test_reinstall_keeps_version_when_release_check_fails(self):
+        # the CLI exits 1 after printing a report with error_code (cached rate limit, offline)
+        self.install()
+        self.log.write_text("")
+        for code in ("rate_limited", "network"):
+            with patch.dict(os.environ, FIXTURE_CHECK_ERROR=code):
+                out = io.StringIO()
+                with contextlib.redirect_stdout(out):
+                    self.install()
+                self.assertIn(f"Could not check for a newer release ({code})", out.getvalue())
+        self.assertIn("update check", self.log.read_text())
         self.assertNotIn("update apply", self.log.read_text())
 
     def test_removed_daemon_reinstall_and_uninstall(self):

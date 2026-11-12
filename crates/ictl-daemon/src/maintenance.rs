@@ -46,8 +46,20 @@ fn lock(dir: &Path, operation: libc::c_int) -> io::Result<File> {
     Ok(f)
 }
 
+/// Busy is not always a client: the daemon itself holds the shared lease while it works on the phone (every
+/// status tick, starting WDA, re-signing, the Apple ID check), from milliseconds to a couple of minutes
 pub fn exclusive() -> io::Result<File> {
-    lock(&directory()?, libc::LOCK_EX)
+    lock(&directory()?, libc::LOCK_EX).map_err(|e| {
+        if e.kind() == io::ErrorKind::WouldBlock {
+            io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "the phone is in use by a client (control page, MCP) or by the daemon's own work \
+                 (status check, starting WDA, re-signing)",
+            )
+        } else {
+            e
+        }
+    })
 }
 
 fn pending(dir: &Path) -> io::Result<Option<PathBuf>> {

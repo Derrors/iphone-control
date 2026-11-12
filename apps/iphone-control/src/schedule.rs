@@ -1,7 +1,6 @@
 //! Run checks outside the daemon so that stopping the daemon cannot kill its updater.
 //! The launcher selects the *old* executable for crash recovery, even if the new one cannot start.
 use std::fs::{self, File};
-use std::io::Write;
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
@@ -56,14 +55,8 @@ pub fn configure(socket: &Path) -> Result<()> {
 }
 
 fn write_file(path: &Path, bytes: &[u8]) -> Result<()> {
-    let dir = path.parent().context("invalid job path")?;
-    fs::create_dir_all(dir)?;
-    let mut tmp = tempfile::NamedTempFile::new_in(dir)?;
-    tmp.write_all(bytes)?;
-    tmp.as_file().sync_all()?;
-    tmp.persist(path)?;
-    File::open(dir)?.sync_all()?;
-    Ok(())
+    fs::create_dir_all(path.parent().context("invalid job path")?)?;
+    crate::update::write_atomic(path, bytes)
 }
 
 fn run(program: &str, args: &[&str]) -> Result<()> {

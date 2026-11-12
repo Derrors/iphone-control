@@ -116,6 +116,25 @@ impl Report {
     }
 }
 
+/// Writes `bytes` to `path` atomically and durably: a temporary file in the same directory, synced, renamed over
+/// `path`, then the directory synced. The directory must exist: callers create it with the permissions it needs
+/// (the updater's store is private and checked, see `transaction::Store::open`)
+pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
+    use std::io::Write;
+    let dir = path.parent().ok_or_else(|| anyhow::anyhow!("no parent directory: {}", path.display()))?;
+    let mut tmp = tempfile::NamedTempFile::new_in(dir)?;
+    tmp.write_all(bytes)?;
+    tmp.as_file().sync_all()?;
+    tmp.persist(path)?;
+    fs::File::open(dir)?.sync_all()?;
+    Ok(())
+}
+
+/// [`write_atomic`] of `value` as JSON
+pub(crate) fn write_json_atomic(path: &Path, value: &impl Serialize) -> Result<()> {
+    write_atomic(path, &serde_json::to_vec(value)?)
+}
+
 fn state_dir(repo: &str) -> PathBuf {
     std::env::var_os("XDG_CACHE_HOME")
         .filter(|s| !s.is_empty())
@@ -191,6 +210,18 @@ fn availability(
     platform: Option<&str>,
     release: Option<&Release>,
 ) -> Availability {
+    let keys = !option_env!("ICTL_UPDATE_PUBLIC_KEYS").unwrap_or("").is_empty();
+    availability_with(local_version, method, platform, release, keys)
+}
+
+/// [`availability`] with whether this build carries release signing keys (`ICTL_UPDATE_PUBLIC_KEYS`)
+fn availability_with(
+    local_version: &str,
+    method: InstallMethod,
+    platform: Option<&str>,
+    release: Option<&Release>,
+    keys: bool,
+) -> Availability {
     use Availability::*;
     if method == InstallMethod::Development {
         return Development;
@@ -218,15 +249,20 @@ fn availability(
     if !latest.assets.contains(&format!("{base}.tar.gz")) {
         return PlatformPending;
     }
-    // Presence allows the CLI to attempt verified installation. It verifies the exact
-    // manifest bytes, signature and archive before handing anything to the installer.
-    if method == InstallMethod::Managed
-        && (!installed.pre.is_empty()
-            || option_env!("ICTL_UPDATE_PUBLIC_KEYS").unwrap_or("").is_empty()
-            || !latest.assets.contains(&format!("{base}.manifest.json"))
-            || !latest.assets.contains(&format!("{base}.manifest.json.sig")))
-    {
-        return ManualOnly;
+    if method == InstallMethod::Managed {
+        // this installation can never take a managed upgrade: a prerelease, or a build without signing keys
+        if !installed.pre.is_empty() || !keys {
+            return ManualOnly;
+        }
+        // The platform's signing job publishes the manifest and its signature after the archive (and may wait
+        // for approval): until both are there the upgrade is pending, not manual. Presence allows the CLI to
+        // attempt verified installation; it verifies the exact manifest bytes, signature and archive before
+        // handing anything to the installer.
+        if !latest.assets.contains(&format!("{base}.manifest.json"))
+            || !latest.assets.contains(&format!("{base}.manifest.json.sig"))
+        {
+            return PlatformPending;
+        }
     }
     Available
 }
@@ -674,5 +710,24 @@ mod tests {
         assert_eq!(for_install("0.2.0", InstallMethod::Debian, Some("linux-x86_64")), Availability::Available);
         assert_eq!(for_install("0.2.0", InstallMethod::Debian, Some("linux-aarch64")), Availability::PlatformPending);
         assert_eq!(for_install("0.2.0", InstallMethod::Unknown, None), Availability::Unsupported);
+    }
+
+    /// A managed install with signing keys: the archive alone (the signing job hasn't published the manifest and
+    /// its signature yet, or waits for approval) is pending, not a manual upgrade; with both it is available.
+    /// Without keys, or from a prerelease, it stays manual
+    #[test]
+    fn managed_upgrade_waits_for_the_signed_manifest() {
+        let base = "iphone-control-v0.2.1-linux-x86_64";
+        let mut release = Release { tag: "v0.2.1".into(), published_at: None, assets: vec![format!("{base}.tar.gz")] };
+        let managed = |r: &Release, running, keys| {
+            availability_with(running, InstallMethod::Managed, Some("linux-x86_64"), Some(r), keys)
+        };
+        assert_eq!(managed(&release, "0.2.0", true), Availability::PlatformPending);
+        release.assets.push(format!("{base}.manifest.json"));
+        assert_eq!(managed(&release, "0.2.0", true), Availability::PlatformPending, "signature still missing");
+        release.assets.push(format!("{base}.manifest.json.sig"));
+        assert_eq!(managed(&release, "0.2.0", true), Availability::Available);
+        assert_eq!(managed(&release, "0.2.0", false), Availability::ManualOnly, "no signing keys in this build");
+        assert_eq!(managed(&release, "0.2.1-rc.1", true), Availability::ManualOnly, "prerelease install");
     }
 }

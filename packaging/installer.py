@@ -517,7 +517,13 @@ def main():
         if data["pinned"]:
             print(f"Keeping pinned iphone-control {data['version']}.")
             return
-        report = json.loads(subprocess.check_output([binary, "update", "check", "--json"]))
+        # `update check` exits non-zero when the release check failed (rate limit, offline: a cached error is kept
+        # until its retry time) but still prints the report. The reinstall itself succeeded: keep this version
+        report = json.loads(subprocess.run([binary, "update", "check", "--json"], stdout=subprocess.PIPE).stdout)
+        if report.get("error_code"):
+            print(f"Could not check for a newer release ({report['error_code']}); keeping iphone-control "
+                  f"{data['version']}. Run `iphone-control update check` later.")
+            return
         if report["availability"] in ("current", "ahead"):
             print(report["guidance"])
             return

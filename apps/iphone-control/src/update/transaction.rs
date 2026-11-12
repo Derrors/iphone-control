@@ -2,7 +2,7 @@
 //! executable. Commit metadata after two healthy snapshots; an unconfirmed swap restores the
 //! original file. Each rename is synced before the next step.
 use std::fs::{self, File};
-use std::io::{self, Write};
+use std::io;
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
@@ -12,7 +12,7 @@ use anyhow::{Context, Result, bail, ensure};
 use semver::Version;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
-use super::{Receipt, archive, digest, read_receipt, receipt_path, validate_receipt};
+use super::{Receipt, archive, digest, read_receipt, receipt_path, validate_receipt, write_json_atomic as write_json};
 use crate::service::{self, Service};
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -88,17 +88,6 @@ fn read_json<T: DeserializeOwned>(path: &Path) -> Result<Option<T>> {
     };
     ensure!(file.metadata()?.is_file() && file.metadata()?.len() <= 64 * 1024, "invalid updater state file");
     Ok(Some(serde_json::from_reader(file)?))
-}
-
-fn write_json(path: &Path, value: &impl Serialize) -> Result<()> {
-    let parent = path.parent().context("missing parent")?;
-    let mut tmp = tempfile::NamedTempFile::new_in(parent)?;
-    serde_json::to_writer(&mut tmp, value)?;
-    tmp.flush()?;
-    tmp.as_file().sync_all()?;
-    tmp.persist(path)?;
-    File::open(parent)?.sync_all()?;
-    Ok(())
 }
 
 pub fn outcome(exe: &Path) -> Result<Option<Outcome>> {
@@ -304,7 +293,7 @@ impl Services for Host<'_> {
     }
     fn exclusive(&self) -> Result<File> {
         ictl_daemon::maintenance::exclusive()
-            .context("busy: close active viewers, MCP clients and device tasks, then retry")
+            .context("busy; retry in a minute (the automatic job tries again next hour)")
     }
 
     async fn idle(&self, current: &Receipt) -> Result<bool> {
@@ -523,7 +512,7 @@ pub async fn apply(socket: &Path, background: bool) -> Result<()> {
                 } else {
                     Some(version.clone())
                 };
-                let status = if e.is::<archive::ManualMigration>() { "manual_migration" } else { "failed" };
+                let status = failure_status(&e);
                 let source = e.is::<archive::ManualMigration>().then(|| MigrationSource::from_receipt(&receipt));
                 store.record(status, &version, format!("{e:#}"), suppressed, source)?;
                 return Err(e);
@@ -535,6 +524,18 @@ pub async fn apply(socket: &Path, background: bool) -> Result<()> {
     .await;
     let _ = fs::remove_dir_all(&stage);
     work
+}
+
+/// The outcome recorded when staging a release fails. A release that only isn't marked for unattended
+/// installation is no failure: the automatic job leaves it to `update apply` (and doesn't download it again)
+fn failure_status(e: &anyhow::Error) -> &'static str {
+    if e.is::<archive::ManualMigration>() {
+        "manual_migration"
+    } else if e.is::<archive::NeedsOperator>() {
+        "needs_operator"
+    } else {
+        "failed"
+    }
 }
 
 pub fn unpin() -> Result<()> {

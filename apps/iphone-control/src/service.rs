@@ -167,21 +167,13 @@ pub fn managed_pid(service: &Service, stopping: bool) -> anyhow::Result<Option<u
                 );
                 return Ok(None);
             }
-            let info = std::str::from_utf8(&out.stdout)?;
-            let field = |key: &str| info.lines().find_map(|line| line.strip_prefix('\t')?.strip_prefix(key));
-            ensure!(field("path = ").map(Path::new) == Some(plist), "launchd loaded a different plist");
-            if stopping && field("pid = ").is_none() {
-                return Ok(None);
-            }
-            ensure!(stopping || field("state = ") == Some("running"), "launchd service is transitioning");
-            Ok(Some(field("pid = ").context("no launchd PID")?.parse()?))
+            launchd_pid(std::str::from_utf8(&out.stdout)?, plist, stopping)
         }
         Service::Systemd { unit, .. } => {
             let out = Command::new("systemctl")
                 .args([
                     "--user",
                     "show",
-                    "--all",
                     unit,
                     "--all", // include an empty DropInPaths (absence is not proof of ownership)
                     "--property=ActiveState,LoadState,MainPID,FragmentPath,DropInPaths,NeedDaemonReload",
@@ -207,6 +199,20 @@ pub fn managed_pid(service: &Service, stopping: bool) -> anyhow::Result<Option<u
             }
         }
     }
+}
+
+/// The daemon's PID from `launchctl print`: `None` when the job is loaded but not running. With
+/// `KeepAlive={SuccessfulExit:false}` launchd leaves a daemon that exited cleanly (SIGTERM, `kill`) that way,
+/// with no PID, for good: like an inactive systemd unit, it is stopped, not transitioning
+fn launchd_pid(info: &str, plist: &Path, stopping: bool) -> anyhow::Result<Option<u32>> {
+    let field = |key: &str| info.lines().find_map(|line| line.strip_prefix('\t')?.strip_prefix(key));
+    ensure!(field("path = ").map(Path::new) == Some(plist), "launchd loaded a different plist");
+    let pid = field("pid = ");
+    if pid.is_none() && (stopping || field("state = ") == Some("not running")) {
+        return Ok(None);
+    }
+    ensure!(stopping || field("state = ") == Some("running"), "launchd service is transitioning");
+    Ok(Some(pid.context("no launchd PID")?.parse()?))
 }
 
 /// Restart exactly the service we stopped without changing the user's enable-at-login setting.
@@ -387,6 +393,25 @@ pub fn uninstall() -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `launchctl print` as macOS 27 shows it for a job with KeepAlive={SuccessfulExit:false}: running, and
+    /// after the program exited with status 0 (loaded, not running, no PID)
+    #[test]
+    fn launchd_job_that_exited_cleanly_is_stopped() {
+        let plist = Path::new("/Users/u/Library/LaunchAgents/io.github.derrors.iphone-control.plist");
+        let print = |state: &str, pid: Option<u32>| {
+            let pid = pid.map(|p| format!("\tpid = {p}\n")).unwrap_or_default();
+            format!(
+                "gui/501/io.github.derrors.iphone-control = {{\n\tpath = {}\n\tstate = {state}\n{pid}\tlast exit code = 0\n}}\n",
+                plist.display()
+            )
+        };
+        assert_eq!(launchd_pid(&print("running", Some(4242)), plist, false).unwrap(), Some(4242));
+        assert_eq!(launchd_pid(&print("not running", None), plist, false).unwrap(), None, "exited cleanly");
+        assert_eq!(launchd_pid(&print("not running", None), plist, true).unwrap(), None);
+        assert!(launchd_pid(&print("spawn scheduled", None), plist, false).is_err(), "really transitioning");
+        assert!(launchd_pid(&print("running", Some(1)), Path::new("/elsewhere.plist"), false).is_err());
+    }
 
     #[test]
     fn homebrew_paths_use_the_opt_link() {

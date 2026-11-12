@@ -51,6 +51,9 @@ jobs:
         run: for p in ictl-l10n ictl-webinspector ictl-device ictl-wda ictl-sign ictl-unlock ictl-daemon ictl-mcp ictl-protocol iphone-control; do cargo fmt -p $p -- --check; done
       # --all-features：默认不编的 debug-cmds（调试子命令）也要能编译
       - run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+      # check_fish_candidates 的候选词断言需要真正的 fish；缺了它该段会被静默跳过
+      - name: Install fish for completion tests
+        run: sudo apt-get update && sudo apt-get install -y fish
       - run: cargo test --workspace --all-features --locked
       - name: Terminal menus (PTY)
         run: python3 tests/terminal.py --binary target/debug/iphone-control --test-dir target/debug/deps

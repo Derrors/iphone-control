@@ -106,24 +106,30 @@ fn decode(bytes: &[u8]) -> Key {
     }
 }
 
-fn read_key() -> io::Result<Key> {
+/// Returns `Ok(None)` when no byte arrives within the first-read window: the
+/// terminal is simply idle, so the caller can skip repainting an unchanged
+/// frame. A byte that arrives but forms an unknown/partial sequence still
+/// returns `Some(Key::Unknown)`, as does every later timeout.
+fn read_key() -> io::Result<Option<Key>> {
     // Duplicate stdin, with no read-ahead, just like crate::read_line. A raw
     // guard per read preserves normal output newline handling between frames.
     let mut input = std::fs::File::from(std::io::stdin().as_fd().try_clone_to_owned()?);
     let _raw = std::io::stdout().into_raw_mode()?;
-    // Periodic wakeups let the caller redraw after a resize, even without keys.
+    // Periodic wakeups let the caller notice a resize, even without keys.
     let Some(first) = read_byte(&mut input, Instant::now() + Duration::from_millis(100))? else {
-        return Ok(Key::Unknown);
+        return Ok(None);
     };
     let deadline = Instant::now() + SEQUENCE_WAIT;
     let mut bytes = vec![first];
     if first == 0x1b {
-        let Some(second) = read_byte(&mut input, deadline)? else { return Ok(Key::Escape) };
+        let Some(second) = read_byte(&mut input, deadline)? else { return Ok(Some(Key::Escape)) };
         bytes.push(second);
         if matches!(second, b'[' | b'O') {
             let mut overflow = false;
             loop {
-                let Some(next) = read_byte(&mut input, deadline)? else { return Ok(Key::Unknown) };
+                let Some(next) = read_byte(&mut input, deadline)? else {
+                    return Ok(Some(Key::Unknown));
+                };
                 if bytes.len() < 32 {
                     bytes.push(next);
                 } else {
@@ -131,7 +137,7 @@ fn read_key() -> io::Result<Key> {
                 }
                 if (0x40..=0x7e).contains(&next) {
                     if overflow {
-                        return Ok(Key::Unknown);
+                        return Ok(Some(Key::Unknown));
                     }
                     break;
                 }
@@ -140,10 +146,10 @@ fn read_key() -> io::Result<Key> {
     }
     // Complete UTF-8 (also Alt+UTF-8) before handing it to the parser.
     while std::str::from_utf8(&bytes).is_err_and(|error| error.error_len().is_none()) && bytes.len() < 6 {
-        let Some(next) = read_byte(&mut input, deadline)? else { return Ok(Key::Unknown) };
+        let Some(next) = read_byte(&mut input, deadline)? else { return Ok(Some(Key::Unknown)) };
         bytes.push(next);
     }
-    Ok(decode(&bytes))
+    Ok(Some(decode(&bytes)))
 }
 
 #[derive(Debug)]
@@ -300,6 +306,11 @@ fn clean(text: &str) -> String {
 }
 
 fn fit(text: &str, columns: usize) -> String {
+    // console::truncate_str subtracts the tail width ("..." = 3 columns) from
+    // the available width; a width below that underflows usize in debug builds
+    // and wraps in release. A window this narrow cannot show the tail anyway, so
+    // clamp to the smallest width truncate_str handles instead of panicking.
+    let columns = columns.max(4);
     console::truncate_str(&clean(text), columns, "...").into_owned()
 }
 
@@ -353,37 +364,44 @@ fn frame(prompt: &str, options: &[&str], state: &Selection, size: (u16, u16)) ->
 
 fn menu(term: &Term, prompt: &str, options: &[&str], default: usize, confirmation: bool) -> anyhow::Result<usize> {
     let mut state = Selection::new(default, options.len(), confirmation);
+    // (size, rendered line count) for the frame currently shown on screen.
     let mut previous = None;
+    let mut needs_render = true;
     loop {
         let size = term.size();
-        // A resize can reflow every previous line. Only erase a frame while its
-        // dimensions are unchanged; otherwise leave history alone and append.
-        if let Some((old_size, lines)) = previous
-            && old_size == size
-        {
-            term.clear_last_lines(lines)?;
-        }
-        if size.0 < 6 || size.1 < 40 {
-            // Initial small terminals use line prompts; shrinking an active
-            // menu must never discard invalid input or accept a stale default.
-            if previous.is_some_and(|(old_size, _)| old_size != size) {
-                term.write_line(&fit(
-                    ictl_l10n::tr!("放大窗口；Esc 取消", "Enlarge window; Esc cancels"),
-                    usize::from(size.1.saturating_sub(1)),
-                ))?;
+        let resized = previous.is_some_and(|(old_size, _)| old_size != size);
+        if needs_render || resized {
+            // A resize can reflow every previous line. Only erase a frame while
+            // its dimensions are unchanged; otherwise leave history alone and append.
+            if let Some((old_size, lines)) = previous
+                && old_size == size
+            {
+                term.clear_last_lines(lines)?;
             }
-            previous = Some((size, 0));
-            match read_key()? {
-                Key::Escape | Key::CtrlC => return Err(Cancelled.into()),
-                _ => continue,
+            if size.0 < 6 || size.1 < 40 {
+                // Initial small terminals use line prompts; shrinking an active
+                // menu must never discard invalid input or accept a stale default.
+                // The prompt is written once per size; idle wakeups must not spam.
+                if resized {
+                    term.write_line(&fit(
+                        ictl_l10n::tr!("放大窗口；Esc 取消", "Enlarge window; Esc cancels"),
+                        usize::from(size.1.saturating_sub(1)),
+                    ))?;
+                }
+                previous = Some((size, 0));
+            } else {
+                let lines = frame(prompt, options, &state, size);
+                for line in &lines {
+                    term.write_line(line)?;
+                }
+                previous = Some((size, lines.len()));
             }
+            needs_render = false;
         }
-        let lines = frame(prompt, options, &state, size);
-        for line in &lines {
-            term.write_line(line)?;
-        }
-        previous = Some((size, lines.len()));
-        let key = read_key()?;
+        // An idle wait (no key) leaves the on-screen frame untouched; the next
+        // iteration still re-checks term.size(), so resizes keep working.
+        let Some(key) = read_key()? else { continue };
+        needs_render = true;
         let current_size = term.size();
         if (current_size.0 < 6 || current_size.1 < 40) && !matches!(key, Key::Escape | Key::CtrlC) {
             continue;
@@ -499,6 +517,19 @@ mod tests {
         ] {
             assert!(!supports_menu(input, output, term, size));
         }
+    }
+
+    #[test]
+    fn fit_survives_widths_below_the_ellipsis_without_panicking() {
+        let label = "中文很长的菜单选项 with extra text to truncate";
+        for columns in 0..=4usize {
+            let fitted = fit(label, columns);
+            // Widths below the "..." tail (3) are clamped to the smallest
+            // width truncate_str handles, so the result stays bounded and clean.
+            assert!(console::measure_text_width(&fitted) <= 4);
+            assert!(!fitted.chars().any(char::is_control));
+        }
+        assert!(fit("abcdefghij", 4).ends_with("..."));
     }
 
     #[test]

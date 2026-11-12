@@ -88,7 +88,9 @@ fn scripts_help_and_errors_do_not_read_settings_create_state_or_contact_the_daem
         assert!(script.contains("auto-patch"));
         let path = root.join(format!("completion.{shell}"));
         fs::write(&path, script).unwrap();
-        // Syntax-check each available shell; CI need not install Fish just to generate it.
+        // Syntax-check each available shell. The Linux CI job installs fish so
+        // its candidate assertions actually run; elsewhere a missing shell is
+        // reported (not silently ignored) so the gap stays visible.
         match Command::new(shell).arg("--version").output() {
             Ok(_) => {
                 let check = Command::new(shell).arg("-n").arg(&path).output().unwrap();
@@ -97,7 +99,9 @@ fn scripts_help_and_errors_do_not_read_settings_create_state_or_contact_the_daem
                     check_fish_candidates(&path);
                 }
             }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                eprintln!("skipping {shell} syntax and completion checks: shell not installed");
+            }
             Err(error) => panic!("cannot run {shell}: {error}"),
         }
     }

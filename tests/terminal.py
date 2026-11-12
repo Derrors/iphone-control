@@ -212,6 +212,38 @@ def main():
                 session.finish("MENU_RESULT=29")
             finally:
                 session.close()
+            # An idle menu (no keys) must not repaint: the 100ms wakeups only
+            # poll for a resize, so a steady frame produces zero extra output.
+            session = Session(command, env)
+            try:
+                session.expect("Esc")
+                session.pump(0.3)
+                baseline = len(session.output)
+                time.sleep(0.5)
+                session.pump(0.15)
+                assert len(session.output) == baseline, (
+                    "idle menu repainted", session.output[baseline:].decode(errors="replace"))
+                session.send(b"\r")
+                session.finish("MENU_RESULT=1")
+            finally:
+                session.close()
+            # Shrinking an active menu to 1-3 columns must not panic: fit()
+            # once underflowed inside console::truncate_str below the "..." tail.
+            for columns in (1, 2, 3):
+                session = Session(command, env)
+                try:
+                    session.expect("Esc")
+                    session.resize(24, columns)
+                    # Several 100ms idle wakeups at the hostile width, no keys.
+                    time.sleep(0.5)
+                    session.pump(0.05)
+                    assert session.proc.poll() is None, session.output.decode(errors="replace")
+                    assert b"panicked" not in session.output
+                    session.resize(24, 80)
+                    session.send(b"\r")
+                    session.finish("MENU_RESULT=1")
+                finally:
+                    session.close()
             yes_env = dict(confirm_env, ICTL_TEST_DEFAULT="yes")
             for text in ["否", "不"]:
                 exercise(command, yes_env, (text + "\r").encode(), "MENU_RESULT=0")

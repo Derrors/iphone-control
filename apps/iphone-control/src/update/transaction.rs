@@ -15,42 +15,14 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use super::{Receipt, archive, digest, read_receipt, receipt_path, validate_receipt, write_json_atomic as write_json};
 use crate::service::{self, Service};
 
+/// The last installation's result. Records written by 0.2.2 may also carry `migration_source` (and the status
+/// `rolled_back` or `manual_migration`); serde ignores the field
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Outcome {
     pub status: String,
     pub target_version: String,
     pub detail: String,
     pub suppressed_version: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub migration_source: Option<MigrationSource>,
-}
-
-#[derive(Clone, Serialize, Deserialize)]
-pub struct MigrationSource {
-    pub publisher: String,
-    pub target: String,
-    pub version: String,
-}
-
-impl MigrationSource {
-    pub(super) fn matches(&self, publisher: &str, target: &str, version: &str) -> bool {
-        self.publisher == publisher && self.target == target && self.version == version
-    }
-
-    fn from_receipt(receipt: &Receipt) -> Self {
-        Self { publisher: receipt.publisher.clone(), target: receipt.target.clone(), version: receipt.version.clone() }
-    }
-}
-
-impl Outcome {
-    fn suppression_for(self, receipt: &Receipt) -> Option<String> {
-        if let Some(src) = self.migration_source
-            && !src.matches(&receipt.publisher, &receipt.target, &receipt.version)
-        {
-            return None;
-        }
-        self.suppressed_version
-    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -66,15 +38,11 @@ struct Transaction {
     old: Receipt,
     new: Receipt,
     was_running: bool,
-    rollback: bool,
     phase: Phase,
 }
 
-#[derive(Serialize, Deserialize)]
-struct Previous {
-    before_digest: String,
-    receipt: Receipt,
-}
+/// What 0.2.2 kept after an upgrade for `update rollback`, which no longer exists: removed on the next upgrade
+const LEGACY_PREVIOUS: [&str; 2] = ["previous", "previous.json"];
 
 fn state_dir(exe: &Path) -> Result<PathBuf> {
     Ok(exe.parent().context("invalid installation path")?.join(".iphone-control-update"))
@@ -138,14 +106,7 @@ impl Store {
         self.dir.join("transaction.json")
     }
 
-    fn record(
-        &self,
-        status: &str,
-        version: &str,
-        detail: impl ToString,
-        suppressed: Option<String>,
-        migration_source: Option<MigrationSource>,
-    ) -> Result<()> {
+    fn record(&self, status: &str, version: &str, detail: impl ToString, suppressed: Option<String>) -> Result<()> {
         write_json(
             &self.dir.join("outcome.json"),
             &Outcome {
@@ -153,7 +114,6 @@ impl Store {
                 target_version: version.into(),
                 detail: detail.to_string(),
                 suppressed_version: suppressed,
-                migration_source,
             },
         )
     }
@@ -182,16 +142,13 @@ impl Store {
 
     fn finish(&self, tx: &Transaction) -> Result<()> {
         write_json(&self.receipt, &tx.new)?;
-        if !tx.rollback {
-            self.link(&self.dir.join("recovery"), &self.dir.join("previous"))?;
-            write_json(
-                &self.dir.join("previous.json"),
-                &Previous { before_digest: tx.new.sha256.clone(), receipt: tx.old.clone() },
-            )?;
+        for name in LEGACY_PREVIOUS {
+            match fs::remove_file(self.dir.join(name)) {
+                Err(e) if e.kind() != io::ErrorKind::NotFound => return Err(e.into()),
+                _ => {}
+            }
         }
-        let (status, suppressed) =
-            if tx.rollback { ("rolled_back", Some(tx.old.version.clone())) } else { ("installed", None) };
-        self.record(status, &tx.new.version, "installation confirmed", suppressed, None)?;
+        self.record("installed", &tx.new.version, "installation confirmed", None)?;
         self.clear()
     }
 
@@ -368,7 +325,7 @@ async fn restore(store: &Store, host: &impl Services, tx: &Transaction, why: &st
         host.start_healthy(&tx.old.version).await?;
     }
     write_json(&store.receipt, &tx.old)?;
-    store.record("restored", &tx.new.version, why, Some(tx.new.version.clone()), None)?;
+    store.record("restored", &tx.new.version, why, Some(tx.new.version.clone()))?;
     store.clear()
 }
 
@@ -378,7 +335,6 @@ async fn replace(
     old: Receipt,
     new: Receipt,
     candidate: &Path,
-    rollback: bool,
     auto: bool,
 ) -> Result<()> {
     let activity = async {
@@ -391,8 +347,8 @@ async fn replace(
     let (_lease, running) = match activity {
         Ok(activity) => activity,
         Err(e) => {
-            let suppressed = outcome(&store.binary)?.and_then(|o| o.suppression_for(&old));
-            store.record("busy", &new.version, format!("{e:#}"), suppressed, None)?;
+            let suppressed = outcome(&store.binary)?.and_then(|o| o.suppressed_version);
+            store.record("busy", &new.version, format!("{e:#}"), suppressed)?;
             return Err(e);
         }
     };
@@ -410,7 +366,7 @@ async fn replace(
     );
     host.mark_pending(&store.journal())?;
     store.link(&store.binary, &store.dir.join("recovery"))?;
-    let mut tx = Transaction { old, new, was_running: running, rollback, phase: Phase::Prepared };
+    let mut tx = Transaction { old, new, was_running: running, phase: Phase::Prepared };
     write_json(&store.journal(), &tx)?;
 
     let swap = async {
@@ -443,7 +399,7 @@ async fn restore_or_report(store: &Store, host: &impl Services, tx: &Transaction
             tx.old.version,
             store.dir.join("recovery").display()
         );
-        store.record("recovery_failed", &tx.new.version, &detail, Some(tx.new.version.clone()), None)?;
+        store.record("recovery_failed", &tx.new.version, &detail, Some(tx.new.version.clone()))?;
         bail!(detail);
     }
     Ok(())
@@ -489,7 +445,7 @@ pub async fn apply(socket: &Path, background: bool, report: super::Report) -> Re
     let host = Host { service, socket, binary: &store.binary };
     if background {
         ensure!(matches!(report.policy, super::Policy::AutoPatch), "automatic installation is disabled");
-        let suppressed = outcome(&store.binary)?.and_then(|o| o.suppression_for(&receipt));
+        let suppressed = outcome(&store.binary)?.and_then(|o| o.suppressed_version);
         ensure!(
             suppressed.as_ref() != Some(&version),
             "automatic retry suppressed for {version}; run iphone-control update to retry"
@@ -497,7 +453,7 @@ pub async fn apply(socket: &Path, background: bool, report: super::Report) -> Re
         // An always-open client may stay busy for days. The lease here is deliberately
         // short-lived; replacement reacquires it and rechecks identity after download.
         if let Err(e) = host.exclusive() {
-            store.record("busy", &version, format!("{e:#}"), suppressed, None)?;
+            store.record("busy", &version, format!("{e:#}"), suppressed)?;
             return Err(e);
         }
     }
@@ -507,18 +463,16 @@ pub async fn apply(socket: &Path, background: bool, report: super::Report) -> Re
             Ok(candidate) => candidate,
             Err(e) => {
                 let suppressed = if e.downcast_ref::<reqwest::Error>().is_some() {
-                    outcome(&store.binary)?.and_then(|o| o.suppression_for(&receipt))
+                    outcome(&store.binary)?.and_then(|o| o.suppressed_version)
                 } else {
                     Some(version.clone())
                 };
-                let status = failure_status(&e);
-                let source = e.is::<archive::ManualMigration>().then(|| MigrationSource::from_receipt(&receipt));
-                store.record(status, &version, format!("{e:#}"), suppressed, source)?;
+                store.record(failure_status(&e), &version, format!("{e:#}"), suppressed)?;
                 return Err(e);
             }
         };
         let next = Receipt { version, sha256: digest(&candidate)?, ..receipt.clone() };
-        replace(&store, &host, receipt, next, &candidate, false, background).await
+        replace(&store, &host, receipt, next, &candidate, background).await
     }
     .await;
     let _ = fs::remove_dir_all(&stage);
@@ -526,15 +480,10 @@ pub async fn apply(socket: &Path, background: bool, report: super::Report) -> Re
 }
 
 /// The outcome recorded when staging a release fails. A release that only isn't marked for unattended
-/// installation is no failure: the automatic job leaves it to `update apply` (and doesn't download it again)
+/// installation is no failure: the automatic job leaves it to `iphone-control update` (and doesn't download it
+/// again)
 fn failure_status(e: &anyhow::Error) -> &'static str {
-    if e.is::<archive::ManualMigration>() {
-        "manual_migration"
-    } else if e.is::<archive::NeedsOperator>() {
-        "needs_operator"
-    } else {
-        "failed"
-    }
+    if e.is::<archive::NeedsOperator>() { "needs_operator" } else { "failed" }
 }
 
 pub fn unpin() -> Result<()> {
@@ -542,22 +491,6 @@ pub fn unpin() -> Result<()> {
     let (store, _) = managed(&receipt)?;
     receipt.pinned = false;
     write_json(&store.receipt, &receipt)
-}
-
-pub async fn rollback(socket: &Path) -> Result<()> {
-    let receipt = read_receipt()?;
-    let (store, service) = managed(&receipt)?;
-    let previous: Previous =
-        read_json(&store.dir.join("previous.json"))?.context("no compatible previous installation")?;
-    ensure!(
-        receipt.sha256 == previous.before_digest && same_install(&receipt, &previous.receipt),
-        "rollback belongs to a different installation"
-    );
-    let candidate = store.dir.join("previous");
-    ensure!(digest(&candidate)? == previous.receipt.sha256, "previous executable digest mismatch");
-    archive::preflight(&candidate, &previous.receipt.version).await?;
-    let host = Host { service, socket, binary: &store.binary };
-    replace(&store, &host, receipt, previous.receipt, &candidate, true, false).await
 }
 
 fn same_install(a: &Receipt, b: &Receipt) -> bool {

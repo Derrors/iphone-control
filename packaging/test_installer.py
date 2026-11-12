@@ -54,7 +54,7 @@ class InstallerTest(unittest.TestCase):
             "PATH": str(commands) + os.pathsep + os.environ["PATH"],
             "ICTL_UPDATE_PUBLISHER": REPO, "GITHUB_REPOSITORY": REPO, "ICTL_UPDATE_PUBLIC_KEYS": pub,
             "ICTL_UPDATE_TAP": "", "GITHUB_REF_NAME": "v" + VERSION,
-            "ICTL_UPDATE_SIGNING_KEY": key.read_text(), "ICTL_UNATTENDED_TAG": "", "ICTL_ROLLBACK_COMPATIBLE_TAG": "",
+            "ICTL_UPDATE_SIGNING_KEY": key.read_text(), "ICTL_UNATTENDED_TAG": "",
         }))
         self.stack.enter_context(patch.multiple(installer, PUBLISHER=REPO, PUBLIC_KEYS=pub))
         self.stack.enter_context(patch.object(installer, "download", self.download))
@@ -296,18 +296,35 @@ class InstallerTest(unittest.TestCase):
         self.assertEqual({p.name for p in state.iterdir()}, {"notes", "personal.bak", "swap-link"})
         self.assertEqual(other.read_text(), "keep")
 
-    def test_rollback_source_is_signed_and_precedes_release(self):
-        command = [sys.executable, ROOT / "packaging/release.py", "sign", self.dist, self.target]
-        with patch.dict(os.environ, ICTL_ROLLBACK_COMPATIBLE_TAG="v" + VERSION):
-            for source in ("", VERSION, "0.2.2"):
-                with self.subTest(source=source), patch.dict(os.environ, ICTL_ROLLBACK_FROM_VERSION=source):
-                    self.assertNotEqual(subprocess.run(command, capture_output=True).returncode, 0)
-            with patch.dict(os.environ, ICTL_ROLLBACK_FROM_VERSION="0.2.0"):
-                self.sign()
+    def test_archive_manifest_still_lets_0_2_2_upgrade(self):
+        # 0.2.2's updater needs both fields and its own version in rollback_from; nothing else reads them
         data = installer.verify_manifest(self.root, self.manifest, self.sig, REPO, installer.PUBLIC_KEYS,
                                          VERSION, self.target)
-        self.assertTrue(data["rollback_compatible"])
-        self.assertEqual(data["rollback_from"], "0.2.0")
+        self.assertIs(data["rollback_compatible"], True)
+        self.assertEqual(data["rollback_from"], "0.2.2")
+
+    def test_debian_package_is_signed_for_its_own_name(self):
+        command = [sys.executable, ROOT / "packaging/release.py", "sign-deb", self.dist, "linux-x86_64"]
+        self.assertNotEqual(subprocess.run(command, capture_output=True).returncode, 0, "no package to sign")
+        deb = self.dist / f"iphone-control_{VERSION}_amd64.deb"
+        deb.write_bytes(b"debian package bytes")
+        subprocess.run(command, check=True)
+        manifest = self.dist / (deb.name + ".manifest.json")
+        sig = self.dist / (deb.name + ".manifest.json.sig")
+
+        def verify(asset):
+            return installer.verify_manifest(self.root, manifest, sig, REPO, installer.PUBLIC_KEYS,
+                                             VERSION, "linux-x86_64", asset)
+
+        data = verify(deb.name)
+        self.assertEqual((data["sha256"], data["size"], data["unattended"]),
+                         (installer.digest(deb), deb.stat().st_size, False))
+        self.assertNotIn("rollback_from", data)
+        with self.assertRaisesRegex(ValueError, "does not match"):
+            verify(None)
+        sig.write_bytes(b"x" * 64)
+        with self.assertRaisesRegex(ValueError, "verification failed"):
+            verify(deb.name)
 
     def test_bad_key_digest_identity_and_tar(self):
         with patch.object(installer, "PUBLIC_KEYS", "11" * 32), self.assertRaisesRegex(ValueError, "verification failed"):

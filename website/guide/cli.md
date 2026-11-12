@@ -23,22 +23,22 @@
 
 ## 主机软件更新
 
-运行 `iphone-control update` 检查发布者的最新稳定版。已是最新时，命令会显示结果并退出。有新版时，它按当前程序的安装方式升级。
+运行 `iphone-control update` 检查发布者的最新稳定版。已是最新时，命令会显示结果并退出。有新版时，它先说明要做什么（从哪个版本升到哪个版本、会不会重启后台服务），问你是否继续，再按当前程序的安装方式升级。脚本里或没有终端时加 `--yes`，不询问直接升级。
 
 | 安装方式 | 运行 `iphone-control update` 后 |
 | --- | --- |
-| 签名安装脚本部署的受管用户服务 | 验证并安装签名更新，重启服务并检查健康状态。先关闭 Viewer、MCP 和其他设备客户端。通过 `--version` 固定版本的安装，须先显式运行 `iphone-control update unpin` 才能升级。 |
-| Homebrew | 通过该安装绑定的 tap 运行 Homebrew 升级，以 tap 提供的版本为准。 |
-| Debian / Ubuntu 软件包 | 下载同一发布者提供的、匹配目标版本和主机架构的 `.deb`，经过校验后交给 apt 安装。 |
+| 签名安装脚本部署的受管用户服务 | 验证发布者签名后安装，重启服务并检查健康状态；新版本 60 秒内起不来就自动换回旧版本。先关闭 Viewer、MCP 和其他设备客户端。通过 `--version` 固定版本的安装，须先显式运行 `iphone-control update unpin` 才能升级。 |
+| Homebrew | 通过该安装绑定的 tap 运行 Homebrew 升级，以 tap 提供的版本为准。`brew services` 在运行的话，升级后重启它。 |
+| Debian / Ubuntu 软件包 | 下载同一发布者提供的、匹配目标版本和主机架构的 `.deb`，验证发布者对它的签名后，用 `sudo` 交给 apt 安装（会询问密码）。deb 带的 systemd 用户服务在运行的话，升级后重启它。用 `apt-mark hold` 锁定了的不会升级，先 `sudo apt-mark unhold iphone-control`。 |
 | 源码安装、没有受管服务的脚本安装或无法识别的安装 | 显示适用的手动升级指引。未绑定发布者的开发构建在本地给出说明。 |
 
-Homebrew 和 apt 升级的是磁盘上的程序。如果原先已经运行后台服务，升级后用 `brew services restart iphone-control` 重启 Homebrew 服务，或用 `systemctl --user restart iphone-control` 重启 Debian 的用户服务。原先未启用服务的安装可跳过这一步。重新打开 Viewer、重连 MCP 客户端后，这些进程也会使用新版。
+重启后台服务会中断正在执行的 AI 任务和控制台画面。Homebrew 和 apt 升级后，命令会确认后台服务已经在运行新版本；没能确认时，它会写出要手动运行的重启命令。重新打开 Viewer、重连 MCP 客户端后，这些进程也会使用新版。
 
 只想查看版本可运行 `iphone-control update check`，脚本可用 `iphone-control update check --json` 读取结果。该检查与 Viewer「关于与更新」共用本地缓存，网络失败时保留上次成功的记录。Viewer 在「设置」旁的 ⓘ 上用红点提示新版本。打开面板可查看发行说明，并复制针对当前程序路径的更新命令，在本机终端执行。
 
-Viewer 只监听本机回环地址。同机其他用户也能查看安装信息、触发版本检查。安装、回滚和更改策略都通过本机 CLI 执行。
+Viewer 只监听本机回环地址。同机其他用户也能查看安装信息、触发版本检查。安装和更改策略都通过本机 CLI 执行。
 
-受管服务默认只做后台检查。显式安装仍可用 `update apply`，恢复前一个已验证版本用 `update rollback`，替换意外中断后用 `update recover`。如果正在使用 0.2.2 的 CLI，先运行 `iphone-control update check` 并按该版本显示的命令升级。新版 CLI 才支持直接运行 `iphone-control update`。
+受管服务默认只做后台检查。`update apply` 不询问直接安装（受管服务），替换意外中断后用 `update recover`。没有回退到上一版的命令：要换回旧版本，先用发行页的安装脚本加 `--uninstall` 卸载（设置和设备数据保留），再加 `--version vX.Y.Z` 安装那个版本。如果正在使用 0.2.2 的 CLI，先运行 `iphone-control update check` 并按该版本显示的命令升级。新版 CLI 才支持直接运行 `iphone-control update`。
 
 主动运行 `iphone-control update policy auto-patch` 后，服务只在空闲时自动安装兼容补丁。请退出 Viewer、MCP 和直连设备的客户端；暂停的任务也视为占用。新 daemon 健康检查失败会恢复旧程序，失败版本须手动重试。`update policy notify` 改回仅检查，`update policy manual` 移除定时任务。
 

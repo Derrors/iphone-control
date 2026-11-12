@@ -16,6 +16,11 @@ SLUG = r"[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9][A-Za-z0-9_.-]*"
 NUMBER = r"(?:0|[1-9][0-9]*)"
 STABLE = rf"v{NUMBER}\.{NUMBER}\.{NUMBER}"
 TARGETS = ("linux-x86_64", "linux-aarch64", "macos-arm64")
+DEB_ARCH = {"linux-x86_64": "amd64", "linux-aarch64": "arm64"}
+# 0.2.2's updater refuses a manifest without these two fields and installs only when `rollback_from` is its own
+# version (rollback was removed after it). Written into archive manifests so 0.2.2 can still upgrade with
+# `iphone-control update apply`; later versions ignore them. Drop once 0.2.2 is no longer supported.
+LEGACY_UPDATER = dict(rollback_compatible=True, rollback_from="0.2.2")
 
 
 def config():
@@ -41,6 +46,10 @@ def main():
         cmd = sub.add_parser(action)
         cmd.add_argument("directory", type=Path)
         cmd.add_argument("target", choices=TARGETS)
+    # The Debian package: `iphone-control update` installs it as root through APT only after this signature
+    cmd = sub.add_parser("sign-deb")
+    cmd.add_argument("directory", type=Path)
+    cmd.add_argument("target", choices=tuple(DEB_ARCH))
     args = parser.parse_args()
     repo, keys = config()
     tag = os.environ["GITHUB_REF_NAME"]
@@ -80,25 +89,27 @@ def main():
         data = verify_manifest(args.directory, manifest, Path(str(manifest) + ".sig"), repo, keys, tag[1:], args.target)
         print(data["sha256"])
         return
+    if args.command == "sign-deb":
+        asset = args.directory / f"iphone-control_{tag[1:]}_{DEB_ARCH[args.target]}.deb"
+        sign(args.directory / f"{asset.name}.manifest.json", manifest_data(repo, tag, args.target, asset, False), keys)
+        return
     archive = args.directory / f"{name}.tar.gz"
-    size = archive.stat().st_size
+    data = manifest_data(repo, tag, args.target, archive, os.environ.get("ICTL_UNATTENDED_TAG") == tag)
+    sign(manifest, dict(data, **LEGACY_UPDATER), keys)
+
+
+def manifest_data(repo, tag, target, asset, unattended):
+    size = asset.stat().st_size
     if not 0 < size <= 128 * 1024 * 1024:
-        raise ValueError("release archive exceeds client limits")
-    compatible = os.environ.get("ICTL_ROLLBACK_COMPATIBLE_TAG") == tag
-    rollback_from = None
-    if compatible:
-        rollback_from = os.environ.get("ICTL_ROLLBACK_FROM_VERSION", "")
-        if not re.fullmatch(STABLE, "v" + rollback_from):
-            raise ValueError("set ICTL_ROLLBACK_FROM_VERSION to the exact tested source version (X.Y.Z)")
-        if tuple(map(int, rollback_from.split("."))) >= tuple(map(int, tag[1:].split("."))):
-            raise ValueError("the tested source version must precede the release")
-    manifest.write_text(json.dumps(dict(
-        schema=1, publisher=repo, version=tag[1:], target=args.target, asset=archive.name,
-        sha256=hashlib.sha256(archive.read_bytes()).hexdigest(), size=size,
-        unattended=os.environ.get("ICTL_UNATTENDED_TAG") == tag,
-        rollback_compatible=compatible, rollback_from=rollback_from,
-    ), separators=(",", ":")) + "\n")
-    # The signing key is a PKCS#8 PEM from the protected signing environment.
+        raise ValueError("release asset exceeds client limits")
+    return dict(schema=1, publisher=repo, version=tag[1:], target=target, asset=asset.name,
+                sha256=hashlib.sha256(asset.read_bytes()).hexdigest(), size=size, unattended=unattended)
+
+
+def sign(manifest, data, keys):
+    manifest.write_text(json.dumps(data, separators=(",", ":")) + "\n")
+    # The signing key is a PKCS#8 PEM from the protected signing environment. One signature per run: it is taken
+    # out of the environment so the child processes don't inherit it.
     with tempfile.TemporaryDirectory() as private:
         key = Path(private) / "key.pem"
         key.write_text(os.environ.pop("ICTL_UPDATE_SIGNING_KEY"))

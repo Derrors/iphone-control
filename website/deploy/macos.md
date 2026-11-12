@@ -111,7 +111,7 @@ sudo launchctl kickstart -k system/com.apple.usbmuxd
 
 升级前先看[更新日志](https://github.com/Derrors/iphone-control/blob/main/CHANGELOG.zh-CN.md)里的升级注意事项。
 
-受管脚本安装先关闭 Viewer、MCP 等客户端，再运行 `iphone-control update`。Homebrew 安装也可使用这条命令，它会通过对应的 tap 升级磁盘上的程序。已经通过 Homebrew 运行后台服务的，升级后运行 `brew services restart iphone-control`。原先未启用服务则跳过这一步。重新打开 Viewer、重连 MCP 客户端后即可使用新版。
+受管脚本安装先关闭 Viewer、MCP 等客户端，再运行 `iphone-control update`。Homebrew 安装也可使用这条命令，它会通过对应的 tap 升级磁盘上的程序。`brew services` 在运行的话，升级后会重启它。重新打开 Viewer、重连 MCP 客户端后即可使用新版。
 
 源码安装请运行以下命令。
 

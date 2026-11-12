@@ -97,3 +97,8 @@
 | 91 | 手机按请求补发的关键帧不带参数集，新页面从它开始解不了 | 组帧时记下 VPS/SPS/PPS，补到这样的关键帧前面 | 单测 keyframes_get_the_parameter_sets |
 | 92 | 横屏时页面上的画面上下颠倒（转正方向写反） | 按「竖放顶边顺时针转过的角度」同向转回来；方向每秒问一次 | 真机：向左、向右横屏的画面和手机截图一致，1.1～2.7 秒跟上；横屏点地址栏点中 |
 | 93 | 在本机运行 `iphone-control update` 只出现子命令帮助，还要再查该用哪种升级命令 | 先检查当前版本。已是最新则提示并结束，有可升级版本时按核实的安装渠道处理，固定版本仍需显式解除 | 单测（`user_update_checks_the_release_before_choosing_an_installer`） |
+| 94 | Debian 升级只对照同一发布页上的 `.sha256` 就用 sudo 以 root 安装：能替换发布附件的人可以同时换掉包和校验值 | 发布流程给每个 .deb 签名清单（`release.py sign-deb`）；没有签名清单不提供升级，下载后大小和 SHA-256 要和签名清单一致才交给 APT | 单测 deb_manifest_is_bound_to_its_package、deb_upgrade_waits_for_its_signed_manifest；`packaging/test_installer.py` test_debian_package_is_signed_for_its_own_name |
+| 95 | `iphone-control update` 不问就开始安装，受管服务会重启，打断正在执行的任务 | 先说明要做什么并询问，没有终端时要 `--yes` | 单测 update_accepts_no_subcommand_and_preserves_read_only_check；手动：终端里运行，回答 n 不升级 |
+| 96 | Homebrew、Debian 升级后后台服务还在跑旧版本 | 升级后服务在运行就重启，并确认守护进程报告的是新版本；确认不了时写出手动重启命令 | 单测 brew_upgrades_the_exact_active_formula_only_after_the_tap_is_ready（已是最新时不重启）；真机：deb 安装下升级 |
+| 97 | APT 锁定（hold）的包仍提示可直接升级，运行后才报错 | hold 当作“已固定”：升级命令带上 `sudo apt-mark unhold`，直接运行时先提示解除锁定 | 单测 a_held_deb_is_reported_like_a_pinned_installation |
+| 98 | 发布清单只允许从声明过的某一个版本升级，其他版本一律“需要手动迁移” | 去掉回滚兼容标记和 `update rollback`；任何更新的签名稳定版都能升级，新版本起不来时仍自动换回旧版本；清单保留两个旧字段让 0.2.2 还能升级 | 单测 verifies_publisher_signed_bytes_before_staging_an_executable、unhealthy_daemon_restores_last_verified_executable_and_service；`test_installer.py` test_archive_manifest_still_lets_0_2_2_upgrade |

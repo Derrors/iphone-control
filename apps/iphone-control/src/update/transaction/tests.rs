@@ -152,7 +152,7 @@ impl Fixture {
     }
 
     async fn apply(&self) -> Result<()> {
-        replace(&self.store, &self.host, self.old.clone(), self.new.clone(), &self.candidate, false, false).await
+        replace(&self.store, &self.host, self.old.clone(), self.new.clone(), &self.candidate, false).await
     }
 
     fn assert_installed(&self, expected: &Receipt) {
@@ -163,7 +163,7 @@ impl Fixture {
 }
 
 #[tokio::test]
-async fn busy_then_replace_and_explicit_rollback_while_daemon_is_running() {
+async fn busy_then_replace_while_daemon_is_running() {
     if unsafe { libc::geteuid() } == 0 {
         return;
     }
@@ -181,14 +181,7 @@ async fn busy_then_replace_and_explicit_rollback_while_daemon_is_running() {
     f.apply().await.unwrap();
     f.assert_installed(&f.new);
     assert_eq!(crate::snapshot(&f.host.socket).await.unwrap().version.unwrap(), f.new.version);
-    let p: Previous = read_json(&f.store.dir.join("previous.json")).unwrap().unwrap();
-    let previous = f.store.dir.join("previous");
-    assert_eq!(p.before_digest, f.new.sha256);
-    assert_eq!(digest(&previous).unwrap(), p.receipt.sha256);
-    replace(&f.store, &f.host, f.new.clone(), p.receipt, &previous, true, false).await.unwrap();
-    f.assert_installed(&f.old);
-    assert_eq!(crate::snapshot(&f.host.socket).await.unwrap().version.unwrap(), f.old.version);
-    assert_eq!(outcome(&f.store.binary).unwrap().unwrap().suppressed_version.unwrap(), f.new.version);
+    assert_eq!(outcome(&f.store.binary).unwrap().unwrap().status, "installed");
     assert_eq!(fs::read_to_string(&state).unwrap(), "untouched device state");
 }
 
@@ -268,7 +261,7 @@ async fn interrupted_worker() {
             busy: Cell::new(false),
         },
     };
-    replace(&store, &host, old, new, &c, false, false).await.unwrap();
+    replace(&store, &host, old, new, &c, false).await.unwrap();
 }
 
 #[tokio::test]
@@ -329,17 +322,15 @@ async fn confirmed_checkpoint_finishes_metadata_and_unknown_disk_is_preserved() 
     let f = Fixture::new("0.2.1");
     f.store.link(&f.store.binary, &f.store.dir.join("recovery")).unwrap();
     f.store.link(&f.candidate, &f.store.binary).unwrap();
-    let mut tx = Transaction {
-        old: f.old.clone(),
-        new: f.new.clone(),
-        was_running: false,
-        rollback: false,
-        phase: Phase::Confirmed,
-    };
+    let mut tx = Transaction { old: f.old.clone(), new: f.new.clone(), was_running: false, phase: Phase::Confirmed };
+    // what 0.2.2 left for `update rollback` goes with the next confirmed installation
+    for name in LEGACY_PREVIOUS {
+        fs::write(f.store.dir.join(name), "left by 0.2.2").unwrap();
+    }
     write_json(&f.store.journal(), &tx).unwrap();
     resume(&f.store, &f.host, &tx).await.unwrap();
     f.assert_installed(&f.new);
-    assert_eq!(digest(&f.store.dir.join("previous")).unwrap(), f.old.sha256);
+    assert!(LEGACY_PREVIOUS.iter().all(|n| !f.store.dir.join(n).exists()));
 
     tx.phase = Phase::Replaced;
     write_json(&f.store.journal(), &tx).unwrap();

@@ -9,6 +9,13 @@
 ### 新增
 
 - 运行 `iphone-control update` 可检查并通过受管服务、Homebrew 或 Debian 软件包升级到新稳定版。已是最新时会直接提示。只想检查可继续用 `update check`。
+- `iphone-control update` 安装前先说明要做什么并询问，`--yes` 跳过询问。Homebrew 和 Debian 升级后，正在运行的后台服务会自动重启到新版本。
+- Debian 软件包也有发布者签名，`iphone-control update` 验证签名后才用 sudo 交给 APT 安装。APT 里锁定（hold）的包会提示先解除锁定。
+
+### 移除
+
+- `iphone-control update rollback` 和升级后保留的上一版程序。新版本起不来时仍会自动换回旧版本。
+- 发布清单里的回滚兼容标记：任何更新的签名稳定版都能直接升级，不再因“需要手动迁移”而停下。
 
 ## [0.2.2] - 2026-11-12
 

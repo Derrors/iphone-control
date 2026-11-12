@@ -111,7 +111,7 @@ sudo launchctl kickstart -k system/com.apple.usbmuxd
 
 Read the upgrade notes in the [changelog](https://github.com/Derrors/iphone-control/blob/main/CHANGELOG.md) first.
 
-For a managed script installation, close Viewer, MCP and other device clients, then run `iphone-control update`. On Homebrew the same command upgrades the executable on disk through the tap. If you already run the Homebrew service, restart it with `brew services restart iphone-control`. Skip this step if you do not use a service. Reopen Viewer and reconnect your MCP client to use the new version.
+For a managed script installation, close Viewer, MCP and other device clients, then run `iphone-control update`. On Homebrew the same command upgrades the executable on disk through the tap. A running `brew services` service is restarted afterwards. Reopen Viewer and reconnect your MCP client to use the new version.
 
 For a source build, run the following commands.
 

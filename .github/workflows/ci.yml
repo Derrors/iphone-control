@@ -52,6 +52,8 @@ jobs:
       # --all-features：默认不编的 debug-cmds（调试子命令）也要能编译
       - run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
       - run: cargo test --workspace --all-features --locked
+      - name: Terminal menus (PTY)
+        run: python3 tests/terminal.py --binary target/debug/iphone-control --test-dir target/debug/deps
 
   # macOS（Apple Silicon）上能编译、测试通过；格式和平台无关，上面已经查过
   macos:
@@ -68,6 +70,8 @@ jobs:
       # --all-features：默认不编的 debug-cmds（调试子命令）也要能编译
       - run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
       - run: cargo test --workspace --all-features --locked
+      - name: Terminal menus (PTY)
+        run: python3 tests/terminal.py --binary target/debug/iphone-control --test-dir target/debug/deps
 
   # 安装方式能用：deb 打得出、装得上；用临时签名发行包校验 install.sh；Homebrew formula 能生成
   packages:

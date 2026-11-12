@@ -21,6 +21,25 @@ These go before the command, for example `iphone-control --socket /path/ctl.sock
 | `mcp` | MCP stdio server, started by the AI client |
 | `mcp-config` | Prints the command that registers the MCP server with Claude Code, with a program path that stays the same across upgrades (Homebrew's `opt` link) |
 
+## Shell completion
+
+`iphone-control completions <bash|zsh|fish>` writes a completion script to stdout, including the current build's subcommands, options and enum values. It does not read the settings file, acquire a device maintenance lock, or connect to the daemon or a phone. Descriptions default to Chinese; prefix the command with `IPHONE_CONTROL_LANG=en` for English.
+
+```bash
+# Bash: enable in the current session
+source <(iphone-control completions bash)
+
+# Zsh: save in a custom completion directory
+mkdir -p ~/.zsh/completions
+iphone-control completions zsh > ~/.zsh/completions/_iphone-control
+
+# Fish: use its automatically loaded completion directory
+mkdir -p ~/.config/fish/completions
+iphone-control completions fish > ~/.config/fish/completions/iphone-control.fish
+```
+
+For Zsh, add `fpath=(~/.zsh/completions $fpath)` before `compinit` in `~/.zshrc`, and make sure `autoload -Uz compinit; compinit` runs. For Bash, put the `source` line above in `~/.bashrc` to load completions on startup. Regenerate the Zsh/Fish files after upgrading; the Bash startup command reads the updated definitions automatically. If you use a custom Fish configuration directory, use its `completions` subdirectory.
+
 ## Host software updates
 
 Run `iphone-control update` to check the publisher's latest stable release. It reports when you are up to date. When an upgrade is available, it first says what it will do (from which version to which, and whether the background service restarts), asks whether to continue, then upgrades through the installation method of the running executable. In a script or without a terminal, add `--yes` to upgrade without asking.
@@ -68,6 +87,12 @@ These commands find the service set up by the one-command install, `iphone-contr
 | `sign` | Sign and install WDA now, same as `resign --force`. Registers the device with the Apple ID |
 | `resign [--force]` | Re-sign only when fewer than `RESIGN_MIN_DAYS` days remain; `--force` re-signs now. Without `--force` it doesn't register a device that has never had WDA |
 
+In setup menus, use ↑/↓ to move and Enter to confirm, or type a number and press Enter. Confirmation prompts also accept ←/→. Esc or Ctrl+C cancels the guide: saved steps are kept, and the current unconfirmed choice is not submitted. A `>` marker identifies the selection without relying on color. After resizing the terminal, the next key redraws the menu at the new width.
+
+With `TERM=dumb`, redirected output or a terminal that is too small when the menu starts, menus use the original numbered/text prompts. Shrinking an active menu preserves its input and pauses confirmation until the window is enlarged; cancellation remains available. Setup still requires stdin to be a terminal; it cannot run unattended through a pipe. These shortcuts apply to menus only; passwords stay hidden.
+
+Cancellation preserves saved settings and discards unsaved changes. In the full guide, language and proxy settings are saved together, so cancelling at the proxy step also discards the language choice made just before it.
+
 ## Checking state
 
 | Command | What it does |
@@ -112,7 +137,7 @@ The `debug` subcommand for diagnostics isn't compiled by default; see the [contr
 
 - **Need the daemon running:** the phone part of `setup`, `status`, `doctor`, `sign`, `resign`, `devices`, `select`, `unlock-reset`, `wda-bridge`, `viewer`, `task`, and MCP tool calls.
 - **Need an interactive terminal:** `iphone-control` with no command (the first time), `setup`, `login`, `passcode set`.
-- **Settings:** every command reads `~/.config/iphone-control/env` when it starts; a variable already in the environment wins. See [Configuration](./configuration#settings-file).
+- **Settings:** every command except `completions` reads `~/.config/iphone-control/env` when it starts; a variable already in the environment wins. See [Configuration](./configuration#settings-file).
 
 ## The control page's picture {#viewer-picture}
 

@@ -61,6 +61,8 @@ All notable changes to this project are documented here. The format is based on 
 
 ### Added
 
+- Navigate setup menus with arrow keys, confirm with Enter, or cancel with Esc. Number selection remains available, and basic terminals keep the line-by-line prompts.
+- Generate Bash, Zsh and Fish completion scripts with `iphone-control completions <shell>`, without starting the daemon or accessing a device.
 - Check for host software updates with `iphone-control update check` or **About & updates** in the viewer. A red dot marks a newer stable release from the build's publisher. Open the panel to see the version and copy the upgrade command for your installation when available.
 - User services installed from a signed release can upgrade with `iphone-control update apply` and roll back with `iphone-control update rollback`. They check for updates by default. Opt in with `iphone-control update policy auto-patch` to install signed patches while idle and restore the previous version if the daemon fails its health check.
 - A redesigned control page: a workspace that fits wide and narrow windows, frosted panels (solid with high contrast or reduced transparency), and the task input, executor and settings together at the foot of the sidebar. Devices show their product name (iPhone 15 Pro rather than `iPhone16,1`) in an iPhone or iPad frame, and the status bar tells apart waiting for a device, connecting, view only, live and disconnected.

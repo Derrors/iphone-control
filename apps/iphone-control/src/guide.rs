@@ -19,6 +19,27 @@ use ictl_l10n::Lang;
 use crate::envfile::{self, EnvFile};
 use crate::{Cli, service};
 
+mod terminal;
+use terminal::{ask_yes, choose};
+
+/// Cancellation is a normal end to the guide, not a failed setup. Completed
+/// steps may already have written settings or changed the system; do not undo them.
+fn finish(result: anyhow::Result<()>) -> anyhow::Result<()> {
+    match result {
+        Err(error) if error.is::<terminal::Cancelled>() => {
+            println!(
+                "\n{}",
+                ictl_l10n::tr!(
+                    "已取消当前向导。已保存的设置和已完成的步骤会保留；当前未保存的输入会丢弃。重新运行可继续设置。",
+                    "Setup cancelled. Saved settings and completed steps are kept; unsaved input is discarded. Run setup again to continue."
+                )
+            );
+            Ok(())
+        }
+        other => other,
+    }
+}
+
 fn marker() -> PathBuf {
     envfile::config_dir().join("setup-done")
 }
@@ -39,6 +60,8 @@ fn heading(zh: &str, en: &str) {
 }
 
 fn need_terminal() -> anyhow::Result<()> {
+    // Keep setup's existing safety boundary: piped answers must not start
+    // services or change a device. TERM=dumb still works with line prompts.
     if !std::io::stdin().is_terminal() {
         bail!(
             "{}",
@@ -51,40 +74,12 @@ fn need_terminal() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// `[Y/n]` or `[y/N]`; Enter takes the default
-fn ask_yes(prompt: &str, default: bool) -> anyhow::Result<bool> {
-    let hint = if default { "[Y/n]" } else { "[y/N]" };
-    loop {
-        let a = crate::read_line(&format!("{prompt} {hint} "))?.to_ascii_lowercase();
-        match a.as_str() {
-            "" => return Ok(default),
-            "y" | "yes" | "是" | "好" => return Ok(true),
-            "n" | "no" | "否" | "不" => return Ok(false),
-            _ => println!("{}", ictl_l10n::tr!("  输入 y 或 n", "  Enter y or n")),
-        }
-    }
-}
-
-/// A numbered choice; Enter takes `default` (0-based). Returns the index
-fn choose(prompt: &str, options: &[&str], default: usize) -> anyhow::Result<usize> {
-    println!("{prompt}");
-    for (i, o) in options.iter().enumerate() {
-        println!("  {}) {o}{}", i + 1, if i == default { ictl_l10n::tr!("（默认）", " (default)") } else { "" });
-    }
-    loop {
-        let a = crate::read_line(ictl_l10n::tr!("选择: ", "Choice: "))?;
-        if a.is_empty() {
-            return Ok(default);
-        }
-        match a.parse::<usize>() {
-            Ok(n) if (1..=options.len()).contains(&n) => return Ok(n - 1),
-            _ => println!("{}", ictl_l10n::trf!("  输入 1 到 {}", "  Enter 1 to {}", options.len())),
-        }
-    }
-}
-
 /// `iphone-control` with no arguments
 pub async fn first_run(cli: &Cli) -> anyhow::Result<()> {
+    finish(first_run_inner(cli).await)
+}
+
+async fn first_run_inner(cli: &Cli) -> anyhow::Result<()> {
     if done() {
         return already_set_up(cli).await;
     }
@@ -101,6 +96,10 @@ pub async fn first_run(cli: &Cli) -> anyhow::Result<()> {
 
 /// `iphone-control setup [--reconfigure]`
 pub async fn setup(cli: &Cli, reconfigure: bool) -> anyhow::Result<()> {
+    finish(setup_inner(cli, reconfigure).await)
+}
+
+async fn setup_inner(cli: &Cli, reconfigure: bool) -> anyhow::Result<()> {
     need_terminal()?;
     if !reconfigure {
         return full(cli).await;
@@ -168,6 +167,8 @@ async fn full_with(cli: &Cli, force: bool) -> anyhow::Result<()> {
     let mut env = EnvFile::open(&envfile::path())?;
 
     heading("语言 / Language", "Language / 语言");
+    // Save these together immediately before applying them to the daemon.
+    // Cancelling at the proxy menu leaves the previous settings intact.
     let mut changed = language(&mut env, force)?;
     heading("代理", "Proxy");
     changed |= proxy(&mut env, force)?;

@@ -1752,6 +1752,8 @@ stage.addEventListener('pointermove', ev => {
   if (down && ev.pointerId !== down.pointerId) return;
   const p = toPoints(ev.clientX, ev.clientY);
   moveHoverDot(p, ev);
+  // 鼠标停在画面上移动时也保持 HID 会话打开（空闲 30 秒会被关，按下时重开要约 0.5 秒）；touchWarm 自己限频到 20 秒一次
+  if (!down) touchWarm();
   if (down && down.live && !down.legacy) {
     const pos = p || toPoints(ev.clientX, ev.clientY, true);
     if (pos) fingerMove(pos); else cancelGestures();

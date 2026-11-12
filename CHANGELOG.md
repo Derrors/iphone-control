@@ -20,6 +20,7 @@ All notable changes to this project are documented here. The format is based on 
 ### Fixed
 
 - Piping output into a program that exits early, such as `iphone-control status | head -1`, no longer crashes with "Broken pipe"; the command ends quietly like other command-line tools.
+- Touches on the control page respond faster again: a press no longer measures the screen size on WDA each time (about 0.1–0.2 s, new in 0.2.2); the size is measured on rotation and at most once a minute. Moving the mouse over the picture also keeps the touch session open, so the first press after a pause doesn't wait about 0.5 s for it to reopen.
 
 ## [0.2.2] - 2026-11-12
 

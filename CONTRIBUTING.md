@@ -8,6 +8,7 @@ Most of the code comments, design documents and commit messages in this reposito
 
 - **Bugs:** include the iPhone or iPad model, iOS version, how you installed it (install.sh, Homebrew, .deb or source; Linux or macOS), and the output of `iphone-control doctor`, with private data removed. The [issue template](.github/ISSUE_TEMPLATE/bug_report.yml) asks for these.
 - **Larger changes:** open an issue first. The key design decisions and their reasons are in [docs/decisions.md](docs/decisions.md); the regression cases every change must keep passing are in [docs/dev/regression-cases.md](docs/dev/regression-cases.md).
+- **Tests:** every pull request must pass the tests in [Required tests](#required-tests); read it before you start, since the device part needs a phone.
 - **Security problems:** don't open an issue — see [SECURITY.md](SECURITY.md).
 
 ## Building and testing without a phone
@@ -39,12 +40,12 @@ Anything that touches the device, timing or WebDriverAgent behaviour needs a rea
 
 ```bash
 python3 -m venv .venv && .venv/bin/pip install -r tests/device/requirements.txt
-export MCP_CMD="iphone-control mcp"            # run.py still defaults to the old container command
+export MCP_CMD="$PWD/target/release/iphone-control mcp"   # your build; the daemon must be the same build
 .venv/bin/python tests/device/run.py            # default steps: harmless (Home, Clock tabs, Spotlight search)
 .venv/bin/python tests/device/run.py '[["iphone_launch_app", {"app": "设置"}], ["iphone_screenshot", {}]]'
 ```
 
-`run.py` prints every result with its wall time and saves screenshots to `./shots`. Use the full path of the binary in `MCP_CMD` if it isn't on your `PATH`. Please mention in the pull request what you ran on which device and iOS version.
+`run.py` prints every result with its wall time, ends with a line counting calls and failures, saves screenshots to `./shots` and exits with 1 if any call failed. `MCP_CMD` defaults to `iphone-control mcp` on your `PATH`. To test your branch, run its daemon too (stop the installed service with `iphone-control service stop`, then start `target/release/iphone-control daemon` in another terminal; `service start` afterwards). What a pull request has to run on the device is in [Required tests](#required-tests).
 
 On macOS, the full checklist (setup, `debug` checks, coexistence with Finder, reconnect) is in [docs/dev/macos-verification.md](docs/dev/macos-verification.md).
 
@@ -71,9 +72,39 @@ Notes:
 - **Never commit** `data/`, `~/.config/iphone-control/env` or other settings files with secrets, certificates, provisioning profiles, pairing records or anything Apple ships (Developer Disk Images, frameworks).
 - Comments explain *why*, especially device quirks; put measured numbers next to timeouts and thresholds.
 
+## Required tests
+
+Every pull request must pass the three kinds of tests below, and its description must show it: the [pull request template](.github/PULL_REQUEST_TEMPLATE.md) has a section for each. A pull request without them is asked for them before review. The rules apply to maintainers too. 每个 PR 都必须通过下面三类测试，并在描述里写明结果。
+
+### 1. Unit tests — every pull request
+
+- `cargo test`, clippy with `-D warnings` and `cargo fmt --check` ([commands above](#building-and-testing-without-a-phone)) pass on your machine. CI runs them on Linux and macOS, plus the MSRV check, gitleaks and the package checks; a pull request with a failing check isn't merged.
+- New behaviour and every bug fix come with a unit test when the logic can run without a phone (parsing, decisions, state, arguments, protocol). For a fix, the test fails without it. Name the tests in the pull request, or say why there can't be one.
+- Don't delete, `#[ignore]` or loosen an existing test to make a change pass. If a test is wrong, fix it and explain why in the pull request.
+- Tests marked `#[ignore]` are run by hand when their area changes, and named in the pull request: `slow_page_stays_close_to_live` (`apps/iphone-control/src/video/`, needs ffmpeg) and `measure_recording` (`video/vt.rs`, macOS only). Run one with `cargo test --workspace --all-features --locked -- --ignored --nocapture <name>`.
+
+### 2. Real-device regression — every pull request that touches the phone
+
+Needed when the change touches code that talks to a phone or changes what it does or how long it takes: anything under `crates/` and `apps/` except pure text changes (comments, translations that don't change meaning). Not needed for changes limited to documentation, the website, CI, packaging or other tests; say so in the template.
+
+- **Default steps:** build your branch, run its daemon and `tests/device/run.py` with the default steps on a real iPhone or iPad ([Testing on a real phone](#testing-on-a-real-phone)). Every call succeeds and the exit code is 0.
+- **No slower, no less stable:** on the same device, run the default steps once more on `main` (or the latest release), and paste both outputs. A step that became clearly slower (more than about 20 %, or by more than 0.5 s) needs a reason. A change that could affect long-running behaviour (WDA start-up and recovery, reconnecting, unlocking, the live picture, timers) also needs a longer run: repeat the default steps for at least an hour, e.g. `for i in $(seq 12); do .venv/bin/python tests/device/run.py || break; sleep 300; done`, and report failures and how the times developed.
+- **What you changed:** also run steps that exercise the change itself (pass them as a JSON list) and paste the output.
+- **The right hardware:** when the change concerns iPad, landscape, an iOS version or a platform, test on that. Changes to macOS-only code go through [docs/dev/macos-verification.md](docs/dev/macos-verification.md).
+- **In the pull request:** device model, iOS version, Linux or macOS, and the outputs (the `===` lines and the last line are enough; remove private data).
+
+### 3. Regression cases — every pull request
+
+[docs/dev/regression-cases.md](docs/dev/regression-cases.md) lists the problems this project has run into, with the right behaviour and how each is tested. Every pull request must keep all of them passing.
+
+- Cases tested by unit tests are covered by part 1.
+- Cases tested on a device (真机, headless Chrome, measured by hand) in the area you changed: run them again and list their numbers in the pull request. To find them, search the file for the module, tool or behaviour you changed; if none apply, say so.
+- A pull request that fixes a problem not in the list adds a row: the problem, the right behaviour, and how it is tested (the unit test's name, or the device steps).
+
 ## Pull requests
 
-- Keep them focused; describe what changed and how you tested it (offline and/or which device).
+- Keep them focused; describe what changed and why.
+- The tests above pass and are reported in the template ([Required tests](#required-tests)).
 - CI must pass: format, clippy with `-D warnings`, tests (on Linux and macOS), the MSRV check, gitleaks and the package checks (`.deb`, `install.sh`, the Homebrew formula).
 - User-visible changes get a line in [CHANGELOG.md](CHANGELOG.md) and [CHANGELOG.zh-CN.md](CHANGELOG.zh-CN.md) under *Unreleased* (a Chinese line is welcome but optional for outside contributors; maintainers add it before release).
 

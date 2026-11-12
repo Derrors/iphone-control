@@ -5,9 +5,11 @@ result with its wall time, and save screenshots.
     python tests/device/run.py                      # default steps (harmless: Home, Clock tabs, Spotlight search)
     python tests/device/run.py '[["iphone_status", {}], ["sleep", 1], ["iphone_screenshot", {}]]'
 
-The MCP server command comes from MCP_CMD (default: `iphone-control mcp`;
-for a source install use e.g. `iphone-control mcp`). Screenshots go to SHOTS_DIR (default: ./shots).
+The MCP server command comes from MCP_CMD (default: `iphone-control mcp`; for a build of your branch use its
+full path, e.g. `target/release/iphone-control mcp`). Screenshots go to SHOTS_DIR (default: ./shots).
 A step `["sleep", seconds]` waits without calling a tool. Exit code is 1 if any tool returned an error.
+The last line sums it up (calls, failures, total time): paste the output into the pull request, see
+CONTRIBUTING.md, "Required tests".
 """
 
 import asyncio
@@ -46,7 +48,11 @@ async def main() -> int:
     shots = os.environ.get("SHOTS_DIR", "shots")
     os.makedirs(shots, exist_ok=True)
     failed = 0
-    params = StdioServerParameters(command=cmd[0], args=cmd[1:])
+    # the whole environment: the MCP SDK passes only a few variables by default, and without XDG_RUNTIME_DIR the
+    # server looks for the daemon's socket in the wrong place (every call fails at once)
+    params = StdioServerParameters(command=cmd[0], args=cmd[1:], env=dict(os.environ))
+    calls = 0
+    t0 = time.time()
     async with stdio_client(params) as (r, w), ClientSession(r, w) as session:
         await session.initialize()
         n = 0
@@ -67,9 +73,11 @@ async def main() -> int:
                     out.append(f"<image {path}>")
                 else:
                     out.append(c.text)
+            calls += 1
             failed += bool(res.is_error)
             flag = " ERROR" if res.is_error else ""
             print(f"=== {name} {json.dumps(args, ensure_ascii=False)} {dt:.2f}s{flag}\n" + "\n".join(out), flush=True)
+    print(f"--- {calls} calls, {failed} failed, {time.time() - t0:.1f}s in all", flush=True)
     return 1 if failed else 0
 
 

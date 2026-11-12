@@ -43,6 +43,7 @@ idevice = { version = "=0.1.68", default-features = false, features = [
     "cryptexd",
     "tss",
     "installation_proxy",
+    "springboardservices",
     "misagent",
     "xctest",
     # developer tools (IPHONE_CONTROL_DEV_TOOLS): os_trace logs, crash reports

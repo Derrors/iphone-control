@@ -39,6 +39,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      - name: Viewer interaction tests
+        run: node --test tests/viewer/*.test.mjs
       # 锁定工具链（与发布一致）：新版 clippy 的 lint 不会在代码没变时把 CI 弄挂
       - uses: dtolnay/rust-toolchain@1.99.1
         with:

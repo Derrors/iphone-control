@@ -1689,8 +1689,17 @@ async function touchPump() {
     show(v.message || tr('操作失败'), 'err');
     if (e.phase === 'down') {
       fingerUp(T.last);
-      if (down) down.legacy = true;
-      // 连着两次按不下去（HID 不可用），本页之后都用整段手势
+      if (v.retry_as_gesture !== true) {
+        if (down?.gesture === e.gesture) { down = null; hideHoverDot(); }
+        if (W.on && W.gesture === e.gesture) {
+          W.on = false; W.pend = { x: 0, y: 0 };
+          clearTimeout(W.idle); cancelAnimationFrame(W.raf);
+        }
+        loadInfo();
+        continue;
+      }
+      if (down?.gesture === e.gesture) down.legacy = true;
+      // 同一画面连续两次在按下前无法建立 HID 会话，后续改用整段手势。
       if (++T.fails >= 2) { S.liveTouch = false; renderFeed(); }
     }
   }
@@ -1700,7 +1709,13 @@ function touchWarm() {
   if (!S.liveTouch || S.mode !== 'live' || !dims() || guarded() || Date.now() - T.warm < 20000) return;
   T.warm = Date.now(); touchSend('prepare', null);
 }
-function fingerDown(p) { ++T.gesture; T.on = true; T.last = p; touchSend('down', p); clearInterval(T.keep); T.keep = setInterval(() => { if (T.on && T.last) touchSend('move', T.last); }, 100); }
+function fingerDown(p) {
+  ++T.gesture; T.on = true; T.last = p;
+  touchSend('down', p);
+  clearInterval(T.keep);
+  T.keep = setInterval(() => { if (T.on && T.last) touchSend('move', T.last); }, 100);
+  return T.gesture;
+}
 function fingerMove(p) { if (!T.on) return; T.last = p; touchSend('move', p); }
 function fingerUp(p) { if (!T.on) return; T.on = false; clearInterval(T.keep); touchSend('up', p || T.last); T.last = null; }
 stage.addEventListener('pointerenter', touchWarm);
@@ -1714,7 +1729,7 @@ stage.addEventListener('pointerdown', ev => {
   wheelEnd(true);
   const liveFinger = S.mode === 'live' && S.liveTouch && !!p;
   down = { p, pointerId: ev.pointerId, t: performance.now(), cx: ev.clientX, cy: ev.clientY, live: liveFinger, legacy: false };
-  if (liveFinger) fingerDown(p);
+  if (liveFinger) down.gesture = fingerDown(p);
 });
 /* 鼠标悬停时跟随光标的小圆点，标出将要点到的位置；触屏、画面外、AI 操作时不显示 */
 let hoverDot = null;
@@ -1775,7 +1790,7 @@ stage.addEventListener('wheel', ev => {
   W.pend.x += ev.deltaX * k * pointsPerPx(); W.pend.y += ev.deltaY * k * pointsPerPx();
   if (!W.on) {
     W.on = true; W.start = wheelSafe(p); W.cur = { ...W.start };
-    if (S.liveTouch) { fingerDown(W.cur); W.raf = requestAnimationFrame(wheelStep); }
+    if (S.liveTouch) { W.gesture = fingerDown(W.cur); W.raf = requestAnimationFrame(wheelStep); }
   }
   clearTimeout(W.idle); W.idle = setTimeout(() => wheelEnd(false), 160);
 }, { passive: false });
@@ -1789,7 +1804,7 @@ function wheelStep() {
   if (sx || sy) {
     const next = { x: round1(W.cur.x - sx), y: round1(W.cur.y - sy) };
     if (next.x < 20 || next.x > d.W - 20 || next.y < 40 || next.y > d.H - 40) {
-      fingerUp(W.cur); W.cur = { ...W.start }; fingerDown(W.cur);
+      fingerUp(W.cur); W.cur = { ...W.start }; W.gesture = fingerDown(W.cur);
     } else { W.cur = next; fingerMove(W.cur); }
   }
   W.raf = requestAnimationFrame(wheelStep);
@@ -1867,11 +1882,12 @@ function applyInfo(v) {
   const changed = S.udid !== udid, display = v.display || null;
   if (changed || S.display?.id !== display?.id) {
     cancelGestures();  // queue a release for the original device and view
+    T.fails = 0;
     S.rtt = null; S.elements = []; S.elState = 'idle';
     highlight(null); marks.replaceChildren(); hoverDot = null;
     if (changed) {
       S.daemon = null; S.dstatus = null; S.apps = []; S.appsState = 'idle'; appNames.map = null; appNames.loading = false;
-      T.warm = 0; T.fails = 0; V.noDevice = false;
+      T.warm = 0; V.noDevice = false;
     }
   }
   const reconnect = feedId && (changed || S.display?.id !== display?.id);
@@ -2480,7 +2496,7 @@ async function loadElements() {
   renderElements();
 }
 function renderElements() {
-  const ul = $('#elements'), q = $('#el-q').value.trim().toLowerCase(), lock = guarded() || !dims();
+  const ul = $('#elements'), q = $('#el-q').value.trim().toLowerCase(), lock = guarded() || (S.mode === 'live' && (!S.udid || S.switching));
   const list = S.elements.map((e, i) => ({ ...e, i })).filter(e => !q || e.label.toLowerCase().includes(q) || e.type.toLowerCase().includes(q));
   $('#el-count').textContent = S.elState === 'ok' ? `${list.length} ${tr('个')}${S.mode === 'demo' ? tr(' · 演示数据') : ''}` : '';
   if (S.elState === 'loading') { ul.innerHTML = tr('<li class="sr-only">正在读取元素…</li>') + '<li class="skel-row no-tile" aria-hidden="true"><span class="skel-lines"><span class="skel l1"></span><span class="skel l2"></span></span></li>'.repeat(6); return; }
@@ -2499,14 +2515,13 @@ elList.addEventListener('focusin', ev => { const row = ev.target.closest('[data-
 elList.addEventListener('focusout', () => highlight(null));
 async function tapElement(i) {
   if (guarded()) { nudgeGuard(); return; }
-  const e = S.elements[i]; if (!e || !dims()) return;
+  const e = S.elements[i]; if (!e) return;
   const same = S.elements.slice(0, i).filter(x => x.label === e.label).length;
-  const p = { x: round1(e.x + e.width / 2), y: round1(e.y + e.height / 2) };
   highlight(null);
-  if (S.mode === 'live') { drawMark('tap', 'user', p); await act('/api/tap_element', { view: S.display.id, text: e.label, index: same }); }
+  if (dims()) drawMark('tap', 'user', { x: round1(e.x + e.width / 2), y: round1(e.y + e.height / 2) });
+  if (S.mode === 'live') await act('/api/tap_element', { text: e.label, index: same });
   else {
     const el = $$('[data-label]', demoEl).filter(x => x.dataset.label === e.label)[same];
-    drawMark('tap', 'user', p);
     show(`${tr('按名字点「')}${e.label}${tr('」：')}${el && el.dataset.act ? demoAct(el.dataset.act) : tr('它不是可点的控件，界面没有变化')}`);
   }
   S.elState = 'stale'; renderElements();

@@ -3,7 +3,7 @@
 use std::time::Duration;
 
 use base64::Engine;
-use ictl_device::ScreenSize;
+use ictl_device::{Rotation, ScreenSize};
 use serde_json::{Value, json};
 
 use crate::http::Transport;
@@ -112,6 +112,7 @@ pub struct WdaClient<T> {
     session: Option<String>,
     /// `/wda/screen` 第一次给的尺寸（当时的方向）。当前方向下的宽高见 [`Self::view`]
     screen: Option<ScreenSize>,
+    rotation_unsupported: bool,
     /// 本客户端（对应一次 WDA 启动）是否确认过一次「确实没锁屏」，确认后 `/wda/locked` 就可信了
     lock_state_trusted: bool,
     /// 点击前后要恢复的等待设置（第一次点击时读一次）
@@ -129,6 +130,7 @@ impl<T: Transport> WdaClient<T> {
             transport,
             session: None,
             screen: None,
+            rotation_unsupported: false,
             lock_state_trusted: false,
             idle_baseline: None,
             idle_current: None,
@@ -159,6 +161,10 @@ impl<T: Transport> WdaClient<T> {
                 kind: err.to_owned(),
                 message: msg.lines().next().unwrap_or_default().to_owned(),
             });
+        }
+        // Older runners may return a JSON 404 without a W3C value.error.
+        if status >= 400 {
+            return Err(WdaError::Remote { kind: "http".into(), message: status.to_string() });
         }
         Ok(v)
     }
@@ -284,6 +290,41 @@ impl<T: Transport> WdaClient<T> {
                 "Can't make sense of the rotation WDA reported: {v}"
             ))
         })
+    }
+
+    /// Older WDA versions lack /rotation. Remember an unsupported route for this runner;
+    /// the regular /orientation endpoint folds opposite directions into the same string.
+    async fn interface_rotation(&mut self, fallback: impl Future<Output = Option<Rotation>>) -> Option<Rotation> {
+        if !self.rotation_unsupported {
+            match self.rotation().await {
+                Ok(r) => return Some(r),
+                Err(WdaError::Remote { kind, message })
+                    if matches!(kind.as_str(), "unknown command" | "unknown method" | "unsupported operation")
+                        || (kind == "http" && matches!(message.as_str(), "404" | "405")) =>
+                {
+                    self.rotation_unsupported = true;
+                }
+                Err(_) => return None,
+            }
+        }
+        fallback.await
+    }
+
+    /// Poll rotation to detect a changed view. The screen-size request is slower and is
+    /// needed on acquisition, on rotation, and after unlock for a new coordinate action.
+    pub async fn display_sample(
+        &mut self,
+        previous: Option<u16>,
+        gesture_start: bool,
+        fallback: impl Future<Output = Option<Rotation>>,
+    ) -> (Option<ScreenSize>, Option<Rotation>) {
+        let rotation = self.interface_rotation(fallback).await;
+        let size = if gesture_start || rotation.is_some_and(|r| Some(r.degrees()) != previous) {
+            self.measure_screen().await
+        } else {
+            self.base_screen_size().await
+        };
+        (size.ok().map(ScreenSize::portrait), rotation)
     }
 
     /// 前台界面的方向
@@ -745,6 +786,70 @@ mod tests {
             let (s, b) = self.replies.lock().unwrap().pop_front().ok_or_else(|| std::io::Error::other("连接被拒绝"))?;
             Ok((s, b.into_bytes()))
         }
+    }
+
+    #[tokio::test]
+    async fn display_poll_remeasures_size_only_when_needed() {
+        let session = (200, r#"{"sessionId":"A"}"#);
+        let size = (200, r#"{"value":{"screenSize":{"width":393,"height":852}}}"#);
+        let portrait = (200, r#"{"value":{"z":0}}"#);
+        let landscape = (200, r#"{"value":{"z":90}}"#);
+        let m = Mock::with(&[session, portrait, size, portrait, landscape, size, landscape, size]);
+        let mut w = WdaClient::new(&m);
+        for (previous, start, expected) in [
+            (None, false, Rotation::Portrait),
+            (Some(0), false, Rotation::Portrait),
+            (Some(0), false, Rotation::TopToRight),
+            (Some(90), true, Rotation::TopToRight),
+        ] {
+            let (size, rotation) = w.display_sample(previous, start, async { panic!("unexpected fallback") }).await;
+            assert_eq!(rotation, Some(expected));
+            assert_eq!(size.unwrap().width, 393.);
+        }
+        let paths: Vec<_> = m.seen.lock().unwrap().iter().map(|s| s.1.clone()).collect();
+        assert_eq!(
+            paths,
+            [
+                "/session",
+                "/session/A/rotation",
+                "/wda/screen",
+                "/session/A/rotation",
+                "/session/A/rotation",
+                "/wda/screen",
+                "/session/A/rotation",
+                "/wda/screen"
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn legacy_http_404_is_distinct_from_a_transient_rotation_failure() {
+        let m = Mock::with(&[
+            (200, r#"{"sessionId":"A"}"#),
+            (500, r#"{"value":"runner busy"}"#),
+            (200, r#"{"value":{"z":90}}"#),
+            (404, r#"{"value":{"message":"Unhandled endpoint"}}"#),
+        ]);
+        let mut w = WdaClient::new(&m);
+        assert_eq!(w.interface_rotation(async { panic!("500 is not a missing route") }).await, None);
+        assert_eq!(w.interface_rotation(async { panic!("supported route") }).await, Some(Rotation::TopToRight));
+        assert_eq!(w.interface_rotation(async { Some(Rotation::UpsideDown) }).await, Some(Rotation::UpsideDown));
+    }
+
+    #[tokio::test]
+    async fn legacy_wda_uses_a_fresh_interface_rotation_without_retrying_the_missing_route() {
+        let m = Mock::with(&[
+            (200, r#"{"sessionId":"A"}"#),
+            (404, r#"{"value":{"error":"unknown command"}}"#),
+            (200, r#"{"value":{"screenSize":{"width":393,"height":852}}}"#),
+        ]);
+        let mut w = WdaClient::new(&m);
+        let (size, rotation) = w.display_sample(None, false, async { Some(Rotation::UpsideDown) }).await;
+        assert_eq!(size.unwrap().width, 393.);
+        assert_eq!(rotation, Some(Rotation::UpsideDown));
+        assert_eq!(w.interface_rotation(async { Some(Rotation::TopToLeft) }).await, Some(Rotation::TopToLeft));
+        assert_eq!(w.interface_rotation(async { None }).await, None);
+        assert_eq!(m.seen.lock().unwrap().len(), 3);
     }
 
     #[tokio::test]

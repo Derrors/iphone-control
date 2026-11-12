@@ -196,12 +196,12 @@ pub enum Response {
         outcome: Option<Outcome>,
     },
     /// JPEG base64 + 说明文字（尺寸、放大倍数、坐标换算式）
-    Image {
-        jpeg_base64: String,
-        caption: String,
-    },
+    Image { jpeg_base64: String, caption: String },
     Error {
         message: String,
+        /// The touch Down could not open a HID session and sent no contact report.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        retry_as_gesture: bool,
     },
 }
 
@@ -225,7 +225,7 @@ impl Response {
         Self::Text { text: s.into(), outcome: Some(outcome) }
     }
     pub fn error(s: impl Into<String>) -> Self {
-        Self::Error { message: s.into() }
+        Self::Error { message: s.into(), retry_as_gesture: false }
     }
 }
 
@@ -334,7 +334,7 @@ pub async fn open_screen_stream(
         .await
         .map_err(|_| std::io::Error::new(std::io::ErrorKind::TimedOut, "screen stream: no answer"))??;
     Ok(match serde_json::from_str::<Response>(&first).map_err(std::io::Error::other)? {
-        Response::Error { message } => Err(message),
+        Response::Error { message, .. } => Err(message),
         _ => Ok((r, w)),
     })
 }

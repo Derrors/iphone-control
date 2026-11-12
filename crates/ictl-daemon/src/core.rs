@@ -261,14 +261,16 @@ pub struct Snapshot {
 #[derive(Default)]
 pub(crate) struct PerDevice {
     pub display: Option<DisplayGeometry>,
+    /// Last complete measurement; passive partial samples never extend this window.
+    pub display_verified_at: Option<Instant>,
     /// 这台手机上的 WDA 描述文件
     pub device_profile: DeviceProfile,
     /// 那份描述文件里没有本机签名私钥的证书（Some(true)）：WDA 是别的机器、旧的数据目录签的，或本机的证书是后来才
     /// 新建的。这时 WDA 起不来多半是签它的证书被吊销了，用本机的证书重签就好（[`Daemon::heal_certificate`]）。
     /// None：不知道（没读到描述文件、本机还没签过名）
     pub foreign_wda: Option<bool>,
-    /// WDA 最近一次报的界面旋转及读取时间。只在短暂掉线时给 HID 使用，不持久化
-    pub wda_rotation: Option<(Instant, Rotation)>,
+    /// 最近一次由 WDA 或 SpringBoard 确认的界面旋转及读取时间。只在短暂掉线时给 HID 使用，不持久化
+    pub last_rotation: Option<(Instant, Rotation)>,
     /// 开发者镜像连续挂载失败次数，到 3 次清缓存重新下载
     pub ddi_failures: u32,
     /// 最近一次经本进程锁屏的时间（自动解锁要等锁屏过渡走完，见 [`crate::tools::LOCK_SETTLE`]）
@@ -291,8 +293,8 @@ pub(crate) struct Inner {
     pub info: Option<DeviceInfo>,
     /// 最近一轮巡检时 USB 上接着的全部设备
     pub connected: Vec<UsbDevice>,
-    /// 各设备的名字、型号（第一次见到时读一次）
-    pub infos: HashMap<String, DeviceInfo>,
+    /// 每次 USB 接入的设备信息；字段不齐时限制重试频率
+    pub infos: HashMap<String, crate::devices::CachedInfo>,
     /// HID 和截图用的隧道（HID 会话归它所有）
     pub tunnel: Option<Tunnel>,
     pub runner: Option<WdaRunner>,
@@ -472,7 +474,7 @@ impl Daemon {
             .map(|d| {
                 g.infos
                     .get(&d.udid)
-                    .cloned()
+                    .and_then(|entry| entry.value.clone())
                     .unwrap_or_else(|| DeviceInfo { udid: d.udid.clone(), ..Default::default() })
             })
             .collect()
@@ -562,6 +564,7 @@ impl Daemon {
         }
         g.wda = None;
         g.dev.display = None;
+        g.dev.display_verified_at = None;
         g.elements_cache = None;
         g.swiped_tree = None;
         drop_tunnel(g).await;
@@ -714,6 +717,15 @@ impl Daemon {
         // 改变界面的操作做完后缓存的元素树就作废；只有调用方声明「不改变布局」的按名字点击（max_age_ms > 0）保留
         let keeps_cache = matches!(req, Request::TapElement { max_age_ms, .. } if max_age_ms > 0);
         let invalidates = req.is_device_action() && !keeps_cache;
+        let response = self.dispatch(g, req, view).await;
+        if invalidates {
+            g.elements_cache = None;
+        }
+        self.publish(g);
+        response
+    }
+
+    async fn dispatch(&self, g: &mut Inner, req: Request, view: Option<&str>) -> Response {
         // what the text reports, for clients that act on it (Response::Text.outcome)
         let mut outcome = crate::protocol::Outcome::default();
         let r = match req {
@@ -723,9 +735,7 @@ impl Daemon {
                 Err("screen_stream is a streaming request: open it with open_screen_stream".into())
             }
             Request::Screenshot { region } => {
-                let resp = self.screenshot(g, region).await.unwrap_or_else(Response::error);
-                self.publish(g);
-                return resp;
+                return self.screenshot(g, region).await.unwrap_or_else(Response::error);
             }
             Request::ListElements { filter, limit, max_age_ms } => {
                 self.list_elements(g, &filter, limit, Duration::from_millis(max_age_ms)).await
@@ -741,7 +751,13 @@ impl Daemon {
             Request::Swipe { from, to, seconds } => self.swipe(g, from, to, seconds, view).await,
             Request::TypeText { text, submit } => self.type_text(g, &text, submit).await,
             Request::PressButton { button } => self.press_button(g, &button).await,
-            Request::Touch { phase, x, y } => self.touch(g, phase, x, y, view).await,
+            Request::Touch { phase, x, y } => {
+                return self
+                    .touch(g, phase, x, y, view)
+                    .await
+                    .map(|()| Response::text_with("", outcome))
+                    .unwrap_or_else(|e| e);
+            }
             Request::ListApps { include_system } => self
                 .list_apps(g, include_system)
                 .await
@@ -777,10 +793,6 @@ impl Daemon {
             | Request::WebTargets
             | Request::WebEval { .. } => unreachable!("other lanes"),
         };
-        if invalidates {
-            g.elements_cache = None;
-        }
-        self.publish(g);
         r.map(|t| Response::text_with(t, outcome)).unwrap_or_else(Response::error)
     }
 
@@ -940,7 +952,7 @@ fn check_request(req: &Request) -> Result<(), String> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     /// 重签结果存成时间和成败，按看的人的语言显示；旧字段照旧写中文整句，旧版本的 state.json 照样读
@@ -968,7 +980,7 @@ mod tests {
         assert_eq!(o.last_resign.as_deref(), Some("2027-01-15 08:00:00 失败：boom"));
     }
 
-    fn test_daemon(tag: &str) -> (Arc<Daemon>, std::path::PathBuf) {
+    pub(crate) fn test_daemon(tag: &str) -> (Arc<Daemon>, std::path::PathBuf) {
         let dir = std::env::temp_dir().join(format!("ictl-core-{tag}-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         (Daemon::new(Config::from_env(&dir)), dir)
@@ -989,7 +1001,7 @@ mod tests {
             )
             .await;
         drop(busy);
-        assert!(matches!(&r, Response::Error { message } if message.contains("已取消")), "{r:?}");
+        assert!(matches!(&r, Response::Error { message, .. } if message.contains("已取消")), "{r:?}");
         std::fs::remove_dir_all(dir).unwrap();
     }
 
@@ -1012,12 +1024,65 @@ mod tests {
         assert_ne!(display.as_ref().unwrap().id, first);
     }
 
+    #[test]
+    fn a_down_dropped_in_the_queue_cannot_be_replayed() {
+        let req = Request::Touch { phase: crate::protocol::TouchPhase::Down, x: 1., y: 2. };
+        let ctx =
+            CallCtx { expect_udid: Some("phone".into()), expect_view: Some("portrait".into()), ..Default::default() };
+        let expired = Instant::now() - STALE - Duration::from_secs(1);
+        assert!(matches!(
+            admit(&req, expired, &ctx, Some("phone")),
+            Err(Response::Error { retry_as_gesture: false, .. })
+        ));
+    }
+
     #[tokio::test]
     async fn coordinate_from_a_previous_view_is_rejected_before_dispatch() {
         let (d, dir) = test_daemon("previous-view");
         let ctx = CallCtx { expect_view: Some("old-view".into()), ..Default::default() };
         let r = d.handle(Request::Tap { x: 3.0, y: 4.0 }, Instant::now(), ctx).await;
-        assert!(matches!(r, Response::Error { message } if message.contains("画面")));
+        assert!(matches!(r, Response::Error { message, retry_as_gesture: false } if message.contains("画面")));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn transient_status_miss_keeps_the_view_and_finger_until_loss_is_confirmed() {
+        let (d, dir) = test_daemon("status-miss-display");
+        let mut g = d.inner.lock().await;
+        let size = ScreenSize { width: 393., height: 852. };
+        DisplayGeometry::update(&mut g.dev.display, Some((size, Rotation::Portrait)));
+        let id = g.dev.display.as_ref().unwrap().id.clone();
+        g.dev.touch_rotation = Some(Rotation::Portrait);
+        for _ in 1..Misses::LIMIT {
+            assert!(!d.confirm_wda_loss(&mut g, true).await);
+            assert_eq!(g.dev.display.as_ref().unwrap().id, id);
+            assert_eq!(g.dev.touch_rotation, Some(Rotation::Portrait));
+        }
+        assert!(d.confirm_wda_loss(&mut g, true).await);
+        assert!(g.dev.display.is_none());
+        assert!(g.dev.touch_rotation.is_none());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn drag_continuations_only_validate_the_existing_view() {
+        let (d, dir) = test_daemon("display-move-up");
+        let mut g = d.inner.lock().await;
+        DisplayGeometry::update(
+            &mut g.dev.display,
+            Some((ScreenSize { width: 393., height: 852. }, Rotation::Portrait)),
+        );
+        let id = g.dev.display.as_ref().unwrap().id.clone();
+        // No WDA in this fixture: resampling would invalidate the geometry before the HID path.
+        for phase in [crate::protocol::TouchPhase::Move, crate::protocol::TouchPhase::Up] {
+            g.dev.touch_rotation = Some(Rotation::Portrait);
+            let _ = d.touch(&mut g, phase, 20., 50., Some(&id)).await;
+            assert_eq!(g.dev.display.as_ref().unwrap().id, id);
+            let stale = d.touch(&mut g, phase, 20., 50., Some("old")).await.unwrap_err();
+            assert!(
+                matches!(stale, Response::Error { message, retry_as_gesture: false } if message.contains("画面") || message.contains("display changed"))
+            );
+        }
         std::fs::remove_dir_all(dir).unwrap();
     }
 
@@ -1031,7 +1096,7 @@ mod tests {
         drop(g);
         let req = Request::Touch { phase: crate::protocol::TouchPhase::Down, x: 20.0, y: 50.0 };
         let response = d.handle(req, Instant::now(), ctx).await;
-        assert!(matches!(response, Response::Error { message } if message.contains("画面")));
+        assert!(matches!(response, Response::Error { message, retry_as_gesture: false } if message.contains("画面")));
         let g = d.inner.lock().await;
         assert!(g.dev.display.is_none());
         assert!(g.dev.touch_rotation.is_none());
@@ -1044,7 +1109,7 @@ mod tests {
         let (d, dir) = test_daemon("expect");
         let ctx = CallCtx { gone: None, expect_udid: Some("00008130-AAAA".into()), ..Default::default() };
         let r = d.handle(Request::Status, Instant::now(), ctx).await;
-        assert!(matches!(&r, Response::Error { message } if message.contains("设备变了")), "{r:?}");
+        assert!(matches!(&r, Response::Error { message, .. } if message.contains("设备变了")), "{r:?}");
         std::fs::remove_dir_all(dir).unwrap();
     }
 

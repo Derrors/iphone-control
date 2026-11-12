@@ -146,11 +146,16 @@ impl Daemon {
         }
     }
 
-    /// The interface rotation in degrees: asked of WDA when the device lock is free, else the last one known
+    /// The fresh interface rotation, if this poll could measure it.
     async fn current_rotation(&self) -> Option<u32> {
         let mut g = self.inner.try_lock().ok()?;
-        self.refresh_hid_rotation(&mut g).await;
-        g.dev.wda_rotation.map(|(_, r)| degrees(r))
+        // The native stream can observe rotation between supervisor ticks. Publish the new view
+        // and release any old contact before sending that rotation with the video.
+        let (rotation, changed) = self.sample_display(&mut g, false).await;
+        if changed {
+            self.publish(&g);
+        }
+        rotation.map(degrees)
     }
 
     /// The screen feed of the controlled device, opening the HID session for it if needed
@@ -184,6 +189,8 @@ impl Daemon {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::{DisplayGeometry, tests::test_daemon};
+    use ictl_device::ScreenSize;
 
     #[test]
     fn rotation_degrees() {
@@ -191,5 +198,23 @@ mod tests {
             [Rotation::Portrait, Rotation::TopToRight, Rotation::UpsideDown, Rotation::TopToLeft].map(degrees),
             [0, 90, 180, 270]
         );
+    }
+
+    #[tokio::test]
+    async fn native_video_does_not_announce_a_cached_rotation_after_wda_is_gone() {
+        let (d, dir) = test_daemon("stream-stale-rotation");
+        let mut g = d.inner.lock().await;
+        let rotation = Rotation::UpsideDown;
+        DisplayGeometry::update(&mut g.dev.display, Some((ScreenSize { width: 393., height: 852. }, rotation)));
+        g.dev.display_verified_at = Some(Instant::now());
+        g.dev.last_rotation = Some((Instant::now(), rotation));
+        g.dev.touch_rotation = Some(rotation);
+        drop(g);
+
+        assert_eq!(d.current_rotation().await, None);
+        let g = d.inner.lock().await;
+        assert!(g.dev.display.is_none());
+        assert!(g.dev.touch_rotation.is_none());
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

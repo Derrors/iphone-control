@@ -66,7 +66,9 @@ iphone-control doctor    # 逐层检查，每项失败都给出修复办法
 
 ## 控制台开着时 WDA 每隔几分钟重启一次
 
-iOS 27 以下（或浏览器解不了 HEVC、改用 H.264/MJPEG）时，画面靠 WDA 一直截图，WDA 的 CPU 占到一个核以上。iOS 对一个进程的限额是一分钟平均 80%，超过就把它杀掉：手机上会有 `WebDriverAgentRunner-Runner.cpu_resource_fatal` 崩溃报告，守护进程记「WDA 不可用」，约 10 秒后重新拉起。期间操作会失败。不看的时候关掉控制台页面；iOS 27 及以上用手机自己的视频就没有这个问题（WDA 的 CPU 约 3%）。
+0.2.2 及以前的版本会这样：画面来自 WDA 截图时（iOS 27 以下，或浏览器解不了 HEVC、改用 H.264/MJPEG），WDA 要把每一帧缩小、重新编码，CPU 超过 iOS 给一个进程的限额（一分钟平均 80%），被 iOS 杀掉。守护进程记「WDA 不可用」，约 10 秒后重新拉起，期间操作会失败。之后的版本画面改用原尺寸，WDA 直接转发手机用硬件编好的截图，不再超限。旧版本上不看的时候关掉控制台页面就能避开；iOS 27 及以上、浏览器能解 HEVC 时用手机自己的视频，本来就没有这个问题。
+
+新版本上还这样的话，在手机的 设置 → 隐私与安全性 → 分析与改进 → 分析数据 里找 `WebDriverAgentRunner-Runner.cpu_resource_fatal` 开头的报告（开着开发者工具时也可以用 `iphone_crash_reports` 读），连同手机型号、iOS 版本、画面下方写的编码方式一起[提 issue](https://github.com/Derrors/iphone-control/issues)。
 
 ## 灵动岛一直显示「配对的电脑」、手机不自动锁屏
 

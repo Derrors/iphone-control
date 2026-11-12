@@ -68,7 +68,9 @@ On iOS 27 and later with a browser that decodes HEVC, the line under the picture
 
 ## WDA restarts every few minutes while the control page is open
 
-Below iOS 27 (or when the browser can't decode HEVC and gets H.264 or MJPEG), the picture comes from WDA capturing the screen all the time, which takes WDA over one CPU core. iOS kills a process that averages more than 80 % over a minute: the phone keeps a `WebDriverAgentRunner-Runner.cpu_resource_fatal` crash report, the daemon logs "WDA unavailable" and starts it again about 10 seconds later, and actions fail meanwhile. Close the control page when you aren't watching; on iOS 27 and later the phone's own video avoids this (WDA stays around 3 %).
+Version 0.2.2 and earlier did this when the picture came from WDA's screenshots (below iOS 27, or a browser that can't decode HEVC and gets H.264 or MJPEG): WDA scaled down and re-encoded every frame, used more CPU than iOS allows a process (80 % averaged over a minute) and was killed. The daemon logs "WDA unavailable" and starts it again about 10 seconds later, and actions fail meanwhile. Later versions take the picture at full size, so WDA passes on the screenshot the phone encodes in hardware and stays under the limit. On an older version, close the control page when you aren't watching; on iOS 27 and later with a browser that decodes HEVC, the phone's own video never had this problem.
+
+If it still happens on a newer version, look on the phone under Settings → Privacy & Security → Analytics & Improvements → Analytics Data for reports starting with `WebDriverAgentRunner-Runner.cpu_resource_fatal` (with the developer tools on, `iphone_crash_reports` reads them too) and [open an issue](https://github.com/Derrors/iphone-control/issues) with the phone model, iOS version and the encoding shown under the picture.
 
 ## "Paired computer" icon stays and the phone won't auto-lock
 

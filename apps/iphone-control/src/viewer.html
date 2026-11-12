@@ -294,7 +294,7 @@ body.resizing .stage, body.resizing iframe { pointer-events: none; }
 
 .agent-foot { min-width: 0; padding: 8px var(--sp-4); display: flex; flex-direction: column; gap: var(--sp-2); }
 .composer { display: flex; flex-direction: column; min-width: 0; border: 1px solid var(--glass-border); border-radius: 16px; background: var(--panel); box-shadow: var(--shadow-xs); overflow: hidden; transition: border-color var(--dur-fast) var(--ease-out); }
-.composer:focus-within { border-color: var(--accent); }
+.composer:has(.textarea:focus-visible) { border-color: var(--accent); }
 .composer.invalid { border-color: var(--danger); }
 /* 执行中的暂停 / 接管 / 停止并到输入框顶部 */
 .runbar { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; padding: var(--sp-2) var(--sp-2) var(--sp-2) 14px; background: var(--sunken); border-bottom: 1px solid var(--line); }
@@ -303,29 +303,38 @@ body.resizing .stage, body.resizing iframe { pointer-events: none; }
 .textarea { display: block; width: 100%; min-height: 44px; max-height: 176px; resize: none; padding: 11px 12px 6px; border: 0; background: transparent; color: var(--text); font-size: var(--fs-sm); line-height: 1.5; overflow-y: auto; }
 .textarea:focus-visible { outline: none; }
 .textarea:disabled { color: var(--muted); cursor: not-allowed; }
-.composer-row { display: flex; align-items: center; justify-content: flex-end; min-width: 0; gap: 4px; padding: 0 8px 8px; }
+.composer-row { display: flex; align-items: center; justify-content: flex-end; min-width: 0; gap: 6px; padding: 0 8px 8px; }
 .agent-pick { flex: 0 1 auto; min-width: 0; max-width: min(11rem, calc(100% - 52px)); }
-.agent-pick .select { min-height: 28px; max-width: 100%; padding: 0 24px 0 8px; border: 0; border-radius: 6px; background: transparent; color: var(--text-2); font-size: var(--fs-xs); font-weight: 500; text-overflow: ellipsis; }
-.agent-pick .select:hover:not(:disabled) { background: var(--hover); }
-.agent-pick .select:disabled { opacity: .6; cursor: default; }
-.agent-pick .select-chev { margin-right: 7px; --od-icon-size: 12px; }
+.agent-trigger { display: flex; align-items: center; gap: 4px; max-width: 100%; min-height: 32px; padding: 0 6px; border: 0; border-radius: 7px; background: transparent; color: var(--text-2); font-size: var(--fs-xs); font-weight: 500; cursor: pointer; }
+.agent-trigger .ic { color: var(--muted); --od-icon-size: 12px; }
+.agent-trigger[aria-expanded="true"], .agent-trigger:hover:enabled { background: var(--hover); }
+.agent-trigger[aria-expanded="true"] .ic { transform: rotate(180deg); }
+.agent-trigger:focus-visible { outline-color: var(--accent); outline-offset: 0; }
+.agent-trigger:disabled { color: var(--muted); cursor: default; }
+.agent-menu { position: fixed; inset: auto; margin: 0; width: max-content; min-width: min(9.5rem, calc(100vw - 16px)); max-width: calc(100vw - 16px); overflow: auto; padding: 4px; border-radius: 12px; color: var(--text); font-size: var(--fs-xs); }
+.agent-menu.glass { background-color: color-mix(in srgb, var(--panel) 75%, var(--glass-surface)); box-shadow: var(--shadow-float); }
+.agent-menu:focus { outline: none; }
+.agent-option { display: flex; align-items: center; justify-content: space-between; gap: 14px; min-height: 32px; padding: 4px 8px; border-radius: 8px; cursor: pointer; }
+.agent-option .od-icon { --od-icon-size: 14px; color: var(--text-2); }
+.agent-option[aria-selected="false"] .od-icon { visibility: hidden; }
+.agent-option[aria-disabled="true"] { color: var(--muted); cursor: default; }
+.agent-option[data-active] { background: var(--hover); }
+.agent-menu:focus-visible .agent-option[data-active] { outline: 1px solid var(--accent); outline-offset: -1px; }
 .send { flex: none; width: 32px; min-height: 32px; height: 32px; padding: 0; border-radius: 50%; --od-icon-size: 16px; }
 .composer .send { background: var(--text); color: var(--panel); border: 0; box-shadow: none; }
 .composer .send:hover:not(:disabled) { background: var(--text-2); }
 .composer .send:disabled { background: var(--press); color: var(--muted); opacity: .75; }
-.example-action, .sidebar-settings {
+.sidebar-settings {
   display: inline-flex; align-items: center; gap: 8px; padding: 0 8px; min-height: 32px;
   border: 0; border-radius: 7px; background: transparent; font-size: var(--fs-xs); cursor: pointer;
+  align-self: stretch; color: var(--text-2); --od-icon-size: 16px;
 }
-.example-action { margin-right: auto; flex: none; color: var(--muted); --od-icon-size: 14px; }
-.example-action:disabled { opacity: .5; cursor: default; }
-.sidebar-settings { align-self: stretch; color: var(--text-2); --od-icon-size: 16px; }
 @media (hover: hover) {
-  .example-action:hover:not(:disabled), .sidebar-settings:hover { background: var(--hover); color: var(--text); }
+  .sidebar-settings:hover { background: var(--hover); color: var(--text); }
 }
 @media (pointer: coarse) {
   .send { width: 44px; min-height: 44px; height: 44px; }
-  .agent-pick .select, .example-action, .sidebar-settings { min-height: 44px; }
+  .agent-trigger, .agent-option, .sidebar-settings { min-height: 44px; }
 }
 .field-error { font-size: var(--fs-xs); color: var(--danger-text); font-weight: 500; padding: 0 var(--sp-2); }
 
@@ -677,7 +686,8 @@ button.nav-device:disabled { cursor: default; }
 }
 @media (forced-colors: active) {
   .glass { border-color: CanvasText; }
-  .composer:focus-within { outline: 2px solid Highlight; }
+  .composer:has(.textarea:focus-visible) { outline: 2px solid Highlight; }
+  .agent-option[data-active] { outline: 1px solid Highlight; outline-offset: -1px; }
   .seg button[aria-selected="true"], .zoom-fit[aria-pressed="true"] { outline: 1px solid Highlight; outline-offset: -2px; }
 }
 /* ================= 响应式 ================= */
@@ -814,11 +824,12 @@ button.nav-device:disabled { cursor: default; }
         <label class="sr-only" for="prompt">交给 AI 的任务</label>
         <textarea class="textarea" id="prompt" rows="1" maxlength="4000" aria-describedby="composer-hint prompt-error" placeholder="想让设备做什么？"></textarea>
         <div class="composer-row">
-          <button type="button" class="example-action" id="agent-example" data-action="fill" data-prompt="打开时钟，启动秒表" title="填入示例任务"><span class="ic" data-icon="conversation"></span><span>示例</span></button>
-          <div class="select-wrap agent-pick" id="agent-pick" hidden>
-            <label class="sr-only" for="agent">执行任务的 AI</label>
-            <select class="select" id="agent" title="执行任务的本地 AI"></select>
-            <span class="select-chev" data-icon="chevron"></span>
+          <div class="agent-pick" id="agent-pick" hidden>
+            <span class="sr-only" id="agent-label">执行任务的 AI</span>
+            <button type="button" class="agent-trigger" id="agent" popovertarget="agent-options" aria-haspopup="listbox" aria-expanded="false" aria-controls="agent-options" aria-labelledby="agent-label agent-name" title="执行任务的本地 AI">
+              <span class="od-truncate" id="agent-name"></span><span class="ic" data-icon="chevron"></span>
+            </button>
+            <div class="agent-menu glass" id="agent-options" role="listbox" aria-labelledby="agent-label" popover="auto" tabindex="-1" autofocus></div>
           </div>
           <span class="sr-only" id="composer-hint">Enter 发送 · Shift+Enter 换行</span>
           <button type="button" class="btn btn-primary send" id="send" data-action="send" data-focus="send" aria-label="开始任务" title="Enter 发送 · Shift+Enter 换行"><span class="ic" data-icon="send"></span></button>
@@ -998,8 +1009,7 @@ Object.assign(EN, {
   '外观':'Appearance', '界面字号':'Text size', '标准':'Standard', '大':'Large', '特大':'Extra large',
   '暂无任务':'No tasks yet', '执行步骤和确认请求会显示在这里。':'Steps and approval requests appear here.',
   '可以先写下任务，连接设备后再执行。':'Draft a task while waiting for a device.',
-  '任务将在模拟设备上运行。':'Tasks run on the simulated device.', '打开时钟，启动秒表':'Open Clock and start the stopwatch',
-  '将示例填入输入框':'Use this example', '开始任务（Enter）':'Start task (Enter)',
+  '任务将在模拟设备上运行。':'Tasks run on the simulated device.', '开始任务（Enter）':'Start task (Enter)',
   '明暗':'Theme', '跟随系统':'System', '浅色':'Light', '深色':'Dark', '完成':'Done'
 });
 Object.assign(EN, {
@@ -1015,8 +1025,7 @@ Object.assign(EN, {
 /* 中文原文 → 当前语言 */
 Object.assign(EN, { '画面已连接 · 等待屏幕尺寸和方向，仅可观看':'Picture connected · waiting for screen dimensions and orientation (view only)', '没有收到设备画面，3 秒后自动重试。':'No picture received. Retrying in 3 seconds.' });
 Object.assign(EN, {
-  '设置': 'Settings', '界面语言': 'Language', '示例': 'Example', '填入示例任务': 'Insert an example task',
-  '打开时钟，启动秒表': 'Open Clock and start the stopwatch'
+  '设置': 'Settings', '界面语言': 'Language', '没有可用的 AI': 'No AI available'
 });
 function tr(zh) { return LANG === 'en' ? (EN[zh] ?? zh) : zh; }
 /* 静态标记里的文字和提示（aria-label、title、placeholder、alt）开始时译一次 */
@@ -2245,7 +2254,6 @@ async function liveControl(task, action, body) {
 function clearPromptError() { promptErr.hidden = true; promptErr.textContent = ''; promptEl.removeAttribute('aria-invalid'); $('#composer').classList.remove('invalid'); }
 function syncSend() {
   const empty = !promptEl.value.trim();
-  $('#agent-example').disabled = promptEl.disabled || !empty;
   $('#send').disabled = promptEl.disabled || empty || (S.mode === 'live' && !S.udid);
 }
 function autosize() { promptEl.style.height = 'auto'; promptEl.style.height = Math.min(promptEl.scrollHeight, 176) + 'px'; syncSend(); }
@@ -2534,7 +2542,6 @@ document.addEventListener('click', ev => {
   const a = b.dataset.action;
   switch (a) {
     case 'send': sendPrompt(); break;
-    case 'fill': if (activeTask() || promptEl.value.trim()) return; promptEl.value = tr(b.dataset.prompt); autosize(); clearPromptError(); promptEl.focus(); promptEl.setSelectionRange(promptEl.value.length, promptEl.value.length); break;
     case 'pause': case 'resume': case 'takeover': case 'handback': control(a); break;
     case 'approve': answerConfirm(true); break;
     case 'reject': answerConfirm(false); break;
@@ -2637,6 +2644,7 @@ async function detect() {
 }
 /* ---------- 执行任务的 AI：本机装了哪些就列哪些，选择记在浏览器里 ---------- */
 const AGENT_KEY = 'ictl.agent';
+const agentButton = $('#agent'), agentMenu = $('#agent-options');
 async function loadAgents() {
   try { S.agents = (await api('/api/agent/backends')).backends || []; } catch { S.agents = []; }
   const ok = S.agents.filter(a => a.available);
@@ -2646,22 +2654,81 @@ async function loadAgents() {
   renderAgentPick();
 }
 function renderAgentPick() {
-  const wrap = $('#agent-pick'), sel = $('#agent');
+  const wrap = $('#agent-pick');
   wrap.hidden = S.mode !== 'live';
-  if (wrap.hidden) return;
-  if (!S.agents.some(a => a.available)) {
-    sel.innerHTML = tr('<option>没有可用的 AI</option>');
-    sel.title = tr('这台机器的 PATH 里没有 claude 或 codex');
-  } else {
-    sel.innerHTML = S.agents.map(a => `<option value="${esc(a.id)}"${a.id === S.agent ? ' selected' : ''}${a.available ? '' : ' disabled'}>${esc(a.name)}${a.available ? '' : tr('（未安装）')}</option>`).join('');
-    sel.title = tr('执行任务的本地 AI');
-  }
-  sel.disabled = !S.agent || !!activeTask();
+  const selected = S.agents.find(a => a.id === S.agent);
+  $('#agent-name').textContent = selected?.name || tr('没有可用的 AI');
+  agentButton.title = selected ? tr('执行任务的本地 AI') : tr('这台机器的 PATH 里没有 claude 或 codex');
+  agentButton.disabled = !selected || !!activeTask();
+  if ((wrap.hidden || agentButton.disabled) && agentMenu.matches(':popover-open')) agentMenu.hidePopover();
 }
-$('#agent').addEventListener('change', ev => {
-  S.agent = ev.target.value;
+function positionAgentMenu() {
+  if (!agentMenu.matches(':popover-open')) return;
+  const anchor = agentButton.getBoundingClientRect();
+  const above = anchor.top - 14, below = innerHeight - anchor.bottom - 14;
+  const openAbove = above >= agentMenu.scrollHeight + 2 || above >= below;
+  agentMenu.style.maxHeight = Math.max(0, openAbove ? above : below) + 'px';
+  agentMenu.style.top = (openAbove ? anchor.top - 6 - agentMenu.offsetHeight : anchor.bottom + 6) + 'px';
+  agentMenu.style.left = Math.max(8, Math.min(anchor.right - agentMenu.offsetWidth, innerWidth - agentMenu.offsetWidth - 8)) + 'px';
+}
+function highlightAgent(option) {
+  if (!option || option.getAttribute('aria-disabled') === 'true') return;
+  agentMenu.querySelector('[data-active]')?.removeAttribute('data-active');
+  option.setAttribute('data-active', '');
+  agentMenu.setAttribute('aria-activedescendant', option.id);
+}
+function chooseAgent(option) {
+  if (!option || option.getAttribute('aria-disabled') === 'true') return;
+  S.agent = option.dataset.id;
   try { localStorage.setItem(AGENT_KEY, S.agent); } catch { /* 只在本次会话生效 */ }
+  renderAgentPick();
+  agentMenu.hidePopover();
+  agentButton.focus();
+}
+agentMenu.addEventListener('beforetoggle', ev => {
+  const opening = ev.newState === 'open';
+  agentButton.setAttribute('aria-expanded', String(opening));
+  if (!opening) return;
+  agentMenu.innerHTML = S.agents.map((a, i) =>
+    `<div class="agent-option" id="agent-opt-${i}" role="option" data-id="${esc(a.id)}" aria-selected="${a.id === S.agent}" aria-disabled="${!a.available}"><span>${esc(a.name)}${a.available ? '' : tr('（未安装）')}</span>${icon('check')}</div>`
+  ).join('');
+  highlightAgent(agentMenu.querySelector('[aria-selected="true"]'));
+  requestAnimationFrame(positionAgentMenu);
 });
+agentMenu.addEventListener('pointermove', ev => highlightAgent(ev.target.closest('[role="option"]')));
+agentMenu.addEventListener('click', ev => chooseAgent(ev.target.closest('[role="option"]')));
+agentButton.addEventListener('keydown', ev => {
+  if (ev.key === 'ArrowDown' || ev.key === 'ArrowUp') {
+    ev.preventDefault();
+    agentMenu.showPopover();
+  }
+});
+let agentPrefix = '', lastAgentKey = 0;
+agentMenu.addEventListener('keydown', ev => {
+  const options = $$('.agent-option[aria-disabled="false"]', agentMenu);
+  const current = agentMenu.querySelector('[data-active]');
+  const index = options.indexOf(current);
+  let next;
+  switch (ev.key) {
+    case 'ArrowDown': next = options[Math.min(index + 1, options.length - 1)]; break;
+    case 'ArrowUp': next = options[Math.max(0, index - 1)]; break;
+    case 'Home': next = options[0]; break;
+    case 'End': next = options.at(-1); break;
+    case 'Enter': case ' ': ev.preventDefault(); chooseAgent(current); return;
+    case 'Tab': agentMenu.hidePopover(); agentButton.focus(); return;
+    case 'Escape': ev.preventDefault(); ev.stopPropagation(); agentMenu.hidePopover(); agentButton.focus(); return;
+    default:
+      if (ev.key.length !== 1 || ev.ctrlKey || ev.metaKey || ev.altKey) return;
+      agentPrefix = (ev.timeStamp - lastAgentKey < 600 ? agentPrefix : '') + ev.key.toLowerCase();
+      lastAgentKey = ev.timeStamp;
+      next = options.find(o => o.textContent.toLowerCase().startsWith(agentPrefix));
+  }
+  ev.preventDefault();
+  highlightAgent(next);
+  next?.scrollIntoView({ block: 'nearest' });
+});
+new ResizeObserver(positionAgentMenu).observe($('#pane-agent'));
+window.addEventListener('resize', positionAgentMenu);
 
 /* ---------- 右侧设备面板隐藏 / 显示（宽屏三栏时），记在浏览器里 ---------- */
 let devHidden = false;

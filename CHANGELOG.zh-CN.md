@@ -6,6 +6,10 @@
 
 ## [Unreleased]
 
+### 新增
+
+- 运行 `iphone-control update` 可检查并通过受管服务、Homebrew 或 Debian 软件包升级到新稳定版。已是最新时会直接提示。只想检查可继续用 `update check`。
+
 ## [0.2.2] - 2026-11-12
 
 ### 升级注意事项

@@ -1,6 +1,7 @@
 //! Host program updates. Only release builds explicitly bound to a GitHub publisher
 //! contact the release API. CLI and Viewer use the same local cache and channel evidence.
 mod archive;
+mod channel;
 mod install;
 mod release;
 pub mod transaction;
@@ -10,7 +11,7 @@ use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Result, ensure};
+use anyhow::{Result, bail, ensure};
 use ictl_l10n::{tr, trf};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -241,7 +242,9 @@ fn availability_with(
     }
     if method == InstallMethod::Debian {
         return match deb_asset(&version.to_string(), platform) {
-            Some(asset) if latest.assets.contains(&asset) => Available,
+            Some(asset) if latest.assets.contains(&asset) && latest.assets.contains(&format!("{asset}.sha256")) => {
+                Available
+            }
             Some(_) => PlatformPending,
             None => Unsupported,
         };
@@ -268,39 +271,22 @@ fn availability_with(
     Available
 }
 
-fn upgrade_command(
-    status: Availability,
-    installation: &Installation,
-    exe: Option<&Path>,
-    release: Option<&Release>,
-    platform: Option<&str>,
-    tap: Option<&str>,
-) -> Option<String> {
+fn upgrade_command(status: Availability, installation: &Installation, exe: Option<&Path>) -> Option<String> {
+    let exe = exe?;
+    let exe =
+        if installation.method == InstallMethod::Homebrew { crate::service::stable_path(exe) } else { exe.to_owned() };
+    let exe = crate::shell_quote(exe.to_str()?);
     match (status, installation.method) {
-        (Availability::Available, InstallMethod::Managed) => {
-            let exe = crate::shell_quote(exe?.to_str()?);
-            Some(if installation.pinned? {
-                format!("{exe} update unpin && {exe} update apply")
-            } else {
-                format!("{exe} update apply")
-            })
+        (Availability::Available, InstallMethod::Managed) if installation.pinned == Some(true) => {
+            Some(format!("{exe} update unpin && {exe} update"))
         }
-        (Availability::BrewCheck, InstallMethod::Homebrew) => {
-            let tap = tap.filter(|tap| repository(tap))?;
-            let brew = install::brew_program(exe?.ancestors().nth(4)?)?;
-            let brew = crate::shell_quote(brew.to_str()?);
-            Some(format!("{brew} update && {brew} upgrade {tap}/iphone-control"))
-        }
-        (Availability::Available, InstallMethod::Debian) => {
-            let version = release::stable_tag(&release?.tag)?;
-            let asset = deb_asset(&version.to_string(), platform?)?;
-            Some(format!("sudo apt install ./{asset}"))
-        }
+        (Availability::Available, InstallMethod::Managed | InstallMethod::Debian)
+        | (Availability::BrewCheck, InstallMethod::Homebrew) => Some(format!("{exe} update")),
         _ => None,
     }
 }
 
-fn guidance(status: Availability, method: InstallMethod, version: Option<&str>, pinned: Option<bool>) -> String {
+fn guidance(status: Availability, method: InstallMethod, pinned: Option<bool>) -> String {
     match status {
         Availability::Development => {
             tr!("开发构建。在对应源码仓库检出目标版本，按原来的构建或安装方式更新本机程序。", "Development build. Check out the desired revision in its source repository and update this copy using its original build or install method.").into()
@@ -327,8 +313,8 @@ fn guidance(status: Availability, method: InstallMethod, version: Option<&str>, 
         Availability::Unchecked => tr!("尚无成功检查记录。", "No successful release check yet.").into(),
         Availability::BrewCheck => {
             tr!(
-                "在主机终端运行 Homebrew 命令。可安装版本取决于 tap 的发布进度及本机是否固定了版本。",
-                "Run the Homebrew command in a terminal on the host. The local tap and Homebrew pin determine the upgrade."
+                "通过 Homebrew 升级。可安装版本取决于 tap 的发布进度及本机是否固定了版本。",
+                "Update through Homebrew. The local tap and Homebrew pin determine the upgrade."
             ).into()
         }
         Availability::Available => match method {
@@ -342,13 +328,10 @@ fn guidance(status: Availability, method: InstallMethod, version: Option<&str>, 
                 "Close Viewer and MCP clients and let tasks finish before running the upgrade command in a host terminal. It verifies the signature and checks rollback compatibility before installing."
             )
             .into(),
-            InstallMethod::Debian => {
-                let asset = deb_asset(version.unwrap_or_default(), target().unwrap_or_default()).unwrap_or_default();
-                trf!(
-                    "从发行页下载并校验 {asset}，在下载目录中运行安装命令。",
-                    "Download and verify {asset} from the release, then run the install command in the download directory."
-                )
-            }
+            InstallMethod::Debian => tr!(
+                "升级命令会下载并校验匹配本机架构的 .deb，再通过 APT 安装。",
+                "The update command downloads and verifies the .deb for this architecture, then installs it with APT."
+            ).into(),
             _ => tr!(
                 "关闭正在运行的客户端和服务，再按发行说明手动更新。",
                 "Close running clients and services, then follow the manual release instructions."
@@ -416,7 +399,7 @@ impl Local {
                 "The verified release manifest requires a manual migration from the installed version. Follow the release notes to upgrade."
             ).into())
         } else {
-            (status, guidance(status, self.install.method, version.as_deref(), self.install.pinned))
+            (status, guidance(status, self.install.method, self.install.pinned))
         };
         let command = if self.source_command.is_some() {
             guidance = tr!(
@@ -430,7 +413,7 @@ impl Local {
                     .into();
             None
         } else {
-            upgrade_command(status, &self.install, self.exe.as_deref(), release, target(), tap())
+            upgrade_command(status, &self.install, self.exe.as_deref())
         };
         if status == Availability::Current && self.install.version.as_deref().is_some_and(|v| v != VERSION) {
             guidance.push_str(tr!(
@@ -489,6 +472,42 @@ pub async fn check(background: bool) -> Result<Report> {
         release::check(&dir, &release::client()?, &url, background).await?
     };
     local.report(cache)
+}
+
+/// The user explicitly requested an update. Use this check's release and installation channel.
+pub async fn upgrade(socket: &Path, report: Report) -> Result<()> {
+    if let Some(code) = &report.error_code {
+        bail!("{}", trf!("检查更新失败：{code}", "Update check failed: {code}"));
+    }
+    match (report.availability, report.install_method) {
+        (Availability::Current | Availability::Ahead, _) => {
+            println!("{} ({})", report.guidance, report.installed_version.as_deref().unwrap_or(VERSION));
+        }
+        (Availability::Available, InstallMethod::Managed) => {
+            ensure!(
+                report.pinned != Some(true),
+                "{}",
+                tr!(
+                    "已固定安装版本。若要升级，请先运行 iphone-control update unpin。",
+                    "This installation is pinned. To upgrade, run iphone-control update unpin first."
+                )
+            );
+            let version = report.available_version.clone().ok_or_else(|| anyhow::anyhow!("missing release version"))?;
+            transaction::apply(socket, false, report).await?;
+            println!("{}", trf!("已升级到 {version}。", "Updated to {version}."));
+        }
+        (Availability::Available, InstallMethod::Debian) | (Availability::BrewCheck, InstallMethod::Homebrew) => {
+            channel::apply(&report).await?;
+        }
+        _ => {
+            let next = report.upgrade_command.as_deref().or(report.release_url.as_deref());
+            if let Some(next) = next {
+                bail!("{}\n{next}", report.guidance);
+            }
+            bail!("{}", report.guidance);
+        }
+    }
+    Ok(())
 }
 
 impl fmt::Display for Report {
@@ -594,7 +613,7 @@ mod tests {
     fn managed_guidance_explains_verification_before_installation() {
         ictl_l10n::with_lang(ictl_l10n::Lang::En, || {
             for pinned in [false, true] {
-                let guide = guidance(Availability::Available, InstallMethod::Managed, Some("0.2.1"), Some(pinned));
+                let guide = guidance(Availability::Available, InstallMethod::Managed, Some(pinned));
                 assert!(guide.contains("signature") && guide.contains("rollback compatibility"), "{guide}");
             }
         });
@@ -654,6 +673,40 @@ mod tests {
         assert!(report.upgrade_command.is_none());
     }
 
+    #[tokio::test]
+    async fn user_update_checks_the_release_before_choosing_an_installer() {
+        let report = |installed: &str, error: Option<&str>, pinned| {
+            let local = Local {
+                source_command: None,
+                exe: None,
+                install: Installation {
+                    method: InstallMethod::Managed,
+                    version: Some(installed.into()),
+                    pinned: Some(pinned),
+                },
+                policy: Policy::Manual,
+            };
+            let mut cache = Cache::default();
+            cache.release = Some(Release { tag: "v1.2.3".into(), published_at: None, assets: vec![], notes: None });
+            cache.error_code = error.map(str::to_owned);
+            local.report(cache).unwrap()
+        };
+        let socket = Path::new("/unused");
+        // Current or newer local versions succeed even when pinned and without an installer or daemon.
+        for version in ["1.2.3", "1.2.4"] {
+            upgrade(socket, report(version, None, true)).await.unwrap();
+        }
+        // A cached version from an unsuccessful refresh cannot authorize any installation.
+        let mut stale = report("1.2.2", Some("rate_limited"), false);
+        stale.availability = Availability::Available;
+        let err = upgrade(socket, stale).await.unwrap_err();
+        assert!(err.to_string().contains("rate_limited"), "{err}");
+        let mut pinned = report("1.2.2", None, true);
+        pinned.availability = Availability::Available;
+        let err = upgrade(socket, pinned).await.unwrap_err();
+        assert!(err.to_string().contains("update unpin"), "{err}");
+    }
+
     #[test]
     fn cached_report_uses_viewer_request_language() {
         let cache: Cache = serde_json::from_value(serde_json::json!({
@@ -674,43 +727,30 @@ mod tests {
 
     #[test]
     fn upgrade_commands_follow_the_verified_channel_and_release_state() {
-        let exe = Path::new("/Users/it's me/bin/iphone-control");
-        let release = Release { tag: "v0.2.1".into(), published_at: None, assets: vec![], notes: None };
-        let brew = Path::new("/opt/homebrew/bin/brew");
-        let keg = Path::new("/opt/homebrew/Cellar/iphone-control/0.2.0/bin/iphone-control");
-        let command = |method, pinned, status, platform, tap| {
-            let exe = if method == InstallMethod::Homebrew { keg } else { exe };
-            let installation = Installation { method, version: Some("0.2.0".into()), pinned };
-            upgrade_command(status, &installation, Some(exe), Some(&release), Some(platform), tap)
-        };
         use Availability::*;
         use InstallMethod::{Debian, Homebrew, Managed, Script, Unknown};
+
+        let exe = Path::new("/Users/it's me/bin/iphone-control");
+        let command = |method, pinned, status| {
+            let installation = Installation { method, version: Some("0.2.0".into()), pinned };
+            upgrade_command(status, &installation, Some(exe))
+        };
         let quoted = crate::shell_quote(exe.to_str().unwrap());
-        for (pinned, expected) in [
-            (false, format!("{quoted} update apply")),
-            (true, format!("{quoted} update unpin && {quoted} update apply")),
-        ] {
-            assert_eq!(command(Managed, Some(pinned), Available, "macos-arm64", None), Some(expected));
-        }
+        let brew = Installation { method: Homebrew, version: Some("0.2.0".into()), pinned: None };
+        let keg = Path::new("/opt/homebrew/Cellar/iphone-control/0.2.0/bin/iphone-control");
         assert_eq!(
-            command(Homebrew, None, BrewCheck, "macos-arm64", Some("Example/tap")),
-            Some(format!(
-                "{brew} update && {brew} upgrade Example/tap/iphone-control",
-                brew = crate::shell_quote(brew.to_str().unwrap())
-            ))
+            upgrade_command(BrewCheck, &brew, Some(keg)),
+            Some(format!("{} update", crate::shell_quote("/opt/homebrew/opt/iphone-control/bin/iphone-control")))
         );
-        assert!(command(Homebrew, None, BrewCheck, "macos-arm64", Some("unverified tap")).is_none());
-        for (target, arch) in [("linux-aarch64", "arm64"), ("linux-x86_64", "amd64")] {
-            assert_eq!(
-                command(Debian, None, Available, target, None),
-                Some(format!("sudo apt install ./iphone-control_0.2.1_{arch}.deb"))
-            );
+        for (method, status) in [(Managed, Available), (Debian, Available)] {
+            assert_eq!(command(method, Some(false), status), Some(format!("{quoted} update")));
         }
+        assert_eq!(command(Managed, Some(true), Available), Some(format!("{quoted} update unpin && {quoted} update")));
         for method in [Unknown, Script] {
-            assert!(command(method, None, Available, "macos-arm64", None).is_none());
+            assert!(command(method, None, Available).is_none());
         }
         for status in [Development, Unchecked, Current, Ahead, PlatformPending, Unsupported, ManualOnly] {
-            assert!(command(Managed, Some(false), status, "macos-arm64", None).is_none());
+            assert!(command(Managed, Some(false), status).is_none());
         }
     }
 
@@ -719,7 +759,11 @@ mod tests {
         let release = Release {
             tag: "v0.2.1".into(),
             published_at: None,
-            assets: vec!["iphone-control-v0.2.1-linux-x86_64.tar.gz".into(), "iphone-control_0.2.1_amd64.deb".into()],
+            assets: vec![
+                "iphone-control-v0.2.1-linux-x86_64.tar.gz".into(),
+                "iphone-control_0.2.1_amd64.deb".into(),
+                "iphone-control_0.2.1_amd64.deb.sha256".into(),
+            ],
             notes: None,
         };
         let for_install = |running, method, platform| availability(running, method, platform, Some(&release));
@@ -731,6 +775,18 @@ mod tests {
         assert_eq!(for_install("0.2.0", InstallMethod::Debian, Some("linux-x86_64")), Availability::Available);
         assert_eq!(for_install("0.2.0", InstallMethod::Debian, Some("linux-aarch64")), Availability::PlatformPending);
         assert_eq!(for_install("0.2.0", InstallMethod::Unknown, None), Availability::Unsupported);
+    }
+
+    #[test]
+    fn deb_upgrade_waits_for_the_matching_checksum_sidecar() {
+        let asset = "iphone-control_0.2.1_amd64.deb";
+        let mut release = Release { tag: "v0.2.1".into(), assets: vec![asset.into()], published_at: None, notes: None };
+        let status = |r: &Release| availability("0.2.0", InstallMethod::Debian, Some("linux-x86_64"), Some(r));
+        assert_eq!(status(&release), Availability::PlatformPending);
+        release.assets.push("iphone-control_0.2.1_arm64.deb.sha256".into());
+        assert_eq!(status(&release), Availability::PlatformPending);
+        release.assets.push(format!("{asset}.sha256"));
+        assert_eq!(status(&release), Availability::Available);
     }
 
     /// A managed install with signing keys: the archive alone (the signing job hasn't published the manifest and

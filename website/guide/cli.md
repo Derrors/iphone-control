@@ -23,11 +23,22 @@
 
 ## 主机软件更新
 
-`iphone-control update check [--json]` 和 Viewer 的「关于与更新」读取同一份本地缓存。未绑定发布者的源码构建不会联网；网络检查失败会保留上次成功的结果。有更新时，侧栏底部「设置」旁的 ⓘ 会显示红点。点开可查看版本号和当前界面语言的发行说明摘录，复制适合当前安装方式的升级命令。Homebrew 以对应 tap 提供的版本为准。Debian 或 Ubuntu 用户先下载面板指定的安装包，再运行命令。
+运行 `iphone-control update` 检查发布者的最新稳定版。已是最新时，命令会显示结果并退出。有新版时，它按当前程序的安装方式升级。
+
+| 安装方式 | 运行 `iphone-control update` 后 |
+| --- | --- |
+| 签名安装脚本部署的受管用户服务 | 验证并安装签名更新，重启服务并检查健康状态。先关闭 Viewer、MCP 和其他设备客户端。通过 `--version` 固定版本的安装，须先显式运行 `iphone-control update unpin` 才能升级。 |
+| Homebrew | 通过该安装绑定的 tap 运行 Homebrew 升级，以 tap 提供的版本为准。 |
+| Debian / Ubuntu 软件包 | 下载同一发布者提供的、匹配目标版本和主机架构的 `.deb`，经过校验后交给 apt 安装。 |
+| 源码安装、没有受管服务的脚本安装或无法识别的安装 | 显示适用的手动升级指引。未绑定发布者的开发构建在本地给出说明。 |
+
+Homebrew 和 apt 升级的是磁盘上的程序。如果原先已经运行后台服务，升级后用 `brew services restart iphone-control` 重启 Homebrew 服务，或用 `systemctl --user restart iphone-control` 重启 Debian 的用户服务。原先未启用服务的安装可跳过这一步。重新打开 Viewer、重连 MCP 客户端后，这些进程也会使用新版。
+
+只想查看版本可运行 `iphone-control update check`，脚本可用 `iphone-control update check --json` 读取结果。该检查与 Viewer「关于与更新」共用本地缓存，网络失败时保留上次成功的记录。Viewer 在「设置」旁的 ⓘ 上用红点提示新版本。打开面板可查看发行说明，并复制针对当前程序路径的更新命令，在本机终端执行。
 
 Viewer 只监听本机回环地址。同机其他用户也能查看安装信息、触发版本检查。安装、回滚和更改策略都通过本机 CLI 执行。
 
-由发行版安装脚本部署的受管用户服务默认只做后台检查。本机运行 `update apply` 安装，`update rollback` 恢复上一份已验证的程序。替换意外中断时可运行 `update recover`。用安装器 `--version` 固定的版本需先 `update unpin`。
+受管服务默认只做后台检查。显式安装仍可用 `update apply`，恢复前一个已验证版本用 `update rollback`，替换意外中断后用 `update recover`。如果正在使用 0.2.2 的 CLI，先运行 `iphone-control update check` 并按该版本显示的命令升级。新版 CLI 才支持直接运行 `iphone-control update`。
 
 主动运行 `iphone-control update policy auto-patch` 后，服务只在空闲时自动安装兼容补丁。请退出 Viewer、MCP 和直连设备的客户端；暂停的任务也视为占用。新 daemon 健康检查失败会恢复旧程序，失败版本须手动重试。`update policy notify` 改回仅检查，`update policy manual` 移除定时任务。
 

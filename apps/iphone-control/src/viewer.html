@@ -2005,7 +2005,7 @@ function drawUpdates(r) {
     needs_operator: t('等待手动升级', 'Waiting for manual upgrade'),
     busy: t('等待空闲', 'Waiting for idle'), recovery_failed: t('需要手动恢复', 'Recovery needs attention') };
   const last = r.last_update?.status;
-  const outcome = last === 'needs_operator' ? t('需手动运行 iphone-control update apply', 'Run iphone-control update apply manually') : outcomes[last] || last;
+  const outcome = last === 'needs_operator' ? t('需手动运行 iphone-control update', 'Run iphone-control update manually') : outcomes[last] || last;
   $('#update-outcome').textContent = r.last_update ? [r.last_update.target_version, outcome, r.last_update.detail].filter(Boolean).join(' · ') : '';
   $('#update-mismatch').textContent = [r.installed_version, r.daemon_version].some(v => v && v !== r.running_version) ?
     t('进程版本不同。重新打开 Viewer，重连 MCP 客户端，并按安装渠道重启 daemon。', 'Versions differ. Reopen Viewer, reconnect MCP clients and restart the daemon through its installation channel.') : '';

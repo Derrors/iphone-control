@@ -6,6 +6,10 @@ All notable changes to this project are documented here. The format is based on 
 
 ## [Unreleased]
 
+### Added
+
+- Run `iphone-control update` to check for a new stable release and install it through your managed service, Homebrew or Debian package. It reports when you already have the latest version. `update check` remains available for a check only.
+
 ## [0.2.2] - 2026-11-12
 
 ### Upgrade notes

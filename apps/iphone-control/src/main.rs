@@ -40,10 +40,10 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    #[command(about = ictl_l10n::tr!("检查和管理主机软件更新", "Check for and manage host software updates"))]
+    #[command(about = ictl_l10n::tr!("检查主机软件版本，有新版时升级", "Check for a new host software release and install it if available"))]
     Update {
         #[command(subcommand)]
-        action: UpdateAction,
+        action: Option<UpdateAction>,
     },
     #[command(about = ictl_l10n::tr!("常驻守护进程（安装时装成用户服务：macOS 是 launchd，Linux 是 systemd；也可以手动启动）", "The long-running daemon (installed as a user service: launchd on macOS, systemd on Linux; can also be started by hand)"))]
     Daemon,
@@ -200,7 +200,8 @@ async fn run() -> anyhow::Result<()> {
     };
     let Some(command) = cli.command.take() else { return guide::first_run(&cli).await };
     match command {
-        Command::Update { action } => update_command(action, &cli.socket).await,
+        Command::Update { action: None } => update::upgrade(&cli.socket, update::check(false).await?).await,
+        Command::Update { action: Some(action) } => update_command(action, &cli.socket).await,
         Command::Daemon => {
             let mut cfg = ictl_daemon::Config::from_env(&cli.data_dir);
             cfg.socket = cli.socket;
@@ -256,14 +257,14 @@ async fn update_command(action: UpdateAction, socket: &Path) -> anyhow::Result<(
         }
         UpdateAction::Policy { policy } => schedule::set_policy(socket, policy),
         UpdateAction::Schedule => schedule::configure(socket),
-        UpdateAction::Apply => transaction::apply(socket, false).await,
+        UpdateAction::Apply => transaction::apply(socket, false, update::check(false).await?).await,
         UpdateAction::Unpin => transaction::unpin(),
         UpdateAction::Rollback => transaction::rollback(socket).await,
         UpdateAction::Recover { scheduled } => transaction::recover(socket, scheduled).await,
         UpdateAction::Run => {
             let report = update::check(true).await?;
             if report.automatic_patch() {
-                transaction::apply(socket, true).await?;
+                transaction::apply(socket, true, report).await?;
             }
             Ok(())
         }
@@ -1058,6 +1059,19 @@ mod tests {
     use super::{host_is_loopback, mcp_command};
     use ictl_l10n::{Lang, with_lang};
     use std::path::Path;
+
+    #[test]
+    fn update_accepts_no_subcommand_and_preserves_read_only_check() {
+        use super::{Cli, Command, UpdateAction};
+        use clap::Parser;
+
+        let parse = |args: &[&str]| Cli::try_parse_from(args).unwrap().command;
+        assert!(matches!(parse(&["iphone-control", "update"]), Some(Command::Update { action: None })));
+        assert!(matches!(
+            parse(&["iphone-control", "update", "check", "--json"]),
+            Some(Command::Update { action: Some(UpdateAction::Check { json: true }) })
+        ));
+    }
 
     /// 英文时注册命令带上语言（MCP 客户端不带用户 shell 的环境）；中文时不带
     #[test]

@@ -164,7 +164,7 @@ pub(super) fn cargo_source(exe: &Path, manifest_dir: &Path) -> Option<(String, S
     Some((version, command))
 }
 
-fn brew_keg(exe: &Path, cellar: &Path, tap: &str) -> Option<String> {
+pub(super) fn brew_keg(exe: &Path, cellar: &Path, tap: &str) -> Option<String> {
     let version = exe.strip_prefix(cellar.join("iphone-control")).ok()?.components().next()?.as_os_str();
     let keg = cellar.join("iphone-control").join(version);
     if exe != keg.join("bin/iphone-control") {
@@ -228,7 +228,7 @@ fn deb_package(exe: &Path) -> Option<String> {
         return None;
     }
     let installed = dpkg(&["-W", "-f=${db:Status-Abbrev} ${Version}", owner])?;
-    let version = installed.strip_prefix("ii  ")?.trim();
+    let version = installed.strip_prefix("ii  ").or_else(|| installed.strip_prefix("hi  "))?.trim();
     let upstream = version.rsplit_once('-').map_or(version, |(upstream, _)| upstream);
     Some(Version::parse(upstream).ok()?.to_string())
 }

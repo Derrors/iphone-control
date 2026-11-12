@@ -72,7 +72,7 @@ You need an iPhone or iPad on iOS 17+ connected by a **data** cable, a free Appl
 curl -fsSLo iphone-control-install.sh https://github.com/Derrors/iphone-control/releases/latest/download/install.sh && sh iphone-control-install.sh
 ```
 
-It downloads the release for your machine, verifies the Ed25519 release manifest and archive SHA-256 (Python 3 and OpenSSL 3 required), installs `iphone-control` into `~/.local/bin` and runs the daemon as a per-user service that starts at login (launchd on macOS, systemd on Linux). Run it as your regular user. Use `iphone-control update apply` to upgrade this managed service. Running `sh iphone-control-install.sh --uninstall` removes it and keeps your data.
+It downloads the release for your machine, verifies the Ed25519 release manifest and archive SHA-256 (Python 3 and OpenSSL 3 required), installs `iphone-control` into `~/.local/bin` and runs the daemon as a per-user service that starts at login (launchd on macOS, systemd on Linux). Run it as your regular user. Use `iphone-control update` to upgrade this managed service. Running `sh iphone-control-install.sh --uninstall` removes it and keeps your data.
 
 Upstream v0.2.0 predates the signed installer. To install that release or migrate an existing script installation, follow the [v0.2.0 instructions](https://derrors.github.io/iphone-control/en/guide/getting-started#legacy-script).
 
@@ -150,7 +150,11 @@ Tool texts, results, CLI output and logs are in Simplified Chinese by default; s
 
 All commands and options: [CLI reference](https://derrors.github.io/iphone-control/en/guide/cli).
 
-Check in Viewer → **About & updates** or run `iphone-control update check --json`. For a managed user service, use `iphone-control update apply`. To opt in to signed patches when no device clients or tasks are active, use `iphone-control update policy auto-patch`; return to background checks with `iphone-control update policy notify`. Other channels upgrade with `brew upgrade iphone-control`, or by installing the new `.deb`; for a source build, see [build from source](https://derrors.github.io/iphone-control/en/deploy/source). Read the upgrade notes in the [changelog](CHANGELOG.md) first. Uninstall with `sh iphone-control-install.sh --uninstall`, `brew uninstall iphone-control` or `sudo apt remove iphone-control`; your data stays. Settings live in `~/.config/iphone-control/env`: the guide writes it, and after editing it by hand run `iphone-control service restart` — see [configuration](https://derrors.github.io/iphone-control/en/guide/configuration). All state lives in `~/.local/share/iphone-control`: the Apple ID session and signing key, and the passcode if auto-unlock is on. **Back it up; never commit or share it.**
+Run `iphone-control update` to check for a stable release. When an upgrade is available, it uses the signed update for a managed service, Homebrew for a tap installation, or apt for a Debian package. It reports when you're up to date. Source installations follow the [source upgrade instructions](https://derrors.github.io/iphone-control/en/deploy/source#upgrade).
+
+To check versions, open **About & updates** in Viewer or run `iphone-control update check --json`. Managed services can opt in to signed patches while idle with `iphone-control update policy auto-patch`. Use `iphone-control update policy notify` to return to checks only. Read the [upgrade notes](CHANGELOG.md) before upgrading.
+
+Uninstall with `sh iphone-control-install.sh --uninstall`, `brew uninstall iphone-control` or `sudo apt remove iphone-control`; your data stays. Settings live in `~/.config/iphone-control/env`: the guide writes it, and after editing it by hand run `iphone-control service restart` — see [configuration](https://derrors.github.io/iphone-control/en/guide/configuration). All state lives in `~/.local/share/iphone-control`: the Apple ID session and signing key, and the passcode if auto-unlock is on. **Back it up; never commit or share it.**
 
 ## Documentation
 

@@ -23,7 +23,7 @@ Pick one of the three. Install as your regular user; don't run `iphone-control` 
 curl -fsSLo iphone-control-install.sh https://github.com/Derrors/iphone-control/releases/latest/download/install.sh && sh iphone-control-install.sh
 ```
 
-It installs the program into `~/.local/bin` and the daemon as a per-user service (launchd on macOS, a systemd user service on Linux) that starts when you log in. Run `iphone-control update check` for upgrade instructions. Pass `--version vX.Y.Z` for a specific signed release, `--prefix DIR` to install into `DIR/bin`, or `--no-service` to install only the program. For upstream v0.2.0, use the [legacy script instructions](#legacy-script).
+It installs the program into `~/.local/bin` and the daemon as a per-user service (launchd on macOS, a systemd user service on Linux) that starts when you log in. Run `iphone-control update` to check for and install an upgrade, or `iphone-control update check` to check versions only. Pass `--version vX.Y.Z` for a specific signed release, `--prefix DIR` to install into `DIR/bin`, or `--no-service` to install only the program. For upstream v0.2.0, use the [legacy script instructions](#legacy-script).
 
 **Homebrew** (macOS, Linux):
 

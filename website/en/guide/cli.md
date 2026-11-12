@@ -23,11 +23,22 @@ These go before the command, for example `iphone-control --socket /path/ctl.sock
 
 ## Host software updates
 
-`iphone-control update check [--json]` and **About & updates** in Viewer share the local release cache. A source build without a publisher makes no network request. A failed check keeps the previous successful result. A red dot on the ⓘ button next to **Settings** indicates a newer stable release. Open it to read the version and release excerpt in the selected language and copy the command for your installation. For Homebrew, the tap determines when the upgrade is available. For Debian or Ubuntu, download the listed package before running the command.
+Run `iphone-control update` to check the publisher's latest stable release. It reports when you are up to date. When an upgrade is available, it uses the installation method of the running executable.
 
-Viewer listens on loopback. Other users on the same host can see installation information and request a version check. Installation, rollback and policy changes use the local CLI.
+| Installation | What `iphone-control update` does |
+| --- | --- |
+| Managed per-user service installed by the signed release script | Verifies and installs the signed update, then restarts the service and checks its health. Close Viewer, MCP and other device clients first. If you pinned a version with `--version`, run `iphone-control update unpin` when you are ready to upgrade. |
+| Homebrew | Runs the Homebrew upgrade through the tap bound to this installation. The tap determines which version is available. |
+| Debian / Ubuntu package | Downloads the matching `.deb` for the target version and host architecture from the same publisher, verifies it and passes it to apt for installation. |
+| Source builds, script installs without a managed service, or unrecognized installations | Shows instructions for a manual upgrade. A development build without a publisher displays guidance locally. |
 
-A managed per-user service installed by the release script checks in the background by default. Use `update apply` to install from the terminal, `update rollback` for the previous verified executable, or `update recover` after an interrupted replacement. A version selected with `install.sh --version` remains pinned until `update unpin`.
+Homebrew and apt upgrade the executable on disk. If you already run a background service, restart it after the upgrade with `brew services restart iphone-control` for Homebrew or `systemctl --user restart iphone-control` for a Debian user service. Skip this step if you do not use a service. Reopen Viewer and reconnect your MCP client to use the new executable.
+
+Use `iphone-control update check` for a version check only, or `iphone-control update check --json` for machine-readable output. This check and **About & updates** in Viewer share the local release cache. If the network check fails, the previous successful record is kept. A red dot on the ⓘ button beside **Settings** indicates a newer release. Open the panel to read the release notes and copy the update command for the current executable into a local terminal.
+
+Viewer listens on loopback. Other users on the same host can read installation information and request a version check. Upgrade, rollback and policy changes are performed from a local terminal.
+
+Managed services check in the background by default. You can still use `update apply` to install, `update rollback` to restore the previous verified executable and `update recover` after an interrupted replacement. If you currently run the 0.2.2 CLI, use `iphone-control update check` and follow the command it shows to upgrade to a version with the new `iphone-control update` command.
 
 Run `iphone-control update policy auto-patch` to opt in to installing compatible patches when idle. Viewer, MCP and direct device clients (including paused tasks) must exit before the service can restart. If the new daemon fails its health checks the updater restores the old executable and holds the failed version for an explicit retry. `update policy notify` checks without installing; `update policy manual` removes the scheduled job.
 

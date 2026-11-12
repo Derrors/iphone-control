@@ -47,7 +47,7 @@ pub(super) struct NeedsOperator(pub String);
 
 impl std::fmt::Display for NeedsOperator {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{} is not marked for automatic installation; install it with: iphone-control update apply", self.0)
+        write!(f, "{} is not marked for automatic installation; install it with: iphone-control update", self.0)
     }
 }
 
@@ -64,7 +64,7 @@ fn trusted(url: &Url) -> bool {
         )
 }
 
-fn client() -> anyhow::Result<Client> {
+pub(super) fn client() -> anyhow::Result<Client> {
     Ok(Client::builder()
         .user_agent("iphone-control-updater")
         .https_only(true)
@@ -80,7 +80,7 @@ fn client() -> anyhow::Result<Client> {
         .build()?)
 }
 
-async fn download(client: &Client, url: &str, max: u64, mut out: impl Write) -> anyhow::Result<u64> {
+pub(super) async fn download(client: &Client, url: &str, max: u64, mut out: impl Write) -> anyhow::Result<u64> {
     let mut response =
         client.get(url).send().await.and_then(|r| r.error_for_status()).map_err(reqwest::Error::without_url)?;
     ensure!(response.content_length().is_none_or(|s| s <= max), "release asset exceeds size limit");

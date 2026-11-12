@@ -478,11 +478,10 @@ fn managed(receipt: &Receipt) -> Result<(Store, Service)> {
     Ok((store, svc))
 }
 
-pub async fn apply(socket: &Path, background: bool) -> Result<()> {
+pub async fn apply(socket: &Path, background: bool, report: super::Report) -> Result<()> {
     let receipt = read_receipt()?;
     let (store, service) = managed(&receipt)?;
     ensure!(!receipt.pinned, "this installation is pinned; unpin it locally first");
-    let report = super::check(background).await?;
     ensure!(report.error_code.is_none(), "release check failed: {:?}", report.error_code);
     ensure!(matches!(report.availability, super::Availability::Available), "{}", report.guidance);
     let version = report.available_version.context("no stable release is available")?;
@@ -493,7 +492,7 @@ pub async fn apply(socket: &Path, background: bool) -> Result<()> {
         let suppressed = outcome(&store.binary)?.and_then(|o| o.suppression_for(&receipt));
         ensure!(
             suppressed.as_ref() != Some(&version),
-            "automatic retry suppressed for {version}; run update apply to retry"
+            "automatic retry suppressed for {version}; run iphone-control update to retry"
         );
         // An always-open client may stay busy for days. The lease here is deliberately
         // short-lived; replacement reacquires it and rechecks identity after download.

@@ -43,7 +43,7 @@ pub fn stable_exe() -> anyhow::Result<PathBuf> {
     Ok(stable_path(&exe))
 }
 
-fn stable_path(exe: &Path) -> PathBuf {
+pub(super) fn stable_path(exe: &Path) -> PathBuf {
     let s = exe.to_string_lossy();
     if let Some(i) = s.find("/Cellar/iphone-control/") {
         let rest = &s[i + "/Cellar/iphone-control/".len()..];

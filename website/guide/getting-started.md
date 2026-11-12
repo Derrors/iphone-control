@@ -23,7 +23,7 @@
 curl -fsSLo iphone-control-install.sh https://github.com/Derrors/iphone-control/releases/latest/download/install.sh && sh iphone-control-install.sh
 ```
 
-程序装到 `~/.local/bin`，守护进程装成用户服务（macOS 用 launchd，Linux 用 systemd），登录后自动启动。运行 `iphone-control update check` 查看升级指引。给脚本传入 `--version vX.Y.Z` 可装指定的签名版本，`--prefix DIR` 可装到 `DIR/bin`，`--no-service` 可只装程序。上游 v0.2.0 请按[旧版脚本说明](#legacy-script)操作。
+程序装到 `~/.local/bin`，守护进程装成用户服务（macOS 用 launchd，Linux 用 systemd），登录后自动启动。运行 `iphone-control update` 检查并升级。只想查看版本可用 `iphone-control update check`。给脚本传入 `--version vX.Y.Z` 可装指定的签名版本，`--prefix DIR` 可装到 `DIR/bin`，`--no-service` 可只装程序。上游 v0.2.0 请按[旧版脚本说明](#legacy-script)操作。
 
 **Homebrew**（macOS、Linux）：
 

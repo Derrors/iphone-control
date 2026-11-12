@@ -357,6 +357,6 @@ async fn confirmed_checkpoint_finishes_metadata_and_unknown_disk_is_preserved() 
 fn a_release_without_unattended_mark_is_not_a_failure() {
     let e = anyhow::Error::from(archive::NeedsOperator("0.2.2".into()));
     assert_eq!(failure_status(&e), "needs_operator");
-    assert!(e.to_string().contains("update apply"), "{e}");
+    assert!(e.to_string().ends_with("iphone-control update"), "{e}");
     assert_eq!(failure_status(&anyhow::anyhow!("archive digest mismatch")), "failed");
 }

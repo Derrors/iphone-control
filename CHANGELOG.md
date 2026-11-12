@@ -19,7 +19,7 @@ All notable changes to this project are documented here. The format is based on 
 
 ### Fixed
 
-- With the control page open in a browser that can't decode HEVC (Firefox, Chrome on most Linux) or on a device below iOS 27, WDA is no longer killed by iOS every 1–2 minutes: the picture is taken at full size, so WDA passes on the screenshot the phone encodes in hardware instead of scaling and re-encoding every frame, which took more CPU than iOS allows.
+- With the control page open in a browser that can't decode HEVC (Firefox, Chrome on most Linux) or on a device below iOS 27, WDA is no longer killed by iOS every 1–2 minutes: the picture is taken at full size and turned upright on the page in landscape, so WDA passes on the screenshot the phone encodes in hardware instead of scaling, rotating and re-encoding every frame, which took more CPU than iOS allows.
 - Piping output into a program that exits early, such as `iphone-control status | head -1`, no longer crashes with "Broken pipe"; the command ends quietly like other command-line tools.
 - Touches on the control page respond faster again: a press no longer measures the screen size on WDA each time (about 0.1–0.2 s, new in 0.2.2); the size is measured on rotation and at most once a minute. Moving the mouse over the picture also keeps the touch session open, so the first press after a pause doesn't wait about 0.5 s for it to reopen.
 

@@ -1326,9 +1326,19 @@ const turnsEl = $('#turns'), stopDialog = $('#stop-dialog'), deviceEl = $('#devi
 /* 实时画面：H.264 画在 canvas 上（见「H.264 画面」），否则是 MJPEG 的 img */
 const cv = $('#live-v'), cvx = cv.getContext('2d');
 const V = { on: false, off: false, noDevice: false, device: false, crop: false, rot: null, frameRotation: null, codecName: '', ctrl: null, dec: null, got: false, label: '', ts: 0, bytes: 0, rate: null, stream: '', recv: 0, acked: 0, acking: false };
-const picEl = () => V.on ? cv : live;
-const picW = () => V.on ? cv.width : live.naturalWidth;
-const picH = () => V.on ? cv.height : live.naturalHeight;
+/* MJPEG 画面横屏时也画在 canvas 上转正（见 mjpegTurn） */
+const M = { on: false, raf: 0 };
+const onCanvas = () => V.on || M.on;
+const picEl = () => onCanvas() ? cv : live;
+const picW = () => onCanvas() ? cv.width : live.naturalWidth;
+const picH = () => onCanvas() ? cv.height : live.naturalHeight;
+/* WDA 的画面（本机编码的 H.264、MJPEG）不在手机上转正：WDA 逐帧旋转、重新编码会让 CPU 超出 iOS 的上限，WDA 被杀。
+ * iPhone 横屏时帧还是竖的、内容侧着，这里按界面方向转正（同手机自己的视频）；iPad 的帧横屏时本来就是横的，不转。
+ * 转屏后视图 id 会变，页面重连画面，所以按出帧时的方向判断就够了 */
+function wdaTurn(w, h) {
+  const r = S.display?.rotation;
+  return (r === 90 || r === 270) && w < h ? r : 0;
+}
 
 let live = $('#live');
 let feedId = '', feedEpoch = 0, retryTimer = 0, infoSequence = 0;
@@ -2114,7 +2124,7 @@ function feedError() {
   if (S.stream === 'error') return;
   cancelGestures(); ++feedEpoch;
   clearTimeout(firstFrameTimer); S.stream = 'error'; S.rtt = null;
-  stopVideo(); cv.hidden = true; live.style.visibility = 'hidden'; live.removeAttribute('src');
+  stopMjpegTurn(); stopVideo(); cv.hidden = true; live.style.visibility = 'hidden'; live.removeAttribute('src');
   marks.replaceChildren(); hoverDot = null; S.elements = []; S.elState = 'idle'; renderElements();
   applyZoom(); showStageNote(); renderFeed(); renderChips();
   const epoch = feedEpoch;
@@ -2135,7 +2145,28 @@ function refreshFrame(reoriented = false) {
   frameWidth = picW(); frameHeight = picH();
   setRatio(frameWidth, frameHeight); syncMarksBox(); renderElements(); renderFeed(); renderChips();
 }
+/* MJPEG 帧是竖的而界面是横的：img 照常接收（透明），每个动画帧把它转正画到 canvas 上。iPhone 的截图带 EXIF 方向，
+ * 浏览器显示 img 时已经按它转正（naturalWidth 已是横的），这里就不转；没有方向标记的帧才用得上 */
+function mjpegTurn() {
+  const sw = live.naturalWidth, sh = live.naturalHeight, r = wdaTurn(sw, sh);
+  if (!r) { stopMjpegTurn(); return; }
+  M.on = true; cv.width = sh; cv.height = sw; cv.hidden = false; live.style.opacity = '0';
+  cancelAnimationFrame(M.raf);
+  const draw = () => {
+    if (!M.on) return;
+    cvx.save(); cvx.translate(sh / 2, sw / 2); cvx.rotate(r * Math.PI / 180);
+    cvx.drawImage(live, -sw / 2, -sh / 2, sw, sh); cvx.restore();
+    M.raf = requestAnimationFrame(draw);
+  };
+  draw();
+}
+function stopMjpegTurn() {
+  if (!M.on) return;
+  M.on = false; cancelAnimationFrame(M.raf); live.style.opacity = '';
+  if (!V.on) cv.hidden = true;
+}
 function connect() {
+  stopMjpegTurn();
   cancelGestures(); const epoch = ++feedEpoch;
   clearTimeout(firstFrameTimer); clearTimeout(retryTimer);
   stopVideo(); cv.hidden = true;
@@ -2152,7 +2183,7 @@ function connect() {
     V.on = true; next.hidden = true; cv.style.visibility = 'hidden'; cv.hidden = false;
     startVideo(q, dev);
   } else {
-    next.onload = () => { if (epoch === feedEpoch) refreshFrame(); };
+    next.onload = () => { if (epoch === feedEpoch) { mjpegTurn(); refreshFrame(); } };
     next.onerror = () => { if (epoch === feedEpoch) feedError(); };
     next.src = '/stream?' + q;
   }
@@ -2193,7 +2224,7 @@ async function startVideo(q, dev) {
       const pw = Math.min(S.size.w, S.size.h), ph = Math.max(S.size.w, S.size.h), k = Math.round(sw / pw) || 1;
       sw = Math.min(sw, Math.round(pw * k)); sh = Math.min(sh, Math.round(ph * k));
     }
-    const r = V.crop ? (V.rot ?? S.display?.rotation ?? 0) : 0, turned = r === 90 || r === 270;
+    const r = V.crop ? (V.rot ?? S.display?.rotation ?? 0) : wdaTurn(sw, sh), turned = r === 90 || r === 270;
     const W = turned ? sh : sw, H = turned ? sw : sh;
     const resized = cv.width !== W || cv.height !== H;
     if (resized) { cv.width = W; cv.height = H; }

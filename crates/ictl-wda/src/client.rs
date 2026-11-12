@@ -131,7 +131,6 @@ pub struct WdaClient<T> {
     idle_baseline: Option<IdleSettings>,
     /// What WDA has now, as far as we know: sending the same again is a wasted round trip
     idle_current: Option<IdleSettings>,
-    upright_stream: bool,
     /// See [`Self::fast_stream`]
     fast_stream: bool,
 }
@@ -147,7 +146,6 @@ impl<T: Transport> WdaClient<T> {
             lock_state_trusted: false,
             idle_baseline: None,
             idle_current: None,
-            upright_stream: false,
             fast_stream: false,
         }
     }
@@ -204,15 +202,14 @@ impl<T: Transport> WdaClient<T> {
             .to_owned();
         self.session = Some(id.clone());
         self.idle_current = None;
-        if self.upright_stream || self.fast_stream {
-            let mut settings = serde_json::Map::new();
-            if self.fast_stream {
-                settings.insert("mjpegServerFramerate".into(), MJPEG_FPS.into());
-                settings.insert("mjpegScalingFactor".into(), MJPEG_SCALE.into());
-            }
-            if self.upright_stream {
-                settings.insert("mjpegFixOrientation".into(), true.into());
-            }
+        if self.fast_stream {
+            // fixOrientation explicitly off: a WDA left running in the background (`ICTL_WDA_DETACHED`) keeps what an
+            // older version set
+            let settings = json!({
+                "mjpegServerFramerate": MJPEG_FPS,
+                "mjpegScalingFactor": MJPEG_SCALE,
+                "mjpegFixOrientation": false,
+            });
             let path = format!("/session/{id}/appium/settings");
             if let Err(e) = self.call("POST", &path, Some(json!({"settings": settings})), DEFAULT_TIMEOUT).await {
                 tracing::debug!("MJPEG settings: {e}");
@@ -501,15 +498,12 @@ impl<T: Transport> WdaClient<T> {
         self.quick_gesture(&swipe_steps(from, to, ms), IdleSettings::NO_COOL_OFF).await
     }
 
-    /// Ask WDA to turn the MJPEG frames with the interface, set with each new session. On an iPhone they otherwise stay
-    /// portrait with sideways content when the screen is landscape, so the live viewer shows them wrong
-    pub fn keep_stream_upright(&mut self) {
-        self.upright_stream = true;
-    }
-
     /// The MJPEG stream (the live viewer) at up to [`MJPEG_FPS`] frames a second instead of WDA's 10, at full size
-    /// ([`MJPEG_SCALE`], why not smaller), set with each new session: the picture follows a drag closely. WDA only
-    /// captures while a client is connected
+    /// ([`MJPEG_SCALE`], why not smaller) and never turned upright, set with each new session: the picture follows a
+    /// drag closely. In landscape the frames stay portrait with the content sideways (on an iPhone; an iPad's are
+    /// already landscape) and the viewer page turns them by the interface rotation, as it does the phone's own video:
+    /// `mjpegFixOrientation` makes WDA decode, rotate and re-encode every frame, 92 % of a core on an iPhone 15 Pro Max
+    /// in landscape, and iOS killed it within two minutes. WDA only captures while a client is connected
     pub fn fast_stream(&mut self) {
         self.fast_stream = true;
     }

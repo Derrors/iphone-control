@@ -21,7 +21,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 
-use super::{AbortOnDrop, Acks, Flow, QUEUE, message};
+use super::{AbortOnDrop, Acks, Flow, QUEUE, STREAM_IDLE, message, send_video};
 
 /// Asking for keyframes at most this often while dropping frames
 const ASK_EVERY: Duration = Duration::from_millis(500);
@@ -47,7 +47,6 @@ pub async fn serve(
     acks: Arc<Acks>,
     client: TcpStream,
 ) {
-    let (mut client_rd, mut client_wr) = client.into_split();
     let (ack_guard, mut acked) = acks.register();
     let mut flow = Flow::default();
 
@@ -71,30 +70,15 @@ pub async fn serve(
     });
     let _reader = AbortOnDrop(reader);
 
-    let (gone_tx, mut gone) = tokio::sync::oneshot::channel::<()>();
-    let watcher = tokio::spawn(async move {
-        let mut b = [0u8; 256];
-        while matches!(client_rd.read(&mut b).await, Ok(n) if n > 0) {}
-        let _ = gone_tx.send(());
-    });
-    let _watcher = AbortOnDrop(watcher);
-
-    let (out_tx, mut out_rx) = mpsc::channel::<Vec<u8>>(QUEUE);
-    let writer = tokio::spawn(async move {
-        while let Some(m) = out_rx.recv().await {
-            if client_wr.write_all(&m).await.is_err() {
-                return;
-            }
-        }
-    });
-    let _writer = AbortOnDrop(writer);
+    let (out_tx, out_rx) = mpsc::channel(QUEUE);
+    let _writer = AbortOnDrop(tokio::spawn(send_video(client, out_rx, STREAM_IDLE)));
 
     // dropping frames until a keyframe (the page fell behind, or its queue was full)
     let mut need_key = false;
     let mut asked: Option<Instant> = None;
     loop {
         tokio::select! {
-            _ = &mut gone => return,
+            _ = out_tx.closed() => return,
             m = msgs.recv() => {
                 let Some((kind, body)) = m else { return };
                 let now = Instant::now();

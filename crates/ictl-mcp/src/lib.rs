@@ -858,7 +858,7 @@ pub fn to_result(r: Response) -> CallToolResult {
         Response::Image { jpeg_base64, caption } => {
             CallToolResult::success(vec![ContentBlock::image(jpeg_base64, "image/jpeg"), ContentBlock::text(caption)])
         }
-        Response::Error { message } => CallToolResult::error(vec![ContentBlock::text(message)]),
+        Response::Error { message, .. } => CallToolResult::error(vec![ContentBlock::text(message)]),
     }
 }
 
@@ -1005,7 +1005,7 @@ impl McpServer {
         }
         match self.call(&Request::Settle { max_ms: opts.settle_ms }).await {
             Response::Text { text: t, .. } => text += &format!("\n{t}"),
-            Response::Error { message } => {
+            Response::Error { message, .. } => {
                 text += &ictl_l10n::trf!(
                     "\n(等界面稳定失败:{message})",
                     "\n(waiting for the screen to settle failed: {message})"
@@ -1022,7 +1022,7 @@ impl McpServer {
                         text +=
                             &ictl_l10n::trf!("\n--- 操作后的界面 ---\n{t}", "\n--- Screen after the action ---\n{t}")
                     }
-                    Response::Error { message } => {
+                    Response::Error { message, .. } => {
                         text += &ictl_l10n::trf!("\n(读界面失败:{message})", "\n(reading the screen failed: {message})")
                     }
                     Response::Image { .. } => {}
@@ -1035,7 +1035,7 @@ impl McpServer {
                     ContentBlock::image(jpeg_base64, "image/jpeg"),
                     ContentBlock::text(caption),
                 ]),
-                Response::Error { message } => done(vec![ContentBlock::text(ictl_l10n::trf!(
+                Response::Error { message, .. } => done(vec![ContentBlock::text(ictl_l10n::trf!(
                     "{text}\n(截图失败:{message})",
                     "{text}\n(screenshot failed: {message})"
                 ))]),
@@ -1089,7 +1089,7 @@ impl McpServer {
                         lines.push(format!("{n}. {tool} → {text}"));
                     }
                     Response::Image { caption, .. } => lines.push(format!("{n}. {tool} → {caption}")),
-                    Response::Error { message } => {
+                    Response::Error { message, .. } => {
                         lines.push(ictl_l10n::trf!("{n}. {tool} → 出错:{message}", "{n}. {tool} → error: {message}"));
                         if n < total {
                             lines.push(ictl_l10n::trf!(

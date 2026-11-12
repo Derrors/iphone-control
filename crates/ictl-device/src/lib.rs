@@ -14,6 +14,7 @@ pub mod apps;
 pub mod ddi;
 pub mod hid;
 mod media;
+mod models;
 pub mod oslog;
 
 use std::future::Future;
@@ -33,6 +34,7 @@ use idevice::{
     misagent::MisagentClient,
     provider::{IdeviceProvider, UsbmuxdProvider},
     rsd::RsdHandshake,
+    springboardservices::{InterfaceOrientation, SpringBoardServicesClient},
     tcp::handle::AdapterHandle,
     usbmuxd::{Connection, UsbmuxdAddr},
 };
@@ -190,6 +192,25 @@ impl Rotation {
             270 => Self::TopToLeft,
             _ => return None,
         })
+    }
+
+    fn from_interface(orientation: InterfaceOrientation) -> Option<Self> {
+        match orientation {
+            InterfaceOrientation::Portrait => Some(Self::Portrait),
+            InterfaceOrientation::PortraitUpsideDown => Some(Self::UpsideDown),
+            InterfaceOrientation::LandscapeRight => Some(Self::TopToLeft),
+            InterfaceOrientation::LandscapeLeft => Some(Self::TopToRight),
+            InterfaceOrientation::Unknown => None,
+        }
+    }
+
+    pub fn degrees(self) -> u16 {
+        match self {
+            Self::Portrait => 0,
+            Self::TopToRight => 90,
+            Self::UpsideDown => 180,
+            Self::TopToLeft => 270,
+        }
     }
 
     pub fn is_landscape(self) -> bool {
@@ -403,6 +424,15 @@ impl Device {
     pub async fn installed_profiles(&self) -> Result<Vec<Vec<u8>>> {
         limit(ictl_l10n::tr!("读描述文件", "read provisioning profiles"), QUERY, async {
             Ok(MisagentClient::connect(&*self.provider).await?.copy_all().await?)
+        })
+        .await
+    }
+
+    /// SpringBoard reports the four interface orientations separately, even when WDA lacks /rotation.
+    pub async fn interface_rotation(&self) -> Result<Option<Rotation>> {
+        limit(ictl_l10n::tr!("读界面方向", "read interface orientation"), Duration::from_secs(2), async {
+            let mut springboard = SpringBoardServicesClient::connect(&*self.provider).await?;
+            Ok(Rotation::from_interface(springboard.get_interface_orientation().await?))
         })
         .await
     }
@@ -674,6 +704,16 @@ impl Tunnel {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn springboard_interface_orientation_preserves_all_four_directions() {
+        use InterfaceOrientation::*;
+        assert_eq!(Rotation::from_interface(Portrait), Some(Rotation::Portrait));
+        assert_eq!(Rotation::from_interface(PortraitUpsideDown), Some(Rotation::UpsideDown));
+        assert_eq!(Rotation::from_interface(LandscapeRight), Some(Rotation::TopToLeft));
+        assert_eq!(Rotation::from_interface(LandscapeLeft), Some(Rotation::TopToRight));
+        assert_eq!(Rotation::from_interface(Unknown), None);
+    }
 
     /// 真机：摄像头在左（z=270）时，HID 按竖放发 (265,314) 落在了界面的 (314,165)，反过来要换算回 (265,314)
     #[test]

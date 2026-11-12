@@ -3,6 +3,8 @@
 //! 同一时间只控制一台（一个 WDA 会话、一把设备锁）。选哪台见 [`crate::machine::pick_device`]：
 //! 选定了就只认那一台；没选定时正在控制的那台一直用到它断开。切换时拆掉上一台的会话，在新的一台上拉起 WDA
 
+use std::time::{Duration, Instant};
+
 use ictl_device::{Device, DeviceInfo, UsbDevice};
 
 use crate::core::{Daemon, Inner, device_label};
@@ -35,15 +37,54 @@ pub fn resolve_device(devices: &[DeviceInfo], query: &str) -> Result<usize, Stri
     }
 }
 
-impl Daemon {
-    /// 记下这一轮 USB 上接着的设备；新接上的读一次名字、型号
-    pub(crate) async fn note_connected(&self, g: &mut Inner, devices: Vec<UsbDevice>) {
-        for d in &devices {
-            if !g.infos.contains_key(&d.udid)
-                && let Ok(i) = Device::from_usb(d).info().await
-            {
-                g.infos.insert(d.udid.clone(), i);
+const METADATA_RETRY: Duration = Duration::from_secs(60);
+
+#[derive(Default)]
+pub(crate) struct CachedInfo {
+    pub value: Option<DeviceInfo>,
+    retry_at: Option<Instant>,
+}
+
+impl CachedInfo {
+    async fn refresh(&mut self, now: Instant, probe: impl Future<Output = Option<DeviceInfo>>) {
+        if self.retry_at.is_some_and(|retry| now < retry) {
+            return;
+        }
+        if self
+            .value
+            .as_ref()
+            .is_some_and(|i| !i.name.is_empty() && !i.product_type.is_empty() && !i.product_version.is_empty())
+        {
+            return;
+        }
+        self.retry_at = Some(now + METADATA_RETRY);
+        if let Some(mut info) = probe.await {
+            if let Some(cached) = &self.value {
+                for (field, previous) in [
+                    (&mut info.product_type, &cached.product_type),
+                    (&mut info.name, &cached.name),
+                    (&mut info.product_version, &cached.product_version),
+                ] {
+                    if field.is_empty() {
+                        field.clone_from(previous);
+                    }
+                }
             }
+            self.value = Some(info);
+        }
+    }
+}
+
+impl Daemon {
+    /// Read identity on attachment; lockdown can return partial metadata until the device is trusted.
+    pub(crate) async fn note_connected(&self, g: &mut Inner, devices: Vec<UsbDevice>) {
+        g.infos.retain(|udid, _| devices.iter().any(|d| d.udid == *udid));
+        for d in &devices {
+            if !g.connected.contains(d) {
+                g.infos.remove(&d.udid);
+            }
+            let cached = g.infos.entry(d.udid.clone()).or_default();
+            cached.refresh(Instant::now(), async { Device::from_usb(d).info().await.ok() }).await;
         }
         g.connected = devices;
     }
@@ -174,6 +215,28 @@ mod tests {
             product_type: "iPhone16,2".into(),
             product_version: "27.0".into(),
         }
+    }
+
+    #[tokio::test]
+    async fn incomplete_metadata_retries_without_polling_lockdown_each_tick() {
+        let start = Instant::now();
+        let mut cached = CachedInfo::default();
+        cached.refresh(start, async { None }).await;
+        cached
+            .refresh(start + Duration::from_secs(10), async { panic!("retried a failed query on the next tick") })
+            .await;
+        let mut partial = dev("A", "Tablet");
+        partial.product_version.clear();
+        cached.refresh(start + METADATA_RETRY, async { Some(partial) }).await;
+        cached
+            .refresh(start + METADATA_RETRY + Duration::from_secs(10), async {
+                panic!("retried partial metadata on the next tick")
+            })
+            .await;
+        cached.refresh(start + 2 * METADATA_RETRY, async { Some(dev("A", "")) }).await;
+        let info = cached.value.as_ref().unwrap();
+        assert_eq!((&*info.name, &*info.product_version), ("Tablet", "27.0"));
+        cached.refresh(start + 3 * METADATA_RETRY, async { panic!("retried complete metadata") }).await;
     }
 
     #[test]

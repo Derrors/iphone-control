@@ -81,19 +81,10 @@ impl Daemon {
             .ok_or_else(|| ictl_l10n::tr!("WDA 不可用,也不知道屏幕尺寸;等 WDA 起来一次,或在 ~/.config/iphone-control/env 里设 SCREEN_W/SCREEN_H", "WDA is unavailable and the screen size is unknown; wait for WDA to start once, or set SCREEN_W/SCREEN_H in ~/.config/iphone-control/env").into())
     }
 
-    /// 记下 WDA 报的界面旋转角：WDA 挂了以后 HID 点击要靠它换算横屏坐标（约 20 毫秒）
-    pub(crate) async fn refresh_hid_rotation(&self, g: &mut Inner) {
-        if let Some(w) = self.wda(g)
-            && let Ok(r) = w.rotation().await
-        {
-            g.dev.wda_rotation = Some((Instant::now(), r));
-        }
-    }
-
     /// 每次 HID 触摸前重新截图核对横竖，不依赖上次截图（转屏、回主屏、解锁都可能改变方向）。
-    /// 截图只给宽高，不能分辨横屏左右；短暂掉线时借用近期 WDA 方向，过期或不匹配就不触摸。
+    /// 截图只给宽高，不能分辨横屏左右；短暂掉线时借用近期实测方向，过期或不匹配就不触摸。
     async fn hid_touch_rotation(&self, g: &mut Inner) -> Result<Rotation, String> {
-        self.refresh_hid_rotation(g).await;
+        self.sample_display(g, false).await;
         let png = self.hid_screenshot(g).await.map_err(|e| {
             ictl_l10n::trf!(
                 "核对 HID 方向失败，没有发送触摸：{e}",
@@ -102,7 +93,7 @@ impl Daemon {
         })?;
         let (w, h) = imaging::png_size(&png)
             .ok_or(ictl_l10n::tr!("无法读取截图尺寸，没有发送触摸", "Can't read the screenshot size, no touch sent"))?;
-        let known = g.dev.wda_rotation.map(|(at, r)| (at.elapsed(), r));
+        let known = g.dev.last_rotation.map(|(at, r)| (at.elapsed(), r));
         hid_rotation(w, h, known)
     }
 
@@ -263,7 +254,7 @@ impl Daemon {
         };
         // 给短暂 WDA 掉线时的 HID 留一份近期方向；不把方向永久缓存到磁盘。
         if wda_png.is_some() {
-            self.refresh_hid_rotation(g).await;
+            self.sample_display(g, false).await;
         }
         let (png, via) = match wda_png {
             Some(p) => (p, "WDA"),
@@ -464,16 +455,53 @@ impl Daemon {
         r
     }
 
-    pub(crate) async fn tap(&self, g: &mut Inner, x: f64, y: f64) -> Result<String, String> {
+    /// A stale pointer must neither unlock nor act on a new display. Unlock can itself
+    /// rotate the foreground app, so take the final measurement after it completes.
+    async fn prepare_coordinates(
+        &self,
+        g: &mut Inner,
+        view: Option<&str>,
+        start: bool,
+    ) -> Result<Option<Rotation>, String> {
+        let changed = || {
+            ictl_l10n::tr!(
+                "画面已变化或尺寸尚未确认，请在新画面上重试",
+                "The display changed or its geometry is unavailable. Retry on the new picture."
+            )
+            .to_owned()
+        };
+        if let Some(id) = view
+            && g.dev.display.as_ref().is_none_or(|v| v.id != id)
+        {
+            return Err(changed());
+        }
+        // Move and Up use the finger's orientation from Down. A known display change
+        // has already invalidated the token and released that finger in update_display.
+        if !start {
+            return Ok(None);
+        }
         self.ensure_unlocked(g).await?;
+        let Some(id) = view else { return Ok(None) };
+        let (rotation, _) = self.sample_display(g, true).await;
+        if g.dev.display.as_ref().is_none_or(|v| v.id != id) {
+            return Err(changed());
+        }
+        Ok(rotation)
+    }
+
+    pub(crate) async fn tap(&self, g: &mut Inner, x: f64, y: f64, view: Option<&str>) -> Result<String, String> {
+        self.prepare_coordinates(g, view, true).await?;
         let pos = format!("({},{})", fmt_g(x), fmt_g(y));
         if let Some(w) = self.wda(g) {
             // 只有连不上才退到 HID；超时说明请求已发出，再用 HID 做一遍可能点两次
             match w.tap(x, y).await {
                 Ok(()) => return Ok(ictl_l10n::trf!("已点击 {pos}", "Tapped {pos}")),
-                Err(WdaError::Unavailable(_)) => {}
+                Err(WdaError::Unavailable(_)) if view.is_none() => {}
                 Err(e) => return Err(e.to_string()),
             }
+        }
+        if view.is_some() {
+            return Err(wda_down(&g.state, g.info.as_ref()));
         }
         let rot = self.hid_touch_rotation(g).await?;
         self.hid_do(g, move |h| {
@@ -486,69 +514,76 @@ impl Daemon {
         Ok(ictl_l10n::trf!("已点击 {pos}(经 HID)", "Tapped {pos} (via HID)"))
     }
 
-    /// A finger following the web viewer's pointer, one HID report per call (see `Request::Touch`). The checks a
-    /// gesture needs (unlocking, the orientation) are done once, when it touches down; moves and the lift only send
-    /// their report on the open HID session, so the screen keeps up with the pointer
-    pub(crate) async fn touch(&self, g: &mut Inner, phase: TouchPhase, x: f64, y: f64) -> Result<String, String> {
-        let contact = match phase {
-            TouchPhase::Prepare => {
-                self.hid(g).await?;
-                g.hid_used = Some(Instant::now());
-                return Ok(String::new());
-            }
-            TouchPhase::Down => {
-                self.ensure_unlocked(g).await?;
-                // WDA knows which way the interface is turned (about 20 ms); without it, check with a screenshot
-                let rot = match self.wda(g) {
-                    Some(w) => w.rotation().await.ok(),
+    /// Follow the viewer pointer with one HID report per call. The first event prepares the device.
+    /// Later events reuse the open HID session and reject a change in display orientation.
+    pub(crate) async fn touch(
+        &self,
+        g: &mut Inner,
+        phase: TouchPhase,
+        x: f64,
+        y: f64,
+        view: Option<&str>,
+    ) -> Result<(), Response> {
+        if phase == TouchPhase::Prepare {
+            self.hid(g).await.map_err(Response::error)?;
+            g.hid_used = Some(Instant::now());
+            return Ok(());
+        }
+        let measured = self.prepare_coordinates(g, view, phase == TouchPhase::Down).await.map_err(Response::error)?;
+        if phase == TouchPhase::Down {
+            let rotation = if let Some(rotation) = measured {
+                rotation
+            } else {
+                // Clients without a view id can use the HID fallback.
+                let fresh = match self.wda(g) {
+                    Some(wda) => wda.rotation().await.ok(),
                     None => None,
                 };
-                let rot = match rot {
+                match fresh {
                     Some(r) => {
-                        g.dev.wda_rotation = Some((Instant::now(), r));
+                        g.dev.last_rotation = Some((Instant::now(), r));
                         r
                     }
-                    None => self.hid_touch_rotation(g).await?,
-                };
-                g.dev.touch_rotation = Some(rot);
-                true
-            }
-            TouchPhase::Move => true,
-            TouchPhase::Up => false,
-        };
+                    None => self.hid_touch_rotation(g).await.map_err(Response::error)?,
+                }
+            };
+            g.dev.touch_rotation = Some(rotation);
+        }
+        self.send_touch(g, phase, x, y).await
+    }
+
+    async fn send_touch(&self, g: &mut Inner, phase: TouchPhase, x: f64, y: f64) -> Result<(), Response> {
+        let contact = phase != TouchPhase::Up;
         let Some(rot) = g.dev.touch_rotation else {
-            return Err(ictl_l10n::tr!("没有按下的手指,先发 down", "No finger is down; send down first").into());
+            return Err(Response::error(ictl_l10n::tr!(
+                "没有按下的手指,先发 down",
+                "No finger is down; send down first"
+            )));
         };
         if !contact {
             g.dev.touch_rotation = None;
         }
-        // the open session straight away: looking up the screen size for every move would cost a WDA request each
-        let open = g.tunnel.as_mut().and_then(|t| t.open_hid()).is_some();
-        let r = if open {
-            let h = g.tunnel.as_mut().and_then(|t| t.open_hid()).expect("checked above");
-            h.rotation = rot;
-            let r = h.touch(contact, x, y).await;
-            g.hid_used = Some(Instant::now());
-            match r {
-                Ok(()) => Ok(()),
-                Err(e) => {
-                    drop_tunnel(g).await;
-                    Err(ictl_l10n::trf!("HID 命令失败: {e}", "HID command failed: {e}"))
+        // Reuse the open session without another WDA screen-size lookup on every move.
+        let h = match g.tunnel.as_mut().and_then(|t| t.open_hid()) {
+            Some(h) => h,
+            None => match self.hid(g).await {
+                Ok(h) => h,
+                Err(message) => {
+                    g.dev.touch_rotation = None;
+                    return Err(Response::Error { message, retry_as_gesture: phase == TouchPhase::Down });
                 }
-            }
-        } else {
-            self.hid_do(g, move |h| {
-                Box::pin(async move {
-                    h.rotation = rot;
-                    h.touch(contact, x, y).await
-                })
-            })
-            .await
+            },
         };
-        if r.is_err() {
+        h.rotation = rot;
+        let result = h.touch(contact, x, y).await;
+        g.hid_used = Some(Instant::now());
+        if let Err(e) = result {
+            // A failed write may still have reached the phone.
             g.dev.touch_rotation = None;
+            drop_tunnel(g).await;
+            return Err(Response::error(ictl_l10n::trf!("HID 命令失败: {e}", "HID command failed: {e}")));
         }
-        r.map(|()| String::new())
+        Ok(())
     }
 
     pub(crate) async fn tap_element(
@@ -618,8 +653,15 @@ impl Daemon {
         Ok((ictl_l10n::trf!("已点击 {}{note}{moved}", "Tapped {}{note}{moved}", e.describe()), false))
     }
 
-    pub(crate) async fn long_press(&self, g: &mut Inner, x: f64, y: f64, seconds: f64) -> Result<String, String> {
-        self.ensure_unlocked(g).await?;
+    pub(crate) async fn long_press(
+        &self,
+        g: &mut Inner,
+        x: f64,
+        y: f64,
+        seconds: f64,
+        view: Option<&str>,
+    ) -> Result<String, String> {
+        self.prepare_coordinates(g, view, true).await?;
         self.require_wda(g)?.touch_and_hold(x, y, seconds).await.map_err(|e| e.to_string())?;
         Ok(ictl_l10n::trf!("已长按 ({},{}) {} 秒", "Long-pressed ({},{}) for {} s", fmt_g(x), fmt_g(y), fmt_g(seconds)))
     }
@@ -630,8 +672,9 @@ impl Daemon {
         from: (f64, f64),
         to: (f64, f64),
         seconds: f64,
+        view: Option<&str>,
     ) -> Result<String, String> {
-        self.ensure_unlocked(g).await?;
+        self.prepare_coordinates(g, view, true).await?;
         let desc = format!("({},{}) → ({},{})", fmt_g(from.0), fmt_g(from.1), fmt_g(to.0), fmt_g(to.1));
         if let Some(w) = self.wda(g) {
             match w.swipe_into_polling(from, to, (seconds * 1000.0) as u64).await {
@@ -643,9 +686,12 @@ impl Daemon {
                     g.swiped_tree = tree.map(|t| (Instant::now(), t));
                     return Ok(ictl_l10n::trf!("已滑动 {desc}{note}", "Swiped {desc}{note}"));
                 }
-                Err(WdaError::Unavailable(_)) => {}
+                Err(WdaError::Unavailable(_)) if view.is_none() => {}
                 Err(e) => return Err(e.to_string()),
             }
+        }
+        if view.is_some() {
+            return Err(wda_down(&g.state, g.info.as_ref()));
         }
         let rot = self.hid_touch_rotation(g).await?;
         self.hid_do(g, move |h| {
@@ -1238,6 +1284,24 @@ async fn verify_typed(w: &mut WdaClient<DeviceTransport>, text: &str) -> Typed {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn missing_hid_session_allows_retry_for_down_only() {
+        let (d, dir) = crate::core::tests::test_daemon("touch-no-hid");
+        let mut g = d.inner.lock().await;
+        // Older devices cannot open a HID session. Only a Down that already passed
+        // coordinate preparation can opt in to the whole-gesture fallback.
+        g.info = Some(ictl_device::DeviceInfo { product_version: "18.0".into(), ..Default::default() });
+        for phase in [TouchPhase::Down, TouchPhase::Move, TouchPhase::Up] {
+            g.dev.touch_rotation = Some(Rotation::Portrait);
+            let err = d.send_touch(&mut g, phase, 20., 50.).await.unwrap_err();
+            assert!(
+                matches!(err, Response::Error { retry_as_gesture, .. } if retry_as_gesture == (phase == TouchPhase::Down))
+            );
+            assert!(g.dev.touch_rotation.is_none());
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     fn hid_rotation_requires_fresh_matching_landscape() {

@@ -99,6 +99,7 @@ pub struct Report {
     pub error_code: Option<String>,
     pub published_at: Option<String>,
     pub release_url: Option<String>,
+    pub release_notes: Option<String>,
     pub guidance: String,
     pub upgrade_command: Option<String>,
     pub last_update: Option<transaction::Outcome>,
@@ -464,6 +465,7 @@ impl Local {
             error_code: cache.error_code,
             published_at: release.and_then(|r| r.published_at.clone()),
             release_url: repo.zip(release).map(|(repo, r)| format!("https://github.com/{repo}/releases/tag/{}", r.tag)),
+            release_notes: release.and_then(|r| r.notes.as_ref()?.for_lang(ictl_l10n::lang())),
             guidance,
             upgrade_command: command,
             last_update,
@@ -646,16 +648,34 @@ mod tests {
             policy: Policy::Manual,
         };
         let mut cache = Cache::default();
-        cache.release = Some(Release { tag: "v9.4.2".into(), published_at: None, assets: vec![] });
+        cache.release = Some(Release { tag: "v9.4.2".into(), published_at: None, assets: vec![], notes: None });
         let report = local.report(cache).unwrap();
         assert_eq!(report.availability, Availability::Current);
         assert!(report.upgrade_command.is_none());
     }
 
     #[test]
+    fn cached_report_uses_viewer_request_language() {
+        let cache: Cache = serde_json::from_value(serde_json::json!({
+            "release": {"tag": "v1.2.3", "assets": [], "notes": {"en": "New video", "zh": "新画面"}}
+        }))
+        .unwrap();
+        for (lang, expected) in [(ictl_l10n::Lang::En, "New video"), (ictl_l10n::Lang::Zh, "新画面")] {
+            let local = Local {
+                source_command: None,
+                exe: None,
+                install: Installation { method: InstallMethod::Unknown, version: None, pinned: None },
+                policy: Policy::Manual,
+            };
+            let report = ictl_l10n::with_lang(lang, || local.report(cache.clone())).unwrap();
+            assert_eq!(report.release_notes.as_deref(), Some(expected));
+        }
+    }
+
+    #[test]
     fn upgrade_commands_follow_the_verified_channel_and_release_state() {
         let exe = Path::new("/Users/it's me/bin/iphone-control");
-        let release = Release { tag: "v0.2.1".into(), published_at: None, assets: vec![] };
+        let release = Release { tag: "v0.2.1".into(), published_at: None, assets: vec![], notes: None };
         let brew = Path::new("/opt/homebrew/bin/brew");
         let keg = Path::new("/opt/homebrew/Cellar/iphone-control/0.2.0/bin/iphone-control");
         let command = |method, pinned, status, platform, tap| {
@@ -700,6 +720,7 @@ mod tests {
             tag: "v0.2.1".into(),
             published_at: None,
             assets: vec!["iphone-control-v0.2.1-linux-x86_64.tar.gz".into(), "iphone-control_0.2.1_amd64.deb".into()],
+            notes: None,
         };
         let for_install = |running, method, platform| availability(running, method, platform, Some(&release));
         assert_eq!(for_install("0.2.1", InstallMethod::Unknown, None), Availability::Current);
@@ -718,7 +739,8 @@ mod tests {
     #[test]
     fn managed_upgrade_waits_for_the_signed_manifest() {
         let base = "iphone-control-v0.2.1-linux-x86_64";
-        let mut release = Release { tag: "v0.2.1".into(), published_at: None, assets: vec![format!("{base}.tar.gz")] };
+        let mut release =
+            Release { tag: "v0.2.1".into(), published_at: None, assets: vec![format!("{base}.tar.gz")], notes: None };
         let managed = |r: &Release, running, keys| {
             availability_with(running, InstallMethod::Managed, Some("linux-x86_64"), Some(r), keys)
         };

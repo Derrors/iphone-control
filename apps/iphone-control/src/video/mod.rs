@@ -37,7 +37,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use serde_json::json;
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::{mpsc, watch};
 
@@ -50,6 +50,8 @@ pub fn device_allowed() -> bool {
         .is_none_or(|v| v.eq_ignore_ascii_case("auto") || v.eq_ignore_ascii_case("device"))
 }
 
+/// Maximum time to read a WDA frame or wait for progress writing to the page. WDA repeats even still frames.
+pub(super) const STREAM_IDLE: Duration = Duration::from_secs(8);
 /// Messages waiting for the page; more means it is falling behind
 const QUEUE: usize = 8;
 /// Restarting for a keyframe at most this often (a link too slow for the picture would otherwise restart all the
@@ -205,7 +207,6 @@ pub async fn serve(
     src: impl AsyncRead + Unpin + Send + 'static,
     client: TcpStream,
 ) {
-    let (mut client_rd, mut client_wr) = client.into_split();
     let (ack_guard, mut acked) = acks.register();
     let mut flow = Flow::default();
 
@@ -215,8 +216,8 @@ pub async fn serve(
         let mut f = mjpeg::Frames::new(src);
         let mut last: Option<Arc<Vec<u8>>> = None;
         loop {
-            match f.next().await {
-                Ok(Some(j)) => {
+            match tokio::time::timeout(STREAM_IDLE, f.next()).await {
+                Ok(Ok(Some(j))) => {
                     if last.as_ref().is_some_and(|l| **l == j) {
                         continue;
                     }
@@ -226,8 +227,8 @@ pub async fn serve(
                         return;
                     }
                 }
-                Ok(None) => return,
-                Err(e) => {
+                Err(_) | Ok(Ok(None)) => return,
+                Ok(Err(e)) => {
                     tracing::debug!("MJPEG stream: {e}");
                     return;
                 }
@@ -236,25 +237,8 @@ pub async fn serve(
     });
     let _reader = AbortOnDrop(reader);
 
-    // the page reads nothing after the request: a read that ends means it went away (a still screen sends nothing,
-    // so a failed write wouldn't notice)
-    let (gone_tx, mut gone) = tokio::sync::oneshot::channel::<()>();
-    let watcher = tokio::spawn(async move {
-        let mut b = [0u8; 256];
-        while matches!(client_rd.read(&mut b).await, Ok(n) if n > 0) {}
-        let _ = gone_tx.send(());
-    });
-    let _watcher = AbortOnDrop(watcher);
-
-    let (out_tx, mut out_rx) = mpsc::channel::<Vec<u8>>(QUEUE);
-    let writer = tokio::spawn(async move {
-        while let Some(m) = out_rx.recv().await {
-            if client_wr.write_all(&m).await.is_err() {
-                return;
-            }
-        }
-    });
-    let _writer = AbortOnDrop(writer);
+    let (out_tx, out_rx) = mpsc::channel(QUEUE);
+    let _writer = AbortOnDrop(tokio::spawn(send_video(client, out_rx, STREAM_IDLE)));
 
     let mut session: Option<ffmpeg::Session> = None;
     let mut last: Option<Arc<Vec<u8>>> = None;
@@ -270,7 +254,7 @@ pub async fn serve(
 
     loop {
         let ev = tokio::select! {
-            _ = &mut gone => return,
+            _ = out_tx.closed() => return,
             r = frames.changed() => match r {
                 Ok(()) => Ev::Frame(frames.borrow_and_update().clone()),
                 // the phone's stream ended (unplugged, WDA restarted): the page reconnects
@@ -391,12 +375,16 @@ fn start(enc: &Encoders, size: (u32, u32)) -> Option<ffmpeg::Session> {
 /// those (seen on Chrome 14x), and on a still screen no next frame would come. So the parts carry no
 /// `Content-Length` (the next one isn't known yet); browsers cut at the boundary anyway. The HTTP response head is
 /// written here
-pub async fn serve_mjpeg(src: impl AsyncRead + Unpin + Send + 'static, mut client: TcpStream) {
-    let (tx, mut rx) = watch::channel::<Option<Arc<Vec<u8>>>>(None);
+pub async fn serve_mjpeg(
+    src: impl AsyncRead + Unpin + Send + 'static,
+    client: impl AsyncRead + AsyncWrite + Unpin,
+    idle: Duration,
+) {
+    let (tx, rx) = watch::channel::<Option<Arc<Vec<u8>>>>(None);
     let reader = tokio::spawn(async move {
         let mut f = mjpeg::Frames::new(src);
         let mut last: Option<Vec<u8>> = None;
-        while let Ok(Some(j)) = f.next().await {
+        while let Ok(Ok(Some(j))) = tokio::time::timeout(idle, f.next()).await {
             if last.as_ref() == Some(&j) {
                 continue;
             }
@@ -407,12 +395,25 @@ pub async fn serve_mjpeg(src: impl AsyncRead + Unpin + Send + 'static, mut clien
         }
     });
     let _reader = AbortOnDrop(reader);
+    let (rd, wr) = tokio::io::split(client);
+    tokio::select! {
+        _ = client_disconnected(rd) => {}
+        _ = write_mjpeg(wr, rx, idle) => {}
+    }
+}
+
+async fn write_mjpeg(
+    mut client: impl AsyncWrite + Unpin,
+    mut rx: watch::Receiver<Option<Arc<Vec<u8>>>>,
+    idle: Duration,
+) {
     const NEXT: &[u8] = b"\r\n--ictl\r\nContent-Type: image/jpeg\r\n\r\n";
     let head =
         b"HTTP/1.1 200 OK\r\nContent-Type: multipart/x-mixed-replace; boundary=ictl\r\nCache-Control: no-store\r\n\
                  X-Content-Type-Options: nosniff\r\nConnection: close\r\n\r\n";
     // the first part's boundary and headers, without the line break that ends a part
-    if client.write_all(head).await.is_err() || client.write_all(&NEXT[2..]).await.is_err() {
+    let header = [head.as_slice(), &NEXT[2..]].concat();
+    if !write_with_progress(&mut client, &header, idle).await {
         return;
     }
     while rx.changed().await.is_ok() {
@@ -420,9 +421,44 @@ pub async fn serve_mjpeg(src: impl AsyncRead + Unpin + Send + 'static, mut clien
         let mut part = Vec::with_capacity(j.len() + NEXT.len());
         part.extend_from_slice(&j);
         part.extend_from_slice(NEXT);
-        if client.write_all(&part).await.is_err() {
+        if !write_with_progress(&mut client, &part, idle).await {
             return;
         }
+    }
+}
+
+// A still picture may never need another write. Watch the request socket for EOF as well.
+async fn client_disconnected(mut reader: impl AsyncRead + Unpin) {
+    let mut buf = [0; 256];
+    while matches!(reader.read(&mut buf).await, Ok(n) if n > 0) {}
+}
+
+// A large keyframe can take time over a tunnel. Apply the idle limit between successful writes.
+async fn write_with_progress(writer: &mut (impl AsyncWrite + Unpin), mut data: &[u8], idle: Duration) -> bool {
+    while !data.is_empty() {
+        match tokio::time::timeout(idle, writer.write(data)).await {
+            Ok(Ok(n)) if n > 0 => data = &data[n..],
+            _ => return false,
+        }
+    }
+    true
+}
+
+async fn send_video(
+    client: impl AsyncRead + AsyncWrite + Unpin,
+    mut messages: mpsc::Receiver<Vec<u8>>,
+    idle: Duration,
+) {
+    let (rd, mut wr) = tokio::io::split(client);
+    tokio::select! {
+        _ = client_disconnected(rd) => {}
+        _ = async {
+            while let Some(msg) = messages.recv().await {
+                if !write_with_progress(&mut wr, &msg, idle).await {
+                    return;
+                }
+            }
+        } => {}
     }
 }
 
@@ -444,6 +480,45 @@ async fn next_packet(s: &mut Option<ffmpeg::Session>) -> Option<Result<Packet, S
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn leaving_a_still_mjpeg_picture_releases_the_source() {
+        let (mut phone, src) = tokio::io::duplex(512);
+        let (client, mut browser) = tokio::io::duplex(512);
+        let relay = tokio::spawn(serve_mjpeg(src, client, Duration::from_secs(30)));
+        phone
+            .write_all(b"HTTP/1.1 200 OK\r\n\r\n--wda\r\nContent-Length: 4\r\n\r\n\xff\xd8\xff\xd9\r\n")
+            .await
+            .unwrap();
+
+        tokio::time::timeout(Duration::from_secs(2), async {
+            let mut frame = Vec::new();
+            tokio::io::AsyncBufReadExt::read_until(&mut tokio::io::BufReader::new(&mut browser), 0xd9, &mut frame)
+                .await
+                .unwrap();
+            assert!(frame.ends_with(b"\xff\xd8\xff\xd9"));
+            drop(browser);
+            relay.await.unwrap();
+            assert_eq!(phone.read(&mut [0]).await.unwrap(), 0);
+        })
+        .await
+        .expect("closing the page releases the source without waiting for another picture");
+    }
+
+    #[tokio::test]
+    async fn video_writer_closes_the_encoder_queue_if_output_stops_making_progress() {
+        let (client, mut browser) = tokio::io::duplex(2);
+        let (tx, rx) = mpsc::channel(1);
+        let writer = tokio::spawn(send_video(client, rx, Duration::from_millis(40)));
+        tx.send(vec![1, 2, 3, 4, 5]).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(2), async {
+            assert_eq!(browser.read_u8().await.unwrap(), 1);
+            tx.closed().await;
+            writer.await.unwrap();
+        })
+        .await
+        .expect("the encoder is notified when its writer gives up");
+    }
 
     /// A page that confirms in time is never behind; one whose confirmations stop coming is, once the oldest
     /// unconfirmed message is older than the usual round trip plus the slack

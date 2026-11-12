@@ -3,13 +3,16 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
-use ictl_device::{Device, DeviceError, LogStream, Tunnel, UsbDevice};
+use ictl_device::{Device, DeviceError, LogStream, Rotation, ScreenSize, Tunnel, UsbDevice};
 use ictl_wda::{WdaClient, WdaError, WdaRunner, http::DeviceTransport};
 
 use crate::core::{Daemon, DetachedWda, DeviceProfile, Inner, close_hid};
 use crate::machine::DeviceState;
 use crate::notify::Event;
 
+/// Three 10-second supervisor intervals. A missing background sample within this
+/// window can leave a verified gesture running, but can never authorize a new one.
+const DISPLAY_SAMPLE_GRACE: Duration = Duration::from_secs(30);
 /// 正常 2～10 秒就绪。手机重启后未授权 automation 时，testmanagerd 握手每次卡 30 秒、要重试一两次，
 /// 60 秒常常等不到 runner 启动，也就认不出「需要输入密码」
 const WDA_START_TIMEOUT: Duration = Duration::from_secs(120);
@@ -158,6 +161,64 @@ impl Daemon {
         self.publish(g);
     }
 
+    /// Returns the rotation actually observed in this sample and whether the published view changed.
+    pub(crate) async fn sample_display(&self, g: &mut Inner, gesture_start: bool) -> (Option<Rotation>, bool) {
+        let previous = g.dev.display.as_ref().map(|v| v.rotation);
+        let device = g.device.clone();
+        let Some(wda) = self.wda(g) else { return (None, self.update_display(g, None).await) };
+        let (size, rotation) = wda
+            .display_sample(previous, gesture_start, async { device?.interface_rotation().await.ok().flatten() })
+            .await;
+        let changed = self.record_display_sample(g, size, rotation, gesture_start).await;
+        (rotation, changed)
+    }
+
+    async fn record_display_sample(
+        &self,
+        g: &mut Inner,
+        size: Option<ScreenSize>,
+        rotation: Option<Rotation>,
+        gesture_start: bool,
+    ) -> bool {
+        if let Some(r) = rotation {
+            g.dev.last_rotation = Some((Instant::now(), r));
+        }
+        // Other clients use the last known size for HID even on WDA versions without /rotation.
+        if let (Some(size), Some(device)) = (size, &g.device)
+            && (g.persisted.screen != Some(size) || g.persisted.screen_udid.as_deref() != Some(&device.udid))
+        {
+            g.persisted.screen = Some(size);
+            g.persisted.screen_udid = Some(device.udid.clone());
+            g.persisted.save(&self.cfg.state_file());
+        }
+        let sample = size.zip(rotation);
+        if sample.is_none()
+            && !gesture_start
+            && g.dev.display_verified_at.is_some_and(|at| at.elapsed() < DISPLAY_SAMPLE_GRACE)
+            && let Some(view) = &g.dev.display
+            && size.is_none_or(|s| (s.width, s.height) == (view.width, view.height))
+            && rotation.is_none_or(|r| r.degrees() == view.rotation)
+        {
+            return false;
+        }
+        self.update_display(g, sample).await
+    }
+
+    async fn update_display(&self, g: &mut Inner, sample: Option<(ScreenSize, Rotation)>) -> bool {
+        g.dev.display_verified_at = sample.map(|_| Instant::now());
+        if !crate::core::DisplayGeometry::update(&mut g.dev.display, sample) {
+            return false;
+        }
+        if g.dev.touch_rotation.is_some() {
+            close_hid(g).await;
+        } else if let Some((size, _)) = sample
+            && let Some(hid) = g.tunnel.as_mut().and_then(Tunnel::open_hid)
+        {
+            hid.screen = size;
+        }
+        true
+    }
+
     async fn offline(&self, g: &mut Inner) {
         let now = Instant::now();
         if g.device.take().is_some() {
@@ -176,6 +237,7 @@ impl Daemon {
     }
 
     pub(crate) async fn online(&self, g: &mut Inner, seen: &UsbDevice) {
+        g.info = g.infos.get(&seen.udid).and_then(|entry| entry.value.clone());
         // 只比 UDID 不够：断开几秒又接上（短于离线判定、落在两轮巡检之间）时 UDID 不变，
         // usbmuxd 却换了编号，旧句柄的每个连接都报 bad device，永远恢复不了
         if !g.device.as_ref().is_some_and(|d| d.is_connection(seen)) {
@@ -197,10 +259,6 @@ impl Daemon {
             // 同一台重新接入也清（App 列表重读很便宜，日志流经的旧连接已经断了）
             self.forget_device(g).await;
             let d = Device::from_usb(seen);
-            g.info = d.info().await.ok();
-            if let Some(i) = &g.info {
-                g.infos.insert(seen.udid.clone(), i.clone());
-            }
             let model =
                 g.info.as_ref().map(|i| format!(" {} iOS {}", i.product_type, i.product_version)).unwrap_or_default();
             self.log.log(&ictl_l10n::log_trf!("手机在线{model}", "Phone online{model}"));
@@ -222,7 +280,10 @@ impl Daemon {
                     self.refresh_device_profile(g).await;
                 }
             }
-            Ok(false) => return self.set_state(g, DeviceState::NeedsTrust),
+            Ok(false) => {
+                self.update_display(g, None).await;
+                return self.set_state(g, DeviceState::NeedsTrust);
+            }
             // usbmuxd 出错：这一轮不下结论
             Err(e) => {
                 return tracing::debug!(
@@ -246,7 +307,7 @@ impl Daemon {
         };
         if ready {
             g.wda_misses.reset();
-            self.refresh_hid_rotation(g).await;
+            self.sample_display(g, false).await;
             if g.state != DeviceState::Ready {
                 if g.state == DeviceState::NeedsAutomationPin || g.dedup.was_sent("pin") {
                     g.dedup.clear("pin");
@@ -254,18 +315,10 @@ impl Daemon {
                 }
                 self.set_state(g, DeviceState::Ready);
                 g.backoff.reset();
-                if let Some(w) = g.wda.as_mut()
-                    && let Ok(s) = w.screen_size().await
-                {
-                    // 存竖放尺寸：WDA 在横屏时就绪的话这里拿到的是横的
-                    g.persisted.screen = Some(s.portrait());
-                    g.persisted.screen_udid = g.device.as_ref().map(|d| d.udid.clone());
-                    g.persisted.save(&self.cfg.state_file());
-                }
             }
             return;
         }
-        if runner_alive && !g.wda_misses.hit() {
+        if !self.confirm_wda_loss(g, runner_alive).await {
             return;
         }
         if g.runner.is_some() {
@@ -279,6 +332,15 @@ impl Daemon {
             return;
         }
         self.spawn_start(g, device, bundle);
+    }
+
+    /// Keep an active view and finger through the same transient status misses as the runner.
+    pub(crate) async fn confirm_wda_loss(&self, g: &mut Inner, runner_alive: bool) -> bool {
+        if runner_alive && !g.wda_misses.hit() {
+            return false;
+        }
+        self.update_display(g, None).await;
+        true
     }
 
     /// 在后台启动 WDA：挂开发者镜像（单独开一条隧道，用完关掉）→ 启动 runner 等就绪。
@@ -818,5 +880,52 @@ async fn open_log(device: &Device) -> Option<LogStream> {
             );
             None
         }
+    }
+}
+
+#[cfg(test)]
+mod display_tests {
+    use super::*;
+    use crate::core::tests::test_daemon;
+
+    const SIZE: ScreenSize = ScreenSize { width: 393., height: 852. };
+
+    #[tokio::test]
+    async fn passive_display_sample_absence_only_holds_the_last_verified_view_temporarily() {
+        let (d, dir) = test_daemon("display-grace");
+        let mut g = d.inner.lock().await;
+        d.record_display_sample(&mut g, Some(SIZE), Some(Rotation::Portrait), false).await;
+        let id = g.dev.display.as_ref().unwrap().id.clone();
+        g.dev.touch_rotation = Some(Rotation::Portrait);
+
+        // A timeout/unknown sample during a drag should not tear down the video or finger.
+        assert!(!d.record_display_sample(&mut g, Some(SIZE), None, false).await);
+        assert_eq!(g.dev.display.as_ref().unwrap().id, id);
+        assert_eq!(g.dev.touch_rotation, Some(Rotation::Portrait));
+        assert!(!d.record_display_sample(&mut g, Some(SIZE), Some(Rotation::Portrait), false).await);
+
+        // A fresh rotation alone does not extend the validity of an old complete sample.
+        g.dev.display_verified_at = Some(Instant::now() - DISPLAY_SAMPLE_GRACE);
+        assert!(d.record_display_sample(&mut g, None, Some(Rotation::Portrait), false).await);
+        assert!(g.dev.display.is_none());
+        assert!(g.dev.touch_rotation.is_none());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn changed_or_strict_display_sample_invalidates_immediately() {
+        let (d, dir) = test_daemon("display-incomplete");
+        let mut g = d.inner.lock().await;
+        let resized = ScreenSize { width: 360., height: 780. };
+        for (size, rotation, start) in
+            [(None, Some(Rotation::TopToLeft), false), (Some(resized), None, false), (Some(SIZE), None, true)]
+        {
+            d.record_display_sample(&mut g, Some(SIZE), Some(Rotation::Portrait), false).await;
+            g.dev.touch_rotation = Some(Rotation::Portrait);
+            assert!(d.record_display_sample(&mut g, size, rotation, start).await);
+            assert!(g.dev.display.is_none());
+            assert!(g.dev.touch_rotation.is_none());
+        }
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

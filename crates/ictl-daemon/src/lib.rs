@@ -134,23 +134,21 @@ async fn serve_conn(daemon: Arc<Daemon>, stream: tokio::net::UnixStream) {
                 // checked when it opens (no stream starts during an update) and not held while it runs: a page
                 // watching for hours would otherwise keep the updater from ever finding the host idle. An update
                 // stops the daemon, which ends the stream; the viewer reconnects to the new one
-                (Ok((protocol::Request::ScreenStream, _, expect_udid, lang)), Ok(lease)) => {
+                (Ok((protocol::Request::ScreenStream, _, ctx, lang)), Ok(lease)) => {
                     drop(lease);
-                    ictl_l10n::scope(lang, daemon.screen_stream(reader, w, expect_udid)).await;
+                    ictl_l10n::scope(lang, daemon.screen_stream(reader, w, ctx.expect_udid)).await;
                     return;
                 }
-                (Ok((req, false, expect_udid, lang)), Ok(_lease)) => {
-                    let handling = daemon.handle(req, queued_at, core::CallCtx { gone: None, expect_udid });
+                (Ok((req, false, ctx, lang)), Ok(_lease)) => {
+                    let handling = daemon.handle(req, queued_at, ctx);
                     ictl_l10n::scope(lang, handling).await
                 }
-                (Ok((req, true, expect_udid, lang)), Ok(_lease)) => {
+                (Ok((req, true, mut ctx, lang)), Ok(_lease)) => {
                     // 调用方断开（取消、超时）就告诉 handle：还在排队的话不再执行
                     let (gone_tx, gone_rx) = tokio::sync::oneshot::channel();
                     let mut gone_tx = Some(gone_tx);
-                    let handling = ictl_l10n::scope(
-                        lang,
-                        daemon.handle(req, queued_at, core::CallCtx { gone: Some(gone_rx), expect_udid }),
-                    );
+                    ctx.gone = Some(gone_rx);
+                    let handling = ictl_l10n::scope(lang, daemon.handle(req, queued_at, ctx));
                     tokio::pin!(handling);
                     let resp = loop {
                         tokio::select! {
@@ -180,17 +178,23 @@ async fn serve_conn(daemon: Arc<Daemon>, stream: tokio::net::UnixStream) {
 
 /// 解析一行请求，并取出 [`protocol::CANCEL_ON_CLOSE`]、[`protocol::EXPECT_UDID`]、[`protocol::LANG`]。
 /// No language (an older client) means Chinese, which is what those clients expect and parse
-fn parse_request(line: &[u8]) -> serde_json::Result<(protocol::Request, bool, Option<String>, ictl_l10n::Lang)> {
+fn parse_request(line: &[u8]) -> serde_json::Result<(protocol::Request, bool, core::CallCtx, ictl_l10n::Lang)> {
     let mut v: serde_json::Value = serde_json::from_slice(line)?;
-    let (cancel, expect, lang) = match v.as_object_mut() {
+    let (cancel, udid, view, lang) = match v.as_object_mut() {
         Some(o) => (
             o.remove(protocol::CANCEL_ON_CLOSE).is_some_and(|c| c == true),
             o.remove(protocol::EXPECT_UDID).and_then(|u| u.as_str().map(str::to_owned)),
+            o.remove(protocol::EXPECT_VIEW).and_then(|v| v.as_str().map(str::to_owned)),
             o.remove(protocol::LANG).and_then(|l| l.as_str().and_then(ictl_l10n::parse)),
         ),
-        None => (false, None, None),
+        None => (false, None, None, None),
     };
-    Ok((serde_json::from_value(v)?, cancel, expect, lang.unwrap_or(ictl_l10n::Lang::Zh)))
+    Ok((
+        serde_json::from_value(v)?,
+        cancel,
+        core::CallCtx { gone: None, expect_udid: udid, expect_view: view },
+        lang.unwrap_or(ictl_l10n::Lang::Zh),
+    ))
 }
 
 /// 等到调用方关掉连接（读到 EOF 或出错）。带 cancel_on_close 的客户端一个连接只发一个请求，之后不会再写
@@ -208,16 +212,18 @@ mod tests {
     #[test]
     fn request_options_are_taken_out_before_parsing() {
         use ictl_l10n::Lang;
-        let (req, cancel, expect, lang) =
-            parse_request(br#"{"op":"tap","x":1.0,"y":2.0,"cancel_on_close":true,"expect_udid":"U1","lang":"en"}"#)
-                .unwrap();
+        let (req, cancel, expect, lang) = parse_request(
+            br#"{"op":"tap","x":1.0,"y":2.0,"cancel_on_close":true,"expect_udid":"U1","expect_view":"V1","lang":"en"}"#,
+        )
+        .unwrap();
         assert_eq!(req, protocol::Request::Tap { x: 1.0, y: 2.0 });
         assert!(cancel);
-        assert_eq!(expect.as_deref(), Some("U1"));
+        assert_eq!(expect.expect_udid.as_deref(), Some("U1"));
+        assert_eq!(expect.expect_view.as_deref(), Some("V1"));
         assert_eq!(lang, Lang::En);
         // 旧版本客户端：没有这几个键；没说语言就是中文（它们按中文的固定写法认结果）
         let (_, cancel, expect, lang) = parse_request(br#"{"op":"status"}"#).unwrap();
-        assert!(!cancel && expect.is_none());
+        assert!(!cancel && expect.expect_udid.is_none());
         assert_eq!(lang, Lang::Zh);
         let (_, _, _, lang) = parse_request(br#"{"op":"status","lang":"klingon"}"#).unwrap();
         assert_eq!(lang, Lang::Zh);

@@ -23,7 +23,7 @@
 //! instead of tapping a phone the user isn't looking at. The device handle is looked up again for each stream, so a
 //! replug (new usbmuxd id) doesn't break the picture.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -55,15 +55,38 @@ struct Ctx {
     port: u16,
     /// The device the page shows and acts on
     udid: Mutex<String>,
+    feeds: Mutex<HashSet<String>>,
     agents: Arc<Agents>,
     checking: Arc<tokio::sync::Mutex<()>>,
     check_error: Arc<Mutex<Option<String>>>,
     /// Bundle id → display name, for the foreground app
     names: tokio::sync::Mutex<HashMap<String, String>>,
+    device_video_allowed: bool,
     /// H.264 for the picture; `None`: MJPEG only
     video: Option<Arc<crate::video::Encoders>>,
     /// How much of each H.264 stream its page has read
     acks: Arc<crate::video::Acks>,
+}
+
+/// A picture handler can be cancelled at any await, including while opening its source.
+struct FeedGuard<'a> {
+    feeds: &'a Mutex<HashSet<String>>,
+    id: String,
+}
+
+impl<'a> FeedGuard<'a> {
+    fn register(feeds: &'a Mutex<HashSet<String>>, id: String) -> Option<Self> {
+        if !feeds.lock().unwrap_or_else(|p| p.into_inner()).insert(id.clone()) {
+            return None;
+        }
+        Some(Self { feeds, id })
+    }
+}
+
+impl Drop for FeedGuard<'_> {
+    fn drop(&mut self) {
+        self.feeds.lock().unwrap_or_else(|p| p.into_inner()).remove(&self.id);
+    }
 }
 
 impl Ctx {
@@ -103,7 +126,8 @@ pub async fn run(socket: &Path, data_dir: &Path, port: u16) -> anyhow::Result<()
             if udid.is_empty() { ictl_l10n::tr!("跟随守护进程", "whichever the daemon controls") } else { &udid }
         )
     );
-    if crate::video::device_allowed() {
+    let device_video_allowed = crate::video::device_allowed();
+    if device_video_allowed {
         println!(
             "{}",
             ictl_l10n::tr!(
@@ -155,11 +179,13 @@ pub async fn run(socket: &Path, data_dir: &Path, port: u16) -> anyhow::Result<()
         data_dir: data_dir.to_path_buf(),
         port,
         udid: Mutex::new(udid),
+        feeds: Mutex::default(),
         agents,
         checking: Arc::default(),
         check_error: Arc::default(),
         names: tokio::sync::Mutex::default(),
         page: page_in(ictl_l10n::lang()),
+        device_video_allowed,
         video,
         acks: Arc::default(),
     });
@@ -180,10 +206,11 @@ pub async fn run(socket: &Path, data_dir: &Path, port: u16) -> anyhow::Result<()
 
 /// The page with `data-lang` set for English, which the page reads as its default language
 fn page_in(lang: ictl_l10n::Lang) -> String {
-    match lang {
-        ictl_l10n::Lang::En => PAGE.replacen("<html lang=\"zh-CN\">", "<html lang=\"en\" data-lang=\"en\">", 1),
-        ictl_l10n::Lang::Zh => PAGE.to_owned(),
-    }
+    let html = match lang {
+        ictl_l10n::Lang::En => "<html lang=\"en\" data-lang=\"en\" data-viewer>",
+        ictl_l10n::Lang::Zh => "<html lang=\"zh-CN\" data-viewer>",
+    };
+    PAGE.replacen("<html lang=\"zh-CN\">", html, 1)
 }
 
 /// One request per connection (`Connection: close`), which keeps the parser small. It is handled in the page's
@@ -206,66 +233,16 @@ async fn handle(mut client: TcpStream, ctx: &Ctx, head: Vec<u8>, req: Head, mut 
     let path = req.path.as_str();
     match (req.method.as_str(), path) {
         ("GET", "/") => reply(&mut client, 200, "text/html; charset=utf-8", ctx.page.as_bytes()).await,
-        // the phone's own screen video (iOS 27 and later), see `crate::video::device`
-        ("GET", "/video") if req.query("src").as_deref() == Some("device") => {
-            if !crate::video::device_allowed() {
-                return reply(&mut client, 404, "text/plain", b"turned off by IPHONE_CONTROL_VIEWER_CODEC").await;
-            }
-            let udid = req.query("udid").filter(|u| !u.is_empty()).unwrap_or_else(|| ctx.udid());
-            if udid.is_empty() {
-                return reply(&mut client, 503, "text/plain", b"no device yet").await;
-            }
-            match crate::video::device::open(&ctx.socket, &udid).await {
-                // the page takes 404 as "not this way" and falls back to H.264 or MJPEG
-                Err(e) => reply(&mut client, 404, "text/plain; charset=utf-8", e.as_bytes()).await,
-                Ok((src, w)) => {
-                    client
-                        .write_all(
-                            b"HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nCache-Control: no-store\r\n\
-                              X-Content-Type-Options: nosniff\r\nConnection: close\r\n\r\n",
-                        )
-                        .await?;
-                    crate::video::device::serve(src, w, ctx.acks.clone(), client).await;
-                    Ok(())
-                }
-            }
-        }
         ("GET", "/stream" | "/video") => {
-            let video = if path == "/video" {
-                match ctx.video.clone().filter(|e| e.label().is_some()) {
-                    Some(e) => Some(e),
-                    None => return reply(&mut client, 404, "text/plain", b"no H.264 encoder").await,
-                }
+            let _feed = if let Some(id) = req.query("feed").filter(|id| !id.is_empty() && id.len() <= 80) {
+                let Some(guard) = FeedGuard::register(&ctx.feeds, id) else {
+                    return reply(&mut client, 409, "text/plain", b"duplicate stream").await;
+                };
+                Some(guard)
             } else {
                 None
             };
-            // the device the page shows (`?udid=`), so a page that hasn't noticed a switch keeps its own picture
-            // instead of silently showing another phone. Looked up again each time: after a replug usbmuxd gives the
-            // device a new id
-            let udid = req.query("udid").filter(|u| !u.is_empty()).unwrap_or_else(|| ctx.udid());
-            if udid.is_empty() {
-                return reply(&mut client, 503, "text/plain", b"no device yet").await;
-            }
-            let device = ictl_device::Device::find(Some(&udid)).await;
-            let mut remote = match async { device?.connect_port(MJPEG_PORT).await }.await {
-                Ok(r) => r,
-                Err(e) => return reply(&mut client, 502, "text/plain", e.to_string().as_bytes()).await,
-            };
-            // WDA's MJPEG server answers any request with the multipart stream
-            remote.write_all(b"GET / HTTP/1.1\r\nHost: localhost\r\n\r\n").await?;
-            match video {
-                Some(enc) => {
-                    client
-                        .write_all(
-                            b"HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nCache-Control: no-store\r\n\
-                              X-Content-Type-Options: nosniff\r\nConnection: close\r\n\r\n",
-                        )
-                        .await?;
-                    crate::video::serve(enc, ctx.acks.clone(), remote, client).await;
-                }
-                None => crate::video::serve_mjpeg(remote, client).await,
-            }
-            Ok(())
+            picture(client, ctx, &req).await
         }
         ("GET", p) if p.starts_with("/api/agent/tasks/") && p.ends_with("/events") => {
             let id = &p["/api/agent/tasks/".len()..p.len() - "/events".len()];
@@ -280,7 +257,14 @@ async fn handle(mut client: TcpStream, ctx: &Ctx, head: Vec<u8>, req: Head, mut 
         ("GET", p) if p.starts_with("/api/") => {
             let v = match &p[5..] {
                 // always an answer: the page falls back to its offline demo when this one fails
-                "info" => Ok(info(ctx).await.unwrap_or_else(|m| json!({"width": null, "height": null, "warning": m}))),
+                "info" => {
+                    let mut v =
+                        info(ctx).await.unwrap_or_else(|m| json!({"width": null, "height": null, "warning": m}));
+                    if let Some(id) = req.query("feed") {
+                        v["feed_open"] = json!(ctx.feeds.lock().unwrap_or_else(|p| p.into_inner()).contains(&id));
+                    }
+                    Ok(v)
+                }
                 "updates" => updates(ctx).await,
                 "daemon" => daemon(ctx).await,
                 "status" => status(ctx).await,
@@ -320,6 +304,60 @@ async fn handle(mut client: TcpStream, ctx: &Ctx, head: Vec<u8>, req: Head, mut 
         }
         _ => reply(&mut client, 404, "text/plain", b"not found").await,
     }
+}
+
+async fn video_head(client: &mut TcpStream) -> anyhow::Result<()> {
+    let head = b"HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nCache-Control: no-store\r\n\
+                 X-Content-Type-Options: nosniff\r\nConnection: close\r\n\r\n";
+    tokio::time::timeout(crate::video::STREAM_IDLE, client.write_all(head)).await??;
+    Ok(())
+}
+
+async fn picture(mut client: TcpStream, ctx: &Ctx, req: &Head) -> anyhow::Result<()> {
+    // the device the page shows (`?udid=`), so a page that hasn't noticed a switch keeps its own picture
+    // instead of silently showing another phone. Looked up again each time: after a replug usbmuxd gives the
+    // device a new id
+    let udid = req.query("udid").filter(|u| !u.is_empty()).unwrap_or_else(|| ctx.udid());
+    if udid.is_empty() {
+        return reply(&mut client, 503, "text/plain", b"no device yet").await;
+    }
+    if req.path == "/video" && req.query("src").as_deref() == Some("device") {
+        if !ctx.device_video_allowed {
+            return reply(&mut client, 404, "text/plain", b"turned off by IPHONE_CONTROL_VIEWER_CODEC").await;
+        }
+        return match crate::video::device::open(&ctx.socket, &udid).await {
+            // the page takes 404 as "not this way" and falls back to H.264 or MJPEG
+            Err(e) => reply(&mut client, 404, "text/plain; charset=utf-8", e.as_bytes()).await,
+            Ok((src, w)) => {
+                video_head(&mut client).await?;
+                crate::video::device::serve(src, w, ctx.acks.clone(), client).await;
+                Ok(())
+            }
+        };
+    }
+    let video = if req.path == "/video" {
+        match ctx.video.clone().filter(|e| e.label().is_some()) {
+            Some(e) => Some(e),
+            None => return reply(&mut client, 404, "text/plain", b"no H.264 encoder").await,
+        }
+    } else {
+        None
+    };
+    let connection = async { ictl_device::Device::find(Some(&udid)).await?.connect_port(MJPEG_PORT).await };
+    let mut remote = match tokio::time::timeout(crate::video::STREAM_IDLE, connection).await {
+        Ok(Ok(r)) => r,
+        _ => return reply(&mut client, 502, "text/plain", b"device feed unavailable").await,
+    };
+    tokio::time::timeout(crate::video::STREAM_IDLE, remote.write_all(b"GET / HTTP/1.1\r\nHost: localhost\r\n\r\n"))
+        .await??;
+    match video {
+        Some(enc) => {
+            video_head(&mut client).await?;
+            crate::video::serve(enc, ctx.acks.clone(), remote, client).await;
+        }
+        None => crate::video::serve_mjpeg(remote, client, crate::video::STREAM_IDLE).await,
+    }
+    Ok(())
 }
 
 /// The release cache belongs to the host user; process versions belong to this Viewer and socket.
@@ -423,6 +461,29 @@ async fn post(ctx: &Ctx, name: &str, b: &Value, device: Option<&str>) -> (u16, V
             )
             .into(),
         );
+    }
+    if matches!(req, Request::TapElement { .. }) {
+        // The daemon resolves the name in a fresh accessibility tree on this device.
+        let Some(target) = device.filter(|id| !id.is_empty()) else {
+            return conflict(ictl_l10n::tr!("请先选择设备", "Select a device first.").into());
+        };
+        return (200, run_action(&ctx.socket, &req, Some(target), SHORT).await);
+    }
+    let positional = matches!(
+        req,
+        Request::Tap { .. }
+            | Request::LongPress { .. }
+            | Request::Swipe { .. }
+            | Request::Touch { phase: TouchPhase::Down | TouchPhase::Move | TouchPhase::Up, .. }
+    );
+    if positional {
+        let (Some(target), Some(view)) = (device, b["view"].as_str().filter(|id| !id.is_empty())) else {
+            return conflict(
+                ictl_l10n::tr!("画面已变化，请刷新后重试", "Display changed. Refresh the viewer and try again.").into(),
+            );
+        };
+        let reply = protocol::call_in_view(&ctx.socket, &req, Some(SHORT), target, view).await;
+        return (200, action_result(&req, reply));
     }
     (200, run_action(&ctx.socket, &req, udid, SHORT).await)
 }
@@ -636,14 +697,19 @@ const SHORT: Duration = Duration::from_secs(120);
 const SIGN: Duration = Duration::from_secs(16 * 60);
 
 async fn run_action(socket: &Path, req: &Request, udid: Option<&str>, timeout: Duration) -> Value {
-    match protocol::call_expecting(socket, req, Some(timeout), udid).await {
+    action_result(req, protocol::call_expecting(socket, req, Some(timeout), udid).await)
+}
+
+fn action_result(req: &Request, result: Result<Response, impl std::fmt::Display>) -> Value {
+    match result {
         // tapping by text that found nothing is an ordinary answer for the agent, a failure for the page
         Ok(Response::Text { text, outcome }) => {
             let missed = matches!(req, Request::TapElement { .. }) && protocol::tapped_nothing(&text, outcome);
             json!({"ok": !missed, "message": text})
         }
         Ok(Response::Image { caption, .. }) => json!({"ok": true, "message": caption}),
-        Ok(Response::Error { message }) => json!({"ok": false, "message": message}),
+        Ok(Response::Error { message, retry_as_gesture }) => json!({"ok": false, "message": message,
+            "retry_as_gesture": retry_as_gesture && matches!(req, Request::Touch { phase: TouchPhase::Down, .. })}),
         Err(e) => json!({"ok": false, "message": e.to_string()}),
     }
 }
@@ -654,7 +720,7 @@ async fn text_of(socket: &Path, req: Request, en: bool) -> Result<String, String
     let r = if en { ictl_l10n::scope(ictl_l10n::Lang::En, call).await } else { call.await };
     match r {
         Ok(Response::Text { text, .. }) => Ok(text),
-        Ok(Response::Error { message }) => Err(message),
+        Ok(Response::Error { message, .. }) => Err(message),
         Ok(Response::Image { caption, .. }) => Ok(caption),
         Err(e) => Err(e.to_string()),
     }
@@ -666,26 +732,26 @@ async fn text_of(socket: &Path, req: Request, en: bool) -> Result<String, String
 /// then its actions carry the old UDID and are refused, never sent to a phone the user isn't looking at
 async fn info(ctx: &Ctx) -> Result<Value, String> {
     let s = crate::snapshot(&ctx.socket).await.map_err(|e| e.to_string())?;
-    if let Some(d) = &s.device
-        && !d.udid.eq_ignore_ascii_case(&ctx.udid())
-    {
-        *ctx.udid.lock().unwrap_or_else(|p| p.into_inner()) = d.udid.clone();
-    }
-    let udid = ctx.udid();
-    let screen = screen_of(&s.persisted, &udid);
+    let udid = s.device.as_ref().map(|d| d.udid.as_str()).unwrap_or_default();
+    *ctx.udid.lock().unwrap_or_else(|p| p.into_inner()) = udid.to_owned();
+    let screen = screen_of(&s.persisted, udid);
     let live_touch = s.device.as_ref().is_some_and(|d| d.major_version() >= 27);
     Ok(json!({
+        "display": s.display,
         "width": screen.map(|s| s.width),
         "height": screen.map(|s| s.height),
         "udid": udid,
         // the picture's pointer drives a finger over CoreDevice HID (iOS 27 and later); older phones get whole gestures
         "live_touch": live_touch,
-        "device": s.device.map(|d| d.name),
+        "device": s.device.as_ref().map(|d| &d.name),
+        "model": s.device.as_ref().map(|d| &d.product_type),
+        "model_name": s.device.as_ref().and_then(|d| d.model_name()),
+        "family": s.device.as_ref().map_or("unknown", |d| d.family()),
         "state": state_of(&s.state).0,
         // the picture as H.264 (`/video`) and with which encoder; null: MJPEG only
         "video": ctx.video.as_ref().and_then(|e| e.label()),
         // the phone's own screen video can be tried (`/video?src=device`): iOS 27 and later, not turned off
-        "device_video": crate::video::device_allowed() && live_touch,
+        "device_video": ctx.device_video_allowed && live_touch,
     }))
 }
 
@@ -703,10 +769,13 @@ fn state_of(s: &DeviceState) -> (&'static str, Option<String>) {
 }
 
 fn device_json(d: &ictl_device::DeviceInfo) -> Value {
-    json!({"udid": d.udid, "name": d.name, "model": d.product_type, "ios": d.product_version})
+    json!({
+        "udid": d.udid, "name": d.name, "model": d.product_type, "ios": d.product_version,
+        "model_name": d.model_name(), "family": d.family(),
+    })
 }
 
-/// `{ state, last_error?, device: { name, model, ios, udid }, auto_unlock }`
+/// `{ state, last_error?, device: { name, model, model_name, family, ios, udid }, auto_unlock }`
 async fn daemon(ctx: &Ctx) -> Result<Value, String> {
     let s = crate::snapshot(&ctx.socket).await.map_err(|e| e.to_string())?;
     let (state, last_error) = state_of(&s.state);
@@ -721,7 +790,7 @@ async fn daemon(ctx: &Ctx) -> Result<Value, String> {
     }))
 }
 
-/// `{ devices: [{ udid, name, model, ios, controlled }], fixed }`
+/// `{ devices: [{ udid, name, model, model_name, family, ios, controlled }], fixed }`
 async fn devices(ctx: &Ctx) -> Result<Value, String> {
     let s = crate::snapshot(&ctx.socket).await.map_err(|e| e.to_string())?;
     let cur = s.device.as_ref().map(|d| d.udid.to_ascii_lowercase());
@@ -852,24 +921,53 @@ fn screen_of(p: &ictl_daemon::core::Persisted, udid: &str) -> Option<ictl_device
 mod tests {
     use super::*;
 
-    #[tokio::test]
-    async fn update_poll_keeps_polling_if_refresh_finishes_after_cache_read() {
-        let temp = tempfile::tempdir_in("/tmp").unwrap();
-        let socket = temp.path().join("daemon.sock");
-        let daemon = tokio::net::UnixListener::bind(&socket).unwrap();
-        let ctx = Ctx {
-            agents: Agents::new(&socket, temp.path().join("gate")).unwrap(),
-            socket,
-            data_dir: temp.path().into(),
+    fn test_ctx(dir: &Path, socket: &Path) -> Ctx {
+        Ctx {
+            agents: Agents::new(socket, dir.join("gate")).unwrap(),
+            socket: socket.to_owned(),
+            data_dir: dir.into(),
             port: 0,
             page: String::new(),
             checking: Arc::default(),
             check_error: Arc::default(),
             names: Default::default(),
             udid: Default::default(),
+            device_video_allowed: true,
             video: None,
             acks: Arc::default(),
-        };
+            feeds: Mutex::default(),
+        }
+    }
+
+    #[tokio::test]
+    async fn cancelled_picture_unregisters_its_feed() {
+        let temp = tempfile::tempdir_in("/tmp").unwrap();
+        let socket = temp.path().join("daemon.sock");
+        let daemon = tokio::net::UnixListener::bind(&socket).unwrap();
+        let ctx = test_ctx(temp.path(), &socket);
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let (tab, accepted) = tokio::join!(TcpStream::connect(listener.local_addr().unwrap()), listener.accept());
+        let _tab = tab.unwrap();
+        let raw = b"GET /video?src=device&udid=TEST&feed=tab HTTP/1.1\r\nHost: localhost\r\n\r\n";
+        let (client, _) = accepted.unwrap();
+        let mut request = Box::pin(handle(client, &ctx, raw.to_vec(), Head::parse(raw).unwrap(), vec![]));
+        // The simulated daemon has accepted the request but has not supplied a stream.
+        tokio::select! {
+            result = &mut request => panic!("picture ended before cancellation: {result:?}"),
+            peer = daemon.accept() => { let _peer = peer.unwrap(); }
+        }
+        assert!(FeedGuard::register(&ctx.feeds, "tab".into()).is_none(), "the first request still owns this ID");
+        assert!(ctx.feeds.lock().unwrap().contains("tab"));
+        drop(request);
+        assert!(!ctx.feeds.lock().unwrap().contains("tab"));
+    }
+
+    #[tokio::test]
+    async fn update_poll_keeps_polling_if_refresh_finishes_after_cache_read() {
+        let temp = tempfile::tempdir_in("/tmp").unwrap();
+        let socket = temp.path().join("daemon.sock");
+        let daemon = tokio::net::UnixListener::bind(&socket).unwrap();
+        let ctx = test_ctx(temp.path(), &socket);
         let guard = ctx.checking.lock().await;
         let finish_check = async {
             // The GET has consumed the release cache when its daemon snapshot begins.
@@ -886,6 +984,86 @@ mod tests {
 
     fn head(s: &str) -> Head {
         Head::parse(s.as_bytes()).unwrap()
+    }
+
+    async fn reply_to_action(daemon: &tokio::net::UnixListener, reply: Response) -> Value {
+        use tokio::io::{AsyncBufReadExt, BufReader};
+        let (mut peer, _) = daemon.accept().await.unwrap();
+        let mut line = String::new();
+        BufReader::new(&mut peer).read_line(&mut line).await.unwrap();
+        peer.write_all(format!("{}\n", serde_json::to_string(&reply).unwrap()).as_bytes()).await.unwrap();
+        serde_json::from_str(&line).unwrap()
+    }
+
+    #[tokio::test]
+    async fn element_tap_requires_only_an_explicit_device() {
+        let temp = tempfile::tempdir_in("/tmp").unwrap();
+        let socket = temp.path().join("daemon.sock");
+        let daemon = tokio::net::UnixListener::bind(&socket).unwrap();
+        let ctx = test_ctx(temp.path(), &socket);
+        let body = json!({"text": "Settings", "index": 1});
+        *ctx.udid.lock().unwrap() = "different-device".into();
+        assert_eq!(post(&ctx, "tap_element", &body, None).await.0, 409);
+        assert_eq!(post(&ctx, "tap", &json!({"x": 1, "y": 2}), Some("phone")).await.0, 409);
+        let (result, req) = tokio::time::timeout(Duration::from_secs(3), async {
+            tokio::join!(
+                post(&ctx, "tap_element", &body, Some("phone")),
+                reply_to_action(&daemon, Response::text("ok"))
+            )
+        })
+        .await
+        .unwrap();
+        assert_eq!(result.1["ok"], true);
+        assert_eq!(req["op"], "tap_element");
+        assert_eq!(req["expect_udid"], "phone");
+        assert_eq!(req["index"], 1);
+        assert!(req.get("expect_view").is_none());
+    }
+
+    #[tokio::test]
+    async fn only_daemon_confirmed_pre_contact_failure_allows_gesture_retry() {
+        let temp = tempfile::tempdir_in("/tmp").unwrap();
+        let socket = temp.path().join("daemon.sock");
+        let daemon = tokio::net::UnixListener::bind(&socket).unwrap();
+        let ctx = test_ctx(temp.path(), &socket);
+        for (phase, daemon_retry, allow) in [("down", false, false), ("down", true, true), ("move", true, false)] {
+            let body = json!({"phase":phase, "x":1, "y":2, "view":"portrait"});
+            let reply = Response::Error { message: "touch failed".into(), retry_as_gesture: daemon_retry };
+            // The result comes directly from the action, with no follow-up status request.
+            let ((_, result), req) = tokio::time::timeout(Duration::from_secs(3), async {
+                tokio::join!(post(&ctx, "touch", &body, Some("phone")), reply_to_action(&daemon, reply))
+            })
+            .await
+            .unwrap();
+            assert_eq!(req["expect_view"], "portrait");
+            assert_eq!(req["expect_udid"], "phone");
+            assert_eq!(result["retry_as_gesture"], allow);
+        }
+    }
+
+    #[tokio::test]
+    async fn mjpeg_relays_a_frame_and_ends_on_disconnect() {
+        let frames = b"HTTP/1.1 200 OK\r\n\r\n--wda\r\nContent-Length: 4\r\n\r\n\xff\xd8\xff\xd9\r\n";
+        let (client, mut browser) = tokio::io::duplex(512);
+        let mut received = Vec::new();
+        let (_, count) = tokio::join!(
+            crate::video::serve_mjpeg(&frames[..], client, Duration::from_secs(2)),
+            browser.read_to_end(&mut received),
+        );
+        assert!(count.unwrap() > frames.len());
+        assert!(received.windows(4).any(|frame| frame == b"\xff\xd8\xff\xd9"));
+    }
+
+    #[tokio::test]
+    async fn mjpeg_expires_on_stalled_phone_or_browser() {
+        let idle = Duration::from_millis(25);
+        for capacity in [1, 512] {
+            let (_phone, remote) = tokio::io::duplex(8);
+            let (client, _browser) = tokio::io::duplex(capacity);
+            tokio::time::timeout(Duration::from_secs(2), crate::video::serve_mjpeg(remote, client, idle))
+                .await
+                .unwrap();
+        }
     }
 
     #[test]
@@ -982,8 +1160,8 @@ mod tests {
 
     #[test]
     fn the_page_says_its_default_language() {
-        assert!(page_in(ictl_l10n::Lang::En).contains("<html lang=\"en\" data-lang=\"en\">"));
-        assert!(page_in(ictl_l10n::Lang::Zh).contains("<html lang=\"zh-CN\">"));
+        assert!(page_in(ictl_l10n::Lang::En).contains("<html lang=\"en\" data-lang=\"en\" data-viewer>"));
+        assert!(page_in(ictl_l10n::Lang::Zh).contains("<html lang=\"zh-CN\" data-viewer>"));
     }
 
     #[test]

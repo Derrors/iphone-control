@@ -408,7 +408,7 @@ async fn print_text(socket: &Path, req: Request) -> anyhow::Result<()> {
             println!("{text}");
             Ok(())
         }
-        Response::Error { message } => bail!("{message}"),
+        Response::Error { message, .. } => bail!("{message}"),
         Response::Image { caption, .. } => {
             println!("{caption}");
             Ok(())
@@ -419,7 +419,7 @@ async fn print_text(socket: &Path, req: Request) -> anyhow::Result<()> {
 async fn snapshot(socket: &Path) -> anyhow::Result<ictl_daemon::Snapshot> {
     match ask(socket, Request::Daemon).await? {
         Response::Text { text, .. } => Ok(serde_json::from_str(&text)?),
-        Response::Error { message } => bail!("{message}"),
+        Response::Error { message, .. } => bail!("{message}"),
         Response::Image { .. } => {
             bail!("{}", ictl_l10n::tr!("守护进程返回了意外的响应", "The daemon sent an unexpected response"))
         }

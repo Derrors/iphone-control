@@ -8,6 +8,7 @@ use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
+use ictl_l10n::Lang;
 use reqwest::{Client, StatusCode, header};
 use serde::{Deserialize, Serialize};
 
@@ -27,6 +28,64 @@ pub(super) struct Release {
     pub tag: String,
     pub published_at: Option<String>,
     pub assets: Vec<String>,
+    // Absent in caches written before release notes were collected.
+    pub notes: Option<ReleaseNotes>,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+pub(super) struct ReleaseNotes {
+    en: Option<String>,
+    zh: Option<String>,
+}
+
+impl ReleaseNotes {
+    fn from_body(body: &str) -> Self {
+        // Both release workflows end the changelog with a shared download/installation footer.
+        let body = body
+            .split_once("\n**Binaries / 二进制:**")
+            .and_then(|(before, _)| before.trim_end().strip_suffix("\n---"))
+            .unwrap_or(body);
+        let mut en = String::new();
+        let mut zh = String::new();
+        let mut lang = None;
+        for line in body.split_inclusive('\n') {
+            match line.trim_end() {
+                "## English" => lang = Some(Lang::En),
+                "## 中文" => lang = Some(Lang::Zh),
+                _ => match lang {
+                    Some(Lang::En) => en.push_str(line),
+                    Some(Lang::Zh) => zh.push_str(line),
+                    None => {}
+                },
+            }
+        }
+        Self { en: excerpt(if lang.is_some() { &en } else { body }), zh: excerpt(&zh) }
+    }
+
+    pub(super) fn for_lang(&self, lang: Lang) -> Option<String> {
+        match lang {
+            Lang::En => self.en.as_ref().or(self.zh.as_ref()),
+            Lang::Zh => self.zh.as_ref().or(self.en.as_ref()),
+        }
+        .cloned()
+    }
+}
+
+const MAX_NOTES_BYTES: usize = 4096;
+
+fn excerpt(text: &str) -> Option<String> {
+    let text = text.trim();
+    if text.is_empty() {
+        return None;
+    }
+    if text.len() <= MAX_NOTES_BYTES {
+        return Some(text.to_owned());
+    }
+    let mut end = MAX_NOTES_BYTES - '…'.len_utf8();
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    Some(format!("{}…", text[..end].trim_end()))
 }
 
 #[derive(Deserialize)]
@@ -35,6 +94,7 @@ struct Metadata {
     draft: bool,
     prerelease: bool,
     published_at: Option<String>,
+    body: Option<String>,
     assets: Vec<Asset>,
 }
 
@@ -56,7 +116,8 @@ fn parse_release(body: &[u8]) -> Option<Release> {
         return None;
     }
     let assets = meta.assets.into_iter().filter(|a| a.state == "uploaded" && a.size > 0).map(|a| a.name).collect();
-    Some(Release { tag: meta.tag_name, published_at: meta.published_at, assets })
+    let notes = Some(ReleaseNotes::from_body(meta.body.as_deref().unwrap_or_default()));
+    Some(Release { tag: meta.tag_name, published_at: meta.published_at, assets, notes })
 }
 
 pub(super) fn read(dir: &Path) -> Result<Cache> {
@@ -119,18 +180,16 @@ async fn fetch(client: &Client, url: &str, cache: &Cache, now: u64) -> reqwest::
         .get(url)
         .header(header::USER_AGENT, "iphone-control-update")
         .header(header::ACCEPT, "application/vnd.github+json");
-    if let Some(etag) = &cache.etag {
+    // Fetch a complete representation once for legacy caches, even if the release itself hasn't changed.
+    let etag = cache.etag.as_ref().filter(|_| cache.release.as_ref().is_some_and(|r| r.notes.is_some()));
+    if let Some(etag) = etag {
         req = req.header(header::IF_NONE_MATCH, etag);
     }
     let mut res = req.send().await?;
     let status = res.status();
     let headers = res.headers();
     if status == StatusCode::NOT_MODIFIED {
-        return Ok(if cache.release.is_some() && cache.etag.is_some() {
-            Fetch::Unchanged
-        } else {
-            Fetch::Failed("invalid_release", None)
-        });
+        return Ok(if etag.is_some() { Fetch::Unchanged } else { Fetch::Failed("invalid_release", None) });
     }
     if status == StatusCode::TOO_MANY_REQUESTS
         || (status == StatusCode::FORBIDDEN
@@ -246,6 +305,65 @@ mod tests {
         cache.last_attempt_at = Some(1);
         cache.next_background_at = Some(2);
         write_json(&dir.join("release.json"), &cache).unwrap();
+    }
+
+    #[test]
+    fn release_notes_select_changelog_without_shared_install_footer() {
+        let body = "## English\r\n\r\n### Added\r\n- Faster video\r\n\r\n## 中文\r\n\r\n### 新增\r\n- 画面更流畅\r\n\r\n---\r\n\r\n**Binaries / 二进制:** packages\r\n**Installer:** command";
+        let notes = ReleaseNotes::from_body(body);
+        assert_eq!(notes.for_lang(Lang::En).as_deref(), Some("### Added\r\n- Faster video"));
+        assert_eq!(notes.for_lang(Lang::Zh).as_deref(), Some("### 新增\r\n- 画面更流畅"));
+        let notes = ReleaseNotes::from_body("## English\n## What's new\n- New video\n## 中文\n## 更新内容\n- 新画面");
+        assert_eq!(notes.for_lang(Lang::En).as_deref(), Some("## What's new\n- New video"));
+        assert_eq!(notes.for_lang(Lang::Zh).as_deref(), Some("## 更新内容\n- 新画面"));
+    }
+
+    #[test]
+    fn release_notes_fall_back_to_available_text_and_bound_each_language_separately() {
+        for (body, expected) in [
+            ("## 中文\n修复", Some("修复")),
+            ("## 中文\n\n## English\nFixed", Some("Fixed")),
+            (" A single paragraph.\n", Some("A single paragraph.")),
+            ("## English\n\n## 中文\n", None),
+            (" \r\n", None),
+        ] {
+            for lang in [Lang::En, Lang::Zh] {
+                assert_eq!(ReleaseNotes::from_body(body).for_lang(lang).as_deref(), expected);
+            }
+        }
+        let body = format!("## English\n{}\n## 中文\n修复", "🎉".repeat(MAX_NOTES_BYTES));
+        let notes = ReleaseNotes::from_body(&body);
+        let en = notes.for_lang(Lang::En).unwrap();
+        assert!(en.ends_with('…') && en.len() <= MAX_NOTES_BYTES);
+        assert_eq!(notes.for_lang(Lang::Zh).as_deref(), Some("修复"));
+    }
+
+    #[tokio::test]
+    async fn legacy_cache_is_backfilled_on_next_due_check_then_keeps_its_etag() {
+        let dir = tempfile::tempdir().unwrap();
+        let old = serde_json::json!({"release": {"tag": "v1.2.3", "assets": ["prior"]}, "etag": "\"tag-1\""});
+        write_json(&dir.path().join("release.json"), &old).unwrap();
+        let legacy = read(dir.path()).unwrap().release.unwrap();
+        assert_eq!(legacy.assets, ["prior"]);
+        assert!(legacy.notes.is_none());
+
+        let mut release: serde_json::Value = serde_json::from_str(RELEASE).unwrap();
+        release["body"] = "## English\nNew video\n## 中文\n新画面".into();
+        let (url, requests) = server(vec![
+            response("200 OK", "ETag: \"tag-1\"\r\n", &release.to_string()),
+            response("304 Not Modified", "", ""),
+        ])
+        .await;
+        let http = local_client();
+        check(dir.path(), &http, &url, false).await.unwrap();
+        make_due(dir.path());
+        let fresh = check(dir.path(), &http, &url, false).await.unwrap();
+        let notes = fresh.release.unwrap().notes.unwrap();
+        assert_eq!(notes.for_lang(Lang::Zh).as_deref(), Some("新画面"));
+        assert_eq!(notes.for_lang(Lang::En).as_deref(), Some("New video"));
+        let requests = requests.await.unwrap();
+        assert!(!requests[0].contains("if-none-match:"));
+        assert!(requests[1].contains("if-none-match: \"tag-1\""));
     }
 
     #[test]

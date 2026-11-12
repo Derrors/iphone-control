@@ -4,6 +4,7 @@
 
 | 组件 | 版本 / 提交 | 许可证 | 引入方式 | 改动 |
 |---|---|---|---|---|
+| [DeviceKit](https://github.com/devicekit/DeviceKit/blob/fab82bd988405367c915143e293479f481e93ba0/Source/Device.generated.swift) | `fab82bd988405367c915143e293479f481e93ba0` | MIT | `crates/ictl-device/src/models.rs` | 提取 iPhone 和 iPad 的硬件标识与型号名称 |
 | [idevice](https://github.com/jkcoxson/idevice) | 上游 master `89702099`（0.1.68 之后、未发版） | MIT | git 依赖，`[patch.crates-io]` | 无（0.1.68 的 cryptexd install 会挂住；发版后换回 crates.io） |
 | [jktcp](https://crates.io/crates/jktcp) | 0.1.8（间接） | MIT | crates.io | 无 |
 | [rmcp](https://github.com/modelcontextprotocol/rust-sdk) | 3.8.0 | Apache-2.0（部分历史代码 MIT） | crates.io | 无 |
@@ -22,3 +23,25 @@
 因为不启用 omnisette 的默认 feature，AGPL-3.0 的过程宏 `remove-async-await` 和没有许可证声明的 `android-loader`/`sysv64` 都不会被编译。
 
 完整的传递依赖许可证清单 `THIRD_PARTY_LICENSES.html` 由 cargo-about 0.9.3 按 `Cargo.lock` 生成（配置 `packaging/licenses/about.toml`），放在每个发布的压缩包里，.deb 里在 `/usr/share/doc/iphone-control/THIRD_PARTY_LICENSES.html`。vendor 组件的许可证文件在仓库的 `vendor/<组件>/` 里。
+
+## DeviceKit
+
+Copyright (c) 2015 Dennis Weissmann
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.

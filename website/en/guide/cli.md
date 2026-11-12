@@ -23,7 +23,7 @@ These go before the command, for example `iphone-control --socket /path/ctl.sock
 
 ## Host software updates
 
-`iphone-control update check [--json]` and **About & updates** in Viewer share the local release cache. A source build without a publisher makes no network request. A failed check keeps the previous successful result. A red dot on **About & updates** indicates a newer stable release. Open the panel to see its version and copy the command for your installation. For Homebrew, the tap determines when the upgrade is available. For Debian or Ubuntu, download the listed package before running the command.
+`iphone-control update check [--json]` and **About & updates** in Viewer share the local release cache. A source build without a publisher makes no network request. A failed check keeps the previous successful result. A red dot on the ⓘ button next to **Settings** indicates a newer stable release. Open it to read the version and release excerpt in the selected language and copy the command for your installation. For Homebrew, the tap determines when the upgrade is available. For Debian or Ubuntu, download the listed package before running the command.
 
 Viewer listens on loopback. Other users on the same host can see installation information and request a version check. Installation, rollback and policy changes use the local CLI.
 

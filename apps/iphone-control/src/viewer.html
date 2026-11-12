@@ -187,7 +187,7 @@ code, .mono { font-family: var(--font-mono); }
 .tone-muted { background: var(--sunken); color: var(--muted); box-shadow: inset 0 0 0 1px var(--line); }
 .t-accent { color: var(--accent-text); } .t-ok { color: var(--ok-text); } .t-danger { color: var(--danger-text); } .t-warn { color: var(--warn-text); } .t-muted { color: var(--muted); } .t-user { color: var(--user-text); }
 
-.input, .select {
+.input {
   width: 100%; min-height: 40px; padding: 0 var(--sp-3); border-radius: var(--r-md);
   border: 1px solid transparent; background: var(--sunken); color: var(--text); font-size: var(--fs-sm);
   transition: background-color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
@@ -195,8 +195,8 @@ code, .mono { font-family: var(--font-mono); }
 @media (hover: hover) { .input:hover:not(:disabled):not(:focus) { border-color: var(--line); } }
 .input:focus { background: var(--panel); border-color: var(--line-strong); }
 .input::placeholder, .textarea::placeholder { color: var(--muted); opacity: 1; }
-.input:disabled, .select:disabled { color: var(--muted); cursor: not-allowed; }
-.input:focus-visible, .select:focus-visible { outline: 2px solid var(--focus); outline-offset: -1px; border-color: transparent; }
+.input:disabled { color: var(--muted); cursor: not-allowed; }
+.input:focus-visible { outline: 2px solid var(--focus); outline-offset: -1px; border-color: transparent; }
 .label { display: block; font-size: var(--fs-xs); font-weight: 600; color: var(--muted); margin-bottom: 6px; }
 
 /* ================= 外壳：浮在浅底上的三栏 ================= */
@@ -305,21 +305,22 @@ body.resizing .stage, body.resizing iframe { pointer-events: none; }
 .textarea:disabled { color: var(--muted); cursor: not-allowed; }
 .composer-row { display: flex; align-items: center; justify-content: flex-end; min-width: 0; gap: 6px; padding: 0 8px 8px; }
 .agent-pick { flex: 0 1 auto; min-width: 0; max-width: min(11rem, calc(100% - 52px)); }
-.agent-trigger { display: flex; align-items: center; gap: 4px; max-width: 100%; min-height: 32px; padding: 0 6px; border: 0; border-radius: 7px; background: transparent; color: var(--text-2); font-size: var(--fs-xs); font-weight: 500; cursor: pointer; }
-.agent-trigger .ic { color: var(--muted); --od-icon-size: 12px; }
-.agent-trigger[aria-expanded="true"], .agent-trigger:hover:enabled { background: var(--hover); }
-.agent-trigger[aria-expanded="true"] .ic { transform: rotate(180deg); }
-.agent-trigger:focus-visible { outline-color: var(--accent); outline-offset: 0; }
-.agent-trigger:disabled { color: var(--muted); cursor: default; }
-.agent-menu { position: fixed; inset: auto; margin: 0; width: max-content; min-width: min(9.5rem, calc(100vw - 16px)); max-width: calc(100vw - 16px); overflow: auto; padding: 4px; border-radius: 12px; color: var(--text); font-size: var(--fs-xs); }
-.agent-menu.glass { background-color: color-mix(in srgb, var(--panel) 75%, var(--glass-surface)); box-shadow: var(--shadow-float); }
-.agent-menu:focus { outline: none; }
-.agent-option { display: flex; align-items: center; justify-content: space-between; gap: 14px; min-height: 32px; padding: 4px 8px; border-radius: 8px; cursor: pointer; }
-.agent-option .od-icon { --od-icon-size: 14px; color: var(--text-2); }
-.agent-option[aria-selected="false"] .od-icon { visibility: hidden; }
-.agent-option[aria-disabled="true"] { color: var(--muted); cursor: default; }
-.agent-option[data-active] { background: var(--hover); }
-.agent-menu:focus-visible .agent-option[data-active] { outline: 1px solid var(--accent); outline-offset: -1px; }
+.picker-trigger { display: flex; align-items: center; gap: 4px; max-width: 100%; min-height: 32px; padding: 0 6px; border: 0; border-radius: 7px; background: transparent; color: var(--text-2); font-size: var(--fs-xs); font-weight: 500; cursor: pointer; }
+.picker-trigger .ic { flex: none; color: var(--muted); --od-icon-size: 12px; }
+.picker-trigger[aria-expanded="true"], .picker-trigger:hover:enabled { background: var(--hover); }
+.picker-trigger[aria-expanded="true"] .ic { transform: rotate(180deg); }
+.picker-trigger:focus-visible { outline-color: var(--accent); outline-offset: 0; }
+.picker-trigger:disabled { color: var(--muted); cursor: default; }
+.picker-menu { position: fixed; inset: auto; margin: 0; width: max-content; min-width: min(9.5rem, calc(100vw - 16px)); max-width: calc(100vw - 16px); overflow: auto; padding: 4px; border-radius: 12px; color: var(--text); font-size: var(--fs-xs); }
+.picker-menu.glass { background-color: color-mix(in srgb, var(--panel) 75%, var(--glass-surface)); box-shadow: var(--shadow-float); }
+.picker-menu:focus { outline: none; }
+.picker-option { display: flex; align-items: center; justify-content: space-between; gap: 14px; min-height: 32px; padding: 4px 8px; border-radius: 8px; cursor: pointer; }
+.picker-option > span { min-width: 0; overflow-wrap: anywhere; }
+.picker-option .od-icon { --od-icon-size: 14px; color: var(--text-2); }
+.picker-option[aria-selected="false"] .od-icon { visibility: hidden; }
+.picker-option[aria-disabled="true"] { color: var(--muted); cursor: default; }
+.picker-option[data-active] { background: var(--hover); }
+.picker-menu:focus-visible .picker-option[data-active] { outline: 1px solid var(--accent); outline-offset: -1px; }
 .send { flex: none; width: 32px; min-height: 32px; height: 32px; padding: 0; border-radius: 50%; --od-icon-size: 16px; }
 .composer .send { background: var(--text); color: var(--panel); border: 0; box-shadow: none; }
 .composer .send:hover:not(:disabled) { background: var(--text-2); }
@@ -334,7 +335,7 @@ body.resizing .stage, body.resizing iframe { pointer-events: none; }
 }
 @media (pointer: coarse) {
   .send { width: 44px; min-height: 44px; height: 44px; }
-  .agent-trigger, .agent-option, .sidebar-settings { min-height: 44px; }
+  .picker-trigger, .picker-option, .sidebar-settings { min-height: 44px; }
 }
 .field-error { font-size: var(--fs-xs); color: var(--danger-text); font-weight: 500; padding: 0 var(--sp-2); }
 
@@ -347,16 +348,11 @@ body.resizing .stage, body.resizing iframe { pointer-events: none; }
 .dev-select .label { margin: 0; white-space: nowrap; font-size: var(--fs-2xs); }
 /* 优先保留设备选择器；状态标签在剩余的宽度内滚动。 */
 .dev-select { flex: 0 1 auto; max-width: 100%; }
-.dev-select .select-wrap { min-width: 0; grid-template-columns: minmax(0, 1fr); }
-.dev-select .select { width: 100%; min-width: 0; max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.device-picker { min-width: 0; max-width: 180px; }
+.device-picker .picker-trigger { min-width: 0; }
 .statusbar .chips { flex: 1 1 auto; }
 /* 中间栏的各行跟着栏宽收缩，不按内容最小宽度把栏撑出窗口 */
 .pane-stage > * { min-width: 0; }
-.select-wrap { display: grid; min-width: 0; }
-.select-wrap > * { grid-area: 1 / 1; }
-.select { appearance: none; -webkit-appearance: none; min-height: 36px; padding: 0 30px 0 var(--sp-2); border: 0; border-radius: var(--r-md); background: transparent; font-weight: 500; cursor: pointer; max-width: 240px; }
-@media (hover: hover) { .select:hover:not(:disabled) { background: var(--hover); } }
-.select-chev { justify-self: end; align-self: center; margin-right: 8px; pointer-events: none; color: var(--muted); --od-icon-size: 12px; }
 .chips { display: flex; align-items: center; gap: 2px; flex-wrap: nowrap; min-width: 0; overflow-x: auto; scrollbar-width: none; margin-left: 6px; padding-left: 8px; border-left: 1px solid var(--line); }
 .chips:empty { display: none; }
 .chips::-webkit-scrollbar { display: none; }
@@ -564,22 +560,43 @@ button.nav-device:disabled { cursor: default; }
 .dialog[open] { animation: rise var(--dur) var(--ease-out); }
 .dialog h2 { font-size: 1.125rem; font-weight: 600; margin-bottom: var(--sp-2); }
 .dialog p { color: var(--text-2); }
-#updates-dialog { background: color-mix(in srgb, var(--panel) 90%, transparent); backdrop-filter: blur(22px); }
-#updates-dialog .update-head { display: flex; justify-content: space-between; align-items: center; }
-#updates-dialog h2 { margin: 0; }
-#about-updates { position: relative; }
-#update-dot { position: absolute; top: 2px; right: 2px; width: 7px; height: 7px; border-radius: 50%; background: var(--danger); box-shadow: 0 0 0 2px var(--panel); }
-#update-command-block { margin-top: var(--sp-3); padding: var(--sp-3); border-radius: var(--r-sm); background: var(--press); }
-.update-command-head { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-2); }
-#update-command { display: block; margin-top: var(--sp-2); font-family: var(--font-mono); font-size: var(--fs-sm); overflow-wrap: anywhere; white-space: pre-wrap; user-select: all; }
-#update-copy-status:empty { display: none; }
-#updates-dialog .dialog-actions { flex-wrap: wrap; }
-.update-version { margin: var(--sp-4) 0; font: 600 var(--fs-xl)/1.3 var(--font-mono); }
-.update-facts { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: var(--sp-1) var(--sp-3); margin: var(--sp-3) 0; }
-.update-facts dt { color: var(--text-2); }
-.update-facts dd, .update-detail { margin: 0; overflow-wrap: anywhere; white-space: pre-line; }
-.update-detail { margin-top: var(--sp-2); }
+
 .dialog-actions { display: flex; justify-content: flex-end; gap: var(--sp-2); margin-top: var(--sp-6); }
+
+.sidebar-footer { display: flex; align-items: center; gap: 6px; }
+.sidebar-footer .sidebar-settings { flex: 1; }
+#about-updates { position: relative; flex: none; color: var(--text-2); }
+#about-updates[aria-expanded="true"] { background: var(--hover); }
+#update-dot { position: absolute; top: 5px; right: 5px; width: 6px; height: 6px; border-radius: 50%; background: var(--danger); box-shadow: 0 0 0 2px var(--panel); }
+#updates-dialog {
+  position: fixed; inset: auto; margin: 0; width: min(19rem, calc(100vw - 16px)); padding: 12px;
+  border-radius: 12px; color: var(--text); font-size: var(--fs-xs); line-height: 1.5;
+  overflow: auto; overflow-wrap: anywhere; overscroll-behavior: contain;
+  background-color: color-mix(in srgb, var(--panel) 75%, var(--glass-surface)); box-shadow: var(--shadow-float);
+}
+.update-head, .update-actions { display: flex; align-items: center; gap: 6px; }
+#update-version { flex: 1; font-size: var(--fs-sm); font-weight: 600; line-height: 1.4; }
+.update-head .btn-icon { width: 28px; min-height: 28px; padding: 0; color: var(--muted); --od-icon-size: 14px; }
+#update-result, #update-notes { color: var(--text-2); }
+#update-notes:not(:empty), #update-result:not(:empty) { margin-top: 4px; }
+#update-result[data-error="true"] { color: var(--danger-text); }
+.update-actions { flex-wrap: wrap; margin-top: 8px; }
+.update-actions .btn { min-height: 30px; padding-inline: 8px; }
+#update-release { text-decoration: none; }
+#update-more { margin-inline-start: auto; gap: 4px; --od-icon-size: 12px; }
+#update-more[aria-expanded="true"] .ic { transform: rotate(180deg); }
+#update-more[data-attention="true"] { color: var(--warn-text); }
+#update-details { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--line); }
+.update-facts { display: grid; grid-template-columns: auto minmax(0,1fr); gap: 4px 12px; margin: 8px 0 0; }
+.update-facts dt { color: var(--muted); }
+.update-facts dd { margin: 0; }
+.update-detail { color: var(--text-2); white-space: pre-line; }
+.update-detail:not(:empty) + .update-detail:not(:empty), #update-copy-status:not(:empty), #update-command-block { margin-top: 6px; }
+#update-command { display: block; padding: 8px; background: var(--sunken); border-radius: 7px; font-size: var(--fs-2xs); white-space: pre-wrap; overflow-wrap: anywhere; user-select: all; }
+@media (pointer: coarse) {
+  #about-updates, .update-head .btn-icon { width: 44px; min-height: 44px; }
+  .update-actions .btn { min-height: 44px; }
+}
 
 /* ================= 演示画面（代码绘制的模拟界面；iPhone 393×852 点，iPad mini 横屏 1133×744 点） ================= */
 .ph { width: var(--dw, 393px); height: var(--dh, 852px); transform: scale(var(--k, 1)); transform-origin: 0 0; justify-self: start; align-self: start; display: grid; grid-template-rows: 54px minmax(0, 1fr) 34px; overflow: hidden; background: #1f2b35; color: #fff; font: 17px/1.3 -apple-system, "SF Pro Text", "PingFang SC", system-ui, sans-serif; }
@@ -663,9 +680,10 @@ button.nav-device:disabled { cursor: default; }
 .ph-lock-time { font-size: 96px; font-weight: 600; line-height: 1.05; font-variant-numeric: tabular-nums; }
 .ph-lock-hint { margin-top: auto; margin-bottom: 12px; font-size: 15px; opacity: .8; }
 
-.appearance-options { display:grid; gap:14px; }
-.appearance-options label { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1.5fr); gap:12px; align-items:center; }
-.appearance-options select { appearance: auto; padding-inline: 8px; border: 1px solid var(--line-strong); }
+.appearance-options { display: grid; }
+.appearance-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-block: 4px; font-size: var(--fs-xs); }
+.appearance-row + .appearance-row { border-top: 1px solid var(--line); }
+.appearance-picker { min-width: 0; max-width: 65%; }
 .pane-agent .pane-head { gap: 6px; padding-inline: 12px; }
 .agent-brand { flex: 1; }
 .brand-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -702,7 +720,7 @@ button.nav-device:disabled { cursor: default; }
 @media (forced-colors: active) {
   .glass { border-color: CanvasText; }
   .composer:has(.textarea:focus-visible) { outline: 2px solid Highlight; }
-  .agent-option[data-active] { outline: 1px solid Highlight; outline-offset: -1px; }
+  .picker-option[data-active] { outline: 1px solid Highlight; outline-offset: -1px; }
   .seg button[aria-selected="true"], .zoom-fit[aria-pressed="true"] { outline: 1px solid Highlight; outline-offset: -2px; }
 }
 /* ================= 响应式 ================= */
@@ -747,7 +765,6 @@ button.nav-device:disabled { cursor: default; }
   .stage-head { gap: 4px; flex-wrap: wrap; height: auto; padding: var(--sp-3) var(--sp-3) 0; }
   .statusbar { flex: 1 1 0; }
   .dev-select { padding-left: 2px; }
-  .dev-select .select-wrap { min-width: 0; }
   .dev-select .label { position: absolute; clip-path: inset(50%); width: 1px; overflow: hidden; }
   .head-tools { gap: 4px; }
   .zoom button { min-width: 30px; padding-inline: 5px; }
@@ -814,7 +831,6 @@ button.nav-device:disabled { cursor: default; }
       </div>
       <span id="agent-badge"></span>
       <button type="button" class="btn btn-ghost btn-sm clear-btn" id="clear-btn" data-action="clear" data-focus="clear" hidden><span class="ic" data-icon="trash"></span><span>清空记录</span></button>
-      <button type="button" class="btn btn-ghost btn-icon btn-sm" id="about-updates" aria-label="关于与更新" title="关于与更新" aria-haspopup="dialog"><svg width="17" height="17" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><circle cx="10" cy="10" r="8"/><path d="M10 9v5m0-8v1"/></svg><span id="update-dot" aria-hidden="true" hidden></span></button>
     </div>
     <div class="pane-body" id="agent-scroll">
       <div class="convo">
@@ -842,17 +858,40 @@ button.nav-device:disabled { cursor: default; }
         <div class="composer-row">
           <div class="agent-pick" id="agent-pick" hidden>
             <span class="sr-only" id="agent-label">执行任务的 AI</span>
-            <button type="button" class="agent-trigger" id="agent" popovertarget="agent-options" aria-haspopup="listbox" aria-expanded="false" aria-controls="agent-options" aria-labelledby="agent-label agent-name" title="执行任务的本地 AI">
-              <span class="od-truncate" id="agent-name"></span><span class="ic" data-icon="chevron"></span>
-            </button>
-            <div class="agent-menu glass" id="agent-options" role="listbox" aria-labelledby="agent-label" popover="auto" tabindex="-1" autofocus></div>
+            <select id="agent-value" data-picker="agent" data-open-above hidden></select>
           </div>
           <span class="sr-only" id="composer-hint">Enter 发送 · Shift+Enter 换行</span>
           <button type="button" class="btn btn-primary send" id="send" data-action="send" data-focus="send" aria-label="开始任务" title="Enter 发送 · Shift+Enter 换行"><span class="ic" data-icon="send"></span></button>
         </div>
       </div>
       <p class="field-error" id="prompt-error" hidden></p>
-      <button type="button" class="sidebar-settings" id="appearance-btn" aria-haspopup="dialog" aria-controls="appearance"><span class="ic" data-icon="settings"></span><span>设置</span></button>
+      <div class="sidebar-footer">
+        <button type="button" class="sidebar-settings" id="appearance-btn" aria-haspopup="dialog" aria-controls="appearance"><span class="ic" data-icon="settings"></span><span>设置</span></button>
+        <button type="button" class="btn btn-ghost btn-icon btn-sm" id="about-updates" popovertarget="updates-dialog" aria-controls="updates-dialog" aria-haspopup="dialog" aria-expanded="false" aria-label="关于与更新" title="关于与更新"><span class="ic" data-icon="info"></span><span id="update-dot" aria-hidden="true" hidden></span></button>
+      </div>
+      <section class="glass" id="updates-dialog" role="dialog" aria-label="关于与更新" popover="auto" tabindex="-1" autofocus>
+        <div class="update-head">
+          <h2 id="update-version">Viewer</h2>
+          <button class="btn btn-ghost btn-icon btn-sm" id="update-check" type="button" aria-label="检查更新" title="检查更新" disabled><span class="ic" data-icon="refresh"></span></button>
+          <button class="btn btn-ghost btn-icon btn-sm" id="update-close" type="button" popovertarget="updates-dialog" popovertargetaction="hide" aria-label="关闭版本信息" title="关闭版本信息"><span class="ic" data-icon="x"></span></button>
+        </div>
+        <p id="update-result" role="status"></p>
+        <p id="update-notes" class="od-clamp-3"></p>
+        <div class="update-actions">
+          <button class="btn btn-primary btn-sm" id="update-copy" type="button" hidden>复制升级命令</button>
+          <a class="btn btn-ghost btn-sm" id="update-release" target="_blank" rel="noopener noreferrer" hidden>发行说明</a>
+          <button class="btn btn-ghost btn-sm" id="update-more" type="button" aria-expanded="false" aria-controls="update-details"><span>版本详情</span><span class="ic" data-icon="chevron"></span></button>
+        </div>
+        <p class="update-detail" id="update-copy-status" role="status"></p>
+        <div id="update-details" hidden>
+          <p class="update-detail" id="update-guide"></p>
+          <div id="update-command-block" hidden><code id="update-command"></code></div>
+          <dl class="update-facts" id="update-facts"></dl>
+          <p class="update-detail" id="update-policy"></p>
+          <p class="update-detail" id="update-outcome"></p>
+          <p class="update-detail" id="update-mismatch"></p>
+        </div>
+      </section>
     </div>
   </aside>
 
@@ -861,10 +900,9 @@ button.nav-device:disabled { cursor: default; }
     <div class="pane-head stage-head">
       <div class="statusbar glass">
         <div class="dev-select">
-          <label class="label" for="device">控制设备</label>
-          <div class="select-wrap">
-            <select class="select" id="device" disabled><option>正在查找…</option></select>
-            <span class="select-chev" data-icon="chevron"></span>
+          <label class="label" id="device-label" for="device">控制设备</label>
+          <div class="device-picker">
+            <select id="device-value" data-picker="device" disabled hidden><option>正在查找…</option></select>
           </div>
         </div>
         <div class="chips" id="chips"></div>
@@ -980,29 +1018,12 @@ button.nav-device:disabled { cursor: default; }
   </aside>
 </div>
 
-<dialog class="dialog" id="updates-dialog" aria-labelledby="updates-title">
-  <div class="update-head"><h2 id="updates-title">关于与更新</h2><form method="dialog"><button class="btn btn-ghost btn-sm">完成</button></form></div>
-  <div class="update-version" id="update-version"></div>
-  <dl class="update-facts" id="update-facts"></dl>
-  <strong id="update-result" role="status"></strong>
-  <p class="update-detail" id="update-guide"></p>
-  <div id="update-command-block" hidden>
-    <div class="update-command-head"><strong>升级命令</strong><button class="btn btn-sm" id="update-copy" type="button">复制命令</button></div>
-    <code id="update-command"></code>
-    <p class="update-detail" id="update-copy-status" role="status"></p>
-  </div>
-  <p class="update-detail" id="update-policy"></p>
-  <p class="update-detail" id="update-outcome"></p>
-  <p class="update-detail" id="update-mismatch"></p>
-  <div class="dialog-actions"><a class="btn btn-ghost" id="update-release" target="_blank" rel="noreferrer" hidden>发行说明</a>
-    <button class="btn btn-primary" id="update-check" type="button" disabled>检查更新</button></div>
-</dialog>
 <dialog class="dialog glass" id="appearance" aria-labelledby="appearance-title">
   <h2 id="appearance-title">设置</h2>
   <div class="appearance-options">
-    <label><span>界面语言</span><select class="select" id="language"><option value="zh" lang="zh-CN">简体中文</option><option value="en" lang="en">English</option></select></label>
-    <label><span>明暗</span><select class="select" id="theme"><option value="system">跟随系统</option><option value="light">浅色</option><option value="dark">深色</option></select></label>
-    <label><span>界面字号</span><select class="select" id="text-size"><option value="standard">标准</option><option value="large">大</option><option value="xlarge">特大</option></select></label>
+    <div class="appearance-row"><label for="language" id="language-label">界面语言</label><div class="appearance-picker"><select id="language-value" data-picker="language" hidden><option value="zh" lang="zh-CN">简体中文</option><option value="en" lang="en">English</option></select></div></div>
+    <div class="appearance-row"><label for="theme" id="theme-label">明暗</label><div class="appearance-picker"><select id="theme-value" data-picker="theme" hidden><option value="system">跟随系统</option><option value="light">浅色</option><option value="dark">深色</option></select></div></div>
+    <div class="appearance-row"><label for="text-size" id="text-size-label">界面字号</label><div class="appearance-picker"><select id="text-size-value" data-picker="text-size" hidden><option value="standard">标准</option><option value="large">大</option><option value="xlarge">特大</option></select></div></div>
   </div>
   <form method="dialog" class="dialog-actions"><button class="btn btn-primary" type="submit">完成</button></form>
 </dialog>
@@ -1056,7 +1077,7 @@ Object.assign(EN, {
   '用 USB 数据线连接 iPhone 或 iPad，并在设备上轻点「信任」。':'Connect your iPhone or iPad with a USB cable, then tap Trust on the device.',
   '等待设备画面':'Waiting for the screen', '正在连接本地服务':'Connecting to the local service'
 });
-Object.assign(EN, {'关于与更新':'About & updates','完成':'Done','检查更新':'Check for updates','检查中…':'Checking…','发行说明':'Release notes','升级命令':'Upgrade command','复制命令':'Copy command','已复制':'Copied','请选中命令并手动复制。':'Select the command and copy it manually.'});
+Object.assign(EN, {'版本详情':'Details','复制升级命令':'Copy upgrade command','关闭版本信息':'Close version information','关于与更新':'About & updates','完成':'Done','检查更新':'Check for updates','检查中…':'Checking…','发行说明':'Release notes','升级命令':'Upgrade command','复制命令':'Copy command','已复制':'Copied','请选中命令并手动复制。':'Select the command and copy it manually.'});
 /* 中文原文 → 当前语言 */
 Object.assign(EN, { '画面已连接 · 等待屏幕尺寸和方向，仅可观看':'Picture connected · waiting for screen dimensions and orientation (view only)', '没有收到设备画面，3 秒后自动重试。':'No picture received. Retrying in 3 seconds.' });
 Object.assign(EN, {
@@ -1076,7 +1097,7 @@ function tr(zh) { return LANG === 'en' ? (EN[zh] ?? zh) : zh; }
     for (const a of ['aria-label', 'title', 'placeholder', 'alt']) { const v = el.getAttribute(a); if (v && EN[v] !== undefined) el.setAttribute(a, EN[v]); }
   });
 })();
-const language = document.getElementById('language');
+const language = document.getElementById('language-value');
 language.value = LANG;
 language.addEventListener('change', () => {
   try {
@@ -1174,6 +1195,109 @@ function icon(name, extra = '') {
 }
 function hydrateIcons(root = document) { $$('[data-icon]', root).forEach(el => { el.innerHTML = icon(el.dataset.icon); }); }
 
+// All five controls share the same popover. Each select supplies its current
+// options, value and disabled state and still emits the usual change event.
+function positionPopover(button, popup, preferAbove = false) {
+  if (!popup.matches(':popover-open')) return;
+  const rect = button.getBoundingClientRect();
+  const above = rect.top - 14, below = innerHeight - rect.bottom - 14;
+  const height = popup.scrollHeight + popup.offsetHeight - popup.clientHeight;
+  const openAbove = preferAbove ? above >= height || above >= below : below < height && above > below;
+  popup.style.maxHeight = Math.max(0, openAbove ? above : below) + 'px';
+  popup.style.top = (openAbove ? rect.top - 6 - popup.offsetHeight : rect.bottom + 6) + 'px';
+  popup.style.left = Math.max(8, Math.min(rect.right - popup.offsetWidth, innerWidth - popup.offsetWidth - 8)) + 'px';
+}
+function bindPicker(select) {
+  const id = select.dataset.picker;
+  select.insertAdjacentHTML('afterend', `
+    <button type="button" class="picker-trigger" id="${id}" popovertarget="${id}-options" aria-haspopup="listbox" aria-controls="${id}-options" aria-expanded="false" aria-labelledby="${id}-label ${id}-name">
+      <span class="od-truncate" id="${id}-name"></span><span class="ic">${icon('chevron')}</span>
+    </button>
+    <div id="${id}-options" class="picker-menu glass" role="listbox" aria-labelledby="${id}-label" popover="auto" tabindex="-1" autofocus></div>`);
+  const button = document.getElementById(id), menu = document.getElementById(id + '-options');
+  const name = document.getElementById(id + '-name');
+  const position = () => positionPopover(button, menu, select.hasAttribute('data-open-above'));
+  const active = () => menu.querySelector('[data-active]');
+  let optionRows = '', prefix = '', lastKey = 0;
+
+  function highlight(row) {
+    if (!row || row.hasAttribute('data-active') || row.getAttribute('aria-disabled') === 'true') return;
+    active()?.removeAttribute('data-active');
+    row.setAttribute('data-active', '');
+    menu.setAttribute('aria-activedescendant', row.id);
+  }
+  function renderOptions(opening) {
+    const rows = Array.from(select.options, (o, i) =>
+      `<div class="picker-option" role="option" id="${id}-opt-${i}" data-value="${esc(o.value)}" aria-selected="${o.selected}" aria-disabled="${o.disabled}"><span${o.lang ? ` lang="${esc(o.lang)}"` : ''}>${esc(o.label)}</span>${icon('check')}</div>`
+    ).join('');
+    if (!opening && rows === optionRows) return;
+    // A device poll may reorder, rename or remove rows while keyboard navigation is in progress.
+    const previous = opening ? null : active()?.dataset.value;
+    optionRows = rows;
+    menu.innerHTML = rows;
+    menu.removeAttribute('aria-activedescendant');
+    const enabled = $$('[aria-disabled="false"]', menu);
+    highlight(enabled.find(row => row.dataset.value === previous) || enabled.find(row => row.getAttribute('aria-selected') === 'true') || enabled[0]);
+    requestAnimationFrame(() => { position(); active()?.scrollIntoView({ block: 'nearest' }); });
+  }
+  function sync() {
+    const label = select.selectedOptions[0]?.label || '';
+    if (label !== name.textContent) name.textContent = label;
+    button.disabled = select.disabled;
+    button.title = select.title;
+    if (menu.matches(':popover-open')) {
+      if (button.disabled || !button.getClientRects().length) menu.hidePopover();
+      else renderOptions(false);
+    }
+  }
+  function choose(row) {
+    if (!row || button.disabled || row.getAttribute('aria-disabled') === 'true') return;
+    const changed = select.value !== row.dataset.value;
+    select.value = row.dataset.value;
+    menu.hidePopover();
+    button.focus();
+    sync();
+    if (changed) select.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+  menu.addEventListener('beforetoggle', ev => {
+    const opening = ev.newState === 'open';
+    button.setAttribute('aria-expanded', String(opening));
+    if (opening) { prefix = ''; renderOptions(true); }
+  });
+  menu.addEventListener('pointermove', ev => highlight(ev.target.closest('[role="option"]')));
+  menu.addEventListener('click', ev => choose(ev.target.closest('[role="option"]')));
+  button.addEventListener('keydown', ev => {
+    if (ev.key === 'ArrowDown' || ev.key === 'ArrowUp') { ev.preventDefault(); menu.showPopover(); }
+  });
+  menu.addEventListener('keydown', ev => {
+    const enabled = $$('[role="option"][aria-disabled="false"]', menu);
+    const index = enabled.indexOf(active());
+    let next;
+    switch (ev.key) {
+      case 'ArrowDown': next = enabled[Math.min(index + 1, enabled.length - 1)]; break;
+      case 'ArrowUp': next = enabled[Math.max(0, index - 1)]; break;
+      case 'Home': next = enabled[0]; break;
+      case 'End': next = enabled.at(-1); break;
+      case 'Enter': case ' ': ev.preventDefault(); choose(active()); return;
+      case 'Tab': menu.hidePopover(); button.focus(); return;
+      case 'Escape': ev.preventDefault(); ev.stopPropagation(); menu.hidePopover(); button.focus(); return;
+      default:
+        if (ev.key.length !== 1 || ev.ctrlKey || ev.metaKey || ev.altKey || ev.isComposing) return;
+        prefix = (ev.timeStamp - lastKey < 600 ? prefix : '') + ev.key.toLowerCase();
+        lastKey = ev.timeStamp;
+        next = enabled.find(row => row.textContent.toLowerCase().startsWith(prefix));
+    }
+    ev.preventDefault();
+    highlight(next);
+    next?.scrollIntoView({ block: 'nearest' });
+  });
+  new ResizeObserver(position).observe(button.closest('dialog, .pane') || button);
+  window.addEventListener('resize', position);
+  sync();
+  return sync;
+}
+const pickerSync = Object.fromEntries($$('select[data-picker]').map(select => [select.dataset.picker, bindPicker(select)]));
+
 const TASK_STATUS = {
   idle: { label: tr('空闲'), tone: 'muted', icon: 'dot' },
   running: { label: tr('执行中'), tone: 'accent', icon: 'loader' },
@@ -1198,7 +1322,7 @@ const badge = st => `<span class="badge tone-${st.tone}">${icon(st.icon, st.icon
 /* ---------- 元素与状态 ---------- */
 const shell = $('#shell'), stage = $('#stage'), frame = $('#frame'), demoEl = $('#demo'), marks = $('#marks'), stageMsg = $('#stage-msg');
 const statusEl = $('#status'), promptEl = $('#prompt'), promptErr = $('#prompt-error'), typeEl = $('#type-text');
-const turnsEl = $('#turns'), stopDialog = $('#stop-dialog'), deviceEl = $('#device');
+const turnsEl = $('#turns'), stopDialog = $('#stop-dialog'), deviceEl = $('#device-value');
 /* 实时画面：H.264 画在 canvas 上（见「H.264 画面」），否则是 MJPEG 的 img */
 const cv = $('#live-v'), cvx = cv.getContext('2d');
 const V = { on: false, off: false, noDevice: false, device: false, crop: false, rot: null, frameRotation: null, codecName: '', ctrl: null, dec: null, got: false, label: '', ts: 0, bytes: 0, rate: null, stream: '', recv: 0, acked: 0, acking: false };
@@ -1794,28 +1918,38 @@ function showStageNote() {
   const html = stageNote(); if (stageMsg.dataset.note !== html) { stageMsg.innerHTML = html; stageMsg.dataset.note = html; }  // 不变就不重画，免得按钮丢了焦点
   stageMsg.hidden = false;
 }
-// This dialog always talks to the host, including when there is no phone. Opening it reads only the cache.
+// Opening the popover reads the host's cached report, even when no device is connected.
 const updateDialog = $('#updates-dialog'), updateCheck = $('#update-check');
 const aboutUpdates = $('#about-updates'), updateCommand = $('#update-command'), copyStatus = $('#update-copy-status');
 let updatePoll, readingUpdates = false;
 const updateText = (zh, en) => LANG === 'en' ? en : zh;
+function newerRelease(r) {
+  return r.available_version && ['available', 'brew_check', 'platform_pending', 'manual_only', 'unsupported'].includes(r.availability);
+}
 function drawUpdateBadge(r) {
-  const newer = r.available_version && ['available', 'brew_check', 'platform_pending', 'manual_only', 'unsupported'].includes(r.availability);
+  const newer = newerRelease(r);
   $('#update-dot').hidden = !newer;
   const label = tr('关于与更新') + (newer ? updateText(' · 新版本 ', ' · New release ') + r.available_version : '');
   aboutUpdates.title = label;
   aboutUpdates.setAttribute('aria-label', label);
 }
 function setUpdateCommand(command) {
-  if (updateCommand.textContent !== command) copyStatus.textContent = '';
-  updateCommand.textContent = command;
-  $('#update-command-block').hidden = !command;
+  if (updateCommand.textContent !== command) {
+    copyStatus.textContent = '';
+    updateCommand.textContent = command;
+  }
+  $('#update-command-block').hidden = $('#update-copy').hidden = !command;
+}
+// The first changelog item is an excerpt. The release page has the full notes.
+function updateExcerpt(markdown) {
+  const line = markdown.split(/\r?\n/).map(s => s.trim()).find(s => s && !/^#|^---|^<!--/.test(s)) || '';
+  return line.replace(/^(?:[-*+] |\d+[.)] )/, '').replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1').replace(/\*\*|__/g, '').replace(/`([^`]+)`/g, '$1');
 }
 function drawUpdates(r) {
   const t = updateText, unknown = t('未知', 'Unknown');
   const channels = { managed: t('受管脚本安装', 'Managed installer'), script: t('手动脚本安装', 'Manual installer'),
     development: t('源码构建', 'Source build'), homebrew: 'Homebrew', debian: 'Debian', unknown };
-  const states = { development: t('开发构建，未绑定发布仓库', 'Development build; no release repository'),
+  const states = { development: t('开发构建 · 未绑定发布仓库', 'Development build · No release repository'),
     unchecked: t('尚未检查', 'Not checked yet'), current: t('已是最新版', 'Up to date'),
     ahead: t('当前版本领先于公开稳定版', 'Ahead of the public stable release'),
     available: t('有可用更新', 'Update available'), platform_pending: t('已发布，当前平台安装包准备中', 'Released; waiting for this platform’s package'),
@@ -1824,10 +1958,13 @@ function drawUpdates(r) {
     manual_only: t('此版本需要手动升级', 'Manual upgrade required') };
   const policies = { manual: t('仅手动检查', 'Manual checks'), notify: t('后台检查，不自动安装', 'Check only'),
     'auto-patch': t('空闲时自动安装补丁版', 'Install patches when idle') };
-  $('#update-version').textContent = 'Viewer ' + (r.running_version || unknown);
+  const newer = newerRelease(r);
+  $('#update-version').textContent = newer ? (r.availability === 'available' ? t('可更新至 ', 'Update to ') : t('新版本 ', 'New release ')) + r.available_version : 'Viewer ' + (r.running_version || unknown);
+  $('#update-notes').textContent = newer ? updateExcerpt(r.release_notes || '') : '';
   const facts = $('#update-facts'); facts.replaceChildren();
   const row = (label, value) => { const dt = document.createElement('dt'), dd = document.createElement('dd');
     dt.textContent = label; dd.textContent = value; facts.append(dt, dd); };
+  row(t('当前 Viewer', 'Running Viewer'), r.running_version || unknown);
   row(t('发布者', 'Publisher'), r.publisher || t('未绑定', 'Unbound'));
   row(t('安装方式', 'Installation'), (channels[r.install_method] || unknown) + (r.pinned ? t(' · 固定版本', ' · pinned') : ''));
   row(t('磁盘 / 守护进程', 'Disk / daemon'), (r.installed_version || unknown) + ' / ' + (r.daemon_version || unknown));
@@ -1837,24 +1974,38 @@ function drawUpdates(r) {
   const errors = { network: t('无法连接发布仓库', 'Release repository unreachable'), invalid_release: t('发行元数据无效', 'Invalid release metadata'),
     rate_limited: t('请求受限', 'Rate limited'), http_error: t('发布仓库返回错误', 'Release repository returned an error') };
   const failure = errors[r.error_code] || r.error_code || r.check_error;
-  const result = failure ? t('检查失败：', 'Check failed: ') + failure : states[r.availability];
+  const result = failure ? t('检查失败：', 'Check failed: ') + failure : states[r.availability] || unknown;
   if (r.retry_after && r.retry_after * 1000 > Date.now()) row(t('可重试时间', 'Retry after'), new Date(r.retry_after * 1000).toLocaleString(LANG));
-  $('#update-result').textContent = r.checking ? tr('检查中…') : result || unknown;
+  const status = $('#update-result');
+  status.textContent = r.checking ? tr('检查中…') : newer && !failure && r.availability === 'available' ? '' : result;
+  status.dataset.error = String(Boolean(failure && !r.checking));
   $('#update-guide').textContent = r.guidance || '';
   setUpdateCommand(failure ? '' : r.upgrade_command || '');
+  $('#update-copy').title = r.guidance || tr('复制升级命令');
   $('#update-policy').textContent = r.install_method === 'managed' && !r.pinned ?
     t('本机策略：', 'Local policy: ') + 'iphone-control update policy ' + (r.policy === 'auto-patch' ? 'manual' : 'auto-patch') : '';
   const outcomes = { installed: t('安装成功', 'Installed'), rolled_back: t('已手动回滚', 'Rolled back'), restored: t('升级失败，已恢复旧版本', 'Previous version restored'),
     failed: t('更新失败', 'Update failed'), manual_migration: t('需要手动迁移', 'Manual migration required'),
-    needs_operator: t('此版本不自动安装，请手动运行 update apply', 'Not installed automatically; run update apply'),
+    needs_operator: t('等待手动升级', 'Waiting for manual upgrade'),
     busy: t('等待空闲', 'Waiting for idle'), recovery_failed: t('需要手动恢复', 'Recovery needs attention') };
-  $('#update-outcome').textContent = r.last_update ? [r.last_update.target_version, outcomes[r.last_update.status] || r.last_update.status, r.last_update.detail].filter(Boolean).join(' · ') : '';
+  const last = r.last_update?.status;
+  const outcome = last === 'needs_operator' ? t('需手动运行 iphone-control update apply', 'Run iphone-control update apply manually') : outcomes[last] || last;
+  $('#update-outcome').textContent = r.last_update ? [r.last_update.target_version, outcome, r.last_update.detail].filter(Boolean).join(' · ') : '';
   $('#update-mismatch').textContent = [r.installed_version, r.daemon_version].some(v => v && v !== r.running_version) ?
     t('进程版本不同。重新打开 Viewer，重连 MCP 客户端，并按安装渠道重启 daemon。', 'Versions differ. Reopen Viewer, reconnect MCP clients and restart the daemon through its installation channel.') : '';
-  const link = $('#update-release'); link.hidden = !r.release_url;
-  if (r.release_url) link.href = r.release_url; else link.removeAttribute('href');
+  const more = $('#update-more');
+  const attention = last && !['installed', 'rolled_back'].includes(last) ? outcomes[last] || last :
+    $('#update-mismatch').textContent ? t('版本不一致', 'Version mismatch') : '';
+  more.dataset.attention = String(Boolean(attention));
+  more.firstElementChild.textContent = attention || tr('版本详情');
+  const link = $('#update-release');
+  link.hidden = !r.release_url?.startsWith('https://');
+  if (link.hidden) link.removeAttribute('href'); else link.href = r.release_url;
+  updateCheck.hidden = !r.publisher;
   updateCheck.disabled = r.checking || !r.publisher;
-  updateCheck.textContent = tr(r.checking ? '检查中…' : '检查更新');
+  updateCheck.title = tr(r.checking ? '检查中…' : '检查更新');
+  updateCheck.setAttribute('aria-label', updateCheck.title);
+  updateCheck.firstElementChild.classList.toggle('spin', r.checking);
 }
 async function loadUpdates(check = false) {
   if (readingUpdates) return;
@@ -1865,21 +2016,42 @@ async function loadUpdates(check = false) {
     if (check) { $('#update-result').textContent = tr('检查中…'); await api('/api/updates/check', {}); }
     const report = await api('/api/updates');
     drawUpdateBadge(report);
-    if (updateDialog.open) drawUpdates(report);
-    if (report.checking && updateDialog.open) updatePoll = setTimeout(loadUpdates, 700);
+    drawUpdates(report);
+    if (report.checking && updateDialog.matches(':popover-open')) updatePoll = setTimeout(loadUpdates, 700);
   } catch (e) {
     setUpdateCommand('');
     $('#update-result').textContent = e.message;
-    updateCheck.disabled = false; updateCheck.textContent = tr('检查更新');
+    $('#update-result').dataset.error = 'true';
+    updateCheck.disabled = updateCheck.hidden;
+    updateCheck.firstElementChild.classList.remove('spin');
+    updateCheck.title = tr('检查更新');
+    updateCheck.setAttribute('aria-label', updateCheck.title);
   } finally {
     readingUpdates = false;
   }
 }
-aboutUpdates.addEventListener('click', () => {
+function positionUpdates() {
+  if (updateDialog.matches(':popover-open')) positionPopover(aboutUpdates, updateDialog, true);
+}
+function showUpdateDetails(show) {
+  $('#update-details').hidden = !show;
+  $('#update-more').setAttribute('aria-expanded', String(show));
+  positionUpdates();
+}
+updateDialog.addEventListener('beforetoggle', ev => {
+  const opening = ev.newState === 'open';
+  aboutUpdates.setAttribute('aria-expanded', String(opening));
+  if (!opening) { clearTimeout(updatePoll); return; }
   copyStatus.textContent = '';
-  updateDialog.showModal();
+  showUpdateDetails(false);
+  updateDialog.scrollTop = 0;
+  requestAnimationFrame(positionUpdates);
   loadUpdates();
 });
+$('#update-more').addEventListener('click', () => showUpdateDetails($('#update-details').hidden));
+new ResizeObserver(positionUpdates).observe(updateDialog);
+new ResizeObserver(positionUpdates).observe($('#pane-agent'));
+window.addEventListener('resize', positionUpdates);
 $('#update-copy').addEventListener('click', async () => {
   const command = updateCommand.textContent;
   if (!command) return;
@@ -1888,14 +2060,16 @@ $('#update-copy').addEventListener('click', async () => {
     copyStatus.textContent = tr('已复制');
   } catch {
     const range = document.createRange(), selection = window.getSelection();
+    showUpdateDetails(true);
     range.selectNodeContents(updateCommand);
     selection.removeAllRanges();
     selection.addRange(range);
-    copyStatus.textContent = document.execCommand('copy') ? tr('已复制') : tr('请选中命令并手动复制。');
+    let copied = false;
+    try { copied = document.execCommand('copy'); } catch { /* The command stays selected for manual copy. */ }
+    copyStatus.textContent = tr(copied ? '已复制' : '请选中命令并手动复制。');
   }
 });
 updateCheck.addEventListener('click', () => loadUpdates(true));
-updateDialog.addEventListener('close', () => clearTimeout(updatePoll));
 // Refresh the host's cached report without initiating a release check.
 const refreshVisibleUpdates = () => { if (!document.hidden) loadUpdates(); };
 refreshVisibleUpdates();
@@ -2127,7 +2301,7 @@ function renderDevices() {
   if (S.mode === 'detecting') return;
   if (!S.devices.length) {
     deviceEl.innerHTML = `<option>${esc(S.udid ? tr('当前设备') : tr('没有设备'))}</option>`; deviceEl.disabled = true;
-    deviceEl.title = S.devicesErr || ''; return;
+    deviceEl.title = S.devicesErr || ''; pickerSync.device(); return;
   }
   const cur = S.devices.find(d => d.controlled);
   const labels = S.devices.map(deviceOptionLabel);
@@ -2140,6 +2314,7 @@ function renderDevices() {
     + `<option value="auto"${cur ? '' : ' selected'}>${tr('自动选择')}</option>`;
   deviceEl.disabled = guarded() || S.switching || S.devicesFixed;
   deviceEl.title = [deviceEl.selectedOptions[0]?.textContent, S.devicesFixed && tr('已用 IPHONE_UDID 固定设备，不能切换')].filter(Boolean).join(' · ');
+  pickerSync.device();
 }
 deviceEl.addEventListener('change', () => selectDevice(deviceEl.value));
 $('#nav-devices').addEventListener('click', ev => {
@@ -2157,7 +2332,7 @@ async function selectDevice(v) {
     show(`${tr('已切换到')} ${next.name}${tr('（演示）')}`);
     return;
   }
-  cancelGestures(); S.switching = true; deviceEl.disabled = true;
+  cancelGestures(); S.switching = true; deviceEl.disabled = true; pickerSync.device();
   try {
     const r = await act('/api/select', { device: v }, true);
     // /api/info 确认当前设备后才重新启用输入
@@ -2747,6 +2922,7 @@ function renderManual() {
   typeEl.disabled = deviceUnavailable; $('#type-btn').disabled = deviceUnavailable; $('#type-submit').disabled = deviceUnavailable;
   $('#url').disabled = deviceUnavailable; $('#url-btn').disabled = deviceUnavailable;
   deviceEl.disabled = lock || S.switching || !S.devices.length || !!S.devicesFixed;
+  pickerSync.device();
   $$('#nav-devices button').forEach(row => { row.disabled = lock || S.switching || !!S.devicesFixed; });
   const t = activeTask();
   $('#vt-agent-label').textContent = t ? `AI · ${{ running: tr('执行中'), waiting: tr('待确认'), paused: tr('已暂停'), takeover: tr('接管中') }[t.status]}` : tr('AI 助手');
@@ -2906,91 +3082,29 @@ async function detect() {
 }
 /* ---------- 执行任务的 AI：本机装了哪些就列哪些，选择记在浏览器里 ---------- */
 const AGENT_KEY = 'ictl.agent';
-const agentButton = $('#agent'), agentMenu = $('#agent-options');
+const agentSelect = $('#agent-value');
 async function loadAgents() {
   try { S.agents = (await api('/api/agent/backends')).backends || []; } catch { S.agents = []; }
   const ok = S.agents.filter(a => a.available);
   let saved = null;
   try { saved = localStorage.getItem(AGENT_KEY); } catch { /* 预览环境可能禁用存储 */ }
   S.agent = (ok.find(a => a.id === saved) || ok[0] || {}).id || null;
+  agentSelect.innerHTML = S.agents.map(a => `<option value="${esc(a.id)}"${a.available ? '' : ' disabled'}>${esc(a.name)}${a.available ? '' : tr('（未安装）')}</option>`).join('');
+  if (!S.agent) agentSelect.add(new Option(tr('没有可用的 AI'), ''), 0);
   renderAgentPick();
 }
+agentSelect.addEventListener('change', () => {
+  S.agent = agentSelect.value;
+  try { localStorage.setItem(AGENT_KEY, S.agent); } catch { /* The choice still applies for this session. */ }
+});
 function renderAgentPick() {
   const wrap = $('#agent-pick');
   wrap.hidden = S.mode !== 'live';
-  const selected = S.agents.find(a => a.id === S.agent);
-  $('#agent-name').textContent = selected?.name || tr('没有可用的 AI');
-  agentButton.title = selected ? tr('执行任务的本地 AI') : tr('这台机器的 PATH 里没有 claude 或 codex');
-  agentButton.disabled = !selected || !!activeTask();
-  if ((wrap.hidden || agentButton.disabled) && agentMenu.matches(':popover-open')) agentMenu.hidePopover();
+  agentSelect.value = S.agent || '';
+  agentSelect.title = S.agent ? tr('执行任务的本地 AI') : tr('这台机器的 PATH 里没有 claude 或 codex');
+  agentSelect.disabled = !S.agent || !!activeTask();
+  pickerSync.agent();
 }
-function positionAgentMenu() {
-  if (!agentMenu.matches(':popover-open')) return;
-  const anchor = agentButton.getBoundingClientRect();
-  const above = anchor.top - 14, below = innerHeight - anchor.bottom - 14;
-  const openAbove = above >= agentMenu.scrollHeight + 2 || above >= below;
-  agentMenu.style.maxHeight = Math.max(0, openAbove ? above : below) + 'px';
-  agentMenu.style.top = (openAbove ? anchor.top - 6 - agentMenu.offsetHeight : anchor.bottom + 6) + 'px';
-  agentMenu.style.left = Math.max(8, Math.min(anchor.right - agentMenu.offsetWidth, innerWidth - agentMenu.offsetWidth - 8)) + 'px';
-}
-function highlightAgent(option) {
-  if (!option || option.getAttribute('aria-disabled') === 'true') return;
-  agentMenu.querySelector('[data-active]')?.removeAttribute('data-active');
-  option.setAttribute('data-active', '');
-  agentMenu.setAttribute('aria-activedescendant', option.id);
-}
-function chooseAgent(option) {
-  if (!option || option.getAttribute('aria-disabled') === 'true') return;
-  S.agent = option.dataset.id;
-  try { localStorage.setItem(AGENT_KEY, S.agent); } catch { /* 只在本次会话生效 */ }
-  renderAgentPick();
-  agentMenu.hidePopover();
-  agentButton.focus();
-}
-agentMenu.addEventListener('beforetoggle', ev => {
-  const opening = ev.newState === 'open';
-  agentButton.setAttribute('aria-expanded', String(opening));
-  if (!opening) return;
-  agentMenu.innerHTML = S.agents.map((a, i) =>
-    `<div class="agent-option" id="agent-opt-${i}" role="option" data-id="${esc(a.id)}" aria-selected="${a.id === S.agent}" aria-disabled="${!a.available}"><span>${esc(a.name)}${a.available ? '' : tr('（未安装）')}</span>${icon('check')}</div>`
-  ).join('');
-  highlightAgent(agentMenu.querySelector('[aria-selected="true"]'));
-  requestAnimationFrame(positionAgentMenu);
-});
-agentMenu.addEventListener('pointermove', ev => highlightAgent(ev.target.closest('[role="option"]')));
-agentMenu.addEventListener('click', ev => chooseAgent(ev.target.closest('[role="option"]')));
-agentButton.addEventListener('keydown', ev => {
-  if (ev.key === 'ArrowDown' || ev.key === 'ArrowUp') {
-    ev.preventDefault();
-    agentMenu.showPopover();
-  }
-});
-let agentPrefix = '', lastAgentKey = 0;
-agentMenu.addEventListener('keydown', ev => {
-  const options = $$('.agent-option[aria-disabled="false"]', agentMenu);
-  const current = agentMenu.querySelector('[data-active]');
-  const index = options.indexOf(current);
-  let next;
-  switch (ev.key) {
-    case 'ArrowDown': next = options[Math.min(index + 1, options.length - 1)]; break;
-    case 'ArrowUp': next = options[Math.max(0, index - 1)]; break;
-    case 'Home': next = options[0]; break;
-    case 'End': next = options.at(-1); break;
-    case 'Enter': case ' ': ev.preventDefault(); chooseAgent(current); return;
-    case 'Tab': agentMenu.hidePopover(); agentButton.focus(); return;
-    case 'Escape': ev.preventDefault(); ev.stopPropagation(); agentMenu.hidePopover(); agentButton.focus(); return;
-    default:
-      if (ev.key.length !== 1 || ev.ctrlKey || ev.metaKey || ev.altKey) return;
-      agentPrefix = (ev.timeStamp - lastAgentKey < 600 ? agentPrefix : '') + ev.key.toLowerCase();
-      lastAgentKey = ev.timeStamp;
-      next = options.find(o => o.textContent.toLowerCase().startsWith(agentPrefix));
-  }
-  ev.preventDefault();
-  highlightAgent(next);
-  next?.scrollIntoView({ block: 'nearest' });
-});
-new ResizeObserver(positionAgentMenu).observe($('#pane-agent'));
-window.addEventListener('resize', positionAgentMenu);
 
 /* ---------- 右侧设备面板隐藏 / 显示（宽屏三栏时），记在浏览器里 ---------- */
 let devHidden = false;
@@ -3009,7 +3123,7 @@ function setDevHidden(hidden, moveFocus) {
 /* Local appearance affects workspace text only. Device pixels have their own scale. */
 const appearanceKey = 'ictl.appearance.v1';
 const systemDark = matchMedia('(prefers-color-scheme: dark)');
-const textSize = $('#text-size'), theme = $('#theme');
+const textSize = $('#text-size-value'), theme = $('#theme-value');
 function applyAppearance() {
   document.documentElement.dataset.textSize = textSize.value;
   document.documentElement.dataset.scheme = theme.value === 'system' ? (systemDark.matches ? 'dark' : 'light') : theme.value;
@@ -3020,6 +3134,7 @@ function readAppearance() {
   textSize.value = ['large','xlarge'].includes(saved?.textSize) ? saved.textSize : 'standard';
   theme.value = ['dark','light'].includes(saved?.theme) ? saved.theme : 'system';
   applyAppearance();
+  pickerSync.theme(); pickerSync['text-size']();
 }
 readAppearance();
 systemDark.addEventListener('change', applyAppearance);

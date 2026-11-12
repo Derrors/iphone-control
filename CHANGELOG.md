@@ -9,6 +9,13 @@ All notable changes to this project are documented here. The format is based on 
 ### Added
 
 - Run `iphone-control update` to check for a new stable release and install it through your managed service, Homebrew or Debian package. It reports when you already have the latest version. `update check` remains available for a check only.
+- `iphone-control update` says what it will do and asks before installing; `--yes` skips the question. After a Homebrew or Debian upgrade a running background service is restarted on the new version.
+- The Debian packages are signed by the publisher too; `iphone-control update` checks the signature before handing the package to APT through sudo. A package on hold in APT is reported with how to release it.
+
+### Removed
+
+- `iphone-control update rollback` and the previous executable kept after an upgrade. A new version that doesn't start is still replaced by the old one automatically.
+- The rollback compatibility mark in release manifests: any newer signed stable release can be installed directly, without stopping at "manual migration required".
 
 ## [0.2.2] - 2026-11-12
 

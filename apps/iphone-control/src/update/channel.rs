@@ -1,7 +1,11 @@
-//! Operator-initiated upgrades for verified package-manager installations.
+//! Operator-initiated upgrades for verified package-manager installations. The Debian package is installed only
+//! after its publisher-signed manifest (`<deb>.manifest.json` and `.sig`, see `archive.rs`) and the downloaded
+//! bytes match: APT runs the package's scripts as root. After the package manager has replaced the program, a
+//! background service that was running is restarted so it runs the new version, and checked to answer with it.
 use std::fs::File;
 use std::path::Path;
 use std::process::Stdio;
+use std::time::Duration;
 
 use anyhow::{Context, Result, bail, ensure};
 use ictl_l10n::tr;
@@ -9,7 +13,10 @@ use tokio::process::Command;
 
 use super::{Availability, InstallMethod, Report, archive, deb_asset, digest, install, publisher, release, tap};
 
-pub(super) async fn apply(report: &Report) -> Result<()> {
+/// Where the .deb puts its systemd user unit (`deploy/deb/iphone-control.service`)
+const DEB_UNIT: &str = "/usr/lib/systemd/user/iphone-control.service";
+
+pub(super) async fn apply(socket: &Path, report: &Report) -> Result<()> {
     let exe = report.executable.as_deref().context("missing installation path")?;
     let latest = report.available_version.as_deref().context("missing release version")?;
     ensure!(release::stable_tag(&format!("v{latest}")).is_some(), "invalid stable release version");
@@ -18,15 +25,121 @@ pub(super) async fn apply(report: &Report) -> Result<()> {
             let cellar = exe.ancestors().nth(4).context("missing Homebrew Cellar")?;
             let tap = tap().context("missing Homebrew tap")?;
             let brew = install::brew_program(cellar).context("cannot locate the Homebrew executable")?;
-            homebrew(&brew, cellar, tap, latest).await
+            if homebrew(&brew, cellar, tap, latest).await? {
+                let running = brew_service_running(&brew).await;
+                restart(
+                    socket,
+                    latest,
+                    running,
+                    &[brew.as_os_str(), "services".as_ref(), "restart".as_ref(), "iphone-control".as_ref()],
+                    "brew services restart iphone-control",
+                )
+                .await;
+            }
+            Ok(())
         }
         (InstallMethod::Debian, Availability::Available) => {
             let repo = publisher().context("missing release publisher")?;
             let target = super::target().context("unsupported Debian architecture")?;
-            debian(repo, target, latest, exe).await
+            if debian(repo, target, latest, exe).await? {
+                let running = deb_service_running().await;
+                restart(
+                    socket,
+                    latest,
+                    running,
+                    &["systemctl".as_ref(), "--user".as_ref(), "restart".as_ref(), "iphone-control".as_ref()],
+                    "systemctl --user restart iphone-control",
+                )
+                .await;
+            }
+            Ok(())
         }
         _ => bail!("{}", report.guidance),
     }
+}
+
+/// The .deb's systemd user service is running (only that unit: not a service the user wrote elsewhere)
+async fn deb_service_running() -> bool {
+    let Ok(out) = Command::new("systemctl")
+        .args(["--user", "show", "iphone-control", "-p", "ActiveState", "-p", "FragmentPath"])
+        .env("LC_ALL", "C")
+        .stderr(Stdio::null())
+        .output()
+        .await
+    else {
+        return false;
+    };
+    let text = String::from_utf8_lossy(&out.stdout);
+    out.status.success()
+        && text.lines().any(|l| l == "ActiveState=active")
+        && text.lines().any(|l| l == format!("FragmentPath={DEB_UNIT}"))
+}
+
+/// `brew services` runs the formula's service. Older Homebrew without `services info --json` counts as not running
+async fn brew_service_running(brew: &Path) -> bool {
+    let Ok(out) = Command::new(brew)
+        .args(["services", "info", "iphone-control", "--json"])
+        .env("HOMEBREW_NO_AUTO_UPDATE", "1")
+        .stderr(Stdio::null())
+        .output()
+        .await
+    else {
+        return false;
+    };
+    serde_json::from_slice::<serde_json::Value>(&out.stdout)
+        .ok()
+        .and_then(|v| v.get(0)?.get("running")?.as_bool())
+        .unwrap_or(false)
+}
+
+/// Restarts the background service if it was `running` and waits until the daemon answers with `version`. Failing
+/// that only prints what to run: the new program is installed either way
+async fn restart(socket: &Path, version: &str, running: bool, cmd: &[&std::ffi::OsStr], by_hand: &str) {
+    if !running {
+        println!(
+            "{}",
+            ictl_l10n::tr!(
+                "后台服务没有在运行，不用重启。Viewer 和 MCP 客户端下次启动时用新版本。",
+                "The background service isn't running, so nothing to restart. Viewer and MCP clients use the new version when they next start."
+            )
+        );
+        return;
+    }
+    println!("{}", ictl_l10n::tr!("正在重启后台服务…", "Restarting the background service…"));
+    let restarted = match Command::new(cmd[0]).args(&cmd[1..]).status().await {
+        Ok(s) if s.success() => wait_for_daemon(socket, version, Duration::from_secs(60)).await,
+        _ => false,
+    };
+    if restarted {
+        println!(
+            "{}",
+            ictl_l10n::trf!(
+                "后台服务已在运行 {version}。重新打开 Viewer、重连 MCP 客户端后它们也会用新版本。",
+                "The background service now runs {version}. Reopen Viewer and reconnect MCP clients to use it there too."
+            )
+        );
+    } else {
+        println!(
+            "{}",
+            ictl_l10n::trf!(
+                "新版本已经装好，但后台服务没能确认重启成功。请运行：{by_hand}",
+                "The new version is installed, but the background service couldn't be confirmed to restart. Run: {by_hand}"
+            )
+        );
+    }
+}
+
+async fn wait_for_daemon(socket: &Path, version: &str, within: Duration) -> bool {
+    let end = tokio::time::Instant::now() + within;
+    while tokio::time::Instant::now() < end {
+        if let Ok(Ok(s)) = tokio::time::timeout(Duration::from_secs(2), crate::snapshot(socket)).await
+            && s.version.as_deref() == Some(version)
+        {
+            return true;
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+    false
 }
 
 async fn run(cmd: &mut Command) -> Result<()> {
@@ -46,7 +159,8 @@ async fn output(cmd: &mut Command) -> Result<String> {
     Ok(String::from_utf8(result.stdout)?)
 }
 
-async fn homebrew(brew: &Path, cellar: &Path, tap: &str, latest: &str) -> Result<()> {
+/// True when it upgraded (false: Homebrew already had `latest`)
+async fn homebrew(brew: &Path, cellar: &Path, tap: &str, latest: &str) -> Result<bool> {
     let formula = format!("{tap}/iphone-control");
     let active = cellar.parent().context("invalid Homebrew prefix")?.join("opt/iphone-control/bin/iphone-control");
     let installed = || {
@@ -59,7 +173,7 @@ async fn homebrew(brew: &Path, cellar: &Path, tap: &str, latest: &str) -> Result
     let before = semver::Version::parse(&installed()?)?;
     if before >= semver::Version::parse(latest)? {
         println!("{}", ictl_l10n::trf!("Homebrew 当前版本为 {before}。", "Homebrew already has {before}."));
-        return Ok(());
+        return Ok(false);
     }
     run(Command::new(brew).arg("update")).await?;
     // Use exactly the metadata refreshed above for the check and upgrade.
@@ -86,24 +200,8 @@ async fn homebrew(brew: &Path, cellar: &Path, tap: &str, latest: &str) -> Result
     );
     run(cmd().args(["upgrade", "--formula", &formula])).await?;
     ensure!(installed()? == latest, "Homebrew did not activate {latest}");
-    println!(
-        "{}",
-        ictl_l10n::trf!(
-            "Homebrew 已升级至 {latest}。如果正在使用 Homebrew 后台服务，运行 brew services restart iphone-control 加载新版。Viewer 和 MCP 客户端将在下次启动时加载新版。",
-            "Homebrew upgraded to {latest}. If your Homebrew service is running, run brew services restart iphone-control to load it. Viewer and MCP clients load the new version on their next start."
-        )
-    );
-    Ok(())
-}
-
-fn checksum<'a>(text: &'a str, asset: &str) -> Result<&'a str> {
-    // The release job emits exactly one sha256sum record using this filename.
-    let (hash, name) = text.trim_end_matches(['\r', '\n']).split_once("  ").context("invalid release checksum file")?;
-    ensure!(
-        name == asset && hash.len() == 64 && hash.bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase()),
-        "invalid checksum or Debian asset name"
-    );
-    Ok(hash)
+    println!("{}", ictl_l10n::trf!("Homebrew 已升级至 {latest}。", "Homebrew upgraded to {latest}."));
+    Ok(true)
 }
 
 fn check_deb_metadata<'a>(fields: &'a str, version: &str, arch: &str) -> Result<&'a str> {
@@ -145,25 +243,27 @@ async fn check_apt_candidate(apt_cache: &mut Command, path: &Path, deb_version: 
     Ok(())
 }
 
-async fn debian(repo: &str, target: &str, latest: &str, exe: &Path) -> Result<()> {
+/// True when it upgraded (false: APT already had `latest`)
+async fn debian(repo: &str, target: &str, latest: &str, exe: &Path) -> Result<bool> {
     let asset = deb_asset(latest, target).context("unsupported Debian architecture")?;
     let arch = asset.rsplit_once('_').and_then(|(_, s)| s.strip_suffix(".deb")).context("invalid Debian asset name")?;
-    let base = format!("https://github.com/{repo}/releases/download/v{latest}/{asset}");
     let client = archive::client()?;
-    let mut sidecar = Vec::new();
-    archive::download(&client, &format!("{base}.sha256"), 1024, &mut sidecar).await?;
-    let expected = checksum(std::str::from_utf8(&sidecar)?, &asset)?;
+    let signed = archive::signed_manifest(&client, repo, target, latest, &asset).await?;
     let temp = tempfile::tempdir()?;
     let path = temp.path().canonicalize()?.join(&asset);
-    archive::download(&client, &base, 128 << 20, File::create_new(&path)?).await?;
-    ensure!(digest(&path)? == expected, "Debian package SHA-256 mismatch");
+    let url = format!("https://github.com/{repo}/releases/download/v{latest}/{asset}");
+    archive::download(&client, &url, signed.size, File::create_new(&path)?).await?;
+    ensure!(
+        path.metadata()?.len() == signed.size && digest(&path)? == signed.sha256,
+        "Debian package does not match its signed manifest"
+    );
     let deb_version = inspect_deb(&path, latest, arch).await?;
     let current = install::detect(Some(exe));
     ensure!(current.method == InstallMethod::Debian, "Debian package ownership changed");
     let current = semver::Version::parse(&current.version.context("missing installed Debian version")?)?;
     if current >= semver::Version::parse(latest)? {
         println!("{}", ictl_l10n::trf!("APT 当前版本为 {current}。", "APT already has {current}."));
-        return Ok(());
+        return Ok(false);
     }
     let held = output(Command::new("/usr/bin/apt-mark").args(["showhold", "iphone-control"])).await?;
     ensure!(held.trim().is_empty(), "{}", tr!("APT 已锁定 iphone-control。", "iphone-control is on hold in APT."));
@@ -194,14 +294,8 @@ async fn debian(repo: &str, target: &str, latest: &str, exe: &Path) -> Result<()
         installed.method == InstallMethod::Debian && installed.version.as_deref() == Some(latest),
         "APT did not install {latest}"
     );
-    println!(
-        "{}",
-        ictl_l10n::trf!(
-            "APT 已升级至 {latest}。如果正在使用 systemd 用户服务，运行 systemctl --user restart iphone-control 加载新版。Viewer 和 MCP 客户端将在下次启动时加载新版。",
-            "APT upgraded to {latest}. If your systemd user service is running, run systemctl --user restart iphone-control to load it. Viewer and MCP clients load the new version on their next start."
-        )
-    );
-    Ok(())
+    println!("{}", ictl_l10n::trf!("APT 已升级至 {latest}。", "APT upgraded to {latest}."));
+    Ok(true)
 }
 
 #[cfg(test)]
@@ -263,24 +357,9 @@ esac
         let err = homebrew(&brew, &cellar, tap, "1.2.3").await.unwrap_err();
         assert!(err.to_string().contains("17"));
         std::fs::write(prefix.join("allow"), b"").unwrap();
-        homebrew(&brew, &cellar, tap, "1.2.3").await.unwrap();
+        assert!(homebrew(&brew, &cellar, tap, "1.2.3").await.unwrap(), "upgraded");
         assert_eq!(active.canonicalize().unwrap(), rack.join("1.2.3"));
-    }
-
-    #[test]
-    fn deb_checksum_is_bound_to_one_exact_asset_and_the_payload() {
-        let temp = tempfile::tempdir().unwrap();
-        let asset = "iphone-control_1.2.3_arm64.deb";
-        let path = temp.path().join(asset);
-        std::fs::write(&path, b"package").unwrap();
-        let sha = digest(&path).unwrap();
-        let record = format!("{sha}  {asset}\n");
-        assert_eq!(checksum(&record, asset).unwrap(), digest(&path).unwrap());
-        std::fs::write(&path, b"different").unwrap();
-        assert_ne!(checksum(&record, asset).unwrap(), digest(&path).unwrap());
-        for bad in [record.replace(asset, "../pkg.deb"), record.repeat(2), record.replace(&sha, "1234")] {
-            assert!(checksum(&bad, asset).is_err());
-        }
+        assert!(!homebrew(&brew, &cellar, tap, "1.2.3").await.unwrap(), "already there: nothing to restart");
     }
 
     #[cfg(target_os = "linux")]

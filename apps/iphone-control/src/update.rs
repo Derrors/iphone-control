@@ -241,13 +241,14 @@ fn availability_with(
         return BrewCheck;
     }
     if method == InstallMethod::Debian {
-        return match deb_asset(&version.to_string(), platform) {
-            Some(asset) if latest.assets.contains(&asset) && latest.assets.contains(&format!("{asset}.sha256")) => {
-                Available
-            }
-            Some(_) => PlatformPending,
-            None => Unsupported,
-        };
+        // APT runs the package's scripts as root: only a package the publisher signed (`<deb>.manifest.json` and
+        // its signature) is installed by `iphone-control update`
+        let Some(asset) = deb_asset(&version.to_string(), platform) else { return Unsupported };
+        if !keys {
+            return ManualOnly;
+        }
+        let signed = [asset.clone(), format!("{asset}.manifest.json"), format!("{asset}.manifest.json.sig")];
+        return if signed.iter().all(|a| latest.assets.contains(a)) { Available } else { PlatformPending };
     }
     let base = format!("iphone-control-{}-{platform}", latest.tag);
     if !latest.assets.contains(&format!("{base}.tar.gz")) {
@@ -279,6 +280,9 @@ fn upgrade_command(status: Availability, installation: &Installation, exe: Optio
     match (status, installation.method) {
         (Availability::Available, InstallMethod::Managed) if installation.pinned == Some(true) => {
             Some(format!("{exe} update unpin && {exe} update"))
+        }
+        (Availability::Available, InstallMethod::Debian) if installation.pinned == Some(true) => {
+            Some(format!("sudo apt-mark unhold iphone-control && {exe} update"))
         }
         (Availability::Available, InstallMethod::Managed | InstallMethod::Debian)
         | (Availability::BrewCheck, InstallMethod::Homebrew) => Some(format!("{exe} update")),
@@ -319,18 +323,22 @@ fn guidance(status: Availability, method: InstallMethod, pinned: Option<bool>) -
         }
         Availability::Available => match method {
             InstallMethod::Managed if pinned == Some(true) => tr!(
-                "安装已固定到指定版本。此命令会解除固定并升级。先退出 Viewer 和 MCP 客户端，等待任务完成，再在主机终端运行。安装前会验证签名并检查回退兼容性。",
-                "This command unpins and upgrades the installation. Close Viewer and MCP clients and let tasks finish before running it in a host terminal. It verifies the signature and checks rollback compatibility before installing."
+                "安装已固定到指定版本。此命令会解除固定并升级。先退出 Viewer 和 MCP 客户端，等待任务完成，再在主机终端运行。安装前会验证发布者签名；新版本起不来时自动恢复旧版本。",
+                "This command unpins and upgrades the installation. Close Viewer and MCP clients and let tasks finish before running it in a host terminal. It verifies the publisher's signature before installing and restores the old version if the new one doesn't start."
             )
             .into(),
             InstallMethod::Managed => tr!(
-                "先退出 Viewer 和 MCP 客户端，等待任务完成，再在主机终端运行升级命令。安装前会验证签名并检查回退兼容性。",
-                "Close Viewer and MCP clients and let tasks finish before running the upgrade command in a host terminal. It verifies the signature and checks rollback compatibility before installing."
+                "先退出 Viewer 和 MCP 客户端，等待任务完成，再在主机终端运行升级命令。安装前会验证发布者签名；新版本起不来时自动恢复旧版本。",
+                "Close Viewer and MCP clients and let tasks finish before running the upgrade command in a host terminal. It verifies the publisher's signature before installing and restores the old version if the new one doesn't start."
             )
             .into(),
+            InstallMethod::Debian if pinned == Some(true) => tr!(
+                "iphone-control 在 APT 里被锁定（apt-mark hold），不会升级。要升级，先解除锁定，命令会接着下载经发布者签名的 .deb 并通过 APT 安装。",
+                "iphone-control is on hold in APT (apt-mark hold) and won't be upgraded. To upgrade, release the hold; the command then downloads the publisher-signed .deb and installs it with APT."
+            ).into(),
             InstallMethod::Debian => tr!(
-                "升级命令会下载并校验匹配本机架构的 .deb，再通过 APT 安装。",
-                "The update command downloads and verifies the .deb for this architecture, then installs it with APT."
+                "升级命令会下载匹配本机架构、经发布者签名的 .deb，验证后通过 APT 安装（需要 sudo）。",
+                "The update command downloads the publisher-signed .deb for this architecture, verifies it and installs it with APT (needs sudo)."
             ).into(),
             _ => tr!(
                 "关闭正在运行的客户端和服务，再按发行说明手动更新。",
@@ -339,24 +347,6 @@ fn guidance(status: Availability, method: InstallMethod, pinned: Option<bool>) -
             .into(),
         },
     }
-}
-
-fn manual_migration(
-    installation: &Installation,
-    outcome: Option<&transaction::Outcome>,
-    latest: Option<&str>,
-    repo: Option<&str>,
-    platform: Option<&str>,
-) -> bool {
-    let (Some(outcome), Some(from), Some(repo), Some(platform)) =
-        (outcome, installation.version.as_deref(), repo, platform)
-    else {
-        return false;
-    };
-    installation.method == InstallMethod::Managed
-        && outcome.status == "manual_migration"
-        && Some(outcome.target_version.as_str()) == latest
-        && outcome.migration_source.as_ref().is_some_and(|source| source.matches(repo, platform, from))
 }
 
 struct Local {
@@ -391,16 +381,7 @@ impl Local {
         let last_update = self.exe.as_deref().map(transaction::outcome).transpose()?.flatten();
         let local_version = self.install.version.as_deref().unwrap_or(VERSION);
         let status = availability(local_version, self.install.method, target(), release);
-        let (status, mut guidance) = if status == Availability::Available
-            && manual_migration(&self.install, last_update.as_ref(), version.as_deref(), repo, target())
-        {
-            (Availability::ManualOnly, tr!(
-                "已验证的发行清单要求从当前安装版本手动迁移。请按发行说明中的步骤升级。",
-                "The verified release manifest requires a manual migration from the installed version. Follow the release notes to upgrade."
-            ).into())
-        } else {
-            (status, guidance(status, self.install.method, self.install.pinned))
-        };
+        let mut guidance = guidance(status, self.install.method, self.install.pinned);
         let command = if self.source_command.is_some() {
             guidance = tr!(
                 "Cargo 源码安装。先在命令所指的本机源码仓库检出目标版本，再运行命令重新安装。完成后重新打开 Viewer，如有后台服务也请重启。",
@@ -474,30 +455,44 @@ pub async fn check(background: bool) -> Result<Report> {
     local.report(cache)
 }
 
-/// The user explicitly requested an update. Use this check's release and installation channel.
-pub async fn upgrade(socket: &Path, report: Report) -> Result<()> {
+/// The user explicitly requested an update (`iphone-control update`). Use this check's release and installation
+/// channel; say what will happen and ask before installing, unless `yes`
+pub async fn upgrade(socket: &Path, report: Report, yes: bool) -> Result<()> {
     if let Some(code) = &report.error_code {
         bail!("{}", trf!("检查更新失败：{code}", "Update check failed: {code}"));
     }
+    let pinned = report.pinned == Some(true);
     match (report.availability, report.install_method) {
         (Availability::Current | Availability::Ahead, _) => {
             println!("{} ({})", report.guidance, report.installed_version.as_deref().unwrap_or(VERSION));
         }
+        (Availability::Available, InstallMethod::Managed) if pinned => bail!(
+            "{}",
+            tr!(
+                "已固定安装版本。若要升级，请先运行 iphone-control update unpin。",
+                "This installation is pinned. To upgrade, run iphone-control update unpin first."
+            )
+        ),
+        (Availability::Available, InstallMethod::Debian) if pinned => bail!(
+            "{}",
+            tr!(
+                "iphone-control 在 APT 里被锁定。若要升级，请先运行 sudo apt-mark unhold iphone-control。",
+                "iphone-control is on hold in APT. To upgrade, run sudo apt-mark unhold iphone-control first."
+            )
+        ),
         (Availability::Available, InstallMethod::Managed) => {
-            ensure!(
-                report.pinned != Some(true),
-                "{}",
-                tr!(
-                    "已固定安装版本。若要升级，请先运行 iphone-control update unpin。",
-                    "This installation is pinned. To upgrade, run iphone-control update unpin first."
-                )
-            );
+            if !confirm(&report, yes)? {
+                return Ok(());
+            }
             let version = report.available_version.clone().ok_or_else(|| anyhow::anyhow!("missing release version"))?;
             transaction::apply(socket, false, report).await?;
             println!("{}", trf!("已升级到 {version}。", "Updated to {version}."));
         }
         (Availability::Available, InstallMethod::Debian) | (Availability::BrewCheck, InstallMethod::Homebrew) => {
-            channel::apply(&report).await?;
+            if !confirm(&report, yes)? {
+                return Ok(());
+            }
+            channel::apply(socket, &report).await?;
         }
         _ => {
             let next = report.upgrade_command.as_deref().or(report.release_url.as_deref());
@@ -508,6 +503,55 @@ pub async fn upgrade(socket: &Path, report: Report) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// What installing `report`'s release will do, the same for every caller
+fn plan(report: &Report) -> String {
+    let from = report.installed_version.as_deref().unwrap_or(VERSION);
+    let to = report.available_version.as_deref().unwrap_or("?");
+    let how = match report.install_method {
+        InstallMethod::Managed => trf!(
+            "验证发布者签名后安装，然后重启后台服务：正在执行的 AI 任务和控制台画面会中断。新版本起不来时自动换回 {from}。",
+            "It verifies the publisher's signature, installs, then restarts the background service: running AI tasks and the control page's picture are interrupted. If the new version doesn't start, {from} is put back."
+        ),
+        InstallMethod::Debian => tr!(
+            "下载并验证经发布者签名的 .deb，用 sudo 通过 APT 安装（会询问密码）。后台服务在运行的话会重启，正在执行的任务会中断。",
+            "It downloads and verifies the publisher-signed .deb and installs it with APT through sudo (asks for your password). A running background service is restarted, interrupting running tasks."
+        )
+        .into(),
+        _ => tr!(
+            "运行 brew update 和 brew upgrade。Homebrew 的后台服务在运行的话会重启，正在执行的任务会中断。",
+            "It runs brew update and brew upgrade. A running Homebrew service is restarted, interrupting running tasks."
+        )
+        .into(),
+    };
+    trf!("将从 {from} 升级到 {to}。{how}", "Upgrading from {from} to {to}. {how}")
+}
+
+/// Shows [`plan`] and asks. False: the user said no. Without a terminal it needs `yes`
+fn confirm(report: &Report, yes: bool) -> Result<bool> {
+    use std::io::{BufRead, IsTerminal, Write};
+    println!("{}", plan(report));
+    if yes {
+        return Ok(true);
+    }
+    ensure!(
+        std::io::stdin().is_terminal(),
+        "{}",
+        tr!(
+            "没有终端，无法确认。在终端里运行，或加 --yes 直接升级。",
+            "No terminal to confirm in. Run it in a terminal, or add --yes to upgrade without asking."
+        )
+    );
+    print!("{}", tr!("继续吗？[y/N] ", "Continue? [y/N] "));
+    std::io::stdout().flush()?;
+    let mut answer = String::new();
+    std::io::stdin().lock().read_line(&mut answer)?;
+    if matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes" | "是") {
+        return Ok(true);
+    }
+    println!("{}", tr!("已取消，没有升级。", "Cancelled; nothing was upgraded."));
+    Ok(false)
 }
 
 impl fmt::Display for Report {
@@ -587,34 +631,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn verified_migration_decision_only_applies_to_the_same_upgrade() {
-        let mut install =
-            Installation { method: InstallMethod::Managed, version: Some("0.2.0".into()), pinned: Some(false) };
-        let outcome: transaction::Outcome = serde_json::from_value(serde_json::json!({
-            "status": "manual_migration", "target_version": "0.2.2", "detail": "", "suppressed_version": "0.2.2",
-            "migration_source": { "publisher": "acme/tools", "target": "macos-arm64", "version": "0.2.0" }
-        }))
-        .unwrap();
-        let matches = |install: &Installation, latest, repo, platform| {
-            manual_migration(install, Some(&outcome), Some(latest), Some(repo), Some(platform))
-        };
-        assert!(matches(&install, "0.2.2", "acme/tools", "macos-arm64"));
-        assert!(!matches(&install, "0.2.3", "acme/tools", "macos-arm64"));
-        assert!(!matches(&install, "0.2.2", "other/tools", "macos-arm64"));
-        assert!(!matches(&install, "0.2.2", "acme/tools", "linux-aarch64"));
-        install.version = Some("0.2.1".into());
-        assert!(!matches(&install, "0.2.2", "acme/tools", "macos-arm64"));
-        install.version = Some("0.2.0".into());
-        install.method = InstallMethod::Unknown;
-        assert!(!matches(&install, "0.2.2", "acme/tools", "macos-arm64"));
-    }
-
-    #[test]
     fn managed_guidance_explains_verification_before_installation() {
         ictl_l10n::with_lang(ictl_l10n::Lang::En, || {
             for pinned in [false, true] {
                 let guide = guidance(Availability::Available, InstallMethod::Managed, Some(pinned));
-                assert!(guide.contains("signature") && guide.contains("rollback compatibility"), "{guide}");
+                assert!(guide.contains("signature") && guide.contains("restores the old version"), "{guide}");
             }
         });
     }
@@ -694,16 +715,16 @@ mod tests {
         let socket = Path::new("/unused");
         // Current or newer local versions succeed even when pinned and without an installer or daemon.
         for version in ["1.2.3", "1.2.4"] {
-            upgrade(socket, report(version, None, true)).await.unwrap();
+            upgrade(socket, report(version, None, true), false).await.unwrap();
         }
         // A cached version from an unsuccessful refresh cannot authorize any installation.
         let mut stale = report("1.2.2", Some("rate_limited"), false);
         stale.availability = Availability::Available;
-        let err = upgrade(socket, stale).await.unwrap_err();
+        let err = upgrade(socket, stale, true).await.unwrap_err();
         assert!(err.to_string().contains("rate_limited"), "{err}");
         let mut pinned = report("1.2.2", None, true);
         pinned.availability = Availability::Available;
-        let err = upgrade(socket, pinned).await.unwrap_err();
+        let err = upgrade(socket, pinned, true).await.unwrap_err();
         assert!(err.to_string().contains("update unpin"), "{err}");
     }
 
@@ -762,31 +783,58 @@ mod tests {
             assets: vec![
                 "iphone-control-v0.2.1-linux-x86_64.tar.gz".into(),
                 "iphone-control_0.2.1_amd64.deb".into(),
-                "iphone-control_0.2.1_amd64.deb.sha256".into(),
+                "iphone-control_0.2.1_amd64.deb.manifest.json".into(),
+                "iphone-control_0.2.1_amd64.deb.manifest.json.sig".into(),
             ],
             notes: None,
         };
-        let for_install = |running, method, platform| availability(running, method, platform, Some(&release));
+        let for_install =
+            |running, method, platform| availability_with(running, method, platform, Some(&release), true);
         assert_eq!(for_install("0.2.1", InstallMethod::Unknown, None), Availability::Current);
         assert_eq!(for_install("0.3.0-rc.1", InstallMethod::Unknown, None), Availability::Ahead);
         assert_eq!(for_install("0.2.0", InstallMethod::Managed, Some("macos-arm64")), Availability::PlatformPending);
-        assert_eq!(for_install("0.2.0", InstallMethod::Managed, Some("linux-x86_64")), Availability::ManualOnly);
+        assert_eq!(for_install("0.2.0", InstallMethod::Managed, Some("linux-x86_64")), Availability::PlatformPending);
         assert_eq!(for_install("0.2.0", InstallMethod::Homebrew, Some("macos-arm64")), Availability::BrewCheck);
         assert_eq!(for_install("0.2.0", InstallMethod::Debian, Some("linux-x86_64")), Availability::Available);
         assert_eq!(for_install("0.2.0", InstallMethod::Debian, Some("linux-aarch64")), Availability::PlatformPending);
         assert_eq!(for_install("0.2.0", InstallMethod::Unknown, None), Availability::Unsupported);
     }
 
+    /// APT installs as root: the .deb is offered only once the publisher has signed it, its own manifest (not
+    /// the other architecture's, not a bare checksum file) with the signature; a build without keys can't verify
     #[test]
-    fn deb_upgrade_waits_for_the_matching_checksum_sidecar() {
+    fn deb_upgrade_waits_for_its_signed_manifest() {
         let asset = "iphone-control_0.2.1_amd64.deb";
-        let mut release = Release { tag: "v0.2.1".into(), assets: vec![asset.into()], published_at: None, notes: None };
-        let status = |r: &Release| availability("0.2.0", InstallMethod::Debian, Some("linux-x86_64"), Some(r));
-        assert_eq!(status(&release), Availability::PlatformPending);
-        release.assets.push("iphone-control_0.2.1_arm64.deb.sha256".into());
-        assert_eq!(status(&release), Availability::PlatformPending);
-        release.assets.push(format!("{asset}.sha256"));
-        assert_eq!(status(&release), Availability::Available);
+        let mut release = Release {
+            tag: "v0.2.1".into(),
+            assets: vec![asset.into(), format!("{asset}.sha256")],
+            published_at: None,
+            notes: None,
+        };
+        let status =
+            |r: &Release, keys| availability_with("0.2.0", InstallMethod::Debian, Some("linux-x86_64"), Some(r), keys);
+        assert_eq!(status(&release, true), Availability::PlatformPending, "a checksum file is no signature");
+        release.assets.push("iphone-control_0.2.1_arm64.deb.manifest.json".into());
+        release.assets.push("iphone-control_0.2.1_arm64.deb.manifest.json.sig".into());
+        release.assets.push(format!("{asset}.manifest.json"));
+        assert_eq!(status(&release, true), Availability::PlatformPending, "signature still missing");
+        release.assets.push(format!("{asset}.manifest.json.sig"));
+        assert_eq!(status(&release, true), Availability::Available);
+        assert_eq!(status(&release, false), Availability::ManualOnly, "no signing keys in this build");
+    }
+
+    #[test]
+    fn a_held_deb_is_reported_like_a_pinned_installation() {
+        let exe = Path::new("/usr/bin/iphone-control");
+        let held = Installation { method: InstallMethod::Debian, version: Some("0.2.0".into()), pinned: Some(true) };
+        assert_eq!(
+            upgrade_command(Availability::Available, &held, Some(exe)).as_deref(),
+            Some("sudo apt-mark unhold iphone-control && /usr/bin/iphone-control update")
+        );
+        ictl_l10n::with_lang(ictl_l10n::Lang::En, || {
+            assert!(guidance(Availability::Available, InstallMethod::Debian, Some(true)).contains("on hold"));
+            assert!(guidance(Availability::Available, InstallMethod::Debian, Some(false)).contains("signed"));
+        });
     }
 
     /// A managed install with signing keys: the archive alone (the signing job hasn't published the manifest and

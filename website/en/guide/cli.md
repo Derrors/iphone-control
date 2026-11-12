@@ -23,22 +23,22 @@ These go before the command, for example `iphone-control --socket /path/ctl.sock
 
 ## Host software updates
 
-Run `iphone-control update` to check the publisher's latest stable release. It reports when you are up to date. When an upgrade is available, it uses the installation method of the running executable.
+Run `iphone-control update` to check the publisher's latest stable release. It reports when you are up to date. When an upgrade is available, it first says what it will do (from which version to which, and whether the background service restarts), asks whether to continue, then upgrades through the installation method of the running executable. In a script or without a terminal, add `--yes` to upgrade without asking.
 
 | Installation | What `iphone-control update` does |
 | --- | --- |
-| Managed per-user service installed by the signed release script | Verifies and installs the signed update, then restarts the service and checks its health. Close Viewer, MCP and other device clients first. If you pinned a version with `--version`, run `iphone-control update unpin` when you are ready to upgrade. |
-| Homebrew | Runs the Homebrew upgrade through the tap bound to this installation. The tap determines which version is available. |
-| Debian / Ubuntu package | Downloads the matching `.deb` for the target version and host architecture from the same publisher, verifies it and passes it to apt for installation. |
+| Managed per-user service installed by the signed release script | Verifies the publisher's signature, installs the update, then restarts the service and checks its health; if the new version doesn't start within 60 seconds, the old one is put back. Close Viewer, MCP and other device clients first. If you pinned a version with `--version`, run `iphone-control update unpin` when you are ready to upgrade. |
+| Homebrew | Runs the Homebrew upgrade through the tap bound to this installation. The tap determines which version is available. A running `brew services` service is restarted afterwards. |
+| Debian / Ubuntu package | Downloads the matching `.deb` for the target version and host architecture from the same publisher, checks the publisher's signature for it, then installs it with apt through `sudo` (asks for your password). The package's systemd user service is restarted afterwards if it was running. A package held with `apt-mark hold` isn't upgraded; release it with `sudo apt-mark unhold iphone-control` first. |
 | Source builds, script installs without a managed service, or unrecognized installations | Shows instructions for a manual upgrade. A development build without a publisher displays guidance locally. |
 
-Homebrew and apt upgrade the executable on disk. If you already run a background service, restart it after the upgrade with `brew services restart iphone-control` for Homebrew or `systemctl --user restart iphone-control` for a Debian user service. Skip this step if you do not use a service. Reopen Viewer and reconnect your MCP client to use the new executable.
+Restarting the background service interrupts running AI tasks and the control page's picture. After a Homebrew or apt upgrade the command checks that the service now runs the new version; if it can't confirm that, it prints the restart command to run by hand. Reopen Viewer and reconnect your MCP client to use the new executable there too.
 
 Use `iphone-control update check` for a version check only, or `iphone-control update check --json` for machine-readable output. This check and **About & updates** in Viewer share the local release cache. If the network check fails, the previous successful record is kept. A red dot on the ⓘ button beside **Settings** indicates a newer release. Open the panel to read the release notes and copy the update command for the current executable into a local terminal.
 
-Viewer listens on loopback. Other users on the same host can read installation information and request a version check. Upgrade, rollback and policy changes are performed from a local terminal.
+Viewer listens on loopback. Other users on the same host can read installation information and request a version check. Upgrades and policy changes are performed from a local terminal.
 
-Managed services check in the background by default. You can still use `update apply` to install, `update rollback` to restore the previous verified executable and `update recover` after an interrupted replacement. If you currently run the 0.2.2 CLI, use `iphone-control update check` and follow the command it shows to upgrade to a version with the new `iphone-control update` command.
+Managed services check in the background by default. `update apply` installs without asking (managed services), and `update recover` finishes an interrupted replacement. There is no command to go back to the previous version: to run an older one, uninstall with the release's install script and `--uninstall` (settings and device data are kept), then install that version with `--version vX.Y.Z`. If you currently run the 0.2.2 CLI, use `iphone-control update check` and follow the command it shows to upgrade to a version with the new `iphone-control update` command.
 
 Run `iphone-control update policy auto-patch` to opt in to installing compatible patches when idle. Viewer, MCP and direct device clients (including paused tasks) must exit before the service can restart. If the new daemon fails its health checks the updater restores the old executable and holds the failed version for an explicit retry. `update policy notify` checks without installing; `update policy manual` removes the scheduled job.
 

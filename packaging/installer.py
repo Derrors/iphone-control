@@ -69,7 +69,7 @@ def digest(path):
         return result.hexdigest()
 
 
-def verify_manifest(directory, manifest, sig, repo, keys, version, target):
+def verify_manifest(directory, manifest, sig, repo, keys, version, target, asset=None):
     keyfile = directory / "public.der"
     for key in keys.split(","):
         keyfile.write_bytes(bytes.fromhex("302a300506032b6570032100" + key))
@@ -81,12 +81,12 @@ def verify_manifest(directory, manifest, sig, repo, keys, version, target):
     else:
         raise ValueError("Ed25519 manifest verification failed (requires OpenSSL 3 and a trusted signing key)")
     data = json.loads(manifest.read_bytes())
-    name = f"iphone-control-v{version}-{target}.tar.gz"
+    name = asset or f"iphone-control-v{version}-{target}.tar.gz"
     if (type(data["schema"]) is not int or data["schema"] != 1 or data["publisher"] != repo
             or data["version"] != version or data["target"] != target or data["asset"] != name
             or not re.fullmatch("[0-9a-f]{64}", data["sha256"])
             or type(data["size"]) is not int or not 0 < data["size"] <= 128 * MIB
-            or type(data["unattended"]) is not bool or type(data["rollback_compatible"]) is not bool):
+            or type(data["unattended"]) is not bool):
         raise ValueError("release manifest does not match requested installation")
     return data
 

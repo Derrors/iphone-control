@@ -42,6 +42,8 @@ struct Cli {
 enum Command {
     #[command(about = ictl_l10n::tr!("检查主机软件版本，有新版时升级", "Check for a new host software release and install it if available"))]
     Update {
+        #[arg(short, long, help = ictl_l10n::tr!("不询问，直接升级（脚本里或没有终端时用）", "Upgrade without asking (for scripts, or without a terminal)"))]
+        yes: bool,
         #[command(subcommand)]
         action: Option<UpdateAction>,
     },
@@ -122,12 +124,10 @@ enum UpdateAction {
     },
     /// Save the local update policy and configure its user job
     Policy { policy: update::Policy },
-    /// Install a verified compatible release (managed user service only)
+    /// Install a verified release without asking (managed user service only)
     Apply,
     /// Release an explicit installer version pin without enabling automatic updates
     Unpin,
-    /// Restore the verified previous executable
-    Rollback,
     /// Recover an interrupted replacement
     Recover {
         #[arg(long, hide = true)]
@@ -200,8 +200,8 @@ async fn run() -> anyhow::Result<()> {
     };
     let Some(command) = cli.command.take() else { return guide::first_run(&cli).await };
     match command {
-        Command::Update { action: None } => update::upgrade(&cli.socket, update::check(false).await?).await,
-        Command::Update { action: Some(action) } => update_command(action, &cli.socket).await,
+        Command::Update { action: None, yes } => update::upgrade(&cli.socket, update::check(false).await?, yes).await,
+        Command::Update { action: Some(action), .. } => update_command(action, &cli.socket).await,
         Command::Daemon => {
             let mut cfg = ictl_daemon::Config::from_env(&cli.data_dir);
             cfg.socket = cli.socket;
@@ -259,7 +259,6 @@ async fn update_command(action: UpdateAction, socket: &Path) -> anyhow::Result<(
         UpdateAction::Schedule => schedule::configure(socket),
         UpdateAction::Apply => transaction::apply(socket, false, update::check(false).await?).await,
         UpdateAction::Unpin => transaction::unpin(),
-        UpdateAction::Rollback => transaction::rollback(socket).await,
         UpdateAction::Recover { scheduled } => transaction::recover(socket, scheduled).await,
         UpdateAction::Run => {
             let report = update::check(true).await?;
@@ -1066,11 +1065,16 @@ mod tests {
         use clap::Parser;
 
         let parse = |args: &[&str]| Cli::try_parse_from(args).unwrap().command;
-        assert!(matches!(parse(&["iphone-control", "update"]), Some(Command::Update { action: None })));
+        assert!(matches!(parse(&["iphone-control", "update"]), Some(Command::Update { action: None, yes: false })));
+        assert!(matches!(
+            parse(&["iphone-control", "update", "-y"]),
+            Some(Command::Update { action: None, yes: true })
+        ));
         assert!(matches!(
             parse(&["iphone-control", "update", "check", "--json"]),
-            Some(Command::Update { action: Some(UpdateAction::Check { json: true }) })
+            Some(Command::Update { action: Some(UpdateAction::Check { json: true }), .. })
         ));
+        assert!(Cli::try_parse_from(["iphone-control", "update", "rollback"]).is_err(), "rollback was removed");
     }
 
     /// 英文时注册命令带上语言（MCP 客户端不带用户 shell 的环境）；中文时不带

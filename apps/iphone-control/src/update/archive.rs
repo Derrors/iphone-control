@@ -1,5 +1,7 @@
 //! The release metadata and signature are deliberately separate: verify the exact response bytes
-//! with an embedded key before parsing any download instructions.
+//! with an embedded key before parsing any download instructions. The same signed manifest covers the managed
+//! archive (`iphone-control-vX.Y.Z-<target>.tar.gz`) and, on Linux, the Debian package
+//! (`iphone-control_X.Y.Z_<arch>.deb`), each in its own `<asset>.manifest.json` beside it.
 use std::fs::File;
 use std::io::{Read, Write};
 use std::os::unix::fs::PermissionsExt;
@@ -15,33 +17,23 @@ const MAX_ARCHIVE: u64 = 128 << 20;
 const MAX_EXPANDED: u64 = 256 << 20;
 const MAX_MANIFEST: u64 = 16 << 10;
 
+/// A signed release manifest. Manifests for 0.2.2's updater also carry `rollback_compatible` and `rollback_from`,
+/// which this version ignores (see `packaging/release.py`)
 #[derive(Debug, Deserialize)]
-struct Manifest {
+pub(super) struct Manifest {
     schema: u32,
     publisher: String,
     version: String,
     target: String,
-    asset: String,
-    sha256: String,
-    size: u64,
+    pub asset: String,
+    pub sha256: String,
+    pub size: u64,
+    #[serde(default)]
     unattended: bool,
-    rollback_compatible: bool,
-    rollback_from: Option<String>,
 }
-
-#[derive(Debug)]
-pub(super) struct ManualMigration(String);
-
-impl std::fmt::Display for ManualMigration {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "release does not support rollback to installed version {}; see the release notes", self.0)
-    }
-}
-
-impl std::error::Error for ManualMigration {}
 
 /// The automatic job found a release not marked for unattended installation: a normal release that is installed
-/// with `update apply`, not a failure
+/// with `iphone-control update`, not a failure
 #[derive(Debug)]
 pub(super) struct NeedsOperator(pub String);
 
@@ -104,6 +96,33 @@ fn key_bytes(key: &str) -> Option<[u8; 32]> {
     Some(decoded)
 }
 
+/// The release signing keys this build trusts (`ICTL_UPDATE_PUBLIC_KEYS`)
+pub(super) fn keys() -> anyhow::Result<&'static str> {
+    option_env!("ICTL_UPDATE_PUBLIC_KEYS").filter(|s| !s.is_empty()).context("this build has no update trust key")
+}
+
+/// Downloads `<asset>.manifest.json` and its signature from release `version` of `publisher` and checks both
+/// against the trusted keys and this exact asset
+pub(super) async fn signed_manifest(
+    client: &Client,
+    publisher: &str,
+    target: &str,
+    version: &str,
+    asset: &str,
+) -> anyhow::Result<Manifest> {
+    let url = format!("https://github.com/{publisher}/releases/download/v{version}/{asset}.manifest.json");
+    let mut raw = Vec::new();
+    let mut sig = Vec::new();
+    download(client, &url, MAX_MANIFEST, &mut raw).await?;
+    download(client, &format!("{url}.sig"), 64, &mut sig).await?;
+    verify(&raw, &sig, keys()?, publisher, target, version, asset)
+}
+
+/// The tar archive's name for a release and target
+pub(super) fn archive_asset(version: &str, target: &str) -> String {
+    format!("iphone-control-v{version}-{target}.tar.gz")
+}
+
 fn verify(
     raw: &[u8],
     sig: &[u8],
@@ -111,7 +130,7 @@ fn verify(
     publisher: &str,
     target: &str,
     version: &str,
-    installed_version: &str,
+    asset: &str,
 ) -> anyhow::Result<Manifest> {
     ensure!(
         keys.split(',').filter_map(key_bytes).any(|key| UnparsedPublicKey::new(&ED25519, key).verify(raw, sig).is_ok()),
@@ -119,11 +138,7 @@ fn verify(
     );
     let m: Manifest = serde_json::from_slice(raw)?;
     ensure!(
-        m.schema == 1
-            && m.publisher == publisher
-            && m.target == target
-            && m.version == version
-            && m.asset == format!("iphone-control-v{version}-{target}.tar.gz"),
+        m.schema == 1 && m.publisher == publisher && m.target == target && m.version == version && m.asset == asset,
         "manifest does not match this release"
     );
     ensure!(
@@ -132,9 +147,6 @@ fn verify(
             && m.sha256.bytes().all(|b| !b.is_ascii_uppercase()),
         "invalid signed digest or size"
     );
-    if !m.rollback_compatible || m.rollback_from.as_deref() != Some(installed_version) {
-        return Err(ManualMigration(installed_version.into()).into());
-    }
     Ok(m)
 }
 
@@ -188,17 +200,10 @@ pub(super) async fn stage(
     version: &str,
     automatic: bool,
 ) -> anyhow::Result<PathBuf> {
-    let keys = option_env!("ICTL_UPDATE_PUBLIC_KEYS")
-        .filter(|s| !s.is_empty())
-        .context("this build has no update trust key")?;
-    let base = format!("https://github.com/{}/releases/download/v{version}", receipt.publisher);
-    let manifest_url = format!("{base}/iphone-control-v{version}-{}.manifest.json", receipt.target);
     let client = client()?;
-    let mut raw = Vec::new();
-    let mut sig = Vec::new();
-    download(&client, &manifest_url, MAX_MANIFEST, &mut raw).await?;
-    download(&client, &format!("{manifest_url}.sig"), 64, &mut sig).await?;
-    let m = verify(&raw, &sig, keys, &receipt.publisher, &receipt.target, version, &receipt.version)?;
+    let asset = archive_asset(version, &receipt.target);
+    let m = signed_manifest(&client, &receipt.publisher, &receipt.target, version, &asset).await?;
+    let base = format!("https://github.com/{}/releases/download/v{version}", receipt.publisher);
     if automatic && !m.unattended {
         return Err(NeedsOperator(version.to_string()).into());
     }
@@ -260,11 +265,12 @@ mod tests {
         let digest = super::super::digest(&file).unwrap();
         let mut doc = json!({"schema":1,"publisher":"example/update","target":"macos-arm64","version":"0.2.1",
             "asset":format!("{ROOT}.tar.gz"),"sha256":digest,"size":file.metadata().unwrap().len(),
-            "unattended":true,"rollback_compatible":true,"rollback_from":"0.2.0"});
+            "unattended":true});
         let key = key();
         let trusted = hex(&key);
+        let asset = archive_asset("0.2.1", "macos-arm64");
         let check = |doc: &[u8], sig: &[u8], keys: &str| {
-            verify(doc, sig, keys, "example/update", "macos-arm64", "0.2.1", "0.2.0")
+            verify(doc, sig, keys, "example/update", "macos-arm64", "0.2.1", &asset)
         };
         let bytes = serde_json::to_vec(&doc).unwrap();
         let sig = key.sign(&bytes);
@@ -281,20 +287,24 @@ mod tests {
             ("target", json!("linux-aarch64")),
             ("size", json!(MAX_ARCHIVE + 1)),
             ("publisher", json!("elsewhere/other")),
-            ("rollback_compatible", json!(false)),
-            ("rollback_from", json!("0.1.9")),
+            ("version", json!("0.2.2")),
             ("asset", json!("other.tar.gz")),
+            ("asset", json!("iphone-control_0.2.1_arm64.deb")),
         ] {
             let original = doc[field].clone();
             doc[field] = value;
             let bad = serde_json::to_vec(&doc).unwrap();
-            let err = check(&bad, key.sign(&bad).as_ref(), &trusted).unwrap_err();
-            assert_eq!(err.is::<ManualMigration>(), matches!(field, "rollback_from" | "rollback_compatible"));
+            assert!(check(&bad, key.sign(&bad).as_ref(), &trusted).is_err(), "{field}");
             doc[field] = original;
         }
-        doc.as_object_mut().unwrap().remove("rollback_from");
-        let legacy = serde_json::to_vec(&doc).unwrap();
-        assert!(check(&legacy, key.sign(&legacy).as_ref(), &trusted).is_err_and(|e| e.is::<ManualMigration>()));
+        // a manifest written for 0.2.2's updater as well: its rollback fields don't matter any more, from any
+        // installed version
+        for (compatible, from) in [(json!(true), json!("0.2.0")), (json!(false), json!(null))] {
+            doc["rollback_compatible"] = compatible;
+            doc["rollback_from"] = from;
+            let legacy = serde_json::to_vec(&doc).unwrap();
+            check(&legacy, key.sign(&legacy).as_ref(), &trusted).unwrap();
+        }
         std::fs::write(file, vec![0; m.size as usize]).unwrap();
         assert!(unpack(&m, root.path()).is_err());
     }
@@ -323,6 +333,24 @@ mod tests {
         }
         for url in ["http://github.com/a", "https://github.com.example.com/a", "https://other@github.com:444/a"] {
             assert!(!trusted(&Url::parse(url).unwrap()));
+        }
+    }
+
+    /// The Debian package's manifest is bound to the .deb's name: a tar manifest of the same release or the other
+    /// architecture's doesn't pass for it
+    #[test]
+    fn deb_manifest_is_bound_to_its_package() {
+        let key = key();
+        let trusted = hex(&key);
+        let deb = "iphone-control_0.2.3_amd64.deb";
+        let doc = json!({"schema":1,"publisher":"example/update","target":"linux-x86_64","version":"0.2.3",
+            "asset":deb,"sha256":"ab".repeat(32),"size":4096,"unattended":false});
+        let bytes = serde_json::to_vec(&doc).unwrap();
+        let sig = key.sign(&bytes);
+        let m = verify(&bytes, sig.as_ref(), &trusted, "example/update", "linux-x86_64", "0.2.3", deb).unwrap();
+        assert_eq!((m.asset.as_str(), m.size), (deb, 4096));
+        for asset in [archive_asset("0.2.3", "linux-x86_64"), "iphone-control_0.2.3_arm64.deb".into()] {
+            assert!(verify(&bytes, sig.as_ref(), &trusted, "example/update", "linux-x86_64", "0.2.3", &asset).is_err());
         }
     }
 }

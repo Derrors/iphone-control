@@ -214,7 +214,9 @@ fn brew_installation(exe: &Path, tap: &str) -> Option<String> {
     Some(active.canonicalize().ok().and_then(|p| brew_keg(&p, cellar, tap)).unwrap_or(version))
 }
 
-fn deb_package(exe: &Path) -> Option<String> {
+/// The installed Debian package's upstream version, and whether it is on hold in APT (`apt-mark hold`), which is
+/// reported like a pinned managed installation
+fn deb_package(exe: &Path) -> Option<(String, bool)> {
     if !cfg!(target_os = "linux") || exe != Path::new("/usr/bin/iphone-control") {
         return None;
     }
@@ -228,9 +230,13 @@ fn deb_package(exe: &Path) -> Option<String> {
         return None;
     }
     let installed = dpkg(&["-W", "-f=${db:Status-Abbrev} ${Version}", owner])?;
-    let version = installed.strip_prefix("ii  ").or_else(|| installed.strip_prefix("hi  "))?.trim();
+    let (version, held) = match installed.strip_prefix("ii  ") {
+        Some(v) => (v, false),
+        None => (installed.strip_prefix("hi  ")?, true),
+    };
+    let version = version.trim();
     let upstream = version.rsplit_once('-').map_or(version, |(upstream, _)| upstream);
-    Some(Version::parse(upstream).ok()?.to_string())
+    Some((Version::parse(upstream).ok()?.to_string(), held))
 }
 
 /// Linux marks /proc/self/exe as deleted when Cargo, dpkg or an installer atomically
@@ -271,8 +277,8 @@ pub(super) fn detect(exe: Option<&Path>) -> Installation {
     if let Some(version) = super::tap().and_then(|tap| brew_installation(exe, tap)) {
         return Installation { method: InstallMethod::Homebrew, version: Some(version), pinned: None };
     }
-    if let Some(version) = deb_package(exe) {
-        return Installation { method: InstallMethod::Debian, version: Some(version), pinned: None };
+    if let Some((version, held)) = deb_package(exe) {
+        return Installation { method: InstallMethod::Debian, version: Some(version), pinned: Some(held) };
     }
     unknown(InstallMethod::Unknown)
 }

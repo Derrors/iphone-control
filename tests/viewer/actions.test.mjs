@@ -109,3 +109,20 @@ test('a named element can be tapped without a rendered frame and targets its dev
   await tapElement(0);
   assert.deepEqual(marks, [['tap', 'user', 15, 20]]);
 });
+
+test('hovering keeps the HID session warm at most every 20 seconds', () => {
+  const sent = [];
+  let now = 100000;
+  const context = {
+    S: { liveTouch: true, mode: 'live' }, T: { warm: 0 }, dims: () => ({ W: 1, H: 1 }), guarded: () => false,
+    touchSend: phase => sent.push(phase), Date: { now: () => now },
+  };
+  const { touchWarm } = handlers(['touchWarm'], context);
+  touchWarm(); touchWarm();
+  now += 19999; touchWarm();
+  assert.deepEqual(sent, ['prepare'], 'one prepare per 20 s while the pointer moves');
+  now += 1; touchWarm();
+  assert.deepEqual(sent, ['prepare', 'prepare']);
+  context.S.liveTouch = false; now += 20000; touchWarm();
+  assert.equal(sent.length, 2, 'no warm-up without live touch');
+});

@@ -6,6 +6,12 @@
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-11-13
+
+### 升级注意事项
+
+- 从 0.2.2 升级：0.2.2 的命令行还没有不带子命令的 `update`。签名安装脚本装的受管服务运行 `iphone-control update apply`；Homebrew 运行 `brew upgrade iphone-control`；Debian / Ubuntu 从发布页下载对应架构的 `.deb`，用 `sudo apt install ./<文件名>` 安装。升级到 0.2.3 之后，直接运行 `iphone-control update` 即可。
+
 ### 新增
 
 - 运行 `iphone-control update` 可检查并通过受管服务、Homebrew 或 Debian 软件包升级到新稳定版。已是最新时会直接提示。只想检查可继续用 `update check`。
@@ -221,7 +227,8 @@
 - `setup`、`doctor`、`status`、`mcp-config`、`wda-bridge`、`notify-test` 命令。
 - Docker 镜像（非 privileged，linux/amd64、linux/arm64）；也可不用 Docker，从源码或预编译二进制以普通用户运行，附 systemd 用户服务。
 
-[Unreleased]: https://github.com/Derrors/iphone-control/compare/v0.2.2...HEAD
+[Unreleased]: https://github.com/Derrors/iphone-control/compare/v0.2.3...HEAD
+[0.2.3]: https://github.com/Derrors/iphone-control/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/Derrors/iphone-control/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/Derrors/iphone-control/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/Derrors/iphone-control/compare/v0.1.5...v0.2.0

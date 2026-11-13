@@ -1,5 +1,6 @@
 //! WDA HTTP 客户端。会话失效（WDA 重启后）自动重建一次。
 
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{Duration, Instant};
 
 use base64::Engine;
@@ -12,6 +13,8 @@ use crate::{Result, WdaError, elements};
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 /// [`WdaClient::xctest_responsive`] 的时限。正常几十到几百毫秒；守护进程每轮巡检问一次，等太久会拖住巡检
 pub const XCTEST_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
+/// 经 XCTest 的请求连续这么多次送到了却没有应答（超时，或应答到一半断了），就当 WDA 卡死（见 [`WdaClient::stalled`]）
+pub const STALL_LIMIT: u32 = 3;
 /// How long a measured screen size is trusted at the start of a gesture. `/wda/screen` takes about 100 ms (measured on
 /// iOS 27) and only Display Zoom changes the size, so a touch-down doesn't pay for it every time
 const SCREEN_RECHECK: Duration = Duration::from_secs(60);
@@ -135,6 +138,8 @@ pub struct WdaClient<T> {
     idle_current: Option<IdleSettings>,
     /// See [`Self::fast_stream`]
     fast_stream: bool,
+    /// 经 XCTest 的请求（除 `/status` 外都是）连续几次没有应答，有应答就清零。工具调用和守护进程的探测都算
+    unanswered: AtomicU32,
 }
 
 impl<T: Transport> WdaClient<T> {
@@ -149,10 +154,45 @@ impl<T: Transport> WdaClient<T> {
             idle_baseline: None,
             idle_current: None,
             fast_stream: false,
+            unanswered: AtomicU32::new(0),
         }
     }
 
     async fn call(&self, method: &str, path: &str, body: Option<Value>, timeout: Duration) -> Result<Value> {
+        // `/status` 不经 XCTest：WDA 半死时它照样应答，不能拿它算 WDA 还活着
+        if path == "/status" {
+            return self.send(method, path, body, timeout).await;
+        }
+        // 已判定卡死：不再发、不再一次次等超时（一个工具调用里接连几个请求，每个都等满时限的话，
+        // 设备会被占好几分钟，守护进程没机会重启 WDA）
+        if self.stalled() {
+            return Err(WdaError::Unavailable(ictl_l10n::trf!(
+                "WDA 卡死：经 XCTest 的请求连续 {STALL_LIMIT} 次没有应答，等守护进程重启它",
+                "WDA is stuck: {STALL_LIMIT} requests in a row through XCTest went unanswered; waiting for the daemon to restart it"
+            )));
+        }
+        let r = self.send(method, path, body, timeout).await;
+        match &r {
+            Err(e) if e.no_answer() => {
+                self.unanswered.fetch_add(1, Ordering::Relaxed);
+            }
+            _ => self.unanswered.store(0, Ordering::Relaxed),
+        }
+        r
+    }
+
+    /// 经 XCTest 的请求连续 [`STALL_LIMIT`] 次没有应答：WDA 卡死了（`/status` 可能照样正常）。之后经 XCTest 的请求不再发，
+    /// 直接报不可用，由守护进程重启 WDA（换一个新的客户端）
+    pub fn stalled(&self) -> bool {
+        self.unanswered() >= STALL_LIMIT
+    }
+
+    /// 经 XCTest 的请求眼下连续几次没有应答
+    pub fn unanswered(&self) -> u32 {
+        self.unanswered.load(Ordering::Relaxed)
+    }
+
+    async fn send(&self, method: &str, path: &str, body: Option<Value>, timeout: Duration) -> Result<Value> {
         let body = body.map(|b| b.to_string().into_bytes());
         let (status, raw) = self.transport.send(method, path, body, timeout).await.map_err(|e| match e.kind() {
             std::io::ErrorKind::TimedOut => WdaError::Timeout(e.to_string()),
@@ -980,6 +1020,66 @@ mod tests {
         // 应答了但不是 JSON：WDA 收到了请求
         let m = Mock::with(&[(200, "<html>")]);
         assert!(matches!(WdaClient::new(&m).active_app().await, Err(WdaError::Interrupted(_))));
+    }
+
+    /// 经 XCTest 的请求（工具调用和探测一样算）连续 3 次没有应答就判定卡死：之后不再发，直接报不可用；
+    /// `/status` 不经 XCTest，既不算数也不受影响；中间有一次应答（哪怕是错误）就从头数
+    #[tokio::test]
+    async fn three_unanswered_requests_mean_stalled() {
+        type Reply = std::io::Result<(u16, Vec<u8>)>;
+        struct Scripted {
+            replies: Mutex<VecDeque<Reply>>,
+            sent: Mutex<Vec<String>>,
+        }
+        impl Transport for &Scripted {
+            async fn send(
+                &self,
+                _: &str,
+                path: &str,
+                _: Option<Vec<u8>>,
+                _: Duration,
+            ) -> std::io::Result<(u16, Vec<u8>)> {
+                self.sent.lock().unwrap().push(path.to_owned());
+                self.replies.lock().unwrap().pop_front().expect("unexpected request")
+            }
+        }
+        let timeout = || Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "t"));
+        let ok = |b: &str| Ok((200, b.as_bytes().to_vec()));
+        let t = Scripted {
+            replies: Mutex::new(VecDeque::from([
+                timeout(),
+                timeout(),
+                ok(r#"{"value":{"error":"unknown error","message":"busy"}}"#),
+                timeout(),
+                ok(r#"{"value":{"ready":true}}"#),
+                timeout(),
+                timeout(),
+                ok(r#"{"value":{"ready":true}}"#),
+            ])),
+            sent: Mutex::default(),
+        };
+        let c = WdaClient::new(&t);
+        assert!(c.wda_reports_locked().await.unwrap_err().no_answer());
+        assert!(c.active_app().await.unwrap_err().no_answer());
+        assert_eq!(c.unanswered(), 2);
+        // 回了错误：还活着，从头数
+        assert!(matches!(c.active_app().await, Err(WdaError::Remote { .. })));
+        assert_eq!(c.unanswered(), 0);
+        assert!(c.xctest_responsive().await.unwrap_err().no_answer());
+        // /status 应答了也不清零
+        assert!(c.ready().await.unwrap());
+        assert_eq!(c.unanswered(), 1);
+        assert!(c.wda_reports_locked().await.is_err());
+        assert!(!c.stalled());
+        assert!(c.active_app().await.is_err());
+        assert!(c.stalled());
+        // 卡死后经 XCTest 的请求不再发出，直接报不可用（调用方可以退到 HID）；/status 照常
+        let sent = t.sent.lock().unwrap().len();
+        assert!(matches!(c.screenshot_png().await, Err(WdaError::Unavailable(_))));
+        assert!(matches!(c.xctest_responsive().await, Err(WdaError::Unavailable(_))));
+        assert_eq!(t.sent.lock().unwrap().len(), sent);
+        assert!(c.ready().await.unwrap());
+        assert!(c.stalled());
     }
 
     /// 经 XCTest 的探测：只有「送到了却没有应答」算卡死的迹象；WDA 回了错误说明它还在办事，连不上归 `/status` 管

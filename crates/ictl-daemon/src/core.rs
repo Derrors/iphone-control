@@ -307,8 +307,6 @@ pub(crate) struct Inner {
     pub starting: Option<JoinHandle<StartOutcome>>,
     pub resigning: bool,
     pub wda_misses: Misses,
-    /// 连续几轮 `/status` 正常、经 XCTest 的探测却没有应答（见 `WdaClient::xctest_responsive`）
-    pub wda_stalls: Misses,
     pub backoff: Backoff,
     /// 连续列不出设备的次数（usbmuxd 抖一下不立刻当成离线）
     pub list_errors: u32,
@@ -424,7 +422,6 @@ impl Daemon {
             starting: None,
             resigning: false,
             wda_misses: Misses::default(),
-            wda_stalls: Misses::default(),
             backoff: Backoff::default(),
             list_errors: 0,
             offline_since: Some(now),
@@ -576,7 +573,6 @@ impl Daemon {
         g.swiped_tree = None;
         drop_tunnel(g).await;
         g.wda_misses.reset();
-        g.wda_stalls.reset();
     }
 
     pub(crate) async fn ensure_tunnel<'a>(
@@ -725,6 +721,11 @@ impl Daemon {
         // 改变界面的操作做完后缓存的元素树就作废；只有调用方声明「不改变布局」的按名字点击（max_age_ms > 0）保留
         let keeps_cache = matches!(req, Request::TapElement { max_age_ms, .. } if max_age_ms > 0);
         let invalidates = req.is_device_action() && !keeps_cache;
+        // WDA 卡死（经 XCTest 的请求接连没有应答）：先重启它，这个请求按 WDA 正在启动处理。工具调用接连不断时巡检抢不到设备，
+        // 等不到它来重启
+        if g.wda.as_ref().is_some_and(|w| w.stalled()) {
+            self.restart_stalled_wda(g).await;
+        }
         let response = self.dispatch(g, req, view).await;
         if invalidates {
             g.elements_cache = None;

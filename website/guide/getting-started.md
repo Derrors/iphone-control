@@ -111,8 +111,11 @@ agent 会调用 `iphone_launch_app`、`iphone_tap_element`、`iphone_screenshot`
 也可以在浏览器里看画面、直接操作手机，或把任务交给本机的 Claude Code、Codex 执行：
 
 ```bash
-iphone-control viewer      # 打开 http://127.0.0.1:8200
+iphone-control viewer          # 控制台，开在 http://127.0.0.1:8200
+iphone-control viewer token    # 另开一个终端：点开它打印的链接就登录了
 ```
+
+控制台要先登录，本机也一样；登录一次记住 30 天。局域网访问、只读令牌、从别的机器用，见[控制台与远程使用](./remote)。
 
 ## 检查状态
 

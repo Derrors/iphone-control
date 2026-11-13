@@ -111,8 +111,11 @@ The agent will use `iphone_launch_app`, `iphone_tap_element`, `iphone_screenshot
 You can also watch and control the phone in a browser, or hand tasks to a local Claude Code or Codex there:
 
 ```bash
-iphone-control viewer      # then open http://127.0.0.1:8200
+iphone-control viewer          # the control page, on http://127.0.0.1:8200
+iphone-control viewer token    # in another terminal: open the link it prints to log in
 ```
+
+The page needs a login, on this machine too; a browser stays logged in for 30 days. The local network, read-only tokens and use from other machines: [Viewer and Remote Use](./remote).
 
 ## Checking on it
 

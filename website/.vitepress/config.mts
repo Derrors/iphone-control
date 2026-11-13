@@ -35,6 +35,7 @@ export default defineConfig({
           {
             text: '使用',
             items: [
+              { text: '控制台与远程使用', link: '/guide/remote' },
               { text: '配置', link: '/guide/configuration' },
               { text: '命令行', link: '/guide/cli' },
               { text: '多台设备', link: '/guide/multi-device' },
@@ -99,6 +100,7 @@ export default defineConfig({
           {
             text: 'Usage',
             items: [
+              { text: 'Viewer and Remote Use', link: '/en/guide/remote' },
               { text: 'Configuration', link: '/en/guide/configuration' },
               { text: 'CLI', link: '/en/guide/cli' },
               { text: 'Several Devices', link: '/en/guide/multi-device' },

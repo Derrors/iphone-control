@@ -146,8 +146,7 @@ pub async fn run(
         false => None,
     };
     let agents = Agents::new(socket)?;
-    let token =
-        auth::load_or_create(data_dir).map_err(|e| anyhow::anyhow!("{}: {e}", auth::token_file(data_dir).display()))?;
+    let auth = auth::Auth::load(data_dir, port)?;
     println!(
         "{}",
         ictl_l10n::trf!(
@@ -284,7 +283,7 @@ pub async fn run(
         acks: Arc::default(),
         tls,
         mcp: mcp.then(|| ictl_mcp::http_service(socket.to_path_buf())),
-        auth: Some(auth::Auth::new(token, port)),
+        auth: Some(auth),
     });
     let slots = Arc::new(tokio::sync::Semaphore::new(crate::MAX_CONNECTIONS));
     loop {
@@ -358,8 +357,15 @@ async fn handle(mut client: Conn, ctx: &Ctx, head: Vec<u8>, req: Head, mut body:
         };
         return redirect(&mut client, &to).await;
     }
-    if !login_gate(&mut client, ctx, &head, &req, &mut body).await? {
+    let Some(pass) = login_gate(&mut client, ctx, &head, &req, &mut body).await? else {
         return Ok(());
+    };
+    if !pass.may(&req) {
+        let m = ictl_l10n::tr!(
+            "这是只读令牌：只能看画面、设备状态和任务，不能操作",
+            "This token is read-only: it can watch the picture, the device's state and tasks, but not act"
+        );
+        return json_reply(&mut client, 403, &json!({"ok": false, "message": m})).await;
     }
     let path = req.path.as_str();
     match (req.method.as_str(), path) {
@@ -390,6 +396,10 @@ async fn handle(mut client: Conn, ctx: &Ctx, head: Vec<u8>, req: Head, mut body:
                         info(ctx).await.unwrap_or_else(|m| json!({"width": null, "height": null, "warning": m}));
                     if let Some(id) = req.query("feed") {
                         v["feed_open"] = json!(ctx.feeds.lock().unwrap_or_else(|p| p.into_inner()).contains(&id));
+                    }
+                    // who the page is logged in as: a read-only token hides what it can't do
+                    if let Some(w) = &pass.who {
+                        v["login"] = json!({"name": w.name, "role": w.role.name()});
                     }
                     Ok(v)
                 }
@@ -427,7 +437,7 @@ async fn handle(mut client: Conn, ctx: &Ctx, head: Vec<u8>, req: Head, mut body:
             mcp::serve(svc, &mut client, &head, body).await
         }
         ("POST", p) if p.starts_with("/api/") => {
-            if !action_allowed(&req, &ctx.access, ctx.port) {
+            if !action_allowed(&req, &ctx.access, ctx.port, pass.bearer()) {
                 return reply(&mut client, 403, "text/plain", b"forbidden").await;
             }
             let len = req.content_length.unwrap_or(0);
@@ -439,7 +449,11 @@ async fn handle(mut client: Conn, ctx: &Ctx, head: Vec<u8>, req: Head, mut body:
                 return json_reply(&mut client, 400, &json!({"ok": false, "message": "bad request"})).await;
             };
             // controlling a task: who, for its log, and which local process (the daemon refuses the task's agent)
-            let caller = if p.starts_with("/api/agent/tasks/") { Caller::of(&client).await } else { Caller::default() };
+            let caller = if p.starts_with("/api/agent/tasks/") {
+                Caller::of(&client, pass.who.as_ref()).await
+            } else {
+                Caller::default()
+            };
             let (code, v) = post(ctx, &p[5..], &b, req.device.as_deref(), caller).await;
             json_reply(&mut client, code, &v).await
         }
@@ -529,13 +543,17 @@ struct Caller {
 }
 
 impl Caller {
-    async fn of(client: &Conn) -> Self {
+    /// `who`: the token it logged in with, by name in the task's log
+    async fn of(client: &Conn, who: Option<&auth::Who>) -> Self {
         let (Ok(peer), Ok(local)) = (client.tcp().peer_addr(), client.tcp().local_addr()) else {
             return Self::default();
         };
         // reads every process's open files: not on the runtime's threads
         let pid = tokio::task::spawn_blocking(move || peer::local_client(peer, local)).await.ok().flatten();
-        let by = if peer.ip().to_canonical().is_loopback() { "viewer".into() } else { format!("viewer {}", peer.ip()) };
+        let mut by = who.map_or_else(|| "viewer".to_owned(), |w| format!("viewer:{}", w.name));
+        if !peer.ip().to_canonical().is_loopback() {
+            by = format!("{by} {}", peer.ip());
+        }
         Self { by, pid }
     }
 }
@@ -721,11 +739,41 @@ async fn reply_with(client: &mut Conn, status: u16, kind: &str, body: &[u8], ext
     Ok(())
 }
 
-/// The login ([`auth`]) before anything else: `true` when the request may go on, otherwise it was answered (the
-/// login page, a login, or 401 / 429)
-async fn login_gate(client: &mut Conn, ctx: &Ctx, head: &[u8], req: &Head, body: &mut Vec<u8>) -> anyhow::Result<bool> {
+/// Who a request is, once [`login_gate`] let it in
+#[derive(Default)]
+struct Pass {
+    /// Logged in with this token; `None` when the viewer has no login (tests)
+    who: Option<auth::Who>,
+}
+
+impl Pass {
+    /// With `Authorization: Bearer`: a program, which needs no `Origin`
+    fn bearer(&self) -> bool {
+        self.who.as_ref().is_some_and(|w| w.bearer)
+    }
+
+    /// A read-only token may look (any `GET` but `/mcp`, and report how much of a video it read), nothing else
+    fn may(&self, req: &Head) -> bool {
+        match &self.who {
+            Some(w) if w.role == auth::Role::View => {
+                (req.method == "GET" && req.path != "/mcp") || (req.method == "POST" && req.path == "/api/video/ack")
+            }
+            _ => true,
+        }
+    }
+}
+
+/// The login ([`auth`]) before anything else: who the request is when it may go on, otherwise `None` and it was
+/// answered (the login page, a login, or 401 / 429)
+async fn login_gate(
+    client: &mut Conn,
+    ctx: &Ctx,
+    head: &[u8],
+    req: &Head,
+    body: &mut Vec<u8>,
+) -> anyhow::Result<Option<Pass>> {
     use auth::Verdict;
-    let Some(a) = &ctx.auth else { return Ok(true) };
+    let Some(a) = &ctx.auth else { return Ok(Some(Pass::default())) };
     let secure = client.is_tls();
     // the link `iphone-control viewer token` shows
     if req.method == "GET"
@@ -733,34 +781,34 @@ async fn login_gate(client: &mut Conn, ctx: &Ctx, head: &[u8], req: &Head, body:
         && let Some(t) = req.query("token")
     {
         match a.try_token(&t) {
-            Verdict::Ok => logged_in(client, a, secure).await?,
+            Verdict::Ok(w) => logged_in(client, a, &w.name, secure).await?,
             v => login_page(client, v).await?,
         }
-        return Ok(false);
+        return Ok(None);
     }
     // the login page's form
     if req.method == "POST" && req.path == "/login" {
         if req.origin.as_deref().is_some_and(|o| !ctx.access.origin_allowed(o, ctx.port)) {
             reply(client, 403, "text/plain", b"forbidden").await?;
-            return Ok(false);
+            return Ok(None);
         }
         let len = req.content_length.unwrap_or(0);
         if len > 4096 {
             reply(client, 413, "text/plain", b"too large").await?;
-            return Ok(false);
+            return Ok(None);
         }
         read_body(client, body, len).await?;
         match auth::form_token(body).filter(|t| !t.trim().is_empty()).map(|t| a.try_token(&t)) {
-            Some(Verdict::Ok) => logged_in(client, a, secure).await?,
+            Some(Verdict::Ok(w)) => logged_in(client, a, &w.name, secure).await?,
             Some(v) => login_page(client, v).await?,
             None => login_page(client, Verdict::Missing).await?,
         }
-        return Ok(false);
+        return Ok(None);
     }
-    let v = a.check(head);
-    if v == Verdict::Ok {
-        return Ok(true);
-    }
+    let v = match a.check(head) {
+        Verdict::Ok(w) => return Ok(Some(Pass { who: Some(w) })),
+        v => v,
+    };
     let status = if v == Verdict::Limited { 429 } else { 401 };
     match (req.method.as_str(), req.path.as_str()) {
         ("GET", "/") => login_page(client, v).await?,
@@ -771,12 +819,12 @@ async fn login_gate(client: &mut Conn, ctx: &Ctx, head: &[u8], req: &Head, body:
         }
         _ => reply(client, status, "text/plain", b"log in first").await?,
     }
-    Ok(false)
+    Ok(None)
 }
 
 /// Logged in: a session cookie, and the page without the token in its address (and history)
-async fn logged_in(client: &mut Conn, a: &auth::Auth, secure: bool) -> anyhow::Result<()> {
-    let extra = format!("Location: /\r\nSet-Cookie: {}\r\n", a.set_cookie(secure));
+async fn logged_in(client: &mut Conn, a: &auth::Auth, name: &str, secure: bool) -> anyhow::Result<()> {
+    let extra = format!("Location: /\r\nSet-Cookie: {}\r\n", a.set_cookie(name, secure));
     reply_with(client, 303, "text/plain", b"", &extra).await
 }
 
@@ -896,9 +944,14 @@ fn percent_decode(s: &str) -> String {
 /// An action must come from this page: `Origin` is the viewer's own address (one of this machine's names with
 /// `--lan`), and the body is JSON, which a cross-origin page can't send without a preflight that this server never
 /// answers
-fn action_allowed(req: &Head, access: &lan::Access, port: u16) -> bool {
+/// `bearer`: logged in with `Authorization: Bearer` (a program). A browser always sends `Origin` with a POST, and a
+/// web page can't make it send that header, so without `Origin` only a program's request is taken
+fn action_allowed(req: &Head, access: &lan::Access, port: u16, bearer: bool) -> bool {
     let json = req.content_type.as_deref().is_some_and(|c| c.split(';').next() == Some("application/json"));
-    json && req.origin.as_deref().is_some_and(|o| access.origin_allowed(o, port))
+    json && match req.origin.as_deref() {
+        Some(o) => access.origin_allowed(o, port),
+        None => bearer,
+    }
 }
 
 /// A read from another site (an `<img>` or `<script>` on some page) is refused: browsers say so in
@@ -1270,7 +1323,16 @@ mod tests {
         let temp = tempfile::tempdir_in("/tmp").unwrap();
         let mut ctx = test_ctx(temp.path(), &temp.path().join("none.sock"));
         let token = "t".repeat(64);
-        ctx.auth = Some(auth::Auth::new(token.clone(), 8202));
+        let entry = |name: &str, role, c: char| auth::Entry {
+            name: name.into(),
+            role,
+            token: c.to_string().repeat(64),
+            created: 0,
+        };
+        ctx.auth = Some(auth::Auth::fixed(
+            vec![entry("owner", auth::Role::Operate, 't'), entry("tv", auth::Role::View, 'v')],
+            8202,
+        ));
         let get = |path: &str, extra: &str| format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1:8202\r\n{extra}\r\n");
         let status = |r: &str| r.split(' ').nth(1).unwrap_or_default().to_owned();
 
@@ -1309,6 +1371,30 @@ mod tests {
         // MCP clients are told to send a bearer token
         let r = exchange(&ctx, "POST /mcp HTTP/1.1\r\nHost: 127.0.0.1:8202\r\nContent-Length: 0\r\n\r\n".into()).await;
         assert!(status(&r) == "401" && r.contains("WWW-Authenticate: Bearer"), "{r}");
+
+        // a read-only token looks but doesn't act
+        let tv = format!("Authorization: Bearer {}\r\n", "v".repeat(64));
+        let r = exchange(&ctx, get("/api/agent/backends", &tv)).await;
+        assert_eq!(status(&r), "200", "{r}");
+        let post = |path: &str, auth: &str| {
+            format!(
+                "POST {path} HTTP/1.1\r\nHost: 127.0.0.1:8202\r\nContent-Type: application/json\r\n{auth}Content-Length: 2\r\n\r\n{{}}"
+            )
+        };
+        for p in ["/api/button", "/api/agent/tasks", "/api/agent/tasks/abc/pause", "/api/select"] {
+            let r = exchange(&ctx, post(p, &tv)).await;
+            assert!(status(&r) == "403" && (r.contains("只读") || r.contains("read-only")), "{p}: {r}");
+        }
+        let r = exchange(&ctx, post("/mcp", &tv)).await;
+        assert_eq!(status(&r), "403", "no MCP: its tools act: {r}");
+        let r = exchange(&ctx, post("/api/video/ack", &tv)).await;
+        assert_ne!(status(&r), "403", "it may say how much of the picture it read: {r}");
+        // a program with the operating token needs no Origin (no daemon here: past the checks it can't reach it)
+        let r = exchange(&ctx, post("/api/button", &format!("Authorization: Bearer {token}\r\n"))).await;
+        assert_ne!(status(&r), "403", "{r}");
+        // the same request from a browser's session cookie without Origin is refused
+        let r = exchange(&ctx, post("/api/button", &format!("Cookie: {cookie}\r\n"))).await;
+        assert_eq!(status(&r), "403", "{r}");
     }
 
     #[test]
@@ -1458,18 +1544,46 @@ mod tests {
     fn actions_need_own_origin_and_json() {
         let local = lan::Access::local();
         let ok = "POST /api/tap HTTP/1.1\r\nHost: 127.0.0.1:8200\r\nOrigin: http://127.0.0.1:8200\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n";
-        assert!(action_allowed(&head(ok), &local, 8200));
-        assert!(action_allowed(&head(&ok.replace("http://127.0.0.1:8200", "http://localhost:8200")), &local, 8200));
+        assert!(action_allowed(&head(ok), &local, 8200, false));
+        assert!(action_allowed(
+            &head(&ok.replace("http://127.0.0.1:8200", "http://localhost:8200")),
+            &local,
+            8200,
+            false
+        ));
         // another page, another port, no origin, a form post
-        assert!(!action_allowed(&head(&ok.replace("http://127.0.0.1:8200", "http://evil.example")), &local, 8200));
-        assert!(!action_allowed(&head(&ok.replace("http://127.0.0.1:8200", "http://127.0.0.1:3000")), &local, 8200));
-        assert!(!action_allowed(&head(&ok.replace("Origin: http://127.0.0.1:8200\r\n", "")), &local, 8200));
-        assert!(!action_allowed(&head(&ok.replace("application/json", "text/plain")), &local, 8200));
-        assert!(!action_allowed(&head(&ok.replace("Origin: http://127.0.0.1:8200", "Origin: null")), &local, 8200));
+        assert!(!action_allowed(
+            &head(&ok.replace("http://127.0.0.1:8200", "http://evil.example")),
+            &local,
+            8200,
+            false
+        ));
+        assert!(!action_allowed(
+            &head(&ok.replace("http://127.0.0.1:8200", "http://127.0.0.1:3000")),
+            &local,
+            8200,
+            false
+        ));
+        assert!(!action_allowed(&head(&ok.replace("Origin: http://127.0.0.1:8200\r\n", "")), &local, 8200, false));
+        // a program logged in with Authorization: Bearer sends no Origin; a cookie (a browser) needs it
+        assert!(action_allowed(&head(&ok.replace("Origin: http://127.0.0.1:8200\r\n", "")), &local, 8200, true));
+        assert!(!action_allowed(
+            &head(&ok.replace("http://127.0.0.1:8200", "http://evil.example")),
+            &local,
+            8200,
+            true
+        ));
+        assert!(!action_allowed(&head(&ok.replace("application/json", "text/plain")), &local, 8200, false));
+        assert!(!action_allowed(
+            &head(&ok.replace("Origin: http://127.0.0.1:8200", "Origin: null")),
+            &local,
+            8200,
+            false
+        ));
         // only open to the network with --lan
         let on_lan = ok.replace("http://127.0.0.1:8200", "http://192.168.10.100:8200");
-        assert!(!action_allowed(&head(&on_lan), &local, 8200));
-        assert!(action_allowed(&head(&on_lan), &lan::Access::with_hosts(["192.168.10.100".into()]), 8200));
+        assert!(!action_allowed(&head(&on_lan), &local, 8200, false));
+        assert!(action_allowed(&head(&on_lan), &lan::Access::with_hosts(["192.168.10.100".into()]), 8200, false));
     }
 
     #[test]

@@ -187,11 +187,33 @@ enum ServiceAction {
 
 #[derive(Subcommand)]
 enum ViewerAction {
-    #[command(about = ictl_l10n::tr!("显示控制台的登录令牌、点开就能登录的链接和 HTTP MCP 的接入方式；--new 换一个新令牌（所有已登录的浏览器都要重新登录）", "Show the viewer's login token, links that log in and how to connect to its HTTP MCP; --new replaces the token (every browser has to log in again)"))]
+    #[command(about = ictl_l10n::tr!("控制台的登录令牌。不带子命令：显示 owner 令牌、点开就能登录的链接和 HTTP MCP 的接入方式（--new 换一个新的）；add / list / show / remove 管理有名字的令牌，可以是只读的", "The viewer's login tokens. Alone: show the owner token, links that log in and how to connect to its HTTP MCP (--new replaces it); add / list / show / remove manage named tokens, which may be read-only"))]
     Token {
+        #[command(subcommand)]
+        action: Option<TokenAction>,
+        #[arg(long, help = ictl_l10n::tr!("换一个新的 owner 令牌（用它登录的浏览器都要重新登录）", "Replace the owner token (browsers logged in with it log in again)"))]
+        new: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum TokenAction {
+    #[command(about = ictl_l10n::tr!("加一个有名字的令牌（比如每人一个、每台设备一个），显示它和登录链接；--read-only 只能看画面、设备状态和任务，不能操作", "Add a named token (one per person or device, say) and show it with links that log in; --read-only can watch the picture, the device's state and tasks but not act"))]
+    Add {
+        name: String,
+        #[arg(long)]
+        read_only: bool,
+    },
+    #[command(about = ictl_l10n::tr!("列出令牌的名字和权限（不显示令牌本身）", "List the tokens' names and roles (not the tokens)"))]
+    List,
+    #[command(about = ictl_l10n::tr!("显示一个令牌和它的登录链接；--new 换一个新的", "Show a token and links that log in with it; --new replaces it"))]
+    Show {
+        name: String,
         #[arg(long)]
         new: bool,
     },
+    #[command(about = ictl_l10n::tr!("删掉一个令牌，用它登录的浏览器和程序马上进不来；最后一个能操作的令牌不能删", "Remove a token: browsers and programs logged in with it are out at once; the last token that may operate stays"))]
+    Remove { name: String },
 }
 
 #[derive(Subcommand)]
@@ -327,7 +349,10 @@ async fn run() -> anyhow::Result<()> {
         Command::Viewer { port, lan, lan_hosts, tls, tls_cert, tls_key, mcp, action } => {
             let tls = viewer::tls::Setting { mode: tls, cert: tls_cert, key: tls_key };
             match action {
-                Some(ViewerAction::Token { new }) => viewer_token(&cli.data_dir, port, lan, &lan_hosts, &tls, mcp, new),
+                Some(ViewerAction::Token { action, new }) => {
+                    let at = ViewerAt { port, lan, lan_hosts: &lan_hosts, tls: &tls, mcp };
+                    viewer_token(&cli.data_dir, &at, action, new)
+                }
                 None => viewer::run(&cli.socket, &cli.data_dir, port, lan, &lan_hosts, &tls, mcp).await,
             }
         }
@@ -505,19 +530,62 @@ async fn service_cmd(socket: &Path, data_dir: &Path, action: ServiceAction) -> a
     Ok(())
 }
 
-/// `viewer token`: the login token, links that log in (with the viewer's own settings) and the HTTP MCP setup
-fn viewer_token(
-    data_dir: &Path,
+/// Where the viewer listens, for links that log in
+struct ViewerAt<'a> {
     port: u16,
     lan: bool,
-    lan_hosts: &[String],
-    tls: &viewer::tls::Setting,
+    lan_hosts: &'a [String],
+    tls: &'a viewer::tls::Setting,
     mcp: bool,
-    new: bool,
-) -> anyhow::Result<()> {
-    let token = if new { viewer::auth::replace(data_dir)? } else { viewer::auth::load_or_create(data_dir)? };
-    let file = viewer::auth::token_file(data_dir);
-    println!("{}", ictl_l10n::trf!("令牌    {token}（存在 {}）", "Token   {token} (kept in {})", file.display()));
+}
+
+/// `viewer token …`: the viewer's login tokens. The viewer reads the file again when it changes
+fn viewer_token(data_dir: &Path, at: &ViewerAt, action: Option<TokenAction>, new: bool) -> anyhow::Result<()> {
+    use viewer::auth;
+    let entry = match action {
+        None if new => auth::renew(data_dir, auth::OWNER)?,
+        None => auth::get(data_dir, auth::OWNER)?,
+        Some(TokenAction::Show { name, new: true }) => auth::renew(data_dir, &name)?,
+        Some(TokenAction::Show { name, new: false }) => auth::get(data_dir, &name)?,
+        Some(TokenAction::Add { name, read_only }) => {
+            auth::add(data_dir, &name, if read_only { auth::Role::View } else { auth::Role::Operate })?
+        }
+        Some(TokenAction::List) => {
+            for e in auth::load(data_dir)? {
+                let role = match e.role {
+                    auth::Role::Operate => ictl_l10n::tr!("可操作", "operate"),
+                    auth::Role::View => ictl_l10n::tr!("只读", "read-only"),
+                };
+                let created = chrono::DateTime::from_timestamp(e.created as i64, 0)
+                    .map(|t| t.format("%Y-%m-%d").to_string())
+                    .unwrap_or_default();
+                println!("{:<24} {role:<10} {created}", e.name);
+            }
+            println!("{}", ictl_l10n::trf!("（存在 {}）", "(kept in {})", auth::tokens_file(data_dir).display()));
+            return Ok(());
+        }
+        Some(TokenAction::Remove { name }) => {
+            auth::remove(data_dir, &name)?;
+            println!(
+                "{}",
+                ictl_l10n::trf!(
+                    "已删掉 {name}：用它登录的浏览器和程序马上进不来了。",
+                    "Removed {name}: browsers and programs logged in with it are out now."
+                )
+            );
+            return Ok(());
+        }
+    };
+    let (token, port) = (&entry.token, at.port);
+    let role = match entry.role {
+        auth::Role::Operate => ictl_l10n::tr!("可操作", "may operate"),
+        auth::Role::View => ictl_l10n::tr!(
+            "只读：只能看画面、设备状态和任务",
+            "read-only: watches the picture, the device's state and tasks"
+        ),
+    };
+    println!("{}", ictl_l10n::trf!("令牌    {}（{role}）", "Token   {} ({role})", entry.name));
+    println!("        {token}");
     println!(
         "{}",
         ictl_l10n::trf!(
@@ -525,9 +593,9 @@ fn viewer_token(
             "Here    http://127.0.0.1:{port}/?token={token}"
         )
     );
-    let scheme = if tls.enabled(lan) { "https" } else { "http" };
-    if lan {
-        for a in viewer::lan_addresses(lan_hosts) {
+    let scheme = if at.tls.enabled(at.lan) { "https" } else { "http" };
+    if at.lan {
+        for a in viewer::lan_addresses(at.lan_hosts) {
             println!(
                 "{}",
                 ictl_l10n::trf!(
@@ -537,13 +605,9 @@ fn viewer_token(
             );
         }
     }
-    if mcp {
+    if at.mcp && entry.role == auth::Role::Operate {
         println!(
-            "{}",
-            ictl_l10n::trf!(
-                "MCP     claude mcp add --transport http iphone http://127.0.0.1:{port}/mcp --header \"Authorization: Bearer {token}\"",
-                "MCP     claude mcp add --transport http iphone http://127.0.0.1:{port}/mcp --header \"Authorization: Bearer {token}\""
-            )
+            "MCP     claude mcp add --transport http iphone http://127.0.0.1:{port}/mcp --header \"Authorization: Bearer {token}\""
         );
     }
     println!(
@@ -557,12 +621,10 @@ fn viewer_token(
         println!(
             "{}",
             ictl_l10n::tr!(
-                "已换成新令牌，之前登录的浏览器和 MCP 客户端都要用新令牌。控制台服务在运行就会重启；手动运行的 viewer 要自己重启。",
-                "The token was replaced: browsers and MCP clients logged in before need the new one. A running viewer service is restarted; restart a viewer you started by hand yourself."
+                "已换成新令牌，马上生效：用旧令牌登录的浏览器和 MCP 客户端都要用新的。",
+                "The token was replaced, effective now: browsers and MCP clients that used the old one need the new one."
             )
         );
-        // a running viewer reads the token when it starts
-        service::restart_viewer_if_running();
     }
     Ok(())
 }

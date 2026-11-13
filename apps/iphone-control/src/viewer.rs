@@ -420,6 +420,39 @@ async fn handle(mut client: Conn, ctx: &Ctx, head: Vec<u8>, req: Head, mut body:
                 Err(m) => json_reply(&mut client, 502, &json!({"message": m})).await,
             }
         }
+        ("POST", "/api/agent/tasks/open" | "/api/agent/tasks/finish") => {
+            if !action_allowed(&req, &ctx.access, ctx.port, pass.program()) {
+                return reply(&mut client, 403, "text/plain", b"forbidden").await;
+            }
+            let len = req.content_length.unwrap_or(0);
+            if len > MAX_BODY {
+                return reply(&mut client, 413, "text/plain", b"too large").await;
+            }
+            read_body(&mut client, &mut body, len).await?;
+            let Ok(b) = serde_json::from_slice::<Value>(&body) else {
+                return json_reply(&mut client, 400, &json!({"ok": false, "message": "bad request"})).await;
+            };
+            if req.path == "/api/agent/tasks/open" {
+                let who = pass.who.as_ref().map_or("remote", |w| w.name.as_str());
+                return open_task(&mut client, ctx, &b, who).await;
+            }
+            let Some(token) = &req.task_token else {
+                let m = ictl_l10n::tr!("结束任务要带任务口令", "Ending a task needs its token");
+                return json_reply(&mut client, 400, &json!({"ok": false, "message": m})).await;
+            };
+            let req = Request::TaskFinish {
+                ok: b["ok"].as_bool().unwrap_or(true),
+                summary: b["summary"].as_str().unwrap_or_default().to_owned(),
+            };
+            let r = protocol::as_task(Some(token.clone()), None, protocol::call(&ctx.socket, &req, Some(SHORT))).await;
+            let (code, v) = match r {
+                Ok(Response::Text { .. }) => (200, json!({"ok": true})),
+                Ok(Response::Error { message, .. }) => (409, json!({"ok": false, "message": message})),
+                Ok(Response::Image { caption, .. }) => (409, json!({"ok": false, "message": caption})),
+                Err(e) => (502, json!({"ok": false, "message": e.to_string()})),
+            };
+            json_reply(&mut client, code, &v).await
+        }
         ("GET" | "POST" | "DELETE", "/mcp") if ctx.mcp.is_some() => {
             // a browser says where it comes from: only the page itself. Other clients send no Origin
             if req.origin.as_deref().is_some_and(|o| !ctx.access.origin_allowed(o, ctx.port)) {
@@ -437,7 +470,7 @@ async fn handle(mut client: Conn, ctx: &Ctx, head: Vec<u8>, req: Head, mut body:
             mcp::serve(svc, &mut client, &head, body).await
         }
         ("POST", p) if p.starts_with("/api/") => {
-            if !action_allowed(&req, &ctx.access, ctx.port, pass.bearer()) {
+            if !action_allowed(&req, &ctx.access, ctx.port, pass.program()) {
                 return reply(&mut client, 403, "text/plain", b"forbidden").await;
             }
             let len = req.content_length.unwrap_or(0);
@@ -685,6 +718,61 @@ async fn events(client: &mut Conn, mut stream: protocol::TaskStream) -> anyhow::
     }
 }
 
+/// `POST /api/agent/tasks/open` (docs/task-control.md 7.6): a task opened from another machine, as `task_open` on
+/// the socket. The answer is server-sent events: `opened` with `{id, token}` first, then the task's events until it
+/// ends. The connection is the task's lease: when the client goes away before the task ended, it is abandoned.
+/// `by`: the login token's name, the task's owner unless the request names one
+async fn open_task(client: &mut Conn, ctx: &Ctx, b: &Value, by: &str) -> anyhow::Result<()> {
+    let title = b["title"].as_str().unwrap_or_default();
+    let owner = b["owner"].as_str().map(str::trim).filter(|o| !o.is_empty()).unwrap_or(by);
+    let apps: Vec<String> = match &b["apps"] {
+        Value::Null => Vec::new(),
+        Value::Array(a) if a.iter().all(Value::is_string) => {
+            a.iter().filter_map(Value::as_str).map(str::to_owned).collect()
+        }
+        _ => return json_reply(client, 400, &json!({"ok": false, "message": "apps must be a list of strings"})).await,
+    };
+    let (opened, mut lease) = match protocol::open_task(&ctx.socket, title, owner, &apps).await {
+        Ok(o) => o,
+        Err(m) => return json_reply(client, 409, &json!({"ok": false, "message": m})).await,
+    };
+    let (mut rd, mut wr) = tokio::io::split(client);
+    let head = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-store\r\n\
+         X-Content-Type-Options: nosniff\r\nConnection: close\r\n\r\nevent: opened\ndata: {}\n\n",
+        json!({"id": opened.id, "token": opened.token})
+    );
+    wr.write_all(head.as_bytes()).await?;
+    wr.flush().await?;
+    let gone = async {
+        let mut buf = [0u8; 64];
+        while matches!(rd.read(&mut buf).await, Ok(n) if n > 0) {}
+    };
+    tokio::pin!(gone);
+    loop {
+        tokio::select! {
+            e = lease.next() => match e {
+                Some(e) => {
+                    wr.write_all(sse(&e).as_bytes()).await?;
+                    wr.flush().await?;
+                    if e.event == "done" {
+                        return Ok(());
+                    }
+                }
+                // the daemon went away (restarting): the task was interrupted, which the client learns from the end
+                None => return Ok(()),
+            },
+            // the opener went away: dropping the lease abandons the task
+            () = &mut gone => return Ok(()),
+            // a comment now and then keeps proxies from closing a quiet connection
+            _ = tokio::time::sleep(Duration::from_secs(15)) => {
+                wr.write_all(b": ping\n\n").await?;
+                wr.flush().await?;
+            }
+        }
+    }
+}
+
 fn sse(e: &protocol::TaskEvent) -> String {
     format!("event: {}\ndata: {}\n\n", e.event, e.data)
 }
@@ -742,22 +830,31 @@ async fn reply_with(client: &mut Conn, status: u16, kind: &str, body: &[u8], ext
 /// Who a request is, once [`login_gate`] let it in
 #[derive(Default)]
 struct Pass {
-    /// Logged in with this token; `None` when the viewer has no login (tests)
+    /// Logged in with this token; `None` when the viewer has no login (tests), or came in by a task's token
     who: Option<auth::Who>,
+    /// Came in by the token of an active task, without a login: an agent, which may only work for its task
+    /// ([`TASK_PATHS`])
+    agent: bool,
 }
 
+/// What an agent may use with its task's token alone: the tools, and ending the task with a summary
+const TASK_PATHS: [&str; 2] = ["/mcp", "/api/agent/tasks/finish"];
+
 impl Pass {
-    /// With `Authorization: Bearer`: a program, which needs no `Origin`
-    fn bearer(&self) -> bool {
-        self.who.as_ref().is_some_and(|w| w.bearer)
+    /// A program (`Authorization: Bearer`, or a task's token), which needs no `Origin`: a web page can't make a
+    /// browser send either
+    fn program(&self) -> bool {
+        self.agent || self.who.as_ref().is_some_and(|w| w.bearer)
     }
 
-    /// A read-only token may look (any `GET` but `/mcp`, and report how much of a video it read), nothing else
+    /// A read-only token may look (any `GET` but `/mcp`, and report how much of a video it read); an agent only works
+    /// for its task
     fn may(&self, req: &Head) -> bool {
         match &self.who {
             Some(w) if w.role == auth::Role::View => {
                 (req.method == "GET" && req.path != "/mcp") || (req.method == "POST" && req.path == "/api/video/ack")
             }
+            None if self.agent => TASK_PATHS.contains(&req.path.as_str()),
             _ => true,
         }
     }
@@ -805,10 +902,25 @@ async fn login_gate(
         }
         return Ok(None);
     }
-    let v = match a.check(head) {
-        Verdict::Ok(w) => return Ok(Some(Pass { who: Some(w) })),
+    let mut v = match a.check(head) {
+        Verdict::Ok(w) => return Ok(Some(Pass { who: Some(w), agent: false })),
         v => v,
     };
+    // an agent on another machine: its task's token instead of a login, only for that task (docs/task-control.md 7.6)
+    if v != Verdict::Limited
+        && TASK_PATHS.contains(&req.path.as_str())
+        && let Some(t) = &req.task_token
+    {
+        if a.limited() {
+            v = Verdict::Limited;
+        } else if protocol::task_check(&ctx.socket, t).await.is_ok() {
+            return Ok(Some(Pass { who: None, agent: true }));
+        } else {
+            // a wrong task token counts like a wrong login
+            a.failed();
+            v = Verdict::Wrong;
+        }
+    }
     let status = if v == Verdict::Limited { 429 } else { 401 };
     match (req.method.as_str(), req.path.as_str()) {
         ("GET", "/") => login_page(client, v).await?,
@@ -871,6 +983,8 @@ struct Head {
     fetch_site: Option<String>,
     /// `X-Ictl-Lang`: the page's language
     lang: Option<ictl_l10n::Lang>,
+    /// [`protocol::TASK_TOKEN_HEADER`]: an agent working for a task
+    task_token: Option<String>,
 }
 
 impl Head {
@@ -892,6 +1006,7 @@ impl Head {
             fetch_site: None,
             lang: None,
             device: None,
+            task_token: None,
         };
         for l in lines {
             let Some((k, v)) = l.split_once(':') else { continue };
@@ -903,6 +1018,7 @@ impl Head {
                 "sec-fetch-site" => h.fetch_site = Some(v.to_ascii_lowercase()),
                 "x-ictl-lang" => h.lang = ictl_l10n::parse(v),
                 "x-ictl-device" if !v.is_empty() => h.device = Some(v.to_owned()),
+                k if k == protocol::TASK_TOKEN_HEADER && !v.is_empty() => h.task_token = Some(v.to_owned()),
                 _ => {}
             }
         }
@@ -1395,6 +1511,65 @@ mod tests {
         // the same request from a browser's session cookie without Origin is refused
         let r = exchange(&ctx, post("/api/button", &format!("Cookie: {cookie}\r\n"))).await;
         assert_eq!(status(&r), "403", "{r}");
+    }
+
+    /// An agent on another machine has its task's token and nothing else: the tools and ending its task, no more
+    #[tokio::test]
+    async fn an_agent_works_for_its_task_by_its_token_alone() {
+        use tokio::io::{AsyncBufReadExt, BufReader};
+        let temp = tempfile::tempdir_in("/tmp").unwrap();
+        let socket = temp.path().join("daemon.sock");
+        let daemon = tokio::net::UnixListener::bind(&socket).unwrap();
+        // a daemon that knows one active task, with the token `good`
+        let seen = Arc::new(Mutex::new(Vec::<Value>::new()));
+        let log = seen.clone();
+        tokio::spawn(async move {
+            while let Ok((mut peer, _)) = daemon.accept().await {
+                let mut line = String::new();
+                BufReader::new(&mut peer).read_line(&mut line).await.unwrap();
+                let req: Value = serde_json::from_str(&line).unwrap();
+                let reply = if req["task"] == "good" { Response::text("t1") } else { Response::error("no such task") };
+                log.lock().unwrap().push(req);
+                let _ = peer.write_all(format!("{}\n", serde_json::to_string(&reply).unwrap()).as_bytes()).await;
+            }
+        });
+        let mut ctx = test_ctx(temp.path(), &socket);
+        let entry = auth::Entry { name: "owner".into(), role: auth::Role::Operate, token: "o".repeat(64), created: 0 };
+        ctx.auth = Some(auth::Auth::fixed(vec![entry], 8202));
+        ctx.mcp = Some(ictl_mcp::http_service(socket.clone()));
+        let status = |r: &str| r.split(' ').nth(1).unwrap_or_default().to_owned();
+        let post = |path: &str, token: &str, body: &str| {
+            format!(
+                "POST {path} HTTP/1.1\r\nHost: 127.0.0.1:8202\r\nContent-Type: application/json\r\n\
+                 Accept: application/json, text/event-stream\r\nIphone-Control-Task-Token: {token}\r\n\
+                 Content-Length: {}\r\n\r\n{body}",
+                body.len()
+            )
+        };
+        let init = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"t","version":"1"}}}"#;
+        let r = exchange(&ctx, post("/mcp", "good", init)).await;
+        assert_eq!(status(&r), "200", "the tools: {r}");
+        let r = exchange(&ctx, post("/mcp", "ended", init)).await;
+        assert!(status(&r) == "401" && r.contains("WWW-Authenticate: Bearer"), "{r}");
+        let r = exchange(&ctx, post("/api/agent/tasks/finish", "good", r#"{"ok":true,"summary":"done"}"#)).await;
+        assert_eq!(status(&r), "200", "{r}");
+        let finish = seen.lock().unwrap().iter().find(|q| q["op"] == "task_finish").cloned().unwrap();
+        assert_eq!((finish["task"].as_str(), finish["summary"].as_str()), (Some("good"), Some("done")));
+        // nothing else: not the page's API, not controlling its task, not opening another
+        for p in ["/api/agent/tasks/t1/confirm", "/api/agent/tasks/t1/resume", "/api/agent/tasks/open", "/api/button"] {
+            let r = exchange(&ctx, post(p, "good", "{}")).await;
+            assert!(matches!(status(&r).as_str(), "401" | "403"), "{p}: {r}");
+        }
+        let r = exchange(
+            &ctx,
+            "GET /api/info HTTP/1.1\r\nHost: 127.0.0.1:8202\r\nIphone-Control-Task-Token: good\r\n\r\n".into(),
+        )
+        .await;
+        assert_eq!(status(&r), "401", "{r}");
+        assert!(
+            !seen.lock().unwrap().iter().any(|q| q["op"] == "task_control"),
+            "nothing reached the daemon's control"
+        );
     }
 
     #[test]

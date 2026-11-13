@@ -933,6 +933,7 @@ impl Daemon {
             | Request::TaskList
             | Request::TaskControl { .. }
             | Request::TaskAgent
+            | Request::TaskCheck
             | Request::TaskStep { .. }
             | Request::TaskStepDone { .. }
             | Request::TaskConfirm { .. }
@@ -980,6 +981,7 @@ fn lane(req: &Request) -> Lane {
         | Request::TaskList
         | Request::TaskControl { .. }
         | Request::TaskAgent
+        | Request::TaskCheck
         | Request::TaskStep { .. }
         | Request::TaskStepDone { .. }
         | Request::TaskConfirm { .. }

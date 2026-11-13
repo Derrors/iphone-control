@@ -100,6 +100,8 @@ struct TaskState {
     ended: Option<u64>,
     /// Bundle IDs the task may act in ([`Target`]); empty: anywhere. Grows when the user lets it go further
     scope: Vec<String>,
+    /// Steps whose action the user kept out of the task's scope: shown as rejected, not as failed
+    declined: Vec<u64>,
 }
 
 pub struct Task {
@@ -469,7 +471,14 @@ impl Task {
         {
             st.last = Some((last, at, false, th));
         }
-        let mut d = json!({"id": id, "status": if ok { "ok" } else { "error" }, "ms": ms, "result": first_lines(text)});
+        // the user said no to going outside the scope: that's a choice, not something that went wrong
+        let declined = st.declined.iter().position(|&s| s == id).map(|i| st.declined.swap_remove(i)).is_some();
+        let status = match (ok, declined) {
+            (true, _) => "ok",
+            (false, true) => "rejected",
+            (false, false) => "error",
+        };
+        let mut d = json!({"id": id, "status": status, "ms": ms, "result": first_lines(text)});
         // where iphone_tap_element tapped is only known now, from its result
         let by_text = st.taps_by_text.iter().position(|&s| s == id).map(|i| st.taps_by_text.swap_remove(i));
         let g = gesture_now
@@ -560,10 +569,12 @@ impl Task {
 
     /// Before an action of a scoped task: within its scope it goes on; outside it waits for the user. Approving lets
     /// the task into that app for the rest of it; rejecting refuses this action only, so the agent can go back
-    /// (unlike a rejected [`Self::confirm`], the task doesn't end as rejected). Returns whether it waited
+    /// (unlike a rejected [`Self::confirm`], the task doesn't end as rejected). `step`: the tool call the action
+    /// belongs to, shown as rejected when the user says no. Returns whether it waited
     pub async fn check_scope(
         &self,
         target: &Target,
+        step: Option<u64>,
         gone: &mut Option<oneshot::Receiver<()>>,
     ) -> Result<bool, Response> {
         let ask = {
@@ -581,10 +592,15 @@ impl Task {
                 }
                 Ok(true)
             }
-            Asked::Rejected => Err(refuse(&ictl_l10n::trf!(
-                "用户不同意超出任务范围（{action}），这一步没有执行。回到任务范围内的 App（{scope}）再继续，做不到就结束任务并说明原因",
-                "The user didn't allow going outside the task's scope ({action}); this step wasn't done. Go back to an app within the scope ({scope}) and carry on there, or if you can't, finish and say why"
-            ))),
+            Asked::Rejected => Err({
+                if let Some(s) = step {
+                    self.lock().declined.push(s);
+                }
+                refuse(&ictl_l10n::trf!(
+                    "用户不同意超出任务范围（{action}），这一步没有执行。回到任务范围内的 App（{scope}）再继续，做不到就结束任务并说明原因",
+                    "The user didn't allow going outside the task's scope ({action}); this step wasn't done. Go back to an app within the scope ({scope}) and carry on there, or if you can't, finish and say why"
+                ))
+            }),
             Asked::Ended => Err(refuse(ended_message())),
             Asked::Gone => Err(cancelled()),
         }
@@ -746,6 +762,7 @@ impl Tasks {
                 rejected: false,
                 ended: None,
                 scope: apps,
+                declined: Vec::new(),
             }),
             tx: broadcast::channel(4096).0,
             changed: Notify::new(),
@@ -980,6 +997,7 @@ fn restore(file: &Path) -> Option<Task> {
             confirm: None,
             rejected: false,
             ended: None,
+            declined: Vec::new(),
             scope: first["apps"]
                 .as_array()
                 .map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_owned)).collect())
@@ -1352,8 +1370,8 @@ mod tests {
         assert!(t.scoped());
         let wechat = Target::Foreground("com.tencent.xin".into());
         answer_soon(&t, true).await;
-        assert_eq!(t.check_scope(&wechat, &mut None).await.ok(), Some(true), "asked, then let through");
-        assert_eq!(t.check_scope(&wechat, &mut None).await.ok(), Some(false), "not asked again");
+        assert_eq!(t.check_scope(&wechat, None, &mut None).await.ok(), Some(true), "asked, then let through");
+        assert_eq!(t.check_scope(&wechat, None, &mut None).await.ok(), Some(false), "not asked again");
         assert_eq!(t.info().apps, scope(&["com.apple.Preferences", "com.tencent.xin"]));
         assert_eq!(t.info().state, "running");
     }
@@ -1363,8 +1381,19 @@ mod tests {
         let ts = tasks();
         let t = ts.open("改设置", "test", Some(PHONE), scope(&["com.apple.Preferences"])).unwrap();
         answer_soon(&t, false).await;
-        let r = t.check_scope(&Target::Launch("com.apple.MobileSMS".into()), &mut None).await;
+        // the tool call that tried it (step 7) shows as rejected, not failed; another failing call stays an error
+        let r = t.check_scope(&Target::Launch("com.apple.MobileSMS".into()), Some(7), &mut None).await;
         assert!(matches!(r, Err(Response::Error { message, .. }) if message.contains("com.apple.Preferences")));
+        t.step_done(7, false, 5, "refused", None);
+        t.step_done(8, false, 5, "WDA unavailable", None);
+        let (log, _, _) = t.subscribe();
+        let status = |id: u64| {
+            log.iter()
+                .rev()
+                .find(|e| e.event == "step" && e.data["id"] == id && e.data.get("ms").is_some())
+                .map(|e| e.data["status"].clone())
+        };
+        assert_eq!((status(7), status(8)), (Some(json!("rejected")), Some(json!("error"))));
         assert_eq!(t.info().state, "running");
         assert_eq!(t.info().apps, scope(&["com.apple.Preferences"]));
         t.finish(true, "改好了");
@@ -1377,10 +1406,9 @@ mod tests {
         let t = ts.open("改设置", "test", Some(PHONE), scope(&["com.apple.Preferences"])).unwrap();
         let (tx, rx) = oneshot::channel();
         let t2 = t.clone();
-        let asking =
-            tokio::spawn(
-                async move { t2.check_scope(&Target::Foreground("com.tencent.xin".into()), &mut Some(rx)).await },
-            );
+        let asking = tokio::spawn(async move {
+            t2.check_scope(&Target::Foreground("com.tencent.xin".into()), None, &mut Some(rx)).await
+        });
         while t.info().state != "waiting" {
             tokio::time::sleep(Duration::from_millis(5)).await;
         }

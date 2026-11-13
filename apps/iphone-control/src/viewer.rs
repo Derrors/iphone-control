@@ -9,7 +9,7 @@
 //! - `POST /api/{tap,swipe,long_press,type,button,launch_app,terminate_app,open_url,tap_element,wait_for,select}`
 //!   turn into ordinary daemon requests, so they queue with an agent's calls, get auto-unlock and follow the
 //!   controlled device, exactly like an MCP tool call.
-//! - `/api/agent/…`: available agents, starting a task, its events (server-sent events), and pause / resume /
+//! - `/api/agent/…`: available agents, starting a task (optionally limited to some apps), its events (server-sent events), and pause / resume /
 //!   take over / hand back / stop / confirm.
 //!
 //! Protections, same model as `wda-bridge`: it binds to the loopback address only, every request needs a
@@ -404,7 +404,15 @@ async fn post(ctx: &Ctx, name: &str, b: &Value, device: Option<&str>) -> (u16, V
     if name == "agent/tasks" {
         let prompt = b["prompt"].as_str().unwrap_or_default();
         let backend = b["agent"].as_str().unwrap_or("claude");
-        return match ctx.agents.start(prompt, backend).await {
+        // the apps the task is limited to (bundle IDs from the page's picker); absent or empty: no limit
+        let apps: Vec<String> = match &b["apps"] {
+            Value::Null => Vec::new(),
+            Value::Array(a) if a.iter().all(Value::is_string) => {
+                a.iter().filter_map(Value::as_str).map(str::to_owned).collect()
+            }
+            _ => return (400, json!({"ok": false, "message": "apps must be a list of strings"})),
+        };
+        return match ctx.agents.start(prompt, backend, &apps).await {
             Ok(id) => (200, json!({"ok": true, "id": id})),
             Err(m) => conflict(m),
         };

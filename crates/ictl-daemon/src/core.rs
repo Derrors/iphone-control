@@ -703,7 +703,7 @@ impl Daemon {
         if let crate::tasks::Admission::Actor(t) = &admission
             && t.scoped()
         {
-            match self.scope_gate(t, &req, &mut ctx.gone).await {
+            match self.scope_gate(t, &req, ctx.task_step, &mut ctx.gone).await {
                 Ok(a) => asked = a,
                 Err(r) => return r,
             }
@@ -732,6 +732,7 @@ impl Daemon {
         &self,
         task: &crate::tasks::Task,
         req: &Request,
+        step: Option<u64>,
         gone: &mut Option<tokio::sync::oneshot::Receiver<()>>,
     ) -> Result<bool, Response> {
         use crate::tasks::{Check, Target};
@@ -758,7 +759,7 @@ impl Daemon {
                 Target::Foreground(w.active_app().await.map_err(|e| unknown(e.to_string()))?)
             }
         };
-        task.check_scope(&target, gone).await
+        task.check_scope(&target, step, gone).await
     }
 
     /// A task's scope from names or bundle IDs: the bundle IDs, each once. `Err` names the app that isn't there

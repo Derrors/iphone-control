@@ -2,9 +2,9 @@
 //!
 //! 不带参数运行是首次运行引导（[`guide`]）：没设置好就一步步引导，设置好以后只显示状态。
 //! 运维命令（status、doctor、resign、unlock-reset）经控制接口问守护进程；
-//! setup、login、passcode 需要交互，直接在本进程里做。每个命令启动时先读 ~/.config/iphone-control/env（[`envfile`]）。
+//! setup、login、passcode 需要交互，直接在本进程里做。除静态补全外，命令启动时先读 ~/.config/iphone-control/env（[`envfile`]）。
 
-use std::io::{BufRead, Write};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -15,6 +15,7 @@ use ictl_daemon::machine::DeviceState;
 use ictl_daemon::protocol::{self, Request, Response};
 
 mod agent;
+mod completions;
 #[cfg(feature = "debug-cmds")]
 mod debug;
 mod envfile;
@@ -42,6 +43,12 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    #[command(about = ictl_l10n::tr!("生成 Bash、Zsh 或 Fish 补全脚本到标准输出（不读取设置或连接设备）", "Generate Bash, Zsh or Fish completions on stdout (without loading settings or connecting to devices)"))]
+    #[command(after_help = ictl_l10n::tr!("用法示例：iphone-control completions bash > iphone-control.bash\n通过 IPHONE_CONTROL_LANG=en 或 zh 选择补全说明的语言。升级后重新生成脚本。", "Example: iphone-control completions bash > iphone-control.bash\nSet IPHONE_CONTROL_LANG=en or zh to choose completion descriptions. Regenerate after upgrading."))]
+    Completions {
+        #[arg(value_enum, help = ictl_l10n::tr!("要生成补全脚本的 shell", "Shell to generate completions for"))]
+        shell: completions::Shell,
+    },
     #[command(about = ictl_l10n::tr!("检查主机软件版本，有新版时升级", "Check for a new host software release and install it if available"))]
     Update {
         #[arg(short, long, help = ictl_l10n::tr!("不询问，直接升级（脚本里或没有终端时用）", "Upgrade without asking (for scripts, or without a terminal)"))]
@@ -178,6 +185,13 @@ enum PasscodeAction {
 }
 
 fn main() -> anyhow::Result<()> {
+    // 静态补全必须在读含密钥的设置、创建线程和维护锁之前返回。
+    if completions::requested(std::env::args_os().skip(1)) {
+        let cli = Cli::parse();
+        if let Some(Command::Completions { shell }) = cli.command {
+            return completions::write(shell, &mut std::io::stdout().lock());
+        }
+    }
     // 设置文件先读进环境（命令行上已设的优先），要在启动任何线程之前：语言、代理、通知等对所有命令都生效
     envfile::load_into_process();
     tokio::runtime::Runtime::new()?.block_on(run())
@@ -235,11 +249,18 @@ async fn run() -> anyhow::Result<()> {
     // Lifetime clients hold this through pauses and confirmations, and direct-device CLI
     // commands participate even when they bypass the daemon.
     let _client = match &cli.command {
-        Some(Command::Daemon | Command::Update { .. } | Command::McpConfig | Command::Status) => None,
+        Some(
+            Command::Daemon
+            | Command::Update { .. }
+            | Command::McpConfig
+            | Command::Status
+            | Command::Completions { .. },
+        ) => None,
         _ => Some(ictl_daemon::maintenance::shared()?),
     };
     let Some(command) = cli.command.take() else { return guide::first_run(&cli).await };
     match command {
+        Command::Completions { shell } => completions::write(shell, &mut std::io::stdout().lock()),
         Command::Update { action: None, yes } => update::upgrade(&cli.socket, update::check(false).await?, yes).await,
         Command::Update { action: Some(action), .. } => update_command(action, &cli.socket).await,
         Command::Daemon => {
@@ -580,8 +601,31 @@ async fn status(socket: &Path) -> anyhow::Result<()> {
 fn read_line(prompt: &str) -> anyhow::Result<String> {
     print!("{prompt}");
     std::io::stdout().flush()?;
-    let mut s = String::new();
-    if std::io::stdin().lock().read_line(&mut s)? == 0 {
+    // Do not use Stdin's global BufReader here: it can read ahead into the
+    // next menu's pasted answer, which the raw terminal reader cannot see.
+    use std::io::Read;
+    use std::os::fd::AsFd;
+    let mut input = std::fs::File::from(std::io::stdin().as_fd().try_clone_to_owned()?);
+    let mut bytes = Vec::new();
+    let mut byte = [0];
+    let mut overflow = false;
+    loop {
+        match input.read(&mut byte) {
+            Ok(0) => break,
+            Ok(_) if byte[0] == b'\n' => break,
+            Ok(_) => {
+                if bytes.len() < 4096 {
+                    bytes.push(byte[0]);
+                } else {
+                    overflow = true;
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(error.into()),
+        }
+    }
+    anyhow::ensure!(!overflow, "{}", ictl_l10n::tr!("输入超过 4096 字节", "Input exceeds 4096 bytes"));
+    if byte[0] != b'\n' {
         bail!(
             "{}",
             ictl_l10n::tr!(
@@ -590,7 +634,7 @@ fn read_line(prompt: &str) -> anyhow::Result<String> {
             )
         );
     }
-    Ok(s.trim().to_owned())
+    Ok(String::from_utf8(bytes)?.trim().to_owned())
 }
 
 /// 不回显地读一行（用 stty 关回显，不引入额外依赖）

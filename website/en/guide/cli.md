@@ -21,6 +21,27 @@ These go before the command, for example `iphone-control --socket /path/ctl.sock
 | `mcp` | MCP stdio server, started by the AI client |
 | `mcp-config` | Prints the command that registers the MCP server with Claude Code, with a program path that stays the same across upgrades (Homebrew's `opt` link) |
 
+## Shell completion
+
+`iphone-control completions <bash|zsh|fish>` writes a completion script to stdout, including the current build's subcommands, options and enum values. It does not read the settings file, acquire a device maintenance lock, or connect to the daemon or a phone. Descriptions default to Chinese; prefix the command with `IPHONE_CONTROL_LANG=en` for English.
+
+```bash
+# Bash: enable in the current session
+mkdir -p ~/.config/iphone-control
+iphone-control completions bash > ~/.config/iphone-control/completion.bash
+source ~/.config/iphone-control/completion.bash
+
+# Zsh: save in a custom completion directory
+mkdir -p ~/.zsh/completions
+iphone-control completions zsh > ~/.zsh/completions/_iphone-control
+
+# Fish: use its automatically loaded completion directory
+mkdir -p ~/.config/fish/completions
+iphone-control completions fish > ~/.config/fish/completions/iphone-control.fish
+```
+
+For Zsh, add `fpath=(~/.zsh/completions $fpath)` before `compinit` in `~/.zshrc`, and make sure `autoload -Uz compinit; compinit` runs. For Bash, put the `source` line above in `~/.bashrc` to load completions on startup. Regenerate the completion file for your shell after upgrading. If you use a custom Fish configuration directory, use its `completions` subdirectory.
+
 ## Host software updates
 
 Run `iphone-control update` to check the publisher's latest stable release. It reports when you are up to date. When an upgrade is available, it first says what it will do (from which version to which, and whether the background service restarts), asks whether to continue, then upgrades through the installation method of the running executable. In a script or without a terminal, add `--yes` to upgrade without asking.
@@ -68,6 +89,12 @@ These commands find the service set up by the one-command install, `iphone-contr
 | `sign` | Sign and install WDA now, same as `resign --force`. Registers the device with the Apple ID |
 | `resign [--force]` | Re-sign only when fewer than `RESIGN_MIN_DAYS` days remain; `--force` re-signs now. Without `--force` it doesn't register a device that has never had WDA |
 
+In setup menus, use ↑/↓ to move and Enter to confirm, or type a number and press Enter. Confirmation prompts also accept ←/→. Esc dismisses the guide. Ctrl+C interrupts it with exit status 130. Both preserve saved steps. A `>` marker identifies the selection without relying on color. After resizing the terminal, the next key redraws the menu at the new width.
+
+With `TERM=dumb`, redirected output or a terminal that is too small when the menu starts, menus use the original numbered/text prompts. Shrinking an active menu preserves its input and pauses confirmation until the window is enlarged; cancellation remains available. Setup still requires stdin to be a terminal; it cannot run unattended through a pipe. These shortcuts apply to menus only; passwords stay hidden.
+
+Cancellation preserves saved settings and discards unsaved changes. In the full guide, language and proxy settings are saved together, so cancelling at the proxy step also discards the language choice made just before it.
+
 ## Checking state
 
 | Command | What it does |
@@ -101,7 +128,7 @@ See [Auto-unlock](./auto-unlock). `--device` takes a UDID or name, and the devic
 |---|---|
 | `notify-test [event]` | Send test notifications: one per event type, or one type (`resign`, `session`, `pin`, `pin-recovered`, `unlock`, `offline`, `online`) |
 | `wda-bridge [--port <port>]` | Expose WDA on `127.0.0.1` (default port 8100) for other tools. WDA has no authentication and every local user can reach it, so stop it when done |
-| `viewer [--port <port>]` | Control page in the browser at `http://127.0.0.1:8200/` (default port), in English or Chinese (follows `IPHONE_CONTROL_LANG`, switchable on the page). **Screen:** the live picture works like a touchscreen: click to tap, drag to swipe, hold to long-press, scroll with the mouse wheel or trackpad, plus a text field and the hardware buttons. On iOS 27 and later the finger follows the pointer as it moves (over CoreDevice HID, which keeps the phone awake until 30 seconds after the last touch); older versions get the whole gesture on release. Everything goes through the daemon like an MCP call, so it queues with the agent and unlocks the phone first. On iOS 27 and later the picture is the phone's own video; otherwise it comes from WDA (none until WDA is ready), as H.264 or MJPEG; see [Picture](#viewer-picture) below. Touch is available when the frame matches the measured size and orientation. After rotating or switching devices, start a new gesture on the updated picture. Settings at the bottom of the sidebar controls the theme and text size. The picture has its own zoom controls, the − and + above it (pinching doesn't zoom, so a drag can't turn into one). **Device panel:** state and readiness checks, installed apps, on-screen elements. The page follows the device the daemon controls: switch on the page or anywhere else, and the picture and panels move over; see [Several Devices](./multi-device#control-page). **AI tasks:** type a task and a local agent carries it out (Claude Code or Codex, whichever is on `PATH`; picked on the page). You can pause, take over and hand back, or stop it, and it asks on the page before paying, deleting or sending messages. Every local user can reach the port, so stop it when done |
+| `viewer [--port <port>]` | Control page in the browser at `http://127.0.0.1:8200/` (default port), in English or Chinese (follows `IPHONE_CONTROL_LANG`, switchable on the page). **Screen:** the live picture works like a touchscreen: click to tap, drag to swipe, hold to long-press, scroll with the mouse wheel or trackpad, plus a text field and the hardware buttons. On iOS 27 and later the finger follows the pointer as it moves (over CoreDevice HID, which keeps the phone awake until 30 seconds after the last touch); older versions get the whole gesture on release. Everything goes through the daemon like an MCP call, so it queues with the agent and unlocks the phone first. On iOS 27 and later the picture is the phone's own video; otherwise it comes from WDA (none until WDA is ready), as H.264 or MJPEG; see [Picture](#viewer-picture) below. Touch is available when the frame matches the measured size and orientation. After rotating or switching devices, start a new gesture on the updated picture. Settings at the bottom of the sidebar controls the theme and text size. The picture has its own zoom controls, the − and + above it (pinching doesn't zoom, so a drag can't turn into one). **Device panel:** state and readiness checks, installed apps, on-screen elements. The page follows the device the daemon controls: switch on the page or anywhere else, and the picture and panels move over; see [Several Devices](./multi-device#control-page). **AI tasks:** type a task and a local agent carries it out (Claude Code or Codex, whichever is on `PATH`; picked on the page). Before it starts you can limit it to some apps with the App button next to the agent; in any other app each step waits for you. You can pause, take over and hand back, or stop it, and it asks on the page before paying, deleting or sending messages. Every local user can reach the port, so stop it when done |
 | `task run [--title <title>] [--app <app>…] -- <command>` | AI tasks for other agent platforms: opens a task on the controlled device and runs the command in it. An `iphone-control mcp` the command starts takes part (through `IPHONE_CONTROL_TASK_TOKEN`): the control page shows every step and can pause, take over and stop it, and it waits for you before paying or sending a message. The task ends when the command does; when the task is stopped elsewhere, so is the command; Ctrl-C stops the task. While a task runs, other clients can look but not act on the phone. `--app` (repeatable, name or bundle ID) limits the task to those apps: in any other app, or to open a link that isn't a web page, each step waits for you first |
 | `task list` / `task events <id>` | Recent tasks (`--json` for programs); follow a task's events, one JSON per line |
 | `task pause\|resume\|takeover\|handback\|stop <id>`, `task approve\|reject <id>` | Control a task from the command line, like the buttons on the control page |
@@ -112,7 +139,7 @@ The `debug` subcommand for diagnostics isn't compiled by default; see the [contr
 
 - **Need the daemon running:** the phone part of `setup`, `status`, `doctor`, `sign`, `resign`, `devices`, `select`, `unlock-reset`, `wda-bridge`, `viewer`, `task`, and MCP tool calls.
 - **Need an interactive terminal:** `iphone-control` with no command (the first time), `setup`, `login`, `passcode set`.
-- **Settings:** every command reads `~/.config/iphone-control/env` when it starts; a variable already in the environment wins. See [Configuration](./configuration#settings-file).
+- **Settings:** every command except `completions` reads `~/.config/iphone-control/env` when it starts; a variable already in the environment wins. See [Configuration](./configuration#settings-file).
 
 ## The control page's picture {#viewer-picture}
 

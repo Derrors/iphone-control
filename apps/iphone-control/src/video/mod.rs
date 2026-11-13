@@ -38,7 +38,6 @@ use std::time::{Duration, Instant};
 
 use serde_json::json;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
-use tokio::net::TcpStream;
 use tokio::sync::{mpsc, watch};
 
 pub use ffmpeg::Encoders;
@@ -205,7 +204,7 @@ pub async fn serve(
     enc: Arc<Encoders>,
     acks: Arc<Acks>,
     src: impl AsyncRead + Unpin + Send + 'static,
-    client: TcpStream,
+    client: impl AsyncRead + AsyncWrite + Unpin + Send + 'static,
 ) {
     let (ack_guard, mut acked) = acks.register();
     let mut flow = Flow::default();
@@ -441,7 +440,8 @@ async fn write_with_progress(writer: &mut (impl AsyncWrite + Unpin), mut data: &
             _ => return false,
         }
     }
-    true
+    // over TLS the last record may still be buffered: each message (a frame) goes out now
+    matches!(tokio::time::timeout(idle, writer.flush()).await, Ok(Ok(())))
 }
 
 async fn send_video(
@@ -624,7 +624,7 @@ mod tests {
 
         // the page, over a real TCP connection, reporting what it read every 100 ms like viewer.html
         let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let mut page = TcpStream::connect(l.local_addr().unwrap()).await.unwrap();
+        let mut page = tokio::net::TcpStream::connect(l.local_addr().unwrap()).await.unwrap();
         let (server_side, _) = l.accept().await.unwrap();
         let acks = Arc::new(Acks::default());
         let _server = AbortOnDrop(tokio::spawn(serve(enc, acks.clone(), src, server_side)));

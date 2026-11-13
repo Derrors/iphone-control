@@ -28,6 +28,7 @@
 
 mod lan;
 mod peer;
+pub mod tls;
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -38,8 +39,8 @@ use anyhow::bail;
 use ictl_daemon::machine::DeviceState;
 use ictl_daemon::protocol::{self, Request, Response, TouchPhase};
 use serde_json::{Value, json};
+use tls::Conn;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpStream;
 
 use crate::agent::{self, Agents};
 
@@ -74,6 +75,8 @@ struct Ctx {
     video: Option<Arc<crate::video::Encoders>>,
     /// How much of each H.264 stream its page has read
     acks: Arc<crate::video::Acks>,
+    /// HTTPS on the same port (`--lan`); plain HTTP from the network is then sent there
+    tls: Option<Arc<tls::Tls>>,
 }
 
 /// A picture handler can be cancelled at any await, including while opening its source.
@@ -103,8 +106,16 @@ impl Ctx {
     }
 }
 
-/// `lan`: also open the page to the local network (`--lan`); `lan_hosts`: more names it answers to there
-pub async fn run(socket: &Path, data_dir: &Path, port: u16, lan: bool, lan_hosts: &[String]) -> anyhow::Result<()> {
+/// `lan`: also open the page to the local network (`--lan`); `lan_hosts`: more names it answers to there; `tls`:
+/// whether and with which certificate it speaks HTTPS
+pub async fn run(
+    socket: &Path,
+    data_dir: &Path,
+    port: u16,
+    lan: bool,
+    lan_hosts: &[String],
+    tls: &tls::Setting,
+) -> anyhow::Result<()> {
     // only a first guess: the page follows whichever device the daemon controls (see `info`). Not knowing yet is
     // fine: the daemon may still be starting (started together with this at login), and with several devices
     // connected it is the one that picks
@@ -124,6 +135,10 @@ pub async fn run(socket: &Path, data_dir: &Path, port: u16, lan: bool, lan_hosts
     let access = if lan { lan::Access::lan(lan_hosts) } else { lan::Access::local() };
     let listener = tokio::net::TcpListener::bind((access.bind_ip(), port)).await?;
     let port = listener.local_addr()?.port();
+    let tls = match tls.enabled(access.is_lan()) {
+        true => Some(Arc::new(tls.load(data_dir, &access.names())?)),
+        false => None,
+    };
     let agents = Agents::new(socket)?;
     println!(
         "{}",
@@ -174,17 +189,51 @@ pub async fn run(socket: &Path, data_dir: &Path, port: u16, lan: bool, lan_hosts
             ictl_l10n::trf!("AI 任务可用:{}", "AI tasks available with: {}", found.join(", "))
         }
     );
+    let scheme = if tls.is_some() { "https" } else { "http" };
+    if let Some(t) = &tls {
+        if t.made {
+            println!(
+                "{}",
+                ictl_l10n::trf!(
+                    "HTTPS:证书是本机生成的({}),SHA-256 指纹 {}。浏览器第一次打开会提示证书不受信任:核对指纹一致后继续访问。想免掉这一步,用 --tls-cert/--tls-key 换成自己的证书",
+                    "HTTPS: a certificate made on this machine ({}), SHA-256 fingerprint {}. The first time, the browser warns that it isn't trusted: check that the fingerprint matches, then go on. To skip that, use a certificate of your own (--tls-cert/--tls-key)",
+                    t.cert.display(),
+                    t.fingerprint
+                )
+            );
+        } else {
+            println!(
+                "{}",
+                ictl_l10n::trf!(
+                    "HTTPS:证书 {}(SHA-256 {})",
+                    "HTTPS: certificate {} (SHA-256 {})",
+                    t.cert.display(),
+                    t.fingerprint
+                )
+            );
+        }
+    }
     if access.is_lan() {
         for a in access.addresses() {
-            println!("{}", ictl_l10n::trf!("局域网:http://{a}:{port}/", "On the network: http://{a}:{port}/"));
+            println!("{}", ictl_l10n::trf!("局域网:{scheme}://{a}:{port}/", "On the network: {scheme}://{a}:{port}/"));
         }
-        println!(
-            "{}",
-            ictl_l10n::tr!(
-                "注意:已对局域网开放,还没有登录:局域网里任何能连上这台机器的人都能看到屏幕、操作手机、用本机的 Claude Code / Codex 执行任务。只在可信的网络里开,用完就停掉。从局域网地址打开时浏览器不提供 WebCodecs,画面是 MJPEG。",
-                "Note: open to the local network, with no login yet: anyone on the network who can reach this machine can watch and control the phone and run tasks with this machine's Claude Code / Codex. Only on a trusted network, and stop it when you are done. Opened at a network address, browsers don't offer WebCodecs, so the picture is MJPEG."
-            )
-        );
+        if tls.is_some() {
+            println!(
+                "{}",
+                ictl_l10n::tr!(
+                    "注意:已对局域网开放,传输经 HTTPS 加密,但还没有登录:局域网里任何能连上这台机器的人都能看到屏幕、操作手机、用本机的 Claude Code / Codex 执行任务。只在可信的网络里开,用完就停掉。",
+                    "Note: open to the local network, encrypted with HTTPS but with no login yet: anyone on the network who can reach this machine can watch and control the phone and run tasks with this machine's Claude Code / Codex. Only on a trusted network, and stop it when you are done."
+                )
+            );
+        } else {
+            println!(
+                "{}",
+                ictl_l10n::tr!(
+                    "注意:已对局域网开放,还没有登录:局域网里任何能连上这台机器的人都能看到屏幕、操作手机、用本机的 Claude Code / Codex 执行任务。只在可信的网络里开,用完就停掉。从局域网地址打开时浏览器不提供 WebCodecs,画面是 MJPEG。",
+                    "Note: open to the local network, with no login yet: anyone on the network who can reach this machine can watch and control the phone and run tasks with this machine's Claude Code / Codex. Only on a trusted network, and stop it when you are done. Opened at a network address, browsers don't offer WebCodecs, so the picture is MJPEG."
+                )
+            );
+        }
     } else {
         println!(
             "{}",
@@ -209,6 +258,7 @@ pub async fn run(socket: &Path, data_dir: &Path, port: u16, lan: bool, lan_hosts
         device_video_allowed,
         video,
         acks: Arc::default(),
+        tls,
     });
     let slots = Arc::new(tokio::sync::Semaphore::new(crate::MAX_CONNECTIONS));
     loop {
@@ -223,6 +273,18 @@ pub async fn run(socket: &Path, data_dir: &Path, port: u16, lan: bool, lan_hosts
         let Ok(slot) = slots.clone().try_acquire_owned() else { continue };
         let ctx = ctx.clone();
         tokio::spawn(async move {
+            let client = match &ctx.tls {
+                // the handshake in the connection's own task: a slow client doesn't hold up the others
+                Some(t) => match t.accept(client).await {
+                    Ok(c) => c,
+                    Err(e) => {
+                        tracing::debug!("viewer TLS: {e}");
+                        drop(slot);
+                        return;
+                    }
+                },
+                None => Conn::Plain(client),
+            };
             if let Err(e) = serve(client, &ctx).await {
                 tracing::debug!("viewer connection: {e}");
             }
@@ -242,7 +304,7 @@ fn page_in(lang: ictl_l10n::Lang) -> String {
 
 /// One request per connection (`Connection: close`), which keeps the parser small. It is handled in the page's
 /// language (`X-Ictl-Lang`), so the daemon's messages match the page
-async fn serve(mut client: TcpStream, ctx: &Ctx) -> anyhow::Result<()> {
+async fn serve(mut client: Conn, ctx: &Ctx) -> anyhow::Result<()> {
     let (head, body) = crate::read_head(&mut client).await?;
     let Some(req) = Head::parse(&head) else {
         return reply(&mut client, 400, "text/plain", b"bad request").await;
@@ -253,9 +315,17 @@ async fn serve(mut client: TcpStream, ctx: &Ctx) -> anyhow::Result<()> {
     }
 }
 
-async fn handle(mut client: TcpStream, ctx: &Ctx, head: Vec<u8>, req: Head, mut body: Vec<u8>) -> anyhow::Result<()> {
+async fn handle(mut client: Conn, ctx: &Ctx, head: Vec<u8>, req: Head, mut body: Vec<u8>) -> anyhow::Result<()> {
     if !ctx.access.host_allowed(&head) || (req.path != "/" && !fetch_site_ok(&req)) {
         return reply(&mut client, 403, "text/plain", b"forbidden").await;
+    }
+    // HTTPS is on: from the network only HTTPS (plain HTTP stays for this machine)
+    let local = client.tcp().peer_addr().is_ok_and(|a| a.ip().to_canonical().is_loopback());
+    if ctx.tls.is_some() && !client.is_tls() && !local {
+        let Some(to) = https_location(&head, &req, ctx.port) else {
+            return reply(&mut client, 400, "text/plain", b"bad request").await;
+        };
+        return redirect(&mut client, &to).await;
     }
     let path = req.path.as_str();
     match (req.method.as_str(), path) {
@@ -335,14 +405,15 @@ async fn handle(mut client: TcpStream, ctx: &Ctx, head: Vec<u8>, req: Head, mut 
     }
 }
 
-async fn video_head(client: &mut TcpStream) -> anyhow::Result<()> {
+async fn video_head(client: &mut Conn) -> anyhow::Result<()> {
     let head = b"HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nCache-Control: no-store\r\n\
                  X-Content-Type-Options: nosniff\r\nConnection: close\r\n\r\n";
     tokio::time::timeout(crate::video::STREAM_IDLE, client.write_all(head)).await??;
+    tokio::time::timeout(crate::video::STREAM_IDLE, client.flush()).await??;
     Ok(())
 }
 
-async fn picture(mut client: TcpStream, ctx: &Ctx, req: &Head) -> anyhow::Result<()> {
+async fn picture(mut client: Conn, ctx: &Ctx, req: &Head) -> anyhow::Result<()> {
     // the device the page shows (`?udid=`), so a page that hasn't noticed a switch keeps its own picture
     // instead of silently showing another phone. Looked up again each time: after a replug usbmuxd gives the
     // device a new id
@@ -416,8 +487,10 @@ struct Caller {
 }
 
 impl Caller {
-    async fn of(client: &TcpStream) -> Self {
-        let (Ok(peer), Ok(local)) = (client.peer_addr(), client.local_addr()) else { return Self::default() };
+    async fn of(client: &Conn) -> Self {
+        let (Ok(peer), Ok(local)) = (client.tcp().peer_addr(), client.tcp().local_addr()) else {
+            return Self::default();
+        };
         // reads every process's open files: not on the runtime's threads
         let pid = tokio::task::spawn_blocking(move || peer::local_client(peer, local)).await.ok().flatten();
         let by = if peer.ip().to_canonical().is_loopback() { "viewer".into() } else { format!("viewer {}", peer.ip()) };
@@ -522,18 +595,20 @@ async fn post(ctx: &Ctx, name: &str, b: &Value, device: Option<&str>, caller: Ca
 }
 
 /// The task's events so far, then new ones as they come (from the daemon), as server-sent events, until it is done
-async fn events(client: &mut TcpStream, mut stream: protocol::TaskStream) -> anyhow::Result<()> {
+async fn events(client: &mut Conn, mut stream: protocol::TaskStream) -> anyhow::Result<()> {
     client
         .write_all(
             b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-store\r\n\
               X-Content-Type-Options: nosniff\r\nConnection: close\r\n\r\n",
         )
         .await?;
+    client.flush().await?;
     loop {
         tokio::select! {
             e = stream.next() => match e {
                 Some(e) => {
                     client.write_all(sse(&e).as_bytes()).await?;
+                    client.flush().await?;
                     if e.event == "done" {
                         return Ok(());
                     }
@@ -542,7 +617,10 @@ async fn events(client: &mut TcpStream, mut stream: protocol::TaskStream) -> any
                 None => return Ok(()),
             },
             // a comment now and then finds a page that went away
-            _ = tokio::time::sleep(Duration::from_secs(15)) => client.write_all(b": ping\n\n").await?,
+            _ = tokio::time::sleep(Duration::from_secs(15)) => {
+                client.write_all(b": ping\n\n").await?;
+                client.flush().await?;
+            }
         }
     }
 }
@@ -551,11 +629,11 @@ fn sse(e: &protocol::TaskEvent) -> String {
     format!("event: {}\ndata: {}\n\n", e.event, e.data)
 }
 
-async fn json_reply(client: &mut TcpStream, status: u16, v: &Value) -> anyhow::Result<()> {
+async fn json_reply(client: &mut Conn, status: u16, v: &Value) -> anyhow::Result<()> {
     reply(client, status, "application/json", v.to_string().as_bytes()).await
 }
 
-async fn reply(client: &mut TcpStream, status: u16, kind: &str, body: &[u8]) -> anyhow::Result<()> {
+async fn reply(client: &mut Conn, status: u16, kind: &str, body: &[u8]) -> anyhow::Result<()> {
     let reason = match status {
         200 => "OK",
         202 => "Accepted",
@@ -573,6 +651,27 @@ async fn reply(client: &mut TcpStream, status: u16, kind: &str, body: &[u8]) -> 
     );
     client.write_all(head.as_bytes()).await?;
     client.write_all(body).await?;
+    // over TLS the last record may still be buffered
+    client.flush().await?;
+    Ok(())
+}
+
+/// Where a plain HTTP request from the network goes: the same page over HTTPS, at the name it asked for (one of
+/// this machine's: [`lan::Access::host_allowed`] already checked it)
+fn https_location(head: &[u8], req: &Head, port: u16) -> Option<String> {
+    let host = lan::host_header(head).filter(|h| !h.is_empty())?;
+    let query = if req.query.is_empty() { String::new() } else { format!("?{}", req.query) };
+    Some(format!("https://{host}:{port}{}{query}", req.path))
+}
+
+/// Temporary (307): with `--tls off` later, browsers mustn't remember it
+async fn redirect(client: &mut Conn, to: &str) -> anyhow::Result<()> {
+    let head = format!(
+        "HTTP/1.1 307 Temporary Redirect\r\nLocation: {to}\r\nContent-Length: 0\r\nCache-Control: no-store\r\n\
+         Connection: close\r\n\r\n"
+    );
+    client.write_all(head.as_bytes()).await?;
+    client.flush().await?;
     Ok(())
 }
 
@@ -1007,7 +1106,20 @@ mod tests {
             video: None,
             acks: Arc::default(),
             feeds: Mutex::default(),
+            tls: None,
         }
+    }
+
+    #[test]
+    fn plain_http_from_the_network_goes_to_the_same_page_over_https() {
+        let at = |raw: &[u8]| https_location(raw, &Head::parse(raw).unwrap(), 8202);
+        assert_eq!(at(b"GET / HTTP/1.1\r\nHost: 192.168.10.100:8202\r\n\r\n").unwrap(), "https://192.168.10.100:8202/");
+        assert_eq!(
+            at(b"GET /stream?feed=a&udid=b HTTP/1.1\r\nHost: NAS.local:8202\r\n\r\n").unwrap(),
+            "https://nas.local:8202/stream?feed=a&udid=b"
+        );
+        assert_eq!(at(b"GET / HTTP/1.1\r\nHost: [fd00::5]:8202\r\n\r\n").unwrap(), "https://[fd00::5]:8202/");
+        assert_eq!(at(b"GET / HTTP/1.1\r\n\r\n"), None);
     }
 
     #[tokio::test]
@@ -1017,11 +1129,12 @@ mod tests {
         let daemon = tokio::net::UnixListener::bind(&socket).unwrap();
         let ctx = test_ctx(temp.path(), &socket);
         let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
-        let (tab, accepted) = tokio::join!(TcpStream::connect(listener.local_addr().unwrap()), listener.accept());
+        let (tab, accepted) =
+            tokio::join!(tokio::net::TcpStream::connect(listener.local_addr().unwrap()), listener.accept());
         let _tab = tab.unwrap();
         let raw = b"GET /video?src=device&udid=TEST&feed=tab HTTP/1.1\r\nHost: localhost\r\n\r\n";
         let (client, _) = accepted.unwrap();
-        let mut request = Box::pin(handle(client, &ctx, raw.to_vec(), Head::parse(raw).unwrap(), vec![]));
+        let mut request = Box::pin(handle(Conn::Plain(client), &ctx, raw.to_vec(), Head::parse(raw).unwrap(), vec![]));
         // The simulated daemon has accepted the request but has not supplied a stream.
         tokio::select! {
             result = &mut request => panic!("picture ended before cancellation: {result:?}"),

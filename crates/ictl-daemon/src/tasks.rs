@@ -98,6 +98,8 @@ struct TaskState {
     /// The user turned down a step: the task ends as rejected
     rejected: bool,
     ended: Option<u64>,
+    /// Bundle IDs the task may act in ([`Target`]); empty: anywhere. Grows when the user lets it go further
+    scope: Vec<String>,
 }
 
 pub struct Task {
@@ -149,6 +151,162 @@ fn observes(req: &Request) -> bool {
     matches!(req, Request::Screenshot { .. } | Request::ListElements { .. } | Request::WaitFor { .. })
 }
 
+/// The home screen, the lock screen and notifications: always in a task's scope (getting back from elsewhere)
+const SPRINGBOARD: &str = "com.apple.springboard";
+/// Where http(s) links open
+const SAFARI: &str = "com.apple.mobilesafari";
+
+/// What a request of a scoped task needs looked up before it may run ([`scope_check`])
+#[derive(Debug, PartialEq)]
+pub enum Check {
+    /// Launches this app (a name or a bundle ID, to resolve)
+    Launch(String),
+    /// Opens this URL
+    Url(String),
+    /// Acts on whatever app is in front
+    Foreground,
+    /// Always asks, whatever the scope
+    Always { action: String, detail: String },
+}
+
+/// What a scoped task's action touches, once looked up
+#[derive(Debug, PartialEq)]
+pub enum Target {
+    Launch(String),
+    Url(String),
+    /// The foreground app's bundle ID; empty when WDA didn't say
+    Foreground(String),
+    Always {
+        action: String,
+        detail: String,
+    },
+}
+
+/// What a request does to the app scope. Pressing buttons and quitting apps aren't checked: they are how an agent
+/// gets back after the user said no. Every variant is listed (no `_`), so a new request type has to be decided here
+pub fn scope_check(req: &Request) -> Option<Check> {
+    match req {
+        Request::LaunchApp { app } => Some(Check::Launch(app.clone())),
+        Request::OpenUrl { url } => Some(Check::Url(url.clone())),
+        Request::Tap { .. }
+        | Request::TapElement { .. }
+        | Request::LongPress { .. }
+        | Request::Swipe { .. }
+        | Request::TypeText { .. }
+        | Request::WebEval { .. }
+        | Request::Touch { phase: TouchPhase::Down | TouchPhase::Move, .. } => Some(Check::Foreground),
+        Request::InstallApp { path } => {
+            Some(Check::Always { action: ictl_l10n::tr!("安装 App", "Install an app").into(), detail: path.clone() })
+        }
+        Request::UninstallApp { app } => Some(Check::Always {
+            action: ictl_l10n::tr!("卸载 App（连同它的数据）", "Uninstall an app (with its data)").into(),
+            detail: app.clone(),
+        }),
+        Request::Touch { phase: TouchPhase::Prepare | TouchPhase::Up, .. }
+        | Request::PressButton { .. }
+        | Request::TerminateApp { .. }
+        | Request::SelectDevice { .. }
+        | Request::Status
+        | Request::ScreenStream
+        | Request::Screenshot { .. }
+        | Request::ListElements { .. }
+        | Request::ListApps { .. }
+        | Request::Settle { .. }
+        | Request::AlertCheck
+        | Request::WaitFor { .. }
+        | Request::Daemon
+        | Request::Doctor
+        | Request::Resign { .. }
+        | Request::UnlockReset
+        | Request::ListDevices
+        | Request::AppLogs { .. }
+        | Request::CrashReports { .. }
+        | Request::WebTargets
+        | Request::TaskOpen { .. }
+        | Request::TaskEvents { .. }
+        | Request::TaskList
+        | Request::TaskControl { .. }
+        | Request::TaskStep { .. }
+        | Request::TaskStepDone { .. }
+        | Request::TaskConfirm { .. }
+        | Request::TaskNote { .. }
+        | Request::TaskFinish { .. } => None,
+    }
+}
+
+fn in_scope(scope: &[String], bundle: &str) -> bool {
+    bundle.eq_ignore_ascii_case(SPRINGBOARD) || scope.iter().any(|s| s.eq_ignore_ascii_case(bundle))
+}
+
+/// `None` when `target` is within `scope` (empty: no limit); otherwise what to ask the user (action, detail) and
+/// the app that approving lets the task into for the rest of it
+fn out_of_scope(scope: &[String], target: &Target) -> Option<(String, String, Option<String>)> {
+    if scope.is_empty() {
+        return None;
+    }
+    let within = || ictl_l10n::trf!("任务范围：{}", "Task scope: {}", scope.join(", "));
+    match target {
+        Target::Launch(b) if !in_scope(scope, b) => Some((
+            ictl_l10n::trf!("打开任务范围以外的 App：{b}", "Open an app outside the task's scope: {b}"),
+            within(),
+            Some(b.clone()),
+        )),
+        Target::Foreground(b) if b.is_empty() => Some((
+            ictl_l10n::tr!("在不知道是哪个 App 的界面上操作", "Act on a screen whose app is unknown").into(),
+            within(),
+            None,
+        )),
+        Target::Foreground(b) if !in_scope(scope, b) => Some((
+            ictl_l10n::trf!("在任务范围以外的 App 里操作：{b}", "Act in an app outside the task's scope: {b}"),
+            within(),
+            Some(b.clone()),
+        )),
+        Target::Url(u) => {
+            let web = u
+                .split_once(':')
+                .is_some_and(|(s, _)| s.eq_ignore_ascii_case("http") || s.eq_ignore_ascii_case("https"));
+            match (web, in_scope(scope, SAFARI)) {
+                (true, true) => None,
+                (true, false) => Some((
+                    ictl_l10n::trf!("在 Safari 里打开链接：{u}", "Open a link in Safari: {u}"),
+                    within(),
+                    Some(SAFARI.into()),
+                )),
+                // tel:, sms:, an app's own scheme…: which app it opens, and what it starts there, isn't known
+                (false, _) => Some((
+                    ictl_l10n::trf!("打开链接：{u}", "Open the link {u}"),
+                    ictl_l10n::trf!(
+                        "不知道它会打开哪个 App、在那里做什么。{}",
+                        "Which app it opens, and what it does there, isn't known. {}",
+                        within()
+                    ),
+                    None,
+                )),
+            }
+        }
+        Target::Always { action, detail } => Some((action.clone(), detail.clone(), None)),
+        Target::Launch(_) | Target::Foreground(_) => None,
+    }
+}
+
+/// How the user answered [`Task::ask_user`]
+#[derive(Debug, PartialEq)]
+enum Asked {
+    Approved,
+    Rejected,
+    /// The task ended meanwhile
+    Ended,
+    /// The caller went away before the answer
+    Gone,
+}
+
+fn cancelled() -> Response {
+    Response::error(ictl_l10n::tr!(
+        "调用方已取消,请求没有执行",
+        "The caller cancelled; the request was not carried out"
+    ))
+}
+
 /// Requests that change something on or about the phone, beyond [`Request::is_device_action`]
 fn acts(req: &Request) -> bool {
     req.is_device_action() || matches!(req, Request::Resign { .. } | Request::UnlockReset)
@@ -170,6 +328,7 @@ impl Task {
             started: self.started,
             ended: st.ended,
             steps: st.next_step - 1,
+            apps: st.scope.clone(),
         }
     }
 
@@ -247,10 +406,7 @@ impl Task {
             match gone {
                 Some(g) => tokio::select! {
                     () = &mut notified => {}
-                    _ = g => return Err(Response::error(ictl_l10n::tr!(
-                        "调用方已取消,请求没有执行",
-                        "The caller cancelled; the request was not carried out"
-                    ))),
+                    _ = g => return Err(cancelled()),
                 },
                 None => notified.await,
             }
@@ -324,15 +480,12 @@ impl Task {
         self.emit(&mut st, "step", d);
     }
 
-    async fn confirm(&self, action: &str, detail: &str) -> Response {
-        let action = action.trim();
-        if action.is_empty() {
-            return refuse(ictl_l10n::tr!("action 不能为空", "action can't be empty"));
-        }
-        let (rx, id) = {
+    /// Shows a confirmation on the page and holds until the user answers, the task ends or the caller goes away
+    async fn ask_user(&self, action: &str, detail: &str, gone: &mut Option<oneshot::Receiver<()>>) -> Asked {
+        let (mut rx, id) = {
             let mut st = self.lock();
             if !st.status.active() {
-                return refuse(ended_message());
+                return Asked::Ended;
             }
             let args = json!({"action": action, "detail": detail});
             let id = self.begin_step(&mut st, "iphone_confirm", &args, None, "waiting");
@@ -342,32 +495,98 @@ impl Task {
             self.set_status(&mut st, Status::Waiting);
             (rx, id)
         };
-        let approve = rx.await.unwrap_or(false);
+        let answer = match gone {
+            Some(g) => tokio::select! {
+                a = &mut rx => Some(a.unwrap_or(false)),
+                _ = g => None,
+            },
+            None => Some(rx.await.unwrap_or(false)),
+        };
         let mut st = self.lock();
         st.last = None;
         let ended = !st.status.active();
-        st.rejected |= !approve && !ended;
-        let (status, result) = match (approve, ended) {
-            (true, false) => ("ok", ictl_l10n::tr!("你同意了，继续执行。", "You approved; carrying on.")),
-            (_, true) => ("stopped", ictl_l10n::tr!("任务已停止。", "The task was stopped.")),
-            (false, false) => {
-                ("rejected", ictl_l10n::tr!("你拒绝了这一步，没有执行。", "You rejected this step; it wasn't done."))
+        let (asked, status, result) = match (answer, ended) {
+            (_, true) => (Asked::Ended, "stopped", ictl_l10n::tr!("任务已停止。", "The task was stopped.")),
+            (None, false) => {
+                // nobody waits for the answer any more: take the question off the page
+                if st.confirm.as_ref().is_some_and(|(waiting, _)| *waiting == id) {
+                    st.confirm = None;
+                }
+                (Asked::Gone, "stopped", ictl_l10n::tr!("调用方已取消，没有执行。", "The caller cancelled; not done."))
             }
+            (Some(true), false) => {
+                (Asked::Approved, "ok", ictl_l10n::tr!("你同意了，继续执行。", "You approved; carrying on."))
+            }
+            (Some(false), false) => (
+                Asked::Rejected,
+                "rejected",
+                ictl_l10n::tr!("你拒绝了这一步，没有执行。", "You rejected this step; it wasn't done."),
+            ),
         };
         self.emit(&mut st, "step", json!({"id": id, "status": status, "result": result}));
         if !ended {
             self.set_status(&mut st, Status::Running);
         }
-        match (approve, ended) {
-            (true, false) => Response::text(ictl_l10n::tr!(
+        asked
+    }
+
+    /// The agent asks before a sensitive action ([`crate::protocol::Request::TaskConfirm`])
+    async fn confirm(&self, action: &str, detail: &str, gone: &mut Option<oneshot::Receiver<()>>) -> Response {
+        let action = action.trim();
+        if action.is_empty() {
+            return refuse(ictl_l10n::tr!("action 不能为空", "action can't be empty"));
+        }
+        match self.ask_user(action, detail, gone).await {
+            Asked::Approved => Response::text(ictl_l10n::tr!(
                 "用户同意了，继续执行这一步。",
                 "The user approved; go ahead with this step."
             )),
-            (_, true) => refuse(ended_message()),
-            (false, false) => refuse(ictl_l10n::tr!(
-                "用户拒绝了这一步：不要执行，也不要换别的方式去做。停下来，说明没做这一步",
-                "The user rejected this step: don't do it, and don't do it another way. Stop and say it wasn't done"
-            )),
+            Asked::Ended => refuse(ended_message()),
+            Asked::Gone => cancelled(),
+            Asked::Rejected => {
+                self.lock().rejected = true;
+                refuse(ictl_l10n::tr!(
+                    "用户拒绝了这一步：不要执行，也不要换别的方式去做。停下来，说明没做这一步",
+                    "The user rejected this step: don't do it, and don't do it another way. Stop and say it wasn't done"
+                ))
+            }
+        }
+    }
+
+    /// Whether the task is limited to some apps
+    pub fn scoped(&self) -> bool {
+        !self.lock().scope.is_empty()
+    }
+
+    /// Before an action of a scoped task: within its scope it goes on; outside it waits for the user. Approving lets
+    /// the task into that app for the rest of it; rejecting refuses this action only, so the agent can go back
+    /// (unlike a rejected [`Self::confirm`], the task doesn't end as rejected). Returns whether it waited
+    pub async fn check_scope(
+        &self,
+        target: &Target,
+        gone: &mut Option<oneshot::Receiver<()>>,
+    ) -> Result<bool, Response> {
+        let ask = {
+            let st = self.lock();
+            out_of_scope(&st.scope, target).map(|a| (a, st.scope.join(", ")))
+        };
+        let Some(((action, detail, adds), scope)) = ask else { return Ok(false) };
+        match self.ask_user(&action, &detail, gone).await {
+            Asked::Approved => {
+                if let Some(a) = adds {
+                    let mut st = self.lock();
+                    if !in_scope(&st.scope, &a) {
+                        st.scope.push(a);
+                    }
+                }
+                Ok(true)
+            }
+            Asked::Rejected => Err(refuse(&ictl_l10n::trf!(
+                "用户不同意超出任务范围（{action}），这一步没有执行。回到任务范围内的 App（{scope}）再继续，做不到就结束任务并说明原因",
+                "The user didn't allow going outside the task's scope ({action}); this step wasn't done. Go back to an app within the scope ({scope}) and carry on there, or if you can't, finish and say why"
+            ))),
+            Asked::Ended => Err(refuse(ended_message())),
+            Asked::Gone => Err(cancelled()),
         }
     }
 
@@ -483,7 +702,8 @@ impl Tasks {
     }
 
     /// Opens a task on `udid` (the controlled device). `Err` is a message
-    pub fn open(&self, title: &str, owner: &str, udid: Option<&str>) -> Result<Arc<Task>, String> {
+    /// `apps`: bundle IDs it may act in, empty for no limit (see [`Task::check_scope`])
+    pub fn open(&self, title: &str, owner: &str, udid: Option<&str>, apps: Vec<String>) -> Result<Arc<Task>, String> {
         let title = title.trim();
         if title.is_empty() {
             return Err(ictl_l10n::tr!("任务要有标题", "A task needs a title").into());
@@ -525,13 +745,14 @@ impl Tasks {
                 confirm: None,
                 rejected: false,
                 ended: None,
+                scope: apps,
             }),
             tx: broadcast::channel(4096).0,
             changed: Notify::new(),
         });
         {
             let mut st = task.lock();
-            let info = json!({"id": task.id, "title": task.title, "owner": task.owner, "udid": task.udid, "started": task.started});
+            let info = json!({"id": task.id, "title": task.title, "owner": task.owner, "udid": task.udid, "started": task.started, "apps": st.scope});
             task.emit(&mut st, "task", info);
         }
         if list.len() >= KEEP {
@@ -664,7 +885,7 @@ impl Tasks {
                 Err(r) => r,
             },
             Request::TaskConfirm { action, detail } => match self.actor(token) {
-                Ok(t) => t.confirm(action, detail).await,
+                Ok(t) => t.confirm(action, detail, gone).await,
                 Err(r) => r,
             },
             Request::TaskNote { text } => match self.actor(token) {
@@ -759,6 +980,10 @@ fn restore(file: &Path) -> Option<Task> {
             confirm: None,
             rejected: false,
             ended: None,
+            scope: first["apps"]
+                .as_array()
+                .map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_owned)).collect())
+                .unwrap_or_default(),
         }),
         tx: broadcast::channel(16).0,
         changed: Notify::new(),
@@ -838,7 +1063,7 @@ mod tests {
     }
 
     fn open(ts: &Tasks) -> Arc<Task> {
-        ts.open("看看设置", "test", Some(PHONE)).unwrap()
+        ts.open("看看设置", "test", Some(PHONE), Vec::new()).unwrap()
     }
 
     fn tap() -> Request {
@@ -868,12 +1093,12 @@ mod tests {
     #[tokio::test]
     async fn only_one_task_and_only_on_a_device() {
         let ts = tasks();
-        assert!(ts.open("x", "", None).is_err());
-        assert!(ts.open(" ", "", Some(PHONE)).is_err());
+        assert!(ts.open("x", "", None, Vec::new()).is_err());
+        assert!(ts.open(" ", "", Some(PHONE), Vec::new()).is_err());
         let t = open(&ts);
-        assert!(ts.open("another", "", Some(PHONE)).err().unwrap().contains(&t.id));
+        assert!(ts.open("another", "", Some(PHONE), Vec::new()).err().unwrap().contains(&t.id));
         t.end(End::Completed, "");
-        assert!(ts.open("another", "", Some(PHONE)).is_ok());
+        assert!(ts.open("another", "", Some(PHONE), Vec::new()).is_ok());
     }
 
     /// The point of D17: while a task runs, a caller without its token can look but not act
@@ -1067,6 +1292,113 @@ mod tests {
         drop(ts);
         let again: Vec<String> = Tasks::load(Some(dir.clone())).infos().into_iter().map(|t| t.id).collect();
         assert_eq!(again, ids);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    fn scope(apps: &[&str]) -> Vec<String> {
+        apps.iter().map(|a| a.to_string()).collect()
+    }
+
+    #[test]
+    fn what_each_request_checks_against_the_scope() {
+        assert_eq!(scope_check(&tap()), Some(Check::Foreground));
+        assert_eq!(scope_check(&Request::LaunchApp { app: "设置".into() }), Some(Check::Launch("设置".into())));
+        assert_eq!(scope_check(&Request::OpenUrl { url: "tel:10086".into() }), Some(Check::Url("tel:10086".into())));
+        assert!(matches!(scope_check(&Request::UninstallApp { app: "x".into() }), Some(Check::Always { .. })));
+        // the ways back after a refusal, and looking, are never held
+        assert_eq!(scope_check(&Request::PressButton { button: "home".into() }), None);
+        assert_eq!(scope_check(&Request::TerminateApp { app: "x".into() }), None);
+        assert_eq!(scope_check(&Request::Screenshot { region: None }), None);
+        assert_eq!(scope_check(&Request::Touch { phase: TouchPhase::Up, x: 0.0, y: 0.0 }), None);
+    }
+
+    #[test]
+    fn what_is_outside_the_scope() {
+        let prefs = scope(&["com.apple.Preferences"]);
+        let fg = |b: &str| Target::Foreground(b.into());
+        assert_eq!(out_of_scope(&[], &fg("com.tencent.xin")), None, "no scope: no limit");
+        assert_eq!(out_of_scope(&prefs, &fg("com.apple.preferences")), None, "bundle IDs ignore case");
+        assert_eq!(out_of_scope(&prefs, &fg(SPRINGBOARD)), None, "the home screen is always fine");
+        let (_, _, adds) = out_of_scope(&prefs, &fg("com.tencent.xin")).unwrap();
+        assert_eq!(adds.as_deref(), Some("com.tencent.xin"));
+        let (_, _, adds) = out_of_scope(&prefs, &fg("")).unwrap();
+        assert_eq!(adds, None, "an unknown app is asked about, never let in");
+        assert_eq!(out_of_scope(&prefs, &Target::Launch("com.apple.Preferences".into())), None);
+        assert!(out_of_scope(&prefs, &Target::Launch("com.apple.MobileSMS".into())).is_some());
+        // links: http(s) is Safari; other schemes open who knows what
+        let web = Target::Url("https://example.com".into());
+        assert_eq!(out_of_scope(&prefs, &web).unwrap().2.as_deref(), Some(SAFARI));
+        assert_eq!(out_of_scope(&scope(&["com.apple.Preferences", SAFARI]), &web), None);
+        let tel = Target::Url("tel:10086".into());
+        assert_eq!(out_of_scope(&scope(&[SAFARI]), &tel).unwrap().2, None);
+        let always = Target::Always { action: "卸载".into(), detail: "x".into() };
+        assert!(out_of_scope(&prefs, &always).is_some());
+    }
+
+    async fn answer_soon(t: &Arc<Task>, approve: bool) {
+        let t = t.clone();
+        tokio::spawn(async move {
+            while t.info().state != "waiting" {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+            t.control("confirm", None, approve).unwrap();
+        });
+    }
+
+    #[tokio::test]
+    async fn an_approved_app_joins_the_scope_for_the_rest_of_the_task() {
+        let ts = tasks();
+        let t = ts.open("改设置", "test", Some(PHONE), scope(&["com.apple.Preferences"])).unwrap();
+        assert!(t.scoped());
+        let wechat = Target::Foreground("com.tencent.xin".into());
+        answer_soon(&t, true).await;
+        assert_eq!(t.check_scope(&wechat, &mut None).await.ok(), Some(true), "asked, then let through");
+        assert_eq!(t.check_scope(&wechat, &mut None).await.ok(), Some(false), "not asked again");
+        assert_eq!(t.info().apps, scope(&["com.apple.Preferences", "com.tencent.xin"]));
+        assert_eq!(t.info().state, "running");
+    }
+
+    #[tokio::test]
+    async fn a_rejected_app_refuses_that_step_but_the_task_can_go_back() {
+        let ts = tasks();
+        let t = ts.open("改设置", "test", Some(PHONE), scope(&["com.apple.Preferences"])).unwrap();
+        answer_soon(&t, false).await;
+        let r = t.check_scope(&Target::Launch("com.apple.MobileSMS".into()), &mut None).await;
+        assert!(matches!(r, Err(Response::Error { message, .. }) if message.contains("com.apple.Preferences")));
+        assert_eq!(t.info().state, "running");
+        assert_eq!(t.info().apps, scope(&["com.apple.Preferences"]));
+        t.finish(true, "改好了");
+        assert_eq!(t.info().state, "completed", "a scope refusal isn't a rejected task");
+    }
+
+    #[tokio::test]
+    async fn a_question_nobody_waits_for_leaves_the_page() {
+        let ts = tasks();
+        let t = ts.open("改设置", "test", Some(PHONE), scope(&["com.apple.Preferences"])).unwrap();
+        let (tx, rx) = oneshot::channel();
+        let t2 = t.clone();
+        let asking =
+            tokio::spawn(
+                async move { t2.check_scope(&Target::Foreground("com.tencent.xin".into()), &mut Some(rx)).await },
+            );
+        while t.info().state != "waiting" {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        tx.send(()).unwrap();
+        assert!(matches!(asking.await.unwrap(), Err(Response::Error { message, .. }) if message.contains("取消")));
+        assert_eq!(t.info().state, "running");
+        assert!(t.control("confirm", None, true).is_err(), "nothing waits for an answer any more");
+    }
+
+    #[test]
+    fn the_scope_survives_a_restart() {
+        let dir = std::env::temp_dir().join(format!("ictl-tasks-scope-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let ts = Tasks::load(Some(dir.clone()));
+        let t = ts.open("改设置", "test", Some(PHONE), scope(&["com.apple.Preferences"])).unwrap();
+        t.end(End::Completed, "");
+        let ts = Tasks::load(Some(dir.clone()));
+        assert_eq!(ts.get(&t.id).unwrap().info().apps, scope(&["com.apple.Preferences"]));
         std::fs::remove_dir_all(dir).unwrap();
     }
 

@@ -876,8 +876,33 @@ pub fn to_result(r: Response) -> CallToolResult {
 #[derive(Debug, Clone)]
 pub struct McpServer {
     pub socket: PathBuf,
-    /// Working for a task (see [`task`])
+    /// This process works for a task (`IPHONE_CONTROL_TASK_TOKEN`, see [`task`]); over HTTP a request may instead
+    /// carry a task's token in [`protocol::TASK_TOKEN_HEADER`] ([`request_token`])
     pub task: bool,
+}
+
+/// The task token an HTTP request carries ([`protocol::TASK_TOKEN_HEADER`]); `None` over stdio
+fn request_token(context: &RequestContext<RoleServer>) -> Option<String> {
+    let parts = context.extensions.get::<http::request::Parts>()?;
+    let t = parts.headers.get(protocol::TASK_TOKEN_HEADER)?.to_str().ok()?.trim();
+    (!t.is_empty()).then(|| t.to_owned())
+}
+
+/// MCP over HTTP (Streamable HTTP, one session per client) for the viewer's `/mcp`
+pub type HttpService = rmcp::transport::streamable_http_server::StreamableHttpService<
+    McpServer,
+    rmcp::transport::streamable_http_server::session::local::LocalSessionManager,
+>;
+
+/// The service behind `/mcp`. It doesn't check `Host` or `Origin`: the viewer does, with the names of its page
+pub fn http_service(socket: PathBuf) -> HttpService {
+    use rmcp::transport::streamable_http_server::{StreamableHttpServerConfig, StreamableHttpService};
+    let config = StreamableHttpServerConfig::default().with_allowed_hosts(Vec::<String>::new());
+    StreamableHttpService::new(
+        move || Ok(McpServer { socket: socket.clone(), task: false }),
+        std::sync::Arc::default(),
+        config,
+    )
 }
 
 impl ServerHandler for McpServer {
@@ -888,10 +913,10 @@ impl ServerHandler for McpServer {
     async fn list_tools(
         &self,
         _request: Option<PaginatedRequestParams>,
-        _context: RequestContext<RoleServer>,
+        context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, ErrorData> {
         let mut t = tools();
-        if self.task {
+        if self.task || request_token(&context).is_some() {
             t.push(confirm_tool());
         }
         Ok(ListToolsResult::with_all_items(t))
@@ -902,9 +927,22 @@ impl ServerHandler for McpServer {
         request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, ErrorData> {
-        if !self.task {
+        let token = request_token(&context);
+        if !self.task && token.is_none() {
             return self.call_tool_cancellable(request, &context).await;
         }
+        // every request of this call goes out with the HTTP request's token (over stdio: the process's)
+        protocol::as_task(token, None, self.call_tool_in_task(request, context)).await
+    }
+}
+
+impl McpServer {
+    /// [`ServerHandler::call_tool`] for a task's agent
+    async fn call_tool_in_task(
+        &self,
+        request: CallToolRequestParams,
+        context: RequestContext<RoleServer>,
+    ) -> Result<CallToolResponse, ErrorData> {
         // working for a task: the daemon holds or refuses the calls; announce each so the page shows the tool
         let args = request.arguments.clone().unwrap_or_default();
         let work = async {
@@ -933,9 +971,7 @@ impl ServerHandler for McpServer {
             _ = context.ct.cancelled() => Ok(to_result(Response::error(ictl_l10n::tr!("调用已取消", "Call cancelled"))).into()),
         }
     }
-}
 
-impl McpServer {
     async fn call_tool_cancellable(
         &self,
         request: CallToolRequestParams,
@@ -993,7 +1029,7 @@ impl McpServer {
         // can take several minutes on its own
         let wait = if matches!(req, Request::InstallApp { .. }) { 660 } else { 150 };
         // in a task the daemon holds calls while the user has paused or taken over, as long as that takes
-        let wait = (!self.task).then(|| Duration::from_secs(wait));
+        let wait = (!protocol::in_task()).then(|| Duration::from_secs(wait));
         protocol::call_expecting(&self.socket, req, wait, expect_udid).await.unwrap_or_else(|e| {
             Response::error(ictl_l10n::trf!(
                 "连不上守护进程({}):{e};确认守护进程在运行(iphone-control status)",

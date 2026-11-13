@@ -15,7 +15,7 @@ Harmless by design: it presses Home, opens Settings and Clock, takes screenshots
 to open (one of them a scheme no app handles). Nothing is sent, bought, deleted or changed.
 
 Environment: ICTL_BIN (default `iphone-control`; your branch's build for a pull request), MCP_CMD (default
-`$ICTL_BIN mcp`), ICTL_SOCKET (default `$XDG_RUNTIME_DIR/iphone-control/ctl.sock`), ICTL_VIEWER (the control page of
+`$ICTL_BIN mcp`; or MCP_URL for MCP over HTTP, see mcp_http.py), ICTL_SOCKET (default `$XDG_RUNTIME_DIR/iphone-control/ctl.sock`), ICTL_VIEWER (the control page of
 the same build, such as `http://127.0.0.1:8202`; the `self` scenario then also tries the page's API from inside a
 task).
 """
@@ -32,6 +32,8 @@ from contextlib import AsyncExitStack
 
 from mcp import ClientSession
 from mcp.client.stdio import StdioServerParameters, stdio_client
+
+import mcp_http
 
 BIN = shlex.split(os.environ.get("ICTL_BIN", "iphone-control"))
 MCP_CMD = shlex.split(os.environ.get("MCP_CMD", "")) or [*BIN, "mcp"]
@@ -183,7 +185,10 @@ async def mcp(stack: AsyncExitStack, token: str | None) -> ClientSession:
     if token:
         env[TOKEN_ENV] = token
     params = StdioServerParameters(command=MCP_CMD[0], args=MCP_CMD[1:], env=env)
-    r, w = await stack.enter_async_context(stdio_client(params))
+    if mcp_http.URL:
+        r, w = await mcp_http.streams(stack, token)
+    else:
+        r, w = await stack.enter_async_context(stdio_client(params))
     s = await stack.enter_async_context(ClientSession(r, w))
     await s.initialize()
     return s

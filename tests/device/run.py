@@ -6,7 +6,8 @@ result with its wall time, and save screenshots.
     python tests/device/run.py '[["iphone_status", {}], ["sleep", 1], ["iphone_screenshot", {}]]'
 
 The MCP server command comes from MCP_CMD (default: `iphone-control mcp`; for a build of your branch use its
-full path, e.g. `target/release/iphone-control mcp`). Screenshots go to SHOTS_DIR (default: ./shots).
+full path, e.g. `target/release/iphone-control mcp`). With MCP_URL set it connects there over HTTP instead (the
+viewer's `/mcp`; MCP_CA trusts its self-signed certificate), see mcp_http.py. Screenshots go to SHOTS_DIR (default: ./shots).
 A step `["sleep", seconds]` waits without calling a tool. Exit code is 1 if any tool returned an error.
 The last line sums it up (calls, failures, total time): paste the output into the pull request, see
 CONTRIBUTING.md, "Required tests".
@@ -19,9 +20,12 @@ import os
 import shlex
 import sys
 import time
+from contextlib import AsyncExitStack, asynccontextmanager
 
 from mcp import ClientSession
 from mcp.client.stdio import StdioServerParameters, stdio_client
+
+import mcp_http
 
 # Harmless by design: no messages, purchases, deletions or settings changes.
 DEFAULT_STEPS = [
@@ -42,6 +46,17 @@ DEFAULT_STEPS = [
 ]
 
 
+@asynccontextmanager
+async def connect(params: StdioServerParameters):
+    """The MCP session: over stdio (MCP_CMD), or at MCP_URL over HTTP (with the task's token, if any)"""
+    async with AsyncExitStack() as stack:
+        if mcp_http.URL:
+            r, w = await mcp_http.streams(stack, os.environ.get("IPHONE_CONTROL_TASK_TOKEN"))
+        else:
+            r, w = await stack.enter_async_context(stdio_client(params))
+        yield await stack.enter_async_context(ClientSession(r, w))
+
+
 async def main() -> int:
     steps = json.loads(sys.argv[1]) if len(sys.argv) > 1 else DEFAULT_STEPS
     cmd = shlex.split(os.environ.get("MCP_CMD", "iphone-control mcp"))
@@ -53,7 +68,7 @@ async def main() -> int:
     params = StdioServerParameters(command=cmd[0], args=cmd[1:], env=dict(os.environ))
     calls = 0
     t0 = time.time()
-    async with stdio_client(params) as (r, w), ClientSession(r, w) as session:
+    async with connect(params) as session:
         await session.initialize()
         n = 0
         for name, args in steps:

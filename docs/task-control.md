@@ -133,7 +133,8 @@ Running → Waiting（等确认）→ Running
 | 三 | 任务范围（App 白名单）和越界确认 | 已完成（2026-11-13，见 5.5） |
 | 三 | 执行方不能控制自己的任务（2.5 的落地版，见 5.6） | 已完成（2026-11-13） |
 | 四 | 局域网访问控制台（7.2）、控制台后台服务、HTTPS（7.3） | 已完成（2026-11-13） |
-| 四 | 登录、HTTP MCP、多设备租约 | 等需要时 |
+| 四 | HTTP MCP（7.4） | 已完成（2026-11-13） |
+| 四 | 登录、跨主机开任务（HTTP 控制面）、多设备租约 | 等需要时 |
 
 ## 5. 阶段一的具体设计
 
@@ -272,3 +273,14 @@ Running → Waiting（等确认）→ Running
 - **写出**：TLS 会把最后一段留在缓冲里，所以每个响应、视频头、每条任务事件、每帧画面之后都 flush（明文 TCP 上 flush 什么也不做）。
 - **依赖**：`tokio-rustls`、`rcgen` 原本就在依赖树里（idevice、reqwest、plume_core），只用 ring，没有新增 crate。
 - **局限**：自签证书第一次要手动点「继续」；之后页面按规范是安全上下文，但各浏览器对点过警告的证书仍有限制（比如 Chrome 不注册 Service Worker），WebCodecs 能不能用以真机浏览器实测为准。
+
+### 7.4 HTTP MCP（2026-11-13）
+
+7.1 第 6 条的一部分：外部 Agent 跨主机接入，用和控制台同一个端口、同一套访问规则，不另开一个口子。
+
+- **在哪**：控制台的 `/mcp`，Streamable HTTP（rmcp 的服务端：会话、SSE 都由它做）。控制台照旧一个连接一个请求：读完请求头和请求体交给 rmcp，再把它的回应（JSON 或 SSE）一段段写回去、每段 flush，直到结束或客户端断开。POST 必须带 `Content-Length`（否则 411），请求体最多 1 MB。
+- **工具**：和 stdio 的 `iphone-control mcp` 是同一个 `McpServer`，没有任何差别（D10）。
+- **任务**：stdio 靠进程的环境变量 `IPHONE_CONTROL_TASK_TOKEN` 加入任务；HTTP 是一个进程服务许多客户端，所以口令放在每个请求的头 `Iphone-Control-Task-Token` 里，`McpServer` 按请求读取，用 `as_task` 让这次调用发出的所有请求都带上它。「是否在任务里」也改成按请求判断（`protocol::in_task`）。带了口令就列出 `iphone_confirm`、每次调用报告步骤，和 stdio 一样。
+- **访问**：和控制台页面一样，对端地址、`Host`、`Sec-Fetch-Site` 先查；带 `Origin` 的请求（浏览器）必须来自控制台自己，命令行客户端不带 `Origin`。rmcp 自己的 Host 白名单设为不检查，免得两套名单不一致。`--lan` 时局域网的明文请求 307 到 HTTPS。
+- **开关**：`--mcp on|off`（`IPHONE_CONTROL_VIEWER_MCP`），默认开：它能做的事控制台的接口本来就能做，没有多开口子。
+- **还没有的**：登录（和控制台一起做）；从别的机器**开**任务（任务的租约还是本机 socket 上的连接，外部平台目前在本机用 `task run` 开任务、把口令交给远端的 agent）。

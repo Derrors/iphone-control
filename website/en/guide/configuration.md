@@ -32,6 +32,7 @@ iphone-control service restart
 | `IPHONE_CONTROL_VIEWER_LAN` | off | Set to `1` to open the viewer to the local network too, like `viewer --lan`, over HTTPS there. There is no login yet: anyone on the network who can reach this machine can control the phone and start AI tasks, so only on a trusted network |
 | `IPHONE_CONTROL_VIEWER_TLS` | `auto` | The viewer's HTTPS, like `--tls`: `auto` turns it on when open to the network or given a certificate; `on`, `off`. `http://127.0.0.1` on this machine always works |
 | `IPHONE_CONTROL_VIEWER_TLS_CERT`, `IPHONE_CONTROL_VIEWER_TLS_KEY` | empty | The viewer's own certificate and key (PEM), like `--tls-cert`, `--tls-key`; without them a self-signed one made on this machine |
+| `IPHONE_CONTROL_VIEWER_MCP` | `on` | MCP over HTTP on the viewer's port (`/mcp`), like `--mcp`; `off` turns it off |
 | `IPHONE_UDID` | automatic | Pin the device to control. Unset: the controlled device is kept until it disconnects, and you can switch with the `select` command or the `iphone_select_device` tool. When set, switching is refused |
 | `RESIGN_MIN_DAYS` | `2` | Re-sign when fewer days than this remain |
 | `RESIGN_CHECK_HOURS` | `6` | How often to check; it is also checked within a minute after the phone reconnects or you switch devices |

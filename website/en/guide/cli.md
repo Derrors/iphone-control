@@ -75,7 +75,9 @@ The daemon runs as a per-user service: launchd on macOS, a systemd user service 
 | `service uninstall` | Stop and remove the service this program set up; data is kept. A service that came with Homebrew or the .deb isn't removed: it is disabled, or you're told how to stop it |
 | `service start` / `stop` | Start or stop it |
 | `service restart` | Restart it, after editing `~/.config/iphone-control/env` |
-| `service status` | Which service is set up, and whether the daemon is running |
+| `service status` | Which service is set up, whether the daemon is running, and whether the viewer service is set up and running |
+| `service viewer install` | Set up the viewer as a service of its own that starts at login, and start it. Its port and whether it is open to the local network come from `IPHONE_CONTROL_VIEWER_PORT`, `IPHONE_CONTROL_VIEWER_LAN` and `IPHONE_CONTROL_VIEWER_LAN_HOSTS` in the settings file. It keeps this shell's `PATH` so the viewer finds `claude` and `codex`; install again if that changes |
+| `service viewer uninstall` / `start` / `stop` / `restart` | Remove, start or stop the viewer service; `restart` after changing those settings. An update stops it first and starts it again afterwards (an automatic update waits while an AI task runs) |
 
 These commands find the service set up by the one-command install, `iphone-control service install`, `brew services` or the .deb, and act on whichever is there.
 

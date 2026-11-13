@@ -240,5 +240,5 @@ Running → Waiting（等确认）→ Running
 
 之后：
 
-1. 控制台做成后台服务（`iphone-control service` 管，开机自启，跟着设置文件里的 `--lan` 开关）。
+1. 控制台做成后台服务（`iphone-control service viewer install`，开机自启，跟着设置文件里的 `IPHONE_CONTROL_VIEWER_*`）：已完成（2026-11-13）。升级时先停下它（它是常驻客户端，会让升级一直 busy），升级完再启动；有 AI 任务在跑时自动升级推迟。
 2. 登录：一个令牌，存在数据目录，登录后用 `HttpOnly; SameSite=Strict` 的 cookie，程序用 `Authorization: Bearer`，失败限速；局域网口子开了登录才放行。HTTPS 和 HTTP MCP 届时再定。

@@ -75,7 +75,9 @@ Viewer 只监听本机回环地址。同机其他用户也能查看安装信息�
 | `service uninstall` | 停止并移除本程序装的服务，数据保留。Homebrew 或 deb 包带的服务不删，只停用或提示怎么停 |
 | `service start` / `stop` | 启动、停止 |
 | `service restart` | 重启，改过 `~/.config/iphone-control/env` 后用 |
-| `service status` | 装的是哪个服务、守护进程在不在运行 |
+| `service status` | 装的是哪个服务、守护进程在不在运行，控制台服务装了没有、在不在运行 |
+| `service viewer install` | 把控制台（`viewer`）也装成登录后自动启动的服务并启动。端口、是否对局域网开放读设置文件里的 `IPHONE_CONTROL_VIEWER_PORT`、`IPHONE_CONTROL_VIEWER_LAN`、`IPHONE_CONTROL_VIEWER_LAN_HOSTS`。会记下当前终端的 `PATH`，好让控制台找到 `claude` 和 `codex`；PATH 变了再装一次 |
+| `service viewer uninstall` / `start` / `stop` / `restart` | 移除、启动、停止控制台服务；改过上面几项设置后 `restart`。升级时它会先停下，升级完再启动（有 AI 任务在跑时自动升级会推迟） |
 
 这些命令认得一行命令安装、`iphone-control service install`、`brew services` 和 deb 包装的服务，哪个在就作用于哪个。
 

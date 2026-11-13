@@ -443,40 +443,58 @@ pub async fn apply(socket: &Path, background: bool, report: super::Report) -> Re
     let version = report.available_version.context("no stable release is available")?;
     eligible(&receipt.version, &version, background)?;
     let host = Host { service, socket, binary: &store.binary };
-    if background {
-        ensure!(matches!(report.policy, super::Policy::AutoPatch), "automatic installation is disabled");
-        let suppressed = outcome(&store.binary)?.and_then(|o| o.suppressed_version);
-        ensure!(
-            suppressed.as_ref() != Some(&version),
-            "automatic retry suppressed for {version}; run iphone-control update to retry"
-        );
-        // An always-open client may stay busy for days. The lease here is deliberately
-        // short-lived; replacement reacquires it and rechecks identity after download.
-        if let Err(e) = host.exclusive() {
-            store.record("busy", &version, format!("{e:#}"), suppressed)?;
-            return Err(e);
-        }
-    }
-    let stage = store.stage()?;
-    let work = async {
-        let candidate = match archive::stage(&stage, &receipt, &version, background).await {
-            Ok(candidate) => candidate,
-            Err(e) => {
-                let suppressed = if e.downcast_ref::<reqwest::Error>().is_some() {
-                    outcome(&store.binary)?.and_then(|o| o.suppressed_version)
-                } else {
-                    Some(version.clone())
-                };
-                store.record(failure_status(&e), &version, format!("{e:#}"), suppressed)?;
+    // the control page's service is an always-running client: it would keep the update busy forever, so it stops
+    // for the update and starts again afterwards (not while it runs an AI task: that would end the task)
+    let paused = pause_viewer(socket).await?;
+    let result = async {
+        if background {
+            ensure!(matches!(report.policy, super::Policy::AutoPatch), "automatic installation is disabled");
+            let suppressed = outcome(&store.binary)?.and_then(|o| o.suppressed_version);
+            ensure!(
+                suppressed.as_ref() != Some(&version),
+                "automatic retry suppressed for {version}; run iphone-control update to retry"
+            );
+            // An always-open client may stay busy for days. The lease here is deliberately
+            // short-lived; replacement reacquires it and rechecks identity after download.
+            if let Err(e) = host.exclusive() {
+                store.record("busy", &version, format!("{e:#}"), suppressed)?;
                 return Err(e);
             }
-        };
-        let next = Receipt { version, sha256: digest(&candidate)?, ..receipt.clone() };
-        replace(&store, &host, receipt, next, &candidate, background).await
+        }
+        let stage = store.stage()?;
+        let work = async {
+            let candidate = match archive::stage(&stage, &receipt, &version, background).await {
+                Ok(candidate) => candidate,
+                Err(e) => {
+                    let suppressed = if e.downcast_ref::<reqwest::Error>().is_some() {
+                        outcome(&store.binary)?.and_then(|o| o.suppressed_version)
+                    } else {
+                        Some(version.clone())
+                    };
+                    store.record(failure_status(&e), &version, format!("{e:#}"), suppressed)?;
+                    return Err(e);
+                }
+            };
+            let next = Receipt { version, sha256: digest(&candidate)?, ..receipt.clone() };
+            replace(&store, &host, receipt, next, &candidate, background).await
+        }
+        .await;
+        let _ = fs::remove_dir_all(&stage);
+        work
     }
     .await;
-    let _ = fs::remove_dir_all(&stage);
-    work
+    crate::service::resume_viewer(paused);
+    result
+}
+
+/// [`service::pause_viewer`], unless an AI task is running
+async fn pause_viewer(socket: &Path) -> Result<Option<Service>> {
+    if crate::service::viewer_find().is_some_and(|s| crate::service::running(&s))
+        && ictl_daemon::protocol::task_list(socket).await.is_ok_and(|l| l.iter().any(|t| t.active()))
+    {
+        anyhow::bail!("busy: an AI task is running");
+    }
+    service::pause_viewer()
 }
 
 /// The outcome recorded when staging a release fails. A release that only isn't marked for unattended
@@ -535,9 +553,15 @@ pub async fn recover(socket: &Path, scheduled: bool) -> Result<()> {
         "invalid recovery entry point"
     );
     let service = service::managed(&store.binary, &receipt.service)?;
-    check_clients(service::managed_pid(&service, true)?)?;
-    let host = Host { service, socket, binary: &store.binary };
-    resume(&store, &host, &tx).await
+    let paused = pause_viewer(socket).await?;
+    let result = async {
+        check_clients(service::managed_pid(&service, true)?)?;
+        let host = Host { service, socket, binary: &store.binary };
+        resume(&store, &host, &tx).await
+    }
+    .await;
+    crate::service::resume_viewer(paused);
+    result
 }
 
 #[cfg(test)]

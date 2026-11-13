@@ -109,11 +109,12 @@ enum Command {
     },
     #[command(about = ictl_l10n::tr!("浏览器里的控制台：实时画面上直接操作手机、看设备状态，把任务交给本机的 Claude Code 或 Codex 执行。只开在 127.0.0.1，操作都经守护进程（默认不监听任何端口）", "Control page in a browser: act on the live screen, see the device's state, and hand tasks to a local Claude Code or Codex. Serves 127.0.0.1 only, every action goes through the daemon (by default no port is opened)"))]
     Viewer {
-        #[arg(long, default_value_t = 8200)]
+        #[arg(long, env = "IPHONE_CONTROL_VIEWER_PORT", default_value_t = 8200)]
         port: u16,
-        #[arg(long, env = "IPHONE_CONTROL_VIEWER_LAN", help = ictl_l10n::tr!("也对局域网开放（同一个端口、HTTP、还没有登录：局域网里任何人都能操作手机），只接受局域网地址来的连接", "Also open to the local network (same port, HTTP, no login yet: anyone on the network can control the phone); only connections from local-network addresses"))]
+        // from the settings file as 1/0, yes/no, on/off or true/false (a plain flag's parser only takes true/false)
+        #[arg(long, env = "IPHONE_CONTROL_VIEWER_LAN", value_parser = clap::builder::BoolishValueParser::new(), help = ictl_l10n::tr!("也对局域网开放（同一个端口、HTTP、还没有登录：局域网里任何人都能操作手机），只接受局域网地址来的连接", "Also open to the local network (same port, HTTP, no login yet: anyone on the network can control the phone); only connections from local-network addresses"))]
         lan: bool,
-        #[arg(long = "lan-host", value_name = "HOST", help = ictl_l10n::tr!("--lan 时还认可的主机名（可写多次）；本机主机名、<主机名>.local 和各网卡 IP 已自动认可", "With --lan, another host name the page answers to (repeatable); this machine's name, <name>.local and its addresses are already accepted"))]
+        #[arg(long = "lan-host", value_name = "HOST", env = "IPHONE_CONTROL_VIEWER_LAN_HOSTS", value_delimiter = ',', help = ictl_l10n::tr!("--lan 时还认可的主机名（可写多次）；本机主机名、<主机名>.local 和各网卡 IP 已自动认可", "With --lan, another host name the page answers to (repeatable); this machine's name, <name>.local and its addresses are already accepted"))]
         lan_hosts: Vec<String>,
     },
     #[command(about = ictl_l10n::tr!("AI 任务：在任务里运行外部 agent（task run），查看、暂停、接管、停止、确认任务", "AI tasks: run an external agent in a task (task run); list, pause, take over, stop and confirm tasks"))]
@@ -167,6 +168,22 @@ enum ServiceAction {
     #[command(about = ictl_l10n::tr!("重启，改过 ~/.config/iphone-control/env 后用", "Restart, after editing ~/.config/iphone-control/env"))]
     Restart,
     Status,
+    #[command(about = ictl_l10n::tr!("控制台（viewer）的后台服务：install / uninstall / start / stop / restart。设置在 ~/.config/iphone-control/env 的 IPHONE_CONTROL_VIEWER_*", "The viewer's own service: install / uninstall / start / stop / restart. Settings: IPHONE_CONTROL_VIEWER_* in ~/.config/iphone-control/env"))]
+    Viewer {
+        #[command(subcommand)]
+        action: ViewerServiceAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum ViewerServiceAction {
+    #[command(about = ictl_l10n::tr!("装成登录后自动启动的服务并启动；会记下当前终端的 PATH（找 claude、codex 用），PATH 变了再装一次", "Set up the service that starts at login and start it; it keeps this shell's PATH (to find claude and codex), so install again if that changes"))]
+    Install,
+    Uninstall,
+    Start,
+    Stop,
+    #[command(about = ictl_l10n::tr!("重启，改过 IPHONE_CONTROL_VIEWER_* 设置后用", "Restart, after changing the IPHONE_CONTROL_VIEWER_* settings"))]
+    Restart,
 }
 
 /// 锁屏密码按设备分开存：一台的密码不会输进另一台
@@ -412,6 +429,7 @@ async fn service_cmd(socket: &Path, action: ServiceAction) -> anyhow::Result<()>
         ServiceAction::Start => service::start(&service::find().ok_or_else(none)?)?,
         ServiceAction::Stop => service::stop(&service::find().ok_or_else(none)?)?,
         ServiceAction::Restart => service::restart(&service::find().ok_or_else(none)?)?,
+        ServiceAction::Viewer { action } => viewer_service_cmd(action)?,
         ServiceAction::Status => {
             match service::find() {
                 Some(s) => println!("{}", ictl_l10n::trf!("后台服务  {}", "Service   {}", s.describe())),
@@ -420,6 +438,23 @@ async fn service_cmd(socket: &Path, action: ServiceAction) -> anyhow::Result<()>
                     ictl_l10n::tr!(
                         "后台服务  没有装（iphone-control service install）",
                         "Service   not set up (iphone-control service install)"
+                    )
+                ),
+            }
+            match service::viewer_find() {
+                Some(s) => println!(
+                    "{}",
+                    if service::running(&s) {
+                        ictl_l10n::trf!("控制台    {}，在运行", "Viewer    {}, running", s.describe())
+                    } else {
+                        ictl_l10n::trf!("控制台    {}，没在运行", "Viewer    {}, not running", s.describe())
+                    }
+                ),
+                None => println!(
+                    "{}",
+                    ictl_l10n::tr!(
+                        "控制台    没装成服务（iphone-control service viewer install）",
+                        "Viewer    no service (iphone-control service viewer install)"
                     )
                 ),
             }
@@ -433,6 +468,57 @@ async fn service_cmd(socket: &Path, action: ServiceAction) -> anyhow::Result<()>
                 }
             );
         }
+    }
+    Ok(())
+}
+
+fn viewer_service_cmd(action: ViewerServiceAction) -> anyhow::Result<()> {
+    let none = || {
+        anyhow::anyhow!(
+            "{}",
+            ictl_l10n::tr!(
+                "没有装控制台服务：iphone-control service viewer install",
+                "No viewer service is set up: iphone-control service viewer install"
+            )
+        )
+    };
+    match action {
+        ViewerServiceAction::Install => {
+            let s = service::viewer_install()?;
+            let port = env_nonempty("IPHONE_CONTROL_VIEWER_PORT").and_then(|p| p.parse::<u16>().ok()).unwrap_or(8200);
+            println!("{}", ictl_l10n::trf!("已安装并启动：{}", "Installed and started: {}", s.describe()));
+            println!("{}", ictl_l10n::trf!("控制台：http://127.0.0.1:{port}/", "Viewer: http://127.0.0.1:{port}/"));
+            let lan = env_nonempty("IPHONE_CONTROL_VIEWER_LAN")
+                .is_some_and(|v| !matches!(v.as_str(), "0" | "false" | "no" | "off"));
+            println!(
+                "{}",
+                if lan {
+                    ictl_l10n::tr!(
+                        "已对局域网开放（IPHONE_CONTROL_VIEWER_LAN），还没有登录：只在可信的网络里开。",
+                        "Open to the local network (IPHONE_CONTROL_VIEWER_LAN), with no login yet: only on a trusted network."
+                    )
+                } else {
+                    ictl_l10n::tr!(
+                        "只在本机。要对局域网开放：设置文件里设 IPHONE_CONTROL_VIEWER_LAN=1，再 iphone-control service viewer restart。",
+                        "Local only. To open it to the local network: IPHONE_CONTROL_VIEWER_LAN=1 in the settings file, then iphone-control service viewer restart."
+                    )
+                }
+            );
+            let found: Vec<&str> = agent::Backend::ALL.iter().filter(|b| b.find().is_some()).map(|b| b.id()).collect();
+            if found.is_empty() {
+                println!(
+                    "{}",
+                    ictl_l10n::tr!(
+                        "这个终端的 PATH 里没有 claude 或 codex，服务里的控制台也用不了 AI 任务；装好后在 PATH 里能找到它们的终端里再装一次。",
+                        "Neither claude nor codex is on this shell's PATH, so the service's viewer can't run AI tasks either; install again from a shell where they are."
+                    )
+                );
+            }
+        }
+        ViewerServiceAction::Uninstall => service::viewer_uninstall()?,
+        ViewerServiceAction::Start => service::start(&service::viewer_find().ok_or_else(none)?)?,
+        ViewerServiceAction::Stop => service::stop(&service::viewer_find().ok_or_else(none)?)?,
+        ViewerServiceAction::Restart => service::restart(&service::viewer_find().ok_or_else(none)?)?,
     }
     Ok(())
 }
@@ -1146,6 +1232,39 @@ fn host_is_loopback(head: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{host_is_loopback, mcp_command};
+
+    /// The viewer's settings come from the settings file as environment variables (also for the viewer service):
+    /// `IPHONE_CONTROL_VIEWER_LAN=1` turns `--lan` on. A plain flag only took true/false, so the service didn't start
+    #[test]
+    fn viewer_settings_from_the_environment() {
+        use clap::Parser;
+        let parse = |lan: Option<&str>| {
+            // SAFETY: only this test sets these variables
+            unsafe {
+                match lan {
+                    Some(v) => std::env::set_var("IPHONE_CONTROL_VIEWER_LAN", v),
+                    None => std::env::remove_var("IPHONE_CONTROL_VIEWER_LAN"),
+                }
+                std::env::set_var("IPHONE_CONTROL_VIEWER_PORT", "8202");
+                std::env::set_var("IPHONE_CONTROL_VIEWER_LAN_HOSTS", "nas.example,nas2");
+            }
+            match super::Cli::try_parse_from(["iphone-control", "viewer"]).map(|c| c.command) {
+                Ok(Some(super::Command::Viewer { port, lan, lan_hosts })) => (port, lan, lan_hosts),
+                other => panic!("{lan:?}: {:?}", other.err()),
+            }
+        };
+        for v in ["1", "yes", "on", "true"] {
+            assert!(parse(Some(v)).1, "{v}");
+        }
+        for v in ["0", "no", "off", "false"] {
+            assert!(!parse(Some(v)).1, "{v}");
+        }
+        assert_eq!(parse(None), (8202, false, vec!["nas.example".to_owned(), "nas2".to_owned()]));
+        unsafe {
+            std::env::remove_var("IPHONE_CONTROL_VIEWER_PORT");
+            std::env::remove_var("IPHONE_CONTROL_VIEWER_LAN_HOSTS");
+        }
+    }
     use ictl_l10n::{Lang, with_lang};
     use std::path::Path;
 

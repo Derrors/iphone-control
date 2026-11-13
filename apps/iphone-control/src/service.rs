@@ -5,6 +5,12 @@
 //! the agent or unit `brew services` writes. `install` only writes our own file when none of these exists; the other
 //! commands act on whichever is there. The service reads `~/.config/iphone-control/env`, starts at login and is
 //! restarted after a crash.
+//!
+//! The control page can be a service of its own too (`iphone-control service viewer install`): launchd label
+//! [`VIEWER_LABEL`], unit `iphone-control-viewer.service`, running `iphone-control viewer` with its settings from the
+//! same file (`IPHONE_CONTROL_VIEWER_PORT`, `_LAN`, `_LAN_HOSTS`). It gets the `PATH` of the shell that installed
+//! it, so it finds `claude` and `codex` (a user service's own `PATH` usually lacks `~/.local/bin`, npm's bin…).
+//! It is an always-running client: an update stops it first and starts it again afterwards ([`pause_viewer`]).
 
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
@@ -16,6 +22,8 @@ use crate::envfile::home;
 
 pub const LABEL: &str = "io.github.derrors.iphone-control";
 const UNIT: &str = "iphone-control";
+pub const VIEWER_LABEL: &str = "io.github.derrors.iphone-control.viewer";
+const VIEWER_UNIT: &str = "iphone-control-viewer";
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Service {
@@ -68,6 +76,14 @@ fn our_plist() -> PathBuf {
 
 fn our_unit() -> PathBuf {
     crate::envfile::config_dir().parent().unwrap_or(Path::new("/")).join("systemd/user/iphone-control.service")
+}
+
+fn viewer_plist() -> PathBuf {
+    launch_agents().join(format!("{VIEWER_LABEL}.plist"))
+}
+
+fn viewer_unit_file() -> PathBuf {
+    our_unit().with_file_name(format!("{VIEWER_UNIT}.service"))
 }
 
 fn run(cmd: &mut Command) -> bool {
@@ -390,6 +406,192 @@ pub fn uninstall() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// The control page's service, if it is set up (no package brings one: only ours)
+pub fn viewer_find() -> Option<Service> {
+    if cfg!(target_os = "macos") {
+        return viewer_plist().is_file().then(|| Service::Launchd {
+            label: VIEWER_LABEL.into(),
+            plist: viewer_plist(),
+            ours: true,
+        });
+    }
+    viewer_unit_file().is_file().then(|| Service::Systemd { unit: VIEWER_UNIT.into(), ours: true })
+}
+
+/// The service's process is running now
+pub fn running(s: &Service) -> bool {
+    match s {
+        Service::Systemd { unit, .. } => systemctl(&["is-active", "--quiet", unit]),
+        Service::Launchd { label, .. } => Command::new("launchctl")
+            .arg("print")
+            .arg(format!("gui/{}/{label}", uid()))
+            .stderr(Stdio::null())
+            .output()
+            .is_ok_and(|o| o.status.success() && String::from_utf8_lossy(&o.stdout).contains("state = running")),
+    }
+}
+
+/// `PATH` for the control page's service: the installing shell's, so the agents are found. Characters that can't
+/// be written into a unit or a plist safely are refused
+fn service_path(path: &str) -> anyhow::Result<&str> {
+    ensure!(
+        !path.is_empty() && !path.contains(['"', '\\', '\n', '\r', '\'', '`', '$']),
+        "{}",
+        ictl_l10n::tr!(
+            "PATH 里有服务文件写不了的字符（引号、反斜杠、$、换行），装不了控制台服务",
+            "PATH has characters a service file can't hold (quotes, backslashes, $, newlines), so the viewer service can't be set up"
+        )
+    );
+    Ok(path)
+}
+
+/// The control page's systemd unit
+fn viewer_unit_text(exe: &str, path: &str) -> anyhow::Result<String> {
+    // systemd expands %-specifiers in Environment=
+    let path = service_path(path)?.replace('%', "%%");
+    Ok(format!(
+        "# Written by iphone-control. Settings: ~/.config/iphone-control/env (IPHONE_CONTROL_VIEWER_*)\n[Unit]\n\
+         Description=iphone-control viewer (control page)\nAfter=iphone-control.service\n\n[Service]\n\
+         ExecStart={exe} viewer\nEnvironmentFile=-%h/.config/iphone-control/env\nEnvironment=\"PATH={path}\"\n\
+         Restart=on-failure\nRestartSec=10\n\n[Install]\nWantedBy=default.target\n"
+    ))
+}
+
+fn xml(s: &str) -> String {
+    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+}
+
+/// The control page's launch agent
+fn viewer_plist_text(exe: &str, path: &str, log: &Path) -> anyhow::Result<String> {
+    let path = xml(service_path(path)?);
+    Ok(format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>{VIEWER_LABEL}</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/sh</string>
+    <string>-c</string>
+    <string>set -a; f="$HOME/.config/iphone-control/env"; [ -f "$f" ] &amp;&amp; . "$f"; set +a; exec "{exe}" viewer</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict><key>PATH</key><string>{path}</string></dict>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
+  <key>ThrottleInterval</key><integer>10</integer>
+  <key>StandardOutPath</key><string>{log}</string>
+  <key>StandardErrorPath</key><string>{log}</string>
+</dict>
+</plist>
+"#,
+        exe = xml(exe),
+        log = xml(&log.to_string_lossy())
+    ))
+}
+
+/// Sets up the control page's service (or rewrites it, e.g. for a new `PATH`) and starts it
+pub fn viewer_install() -> anyhow::Result<Service> {
+    let exe = stable_exe()?;
+    let exe = exe.to_string_lossy();
+    if exe.contains(['"', '\'', '\\', '&', '<', '>']) {
+        bail!(
+            "{}",
+            ictl_l10n::trf!(
+                "程序路径里有特殊字符，装不了服务：{exe}",
+                "The program path has special characters, can't set up a service: {exe}"
+            )
+        );
+    }
+    let path = std::env::var("PATH").unwrap_or_default();
+    if let Some(s) = viewer_find() {
+        // rewritten below with the current PATH and program; stop the old one first
+        let _ = stop(&s);
+    }
+    if cfg!(target_os = "macos") {
+        let logs = home().join("Library/Logs/iphone-control");
+        std::fs::create_dir_all(&logs)?;
+        std::fs::create_dir_all(launch_agents())?;
+        std::fs::write(viewer_plist(), viewer_plist_text(&exe, &path, &logs.join("viewer.log"))?)?;
+        let s = Service::Launchd { label: VIEWER_LABEL.into(), plist: viewer_plist(), ours: true };
+        start(&s)?;
+        return Ok(s);
+    }
+    if !has_systemd_user() {
+        bail!(
+            "{}",
+            ictl_l10n::tr!(
+                "没有可用的 systemd 用户会话，装不了服务；在另一个终端运行 iphone-control viewer",
+                "No systemd user session, so no service can be set up; run iphone-control viewer in another terminal"
+            )
+        );
+    }
+    let unit = viewer_unit_file();
+    std::fs::create_dir_all(unit.parent().unwrap_or(Path::new("/")))?;
+    std::fs::write(&unit, viewer_unit_text(&exe, &path)?)?;
+    systemctl(&["daemon-reload"]);
+    let s = Service::Systemd { unit: VIEWER_UNIT.into(), ours: true };
+    start(&s)?;
+    Ok(s)
+}
+
+/// Stops and removes the control page's service
+pub fn viewer_uninstall() -> anyhow::Result<()> {
+    let Some(s) = viewer_find() else {
+        println!("{}", ictl_l10n::tr!("没有装控制台服务", "No viewer service is set up"));
+        return Ok(());
+    };
+    match &s {
+        Service::Launchd { plist, .. } => {
+            stop(&s)?;
+            std::fs::remove_file(plist)?;
+        }
+        Service::Systemd { unit, .. } => {
+            systemctl(&["disable", "--now", unit]);
+            std::fs::remove_file(viewer_unit_file())?;
+            systemctl(&["daemon-reload"]);
+        }
+    }
+    println!("{}", ictl_l10n::trf!("已移除控制台服务 {}", "Removed the viewer service {}", s.describe()));
+    Ok(())
+}
+
+/// For an update: stops the control page's service if it is running (it is an `iphone-control` process holding a
+/// client lease, so the update would wait for it forever) and waits until it is gone. `Some` to start it again
+/// with [`resume_viewer`]
+pub fn pause_viewer() -> anyhow::Result<Option<Service>> {
+    let Some(s) = viewer_find().filter(running) else { return Ok(None) };
+    stop(&s)?;
+    for _ in 0..50 {
+        if !running(&s) {
+            return Ok(Some(s));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(200));
+    }
+    let _ = start(&s);
+    bail!("busy: the viewer service didn't stop")
+}
+
+/// Starts the control page's service again after [`pause_viewer`]; a failure is only reported
+pub fn resume_viewer(paused: Option<Service>) {
+    if let Some(s) = paused
+        && let Err(e) = start(&s)
+    {
+        eprintln!("{e:#}");
+    }
+}
+
+/// After a package manager replaced the program: a running control page service runs the new one
+pub fn restart_viewer_if_running() {
+    if let Some(s) = viewer_find().filter(running) {
+        match restart(&s) {
+            Ok(()) => println!("{}", ictl_l10n::tr!("控制台服务已重启。", "The viewer service was restarted.")),
+            Err(e) => eprintln!("{e:#}"),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -411,6 +613,33 @@ mod tests {
         assert_eq!(launchd_pid(&print("not running", None), plist, true).unwrap(), None);
         assert!(launchd_pid(&print("spawn scheduled", None), plist, false).is_err(), "really transitioning");
         assert!(launchd_pid(&print("running", Some(1)), Path::new("/elsewhere.plist"), false).is_err());
+    }
+
+    #[test]
+    fn the_viewer_service_runs_the_viewer_with_this_path() {
+        let path = "/home/u/.local/bin:/home/u/.npm-global/bin:/usr/bin";
+        let unit = viewer_unit_text("/home/u/.local/bin/iphone-control", path).unwrap();
+        assert!(unit.contains("ExecStart=/home/u/.local/bin/iphone-control viewer\n"), "{unit}");
+        assert!(unit.contains(&format!("Environment=\"PATH={path}\"\n")));
+        assert!(unit.contains("EnvironmentFile=-%h/.config/iphone-control/env"));
+        assert!(unit.contains("After=iphone-control.service"));
+        assert!(
+            viewer_unit_text("x", "/odd%dir:/usr/bin").unwrap().contains("PATH=/odd%%dir:/usr/bin"),
+            "not a specifier"
+        );
+        for bad in ["/a\"b", "/a\\b", "/a$HOME", "/a\nb", "/a`b`", ""] {
+            assert!(viewer_unit_text("x", bad).is_err(), "{bad:?}");
+        }
+        let plist = viewer_plist_text(
+            "/opt/homebrew/opt/iphone-control/bin/iphone-control",
+            "/a&b:/usr/bin",
+            Path::new("/L/viewer.log"),
+        )
+        .unwrap();
+        assert!(plist.contains(r#"exec "/opt/homebrew/opt/iphone-control/bin/iphone-control" viewer</string>"#));
+        assert!(plist.contains("<key>PATH</key><string>/a&amp;b:/usr/bin</string>"));
+        assert!(plist.contains(&format!("<string>{VIEWER_LABEL}</string>")));
+        assert!(plist::Value::from_reader_xml(plist.as_bytes()).is_ok(), "a valid plist");
     }
 
     #[test]

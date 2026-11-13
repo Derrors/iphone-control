@@ -214,11 +214,23 @@ pub(super) async fn stage(
 }
 
 pub(super) async fn preflight(candidate: &Path, version: &str) -> anyhow::Result<()> {
-    let mut cmd = tokio::process::Command::new(candidate);
-    cmd.arg("--version").kill_on_drop(true);
-    let out = tokio::time::timeout(Duration::from_secs(10), cmd.output())
-        .await
-        .context("candidate --version timed out")??;
+    // "text file busy" (ETXTBSY): another thread forked while the candidate was still open for writing, and the
+    // child's copy of that descriptor lives until it execs. It is gone in a moment, so try again
+    let mut busy = 0;
+    let out = loop {
+        let mut cmd = tokio::process::Command::new(candidate);
+        cmd.arg("--version").kill_on_drop(true);
+        match tokio::time::timeout(Duration::from_secs(10), cmd.output())
+            .await
+            .context("candidate --version timed out")?
+        {
+            Err(e) if e.raw_os_error() == Some(libc::ETXTBSY) && busy < 20 => {
+                busy += 1;
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+            r => break r?,
+        }
+    };
     ensure!(
         out.status.success() && std::str::from_utf8(&out.stdout)?.trim() == format!("iphone-control {version}"),
         "unexpected candidate --version"
@@ -255,6 +267,22 @@ mod tests {
 
     fn hex(k: &Ed25519KeyPair) -> String {
         k.public_key().as_ref().iter().map(|v| format!("{v:02x}")).collect()
+    }
+
+    #[tokio::test]
+    async fn the_candidate_runs_once_it_is_no_longer_open_for_writing() {
+        // the race behind "text file busy": the candidate is still open for writing somewhere when it is run
+        let root = tempfile::tempdir().unwrap();
+        let file = root.path().join("iphone-control");
+        std::fs::write(&file, "#!/bin/sh\necho iphone-control 0.2.1\n").unwrap();
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let open = std::fs::OpenOptions::new().append(true).open(&file).unwrap();
+        let released = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            drop(open);
+        });
+        preflight(&file, "0.2.1").await.unwrap();
+        released.await.unwrap();
     }
 
     #[tokio::test]

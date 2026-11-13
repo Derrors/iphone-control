@@ -34,6 +34,7 @@ All notable changes to this project are documented here. The format is based on 
 
 ### Fixed
 
+- Checking a new version during an update (running its `--version`) could fail now and then with "Text file busy": another thread started a process while the new program was still open for writing. It now waits a moment and tries again.
 - `task run`: a command that ended its task with `task finish` is no longer stopped on its way out with exit code 1. It now has 5 seconds to exit with its own code; if it is stopped after that, the exit code is 0 when the task completed.
 - Holding an arrow key in a setup menu keeps moving the selection without echoing key sequences into the menu.
 - AI task summaries on the control page are formatted: bold, lists, inline code and line breaks show as such instead of raw Markdown.

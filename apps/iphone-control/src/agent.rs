@@ -20,6 +20,10 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 
 /// Longest prompt accepted (the page limits the text box to the same)
 pub const MAX_PROMPT: usize = 4000;
+/// Most apps a task from the page may be limited to (docs/task-control.md 5.5); a name or bundle ID is at most
+/// [`MAX_APP_LEN`] characters
+pub const MAX_SCOPE_APPS: usize = 30;
+const MAX_APP_LEN: usize = 200;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Backend {
@@ -81,8 +85,9 @@ impl Agents {
         Ok(Arc::new(Self { exe: std::env::current_exe()?, socket: socket.to_path_buf(), workdir }))
     }
 
-    /// Opens a task in the daemon and starts the agent on it; `Err` is a message for the page
-    pub async fn start(self: &Arc<Self>, prompt: &str, backend: &str) -> Result<String, String> {
+    /// Opens a task in the daemon and starts the agent on it; `Err` is a message for the page. `apps` limits the
+    /// task to those apps (names or bundle IDs, resolved by the daemon); empty for no limit
+    pub async fn start(self: &Arc<Self>, prompt: &str, backend: &str, apps: &[String]) -> Result<String, String> {
         let prompt = prompt.trim();
         if prompt.is_empty() {
             return Err(ictl_l10n::tr!("先写下要 AI 做的事", "Write what the AI should do first").into());
@@ -93,6 +98,7 @@ impl Agents {
                 "The task is too long, at most {MAX_PROMPT} characters"
             ));
         }
+        let apps = scope_apps(apps)?;
         let Some(backend) = Backend::parse(backend) else {
             return Err(ictl_l10n::trf!("不认识的 agent「{backend}」", "Unknown agent “{backend}”"));
         };
@@ -104,14 +110,15 @@ impl Agents {
                 backend.id()
             ));
         };
-        let (opened, lease) = protocol::open_task(&self.socket, prompt, backend.id(), &[]).await?;
+        // the daemon resolves names and refuses an app the phone doesn't have
+        let (opened, lease) = protocol::open_task(&self.socket, prompt, backend.id(), &apps).await?;
         let id = opened.id.clone();
         let me = self.clone();
         let prompt = prompt.to_owned();
         let lang = ictl_l10n::lang();
         tokio::spawn(ictl_l10n::scope(lang, async move {
             let mut lease = lease;
-            if let Err(e) = me.run(&opened.token, &mut lease, backend, &program, &prompt).await {
+            if let Err(e) = me.run(&opened.token, &mut lease, backend, &program, &prompt, &apps).await {
                 let summary =
                     ictl_l10n::trf!("{} 没能启动或中途出错：{e}", "{} didn't start or failed: {e}", backend.name());
                 me.finish(&opened.token, false, summary).await;
@@ -158,9 +165,10 @@ impl Agents {
         backend: Backend,
         program: &Path,
         prompt: &str,
+        apps: &[String],
     ) -> anyhow::Result<()> {
         let mut cmd = tokio::process::Command::new(program);
-        cmd.args(self.agent_args(backend, token, prompt))
+        cmd.args(self.agent_args(backend, token, prompt, apps))
             .current_dir(&self.workdir)
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::piped())
@@ -236,7 +244,8 @@ impl Agents {
         Ok(())
     }
 
-    fn agent_args(&self, backend: Backend, token: &str, prompt: &str) -> Vec<String> {
+    fn agent_args(&self, backend: Backend, token: &str, prompt: &str, apps: &[String]) -> Vec<String> {
+        let guide = guidance(apps);
         let exe = self.exe.to_string_lossy().into_owned();
         let socket = self.socket.to_string_lossy().into_owned();
         let mut env = Map::new();
@@ -265,7 +274,7 @@ impl Agents {
                     s("dontAsk"),
                     s("--no-session-persistence"),
                     s("--append-system-prompt"),
-                    s(instructions()),
+                    guide.clone(),
                 ]
             }
             Backend::Codex => {
@@ -296,7 +305,7 @@ impl Agents {
                     s("mcp_servers.iphone.default_tools_approval_mode=\"approve\""),
                     s("-c"),
                     s("suppress_unstable_features_warning=true"),
-                    format!("{}\n\n{}{prompt}", instructions(), ictl_l10n::tr!("任务：", "Task: ")),
+                    format!("{guide}\n\n{}{prompt}", ictl_l10n::tr!("任务：", "Task: ")),
                 ]
             }
         }
@@ -377,9 +386,67 @@ fn instructions() -> &'static str {
     )
 }
 
+/// The apps a task from the page is limited to: trimmed, each once, at most [`MAX_SCOPE_APPS`]. `Err` is a message
+fn scope_apps(apps: &[String]) -> Result<Vec<String>, String> {
+    let mut out: Vec<String> = Vec::new();
+    for a in apps.iter().map(|a| a.trim()).filter(|a| !a.is_empty()) {
+        if a.chars().count() > MAX_APP_LEN {
+            return Err(ictl_l10n::tr!("App 名太长", "An app name is too long").into());
+        }
+        if !out.iter().any(|o| o.eq_ignore_ascii_case(a)) {
+            out.push(a.to_owned());
+        }
+    }
+    if out.len() > MAX_SCOPE_APPS {
+        return Err(ictl_l10n::trf!(
+            "最多限定 {MAX_SCOPE_APPS} 个 App",
+            "A task can be limited to at most {MAX_SCOPE_APPS} apps"
+        ));
+    }
+    Ok(out)
+}
+
+/// [`instructions`], and the task's app scope when it has one: the agent plans within it from the start (the daemon
+/// holds anything outside it for the user either way)
+fn guidance(apps: &[String]) -> String {
+    if apps.is_empty() {
+        return instructions().to_owned();
+    }
+    let list = apps.join(ictl_l10n::tr!("、", ", "));
+    format!(
+        "{}\n{}",
+        instructions(),
+        ictl_l10n::trf!(
+            "- 这个任务限定在这些 App 里：{list}（主屏幕总是可以）。在别的 App 里操作、打开别的 App 或网页以外的链接时，那一步会先等用户确认；用户不同意，就回到这些 App 里继续，做不到就结束并说明原因。",
+            "- This task is limited to these apps: {list} (the home screen is always fine). Acting in another app, opening one, or opening a link that isn't a web page waits for the user to confirm first; if the user says no, go back to these apps and carry on, or if you can't, finish and say why."
+        )
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_scope_from_the_page_is_checked_and_told_to_the_agent() {
+        let v = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(
+            scope_apps(&v(&[" 设置 ", "", "com.apple.mobiletimer", "设置"])).unwrap(),
+            v(&["设置", "com.apple.mobiletimer"])
+        );
+        assert_eq!(scope_apps(&v(&["com.apple.Preferences", "COM.APPLE.PREFERENCES"])).unwrap().len(), 1);
+        assert!(scope_apps(&["x".repeat(MAX_APP_LEN + 1)]).is_err());
+        assert!(scope_apps(&(0..=MAX_SCOPE_APPS).map(|i| format!("app{i}")).collect::<Vec<_>>()).is_err());
+
+        let agents = Agents::new(Path::new("/nonexistent/ctl.sock")).unwrap();
+        let scoped = v(&["com.apple.Preferences", "com.apple.mobiletimer"]);
+        for backend in Backend::ALL {
+            let plain = agents.agent_args(backend, "t", "看看设置", &[]).join("\n");
+            let limited = agents.agent_args(backend, "t", "看看设置", &scoped).join("\n");
+            assert!(!plain.contains("com.apple.Preferences"), "{backend:?}: no scope, nothing about one");
+            assert!(limited.contains("com.apple.Preferences、com.apple.mobiletimer"), "{backend:?}");
+        }
+    }
 
     #[test]
     fn claude_lines() {

@@ -10,6 +10,7 @@ All notable changes to this project are documented here. The format is based on 
 
 - Navigate setup menus with arrow keys, confirm with Enter, or cancel with Esc. Number selection remains available, and basic terminals keep the line-by-line prompts.
 - Generate Bash, Zsh and Fish completion scripts with `iphone-control completions <shell>`, without starting the daemon or accessing a device.
+- On the control page, a task can be limited to some apps before it starts (the App button next to the agent): in any other app each step waits for you, as with `task run --app`. The task card shows the scope, and running a task again keeps it.
 - AI tasks for any agent platform: `iphone-control task run -- <command>` runs a command in a task, and an `iphone-control mcp` it starts takes part (the control page shows its steps and can pause, take over, stop and confirm). `task list`, `task events`, `task pause`/`resume`/`takeover`/`handback`/`stop` and `task approve`/`reject` follow and steer tasks from the command line.
 - The control page picks up a task in progress: after a reload, and for tasks started elsewhere.
 - A task can be limited to some apps (`task run --app Settings`): in any other app, launching it, or opening a link that isn't a web page, each step waits for you to confirm; approving lets the task into that app.

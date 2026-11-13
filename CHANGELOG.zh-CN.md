@@ -8,6 +8,7 @@
 
 ### 新增
 
+- 控制台上开任务前可以限定 App 范围（Agent 旁边的 App 按钮）：到了别的 App，每一步都先等你确认，和 `task run --app` 一样。任务卡片上显示范围，重新执行时沿用。
 - 任何 agent 平台都能用 AI 任务：`iphone-control task run -- <命令>` 在任务里运行命令，它启动的 `iphone-control mcp` 自动加入任务（控制台能看到每一步，可以暂停、接管、停止、确认）。`task list`、`task events`、`task pause`/`resume`/`takeover`/`handback`/`stop`、`task approve`/`reject` 在命令行里查看和控制任务。
 - 控制台会接上正在进行的任务：页面刷新后，以及在别处开的任务。
 - 任务可以限定 App（`task run --app 设置`）：在别的 App 里操作、启动别的 App、打开网页以外的链接，每一步都先等你确认；同意后这个 App 就加入任务范围。

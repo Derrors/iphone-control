@@ -112,10 +112,16 @@ enum Command {
         #[arg(long, env = "IPHONE_CONTROL_VIEWER_PORT", default_value_t = 8200)]
         port: u16,
         // from the settings file as 1/0, yes/no, on/off or true/false (a plain flag's parser only takes true/false)
-        #[arg(long, env = "IPHONE_CONTROL_VIEWER_LAN", value_parser = clap::builder::BoolishValueParser::new(), help = ictl_l10n::tr!("也对局域网开放（同一个端口、HTTP、还没有登录：局域网里任何人都能操作手机），只接受局域网地址来的连接", "Also open to the local network (same port, HTTP, no login yet: anyone on the network can control the phone); only connections from local-network addresses"))]
+        #[arg(long, env = "IPHONE_CONTROL_VIEWER_LAN", value_parser = clap::builder::BoolishValueParser::new(), help = ictl_l10n::tr!("也对局域网开放（同一个端口，局域网里用 HTTPS；还没有登录：局域网里任何人都能操作手机），只接受局域网地址来的连接", "Also open to the local network (same port, HTTPS there; no login yet: anyone on the network can control the phone); only connections from local-network addresses"))]
         lan: bool,
         #[arg(long = "lan-host", value_name = "HOST", env = "IPHONE_CONTROL_VIEWER_LAN_HOSTS", value_delimiter = ',', help = ictl_l10n::tr!("--lan 时还认可的主机名（可写多次）；本机主机名、<主机名>.local 和各网卡 IP 已自动认可", "With --lan, another host name the page answers to (repeatable); this machine's name, <name>.local and its addresses are already accepted"))]
         lan_hosts: Vec<String>,
+        #[arg(long, value_enum, env = "IPHONE_CONTROL_VIEWER_TLS", default_value = "auto", help = ictl_l10n::tr!("HTTPS（同一个端口，本机仍可用 http://127.0.0.1）：auto 在 --lan 或给了证书时开启；on、off", "HTTPS (same port; http://127.0.0.1 still works on this machine): auto turns it on with --lan or a certificate; on, off"))]
+        tls: viewer::tls::Mode,
+        #[arg(long = "tls-cert", value_name = "PEM", env = "IPHONE_CONTROL_VIEWER_TLS_CERT", requires = "tls_key", help = ictl_l10n::tr!("自己的证书（PEM，可带证书链），比如 mkcert 或 tailscale cert 生成的；不给就用本机生成的自签证书", "Your own certificate (PEM, chain allowed), such as one from mkcert or tailscale cert; without it a self-signed one made on this machine"))]
+        tls_cert: Option<PathBuf>,
+        #[arg(long = "tls-key", value_name = "PEM", env = "IPHONE_CONTROL_VIEWER_TLS_KEY", requires = "tls_cert", help = ictl_l10n::tr!("--tls-cert 的私钥（PEM）", "The private key of --tls-cert (PEM)"))]
+        tls_key: Option<PathBuf>,
     },
     #[command(about = ictl_l10n::tr!("AI 任务：在任务里运行外部 agent（task run），查看、暂停、接管、停止、确认任务", "AI tasks: run an external agent in a task (task run); list, pause, take over, stop and confirm tasks"))]
     Task {
@@ -296,7 +302,7 @@ async fn run() -> anyhow::Result<()> {
         Command::Status => status(&cli.socket).await,
         Command::Doctor => print_text(&cli.socket, Request::Doctor).await,
         Command::Setup { reconfigure } => guide::setup(&cli, reconfigure).await,
-        Command::Service { action } => service_cmd(&cli.socket, action).await,
+        Command::Service { action } => service_cmd(&cli.socket, &cli.data_dir, action).await,
         Command::Login { email } => login(&cli.data_dir, email).await,
         Command::Sign => print_text(&cli.socket, Request::Resign { force: true }).await,
         Command::Resign { force } => print_text(&cli.socket, Request::Resign { force }).await,
@@ -305,8 +311,9 @@ async fn run() -> anyhow::Result<()> {
         Command::Devices => print_text(&cli.socket, Request::ListDevices).await,
         Command::Select { device } => print_text(&cli.socket, Request::SelectDevice { device }).await,
         Command::WdaBridge { port } => wda_bridge(&cli.socket, port).await,
-        Command::Viewer { port, lan, lan_hosts } => {
-            viewer::run(&cli.socket, &cli.data_dir, port, lan, &lan_hosts).await
+        Command::Viewer { port, lan, lan_hosts, tls, tls_cert, tls_key } => {
+            let tls = viewer::tls::Setting { mode: tls, cert: tls_cert, key: tls_key };
+            viewer::run(&cli.socket, &cli.data_dir, port, lan, &lan_hosts, &tls).await
         }
         Command::Task { action } => task::run(&cli.socket, action).await,
         #[cfg(feature = "debug-cmds")]
@@ -410,7 +417,7 @@ fn mcp_config(socket: &Path) -> anyhow::Result<String> {
     Ok(mcp_command(&service::stable_exe()?, socket))
 }
 
-async fn service_cmd(socket: &Path, action: ServiceAction) -> anyhow::Result<()> {
+async fn service_cmd(socket: &Path, data_dir: &Path, action: ServiceAction) -> anyhow::Result<()> {
     let none = || {
         anyhow::anyhow!(
             "{}",
@@ -457,6 +464,16 @@ async fn service_cmd(socket: &Path, action: ServiceAction) -> anyhow::Result<()>
                         "Viewer    no service (iphone-control service viewer install)"
                     )
                 ),
+            }
+            // to check against the browser's warning when the page is opened from another machine
+            if let Some(fp) = viewer::tls::made_fingerprint(data_dir) {
+                println!(
+                    "{}",
+                    ictl_l10n::trf!(
+                        "          本机生成的 HTTPS 证书 SHA-256 {fp}",
+                        "          HTTPS certificate made here, SHA-256 {fp}"
+                    )
+                );
             }
             let up = snapshot(socket).await.is_ok();
             println!(
@@ -1193,7 +1210,7 @@ const MAX_HEAD: usize = 16 * 1024;
 const READ_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// 读到请求头结束；返回头部和跟着一起到的那部分请求体
-async fn read_head(client: &mut tokio::net::TcpStream) -> anyhow::Result<(Vec<u8>, Vec<u8>)> {
+async fn read_head(client: &mut (impl tokio::io::AsyncRead + Unpin)) -> anyhow::Result<(Vec<u8>, Vec<u8>)> {
     use tokio::io::AsyncReadExt;
     let mut data = Vec::new();
     let mut buf = [0u8; 4096];
@@ -1249,7 +1266,7 @@ mod tests {
                 std::env::set_var("IPHONE_CONTROL_VIEWER_LAN_HOSTS", "nas.example,nas2");
             }
             match super::Cli::try_parse_from(["iphone-control", "viewer"]).map(|c| c.command) {
-                Ok(Some(super::Command::Viewer { port, lan, lan_hosts })) => (port, lan, lan_hosts),
+                Ok(Some(super::Command::Viewer { port, lan, lan_hosts, .. })) => (port, lan, lan_hosts),
                 other => panic!("{lan:?}: {:?}", other.err()),
             }
         };

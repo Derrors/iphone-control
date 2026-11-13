@@ -1,8 +1,8 @@
 //! Who may reach the control page (docs/task-control.md 7.2, D3).
 //!
 //! By default the page is on `127.0.0.1` only, as before. With `viewer --lan` (`IPHONE_CONTROL_VIEWER_LAN=1`) the
-//! same port, still plain HTTP and **without a login** (that comes later), listens on every IPv4 interface, so the
-//! page can be opened from another machine on the local network. What still protects it:
+//! same port, **without a login** (that comes later), listens on every IPv4 interface, so the page can be opened
+//! from another machine on the local network; it speaks HTTPS there (`super::tls`). What still protects it:
 //!
 //! - connections only from loopback, private (10/8, 172.16/12, 192.168/16), link-local (169.254/16) and CGNAT
 //!   (100.64/10, which Tailscale uses) addresses: a machine reachable from the internet isn't operated from there;
@@ -77,14 +77,23 @@ impl Access {
         LOOPBACK.contains(&name) || (self.lan && self.hosts.iter().any(|h| h == name))
     }
 
+    /// The names the page answers to, for its certificate: the loopback ones too, IPv6 without brackets
+    pub fn names(&self) -> Vec<String> {
+        let mut v: Vec<String> = vec!["localhost".into(), "127.0.0.1".into(), "::1".into()];
+        v.extend(self.hosts.iter().map(|h| h.trim_start_matches('[').trim_end_matches(']').to_owned()));
+        v
+    }
+
     /// The request's `Host` names this machine
     pub fn host_allowed(&self, head: &[u8]) -> bool {
         host_header(head).is_some_and(|h| self.knows(&h))
     }
 
-    /// An action's `Origin` is this page: `http://<a known name>:<port>`
+    /// An action's `Origin` is this page: `http://` or `https://<a known name>:<port>`
     pub fn origin_allowed(&self, origin: &str, port: u16) -> bool {
-        let Some(rest) = origin.strip_prefix("http://") else { return false };
+        let Some(rest) = origin.strip_prefix("http://").or_else(|| origin.strip_prefix("https://")) else {
+            return false;
+        };
         let rest = rest.to_ascii_lowercase();
         let Some((name, p)) = rest.rsplit_once(':') else { return false };
         p.parse::<u16>().ok() == Some(port) && self.knows(name)
@@ -109,7 +118,8 @@ pub fn peer_allowed(ip: IpAddr) -> bool {
 }
 
 /// The `Host` header's name without the port, lowercase; an IPv6 address in brackets
-fn host_header(head: &[u8]) -> Option<String> {
+/// The `Host` header's name, lowercase, without the port; IPv6 in brackets
+pub fn host_header(head: &[u8]) -> Option<String> {
     let text = String::from_utf8_lossy(head);
     let host = text.split("\r\n").skip(1).find_map(|l| {
         let (k, v) = l.split_once(':')?;
@@ -215,10 +225,15 @@ mod tests {
         }
         assert!(a.origin_allowed("http://192.168.10.100:8202", 8202));
         assert!(a.origin_allowed("http://NAS.local:8202", 8202));
-        assert!(!a.origin_allowed("https://192.168.10.100:8202", 8202), "only what is served");
+        assert!(a.origin_allowed("https://192.168.10.100:8202", 8202), "the page over HTTPS");
+        assert!(!a.origin_allowed("https://evil.example:8202", 8202));
+        assert!(!a.origin_allowed("ftp://192.168.10.100:8202", 8202));
         assert!(!a.origin_allowed("http://192.168.10.100:3000", 8202), "another port");
         assert!(!a.origin_allowed("http://evil.example:8202", 8202));
         assert!(!a.origin_allowed("null", 8202));
+        // what its certificate covers
+        assert_eq!(a.names(), ["localhost", "127.0.0.1", "::1", "192.168.10.100", "nas.local", "nas"]);
+        assert_eq!(Access::with_hosts(["[fd00::5]".into()]).names()[3], "fd00::5");
     }
 
     #[test]

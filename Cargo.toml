@@ -55,6 +55,9 @@ tokio = { version = "=1.54.1", features = ["full"] }
 # rustls-no-provider：不编进 aws-lc-rs（C 代码，编译慢、体积大）；idevice/plume_core 用 ring，入口处显式装 ring 为默认 provider
 reqwest = { version = "=0.13.5", default-features = false, features = ["form", "rustls-no-provider"] }
 rustls = { version = "=0.23.46", default-features = false, features = ["ring"] }
+# 控制台的 HTTPS（viewer --lan）：两者已经在依赖树里（idevice、reqwest、plume_core），同样只用 ring
+tokio-rustls = { version = "=0.26.6", default-features = false, features = ["ring"] }
+rcgen = "=0.12.1"
 quick-xml = "=0.42.0"
 image = { version = "=0.25.10", default-features = false, features = ["png", "jpeg"] }
 clap = { version = "=4.6.7", features = ["derive", "env"] }

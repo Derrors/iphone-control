@@ -132,7 +132,8 @@ Running → Waiting（等确认）→ Running
 | 二 | 控制台接上正在进行的任务（刷新后、在别处开的）；命令行查看事件 | 已完成（2026-11-12） |
 | 三 | 任务范围（App 白名单）和越界确认 | 已完成（2026-11-13，见 5.5） |
 | 三 | 执行方不能控制自己的任务（2.5 的落地版，见 5.6） | 已完成（2026-11-13） |
-| 四 | 带认证的 HTTP 控制面、HTTP MCP；局域网访问控制台（第 7 节）；`SO_PEERCRED`；多设备租约 | 等需要时 |
+| 四 | 局域网访问控制台（7.2）、控制台后台服务、HTTPS（7.3） | 已完成（2026-11-13） |
+| 四 | 登录、HTTP MCP、多设备租约 | 等需要时 |
 
 ## 5. 阶段一的具体设计
 
@@ -256,4 +257,18 @@ Running → Waiting（等确认）→ Running
 之后：
 
 1. 控制台做成后台服务（`iphone-control service viewer install`，开机自启，跟着设置文件里的 `IPHONE_CONTROL_VIEWER_*`）：已完成（2026-11-13）。升级时先停下它（它是常驻客户端，会让升级一直 busy），升级完再启动；有 AI 任务在跑时自动升级推迟。
-2. 登录：一个令牌，存在数据目录，登录后用 `HttpOnly; SameSite=Strict` 的 cookie，程序用 `Authorization: Bearer`，失败限速；局域网口子开了登录才放行。HTTPS 和 HTTP MCP 届时再定。
+2. 登录：一个令牌，存在数据目录，登录后用 `HttpOnly; SameSite=Strict; Secure` 的 cookie，程序用 `Authorization: Bearer`，失败限速；局域网口子开了登录才放行。HTTP MCP 届时再定。
+3. HTTPS：已完成（2026-11-13），见 7.3。
+
+### 7.3 HTTPS（2026-11-13）
+
+7.1 第 4 条的落地。目的是让局域网里打开的控制台和本机一样用 WebCodecs（H.264、手机自己的 HEVC），并且加密；它不是登录。
+
+- **同一个端口**：看连接的第一个字节，`0x16`（TLS 握手）走 TLS，否则是明文 HTTP。明文从本机（回环）来照常服务；从局域网来的回 307 跳到 `https://<它请求的 Host>:<端口><路径>`（Host 已经过白名单，不会成为开放跳转；用 307 而不是 308，免得浏览器记住，之后 `--tls off` 时打不开）。握手在每个连接自己的任务里做，最多等 10 秒。
+- **什么时候开**：`--tls auto`（默认）在 `--lan` 或给了证书时开；`on`、`off` 强制。设置文件：`IPHONE_CONTROL_VIEWER_TLS`、`_TLS_CERT`、`_TLS_KEY`。
+- **证书**：用户给的（PEM，可带证书链；mkcert、`tailscale cert`、内部 CA），或者本机生成的自签证书：ECDSA P-256，800 天（低于 Apple 的 825 天上限），EKU serverAuth，SAN 是回环名、主机名和 `.local`、各网卡 IP、`--lan-host`。存在数据目录 `viewer-tls/`（`key.pem` 0600），旁边 `names.json` 记下覆盖的名字和到期时间。名字都覆盖、离到期还有 30 天以上就沿用；出现新名字（DHCP 换了地址）或快到期就重新生成，新证书保留旧名字，序列号取当前时间（Firefox 拒绝同一签发者重复的序列号）。
+- **指纹**：SHA-256，按浏览器显示的 `AB:CD:…` 格式，在启动输出和 `service status` 里，供第一次核对浏览器的警告。
+- **Origin**：操作的 Origin 接受 `http://` 和 `https://` 两种，名字和端口照旧要对。
+- **写出**：TLS 会把最后一段留在缓冲里，所以每个响应、视频头、每条任务事件、每帧画面之后都 flush（明文 TCP 上 flush 什么也不做）。
+- **依赖**：`tokio-rustls`、`rcgen` 原本就在依赖树里（idevice、reqwest、plume_core），只用 ring，没有新增 crate。
+- **局限**：自签证书第一次要手动点「继续」；之后页面按规范是安全上下文，但各浏览器对点过警告的证书仍有限制（比如 Chrome 不注册 Service Worker），WebCodecs 能不能用以真机浏览器实测为准。

@@ -165,10 +165,10 @@ fn decode(bytes: &[u8]) -> Key {
 /// frame. A byte that arrives but forms an unknown/partial sequence still
 /// returns `Some(Key::Unknown)`, as does every later timeout.
 fn read_key(utf8: &mut Vec<u8>, queued: &mut Option<u8>) -> io::Result<Option<Key>> {
-    // Duplicate stdin, with no read-ahead, just like crate::read_line. A raw
-    // guard per read preserves normal output newline handling between frames.
-    let mut input = std::fs::File::from(std::io::stdin().as_fd().try_clone_to_owned()?);
-    let _raw = std::io::stdout().into_raw_mode()?;
+    // The input and output may be separate terminals. Read keys in raw mode
+    // on stdin and restore it before rendering the next frame.
+    let input = std::fs::File::from(std::io::stdin().as_fd().try_clone_to_owned()?);
+    let mut input = input.into_raw_mode()?;
     // Periodic wakeups let the caller notice a resize, even without keys.
     let first = match queued.take() {
         Some(byte) => byte,

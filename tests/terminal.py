@@ -107,6 +107,28 @@ def exercise(command, env, keys, result, ready="Esc", size=(24, 80), redirect=Fa
         session.close()
 
 
+def escape_with_separate_input_terminal(command, env):
+    # The terminal that receives keys can differ from the one showing the menu.
+    key_stream, key_tty = pty.openpty()
+    display, screen_tty = pty.openpty()
+    try:
+        fcntl.ioctl(screen_tty, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
+        with subprocess.Popen(command, stdin=key_tty, stdout=screen_tty, stderr=screen_tty, env=env) as proc:
+            try:
+                output = b""
+                while b"Ctrl+C cancel" not in output:
+                    assert select.select([display], [], [], 5)[0], "split-terminal menu did not appear"
+                    output += os.read(display, 8192)
+                os.write(key_stream, b"\x1b")
+                assert proc.wait(timeout=3) == 0
+            finally:
+                if proc.poll() is None:
+                    proc.terminate()
+    finally:
+        for fd in (key_stream, key_tty, display, screen_tty):
+            os.close(fd)
+
+
 MENU_TEST = "guide::terminal::tests::pty_menu"
 
 
@@ -157,6 +179,7 @@ def main():
         elif args.binary:
             command = [str(args.binary.resolve()), "--data-dir", str(root / "data"),
                        "--socket", str(root / "daemon.sock"), "setup", "--reconfigure"]
+            escape_with_separate_input_terminal(command, env)
             for key, status in [(b"\x1b", 0), (b"\x03", 130)]:
                 output = exercise(command, env, key, "Saved settings and completed steps are kept", status=status)
                 assert b"Done." not in output

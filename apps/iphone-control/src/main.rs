@@ -112,7 +112,7 @@ enum Command {
         #[arg(long, env = "IPHONE_CONTROL_VIEWER_PORT", default_value_t = 8200)]
         port: u16,
         // from the settings file as 1/0, yes/no, on/off or true/false (a plain flag's parser only takes true/false)
-        #[arg(long, env = "IPHONE_CONTROL_VIEWER_LAN", value_parser = clap::builder::BoolishValueParser::new(), help = ictl_l10n::tr!("也对局域网开放（同一个端口，局域网里用 HTTPS；还没有登录：局域网里任何人都能操作手机），只接受局域网地址来的连接", "Also open to the local network (same port, HTTPS there; no login yet: anyone on the network can control the phone); only connections from local-network addresses"))]
+        #[arg(long, env = "IPHONE_CONTROL_VIEWER_LAN", value_parser = clap::builder::BoolishValueParser::new(), help = ictl_l10n::tr!("也对局域网开放（同一个端口，局域网里用 HTTPS，要令牌登录：iphone-control viewer token），只接受局域网地址来的连接", "Also open to the local network (same port, HTTPS there, login with the token: iphone-control viewer token); only connections from local-network addresses"))]
         lan: bool,
         #[arg(long = "lan-host", value_name = "HOST", env = "IPHONE_CONTROL_VIEWER_LAN_HOSTS", value_delimiter = ',', help = ictl_l10n::tr!("--lan 时还认可的主机名（可写多次）；本机主机名、<主机名>.local 和各网卡 IP 已自动认可", "With --lan, another host name the page answers to (repeatable); this machine's name, <name>.local and its addresses are already accepted"))]
         lan_hosts: Vec<String>,
@@ -124,6 +124,8 @@ enum Command {
         tls_key: Option<PathBuf>,
         #[arg(long, env = "IPHONE_CONTROL_VIEWER_MCP", value_name = "on|off", default_value = "on", action = clap::ArgAction::Set, value_parser = clap::builder::BoolishValueParser::new(), help = ictl_l10n::tr!("同一个端口上的 MCP（HTTP）：/mcp，本机和（--lan 时）局域网的客户端用 URL 接入；off 关掉", "MCP over HTTP on the same port: /mcp, for clients on this machine and (with --lan) the local network that connect by URL; off turns it off"))]
         mcp: bool,
+        #[command(subcommand)]
+        action: Option<ViewerAction>,
     },
     #[command(about = ictl_l10n::tr!("AI 任务：在任务里运行外部 agent（task run），查看、暂停、接管、停止、确认任务", "AI tasks: run an external agent in a task (task run); list, pause, take over, stop and confirm tasks"))]
     Task {
@@ -180,6 +182,15 @@ enum ServiceAction {
     Viewer {
         #[command(subcommand)]
         action: ViewerServiceAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum ViewerAction {
+    #[command(about = ictl_l10n::tr!("显示控制台的登录令牌、点开就能登录的链接和 HTTP MCP 的接入方式；--new 换一个新令牌（所有已登录的浏览器都要重新登录）", "Show the viewer's login token, links that log in and how to connect to its HTTP MCP; --new replaces the token (every browser has to log in again)"))]
+    Token {
+        #[arg(long)]
+        new: bool,
     },
 }
 
@@ -313,9 +324,12 @@ async fn run() -> anyhow::Result<()> {
         Command::Devices => print_text(&cli.socket, Request::ListDevices).await,
         Command::Select { device } => print_text(&cli.socket, Request::SelectDevice { device }).await,
         Command::WdaBridge { port } => wda_bridge(&cli.socket, port).await,
-        Command::Viewer { port, lan, lan_hosts, tls, tls_cert, tls_key, mcp } => {
+        Command::Viewer { port, lan, lan_hosts, tls, tls_cert, tls_key, mcp, action } => {
             let tls = viewer::tls::Setting { mode: tls, cert: tls_cert, key: tls_key };
-            viewer::run(&cli.socket, &cli.data_dir, port, lan, &lan_hosts, &tls, mcp).await
+            match action {
+                Some(ViewerAction::Token { new }) => viewer_token(&cli.data_dir, port, lan, &lan_hosts, &tls, mcp, new),
+                None => viewer::run(&cli.socket, &cli.data_dir, port, lan, &lan_hosts, &tls, mcp).await,
+            }
         }
         Command::Task { action } => task::run(&cli.socket, action).await,
         #[cfg(feature = "debug-cmds")]
@@ -491,6 +505,68 @@ async fn service_cmd(socket: &Path, data_dir: &Path, action: ServiceAction) -> a
     Ok(())
 }
 
+/// `viewer token`: the login token, links that log in (with the viewer's own settings) and the HTTP MCP setup
+fn viewer_token(
+    data_dir: &Path,
+    port: u16,
+    lan: bool,
+    lan_hosts: &[String],
+    tls: &viewer::tls::Setting,
+    mcp: bool,
+    new: bool,
+) -> anyhow::Result<()> {
+    let token = if new { viewer::auth::replace(data_dir)? } else { viewer::auth::load_or_create(data_dir)? };
+    let file = viewer::auth::token_file(data_dir);
+    println!("{}", ictl_l10n::trf!("令牌    {token}（存在 {}）", "Token   {token} (kept in {})", file.display()));
+    println!(
+        "{}",
+        ictl_l10n::trf!(
+            "本机    http://127.0.0.1:{port}/?token={token}",
+            "Here    http://127.0.0.1:{port}/?token={token}"
+        )
+    );
+    let scheme = if tls.enabled(lan) { "https" } else { "http" };
+    if lan {
+        for a in viewer::lan_addresses(lan_hosts) {
+            println!(
+                "{}",
+                ictl_l10n::trf!(
+                    "局域网  {scheme}://{a}:{port}/?token={token}",
+                    "Network {scheme}://{a}:{port}/?token={token}"
+                )
+            );
+        }
+    }
+    if mcp {
+        println!(
+            "{}",
+            ictl_l10n::trf!(
+                "MCP     claude mcp add --transport http iphone http://127.0.0.1:{port}/mcp --header \"Authorization: Bearer {token}\"",
+                "MCP     claude mcp add --transport http iphone http://127.0.0.1:{port}/mcp --header \"Authorization: Bearer {token}\""
+            )
+        );
+    }
+    println!(
+        "{}",
+        ictl_l10n::tr!(
+            "链接里带着令牌：别发到聊天或公开的地方。打开一次后浏览器会记住登录（30 天），地址栏里的令牌会被去掉。",
+            "The links carry the token: don't paste them into chats or anywhere public. Opened once, the browser stays logged in (30 days) and the token leaves the address bar."
+        )
+    );
+    if new {
+        println!(
+            "{}",
+            ictl_l10n::tr!(
+                "已换成新令牌，之前登录的浏览器和 MCP 客户端都要用新令牌。控制台服务在运行就会重启；手动运行的 viewer 要自己重启。",
+                "The token was replaced: browsers and MCP clients logged in before need the new one. A running viewer service is restarted; restart a viewer you started by hand yourself."
+            )
+        );
+        // a running viewer reads the token when it starts
+        service::restart_viewer_if_running();
+    }
+    Ok(())
+}
+
 fn viewer_service_cmd(action: ViewerServiceAction) -> anyhow::Result<()> {
     let none = || {
         anyhow::anyhow!(
@@ -513,8 +589,8 @@ fn viewer_service_cmd(action: ViewerServiceAction) -> anyhow::Result<()> {
                 "{}",
                 if lan {
                     ictl_l10n::tr!(
-                        "已对局域网开放（IPHONE_CONTROL_VIEWER_LAN），还没有登录：只在可信的网络里开。",
-                        "Open to the local network (IPHONE_CONTROL_VIEWER_LAN), with no login yet: only on a trusted network."
+                        "已对局域网开放（IPHONE_CONTROL_VIEWER_LAN）。登录用的令牌：iphone-control viewer token。",
+                        "Open to the local network (IPHONE_CONTROL_VIEWER_LAN). The login token: iphone-control viewer token."
                     )
                 } else {
                     ictl_l10n::tr!(
@@ -1268,7 +1344,7 @@ mod tests {
                 std::env::set_var("IPHONE_CONTROL_VIEWER_LAN_HOSTS", "nas.example,nas2");
             }
             match super::Cli::try_parse_from(["iphone-control", "viewer"]).map(|c| c.command) {
-                Ok(Some(super::Command::Viewer { port, lan, lan_hosts, .. })) => (port, lan, lan_hosts),
+                Ok(Some(super::Command::Viewer { port, lan, lan_hosts, action: None, .. })) => (port, lan, lan_hosts),
                 other => panic!("{lan:?}: {:?}", other.err()),
             }
         };

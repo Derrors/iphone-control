@@ -17,7 +17,7 @@ to open (one of them a scheme no app handles). Nothing is sent, bought, deleted 
 Environment: ICTL_BIN (default `iphone-control`; your branch's build for a pull request), MCP_CMD (default
 `$ICTL_BIN mcp`; or MCP_URL for MCP over HTTP, see mcp_http.py), ICTL_SOCKET (default `$XDG_RUNTIME_DIR/iphone-control/ctl.sock`), ICTL_VIEWER (the control page of
 the same build, such as `http://127.0.0.1:8202`; the `self` scenario then also tries the page's API from inside a
-task).
+task), ICTL_VIEWER_TOKEN (its login token, `iphone-control viewer token`; also sent to MCP_URL).
 """
 
 import argparse
@@ -49,8 +49,10 @@ VIEWER = os.environ.get("ICTL_VIEWER", "").rstrip("/")
 PAGE_PAUSE = """
 import json, os, sys, urllib.error, urllib.request
 v, task = sys.argv[1], os.environ["IPHONE_CONTROL_TASK_ID"]
-req = urllib.request.Request(f"{v}/api/agent/tasks/{task}/pause", data=b"{}", method="POST",
-                             headers={"Content-Type": "application/json", "Origin": v})
+headers = {"Content-Type": "application/json", "Origin": v}
+if os.environ.get("ICTL_VIEWER_TOKEN"):
+    headers["Authorization"] = "Bearer " + os.environ["ICTL_VIEWER_TOKEN"]
+req = urllib.request.Request(f"{v}/api/agent/tasks/{task}/pause", data=b"{}", method="POST", headers=headers)
 try:
     r = urllib.request.urlopen(req, timeout=15)
     print(r.status, r.read().decode())

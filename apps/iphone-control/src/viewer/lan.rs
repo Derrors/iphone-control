@@ -1,8 +1,8 @@
 //! Who may reach the control page (docs/task-control.md 7.2, D3).
 //!
 //! By default the page is on `127.0.0.1` only, as before. With `viewer --lan` (`IPHONE_CONTROL_VIEWER_LAN=1`) the
-//! same port, **without a login** (that comes later), listens on every IPv4 interface, so the page can be opened
-//! from another machine on the local network; it speaks HTTPS there (`super::tls`). What still protects it:
+//! same port listens on every IPv4 interface, so the page can be opened from another machine on the local network;
+//! it speaks HTTPS there (`super::tls`) and needs the login like everywhere (`super::auth`). Besides the login:
 //!
 //! - connections only from loopback, private (10/8, 172.16/12, 192.168/16), link-local (169.254/16) and CGNAT
 //!   (100.64/10, which Tailscale uses) addresses: a machine reachable from the internet isn't operated from there;

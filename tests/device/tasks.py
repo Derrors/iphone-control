@@ -456,6 +456,24 @@ async def run_cmd(stack):
     elif p.returncode is None:
         p.kill()
 
+    # the command ends the task itself (`task finish`): its own exit code, not 1 from being stopped while leaving
+    for title_tail, script, want, max_s in (
+        ("finish 后退出", '"$@" task finish 完成; sleep 1', 0, 4),
+        ("finish 后不退出", '"$@" task finish 完成; sleep 600', 0, 12),
+        ("finish 失败后退出", '"$@" task finish --failed 没做成; exit 3', 3, 4),
+    ):
+        title = f"真机回归：task run {title_tail} {int(time.time())}"
+        t0 = time.time()
+        p = await asyncio.create_subprocess_exec(
+            *BIN, "task", "run", "--title", title, "--owner", OWNER, "--", "sh", "-c", script, "sh", *BIN,
+            stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
+        )
+        code = await asyncio.wait_for(p.wait(), 30)
+        dt = time.time() - t0
+        state = (next((t for t in reversed(await tasks()) if t["title"] == title), {})).get("state")
+        check(c, f"`task finish` then {title_tail}: exit {code} ({dt:.1f}s), task {state}",
+              code == want and dt < max_s and state == ("failed" if want else "completed"))
+
 
 async def scope(stack):
     """#110: a task limited to Settings asks before going elsewhere; approving lets it in, rejecting refuses one step"""

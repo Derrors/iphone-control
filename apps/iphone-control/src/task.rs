@@ -183,6 +183,8 @@ async fn run_command(
     let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
     let mut outcome: Option<String> = None;
     let mut ended = false;
+    // the command ended the task itself and is on its way out: stopped only if it is still there after this
+    let mut grace: Option<std::pin::Pin<Box<tokio::time::Sleep>>> = None;
     let status = loop {
         tokio::select! {
             s = child.wait() => break s?,
@@ -190,9 +192,17 @@ async fn run_command(
                 if let Some(e) = &e && e.event != "done" {
                     continue;
                 }
-                // ended elsewhere, or the daemon went away: the command can't go on
                 ended = true;
                 outcome = e.and_then(|e| e.data["outcome"].as_str().map(str::to_owned));
+                if finished_inside(outcome.as_deref()) {
+                    grace = Some(Box::pin(tokio::time::sleep(FINISH_GRACE)));
+                } else {
+                    // stopped or interrupted elsewhere, or the daemon went away: the command can't go on
+                    stop_group(pid);
+                }
+            }
+            () = async { grace.as_mut().expect("guarded").await }, if grace.is_some() => {
+                grace = None;
                 stop_group(pid);
             }
             _ = tokio::signal::ctrl_c() => stop_here(socket, &opened.id, pid).await,
@@ -215,7 +225,21 @@ async fn run_command(
     };
     eprintln!("{}", ictl_l10n::trf!("任务 {} 结束：{outcome}", "Task {} ended: {outcome}", opened.id));
     drop(lease);
-    std::process::exit(status.code().unwrap_or(1));
+    std::process::exit(exit_code(status.code(), &outcome));
+}
+
+/// How long a command that ended its task (`task finish`) has to exit before it is stopped
+const FINISH_GRACE: Duration = Duration::from_secs(5);
+
+/// The task ended from inside the command: only a process with the task's token can finish it, and this one only
+/// finishes it after the command exited. Any other end (stopped, interrupted) came from elsewhere
+fn finished_inside(outcome: Option<&str>) -> bool {
+    matches!(outcome, Some("completed" | "failed" | "rejected"))
+}
+
+/// The command's own exit code; when it was stopped (a signal, no code), the task's result: 0 if it completed
+fn exit_code(code: Option<i32>, outcome: &str) -> i32 {
+    code.unwrap_or(if outcome == "completed" { 0 } else { 1 })
 }
 
 /// Ctrl-C or SIGTERM: the user stops the task (the lease stream then reports it, and the command is stopped)
@@ -241,4 +265,28 @@ fn stop_group(pid: Option<libc::pid_t>) {
         tokio::time::sleep(Duration::from_secs(3)).await;
         unsafe { libc::kill(-pgid, libc::SIGKILL) };
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_command_that_finished_its_task_is_given_time_to_exit() {
+        for o in ["completed", "failed", "rejected"] {
+            assert!(finished_inside(Some(o)), "{o}");
+        }
+        for o in [Some("cancelled"), Some("interrupted"), Some("abandoned"), None] {
+            assert!(!finished_inside(o), "{o:?}: stop it now");
+        }
+    }
+
+    #[test]
+    fn the_exit_code_is_the_command_s_or_the_task_s_result() {
+        assert_eq!(exit_code(Some(0), "failed"), 0, "its own code wins");
+        assert_eq!(exit_code(Some(3), "completed"), 3);
+        assert_eq!(exit_code(None, "completed"), 0, "stopped after it completed the task");
+        assert_eq!(exit_code(None, "cancelled"), 1);
+        assert_eq!(exit_code(None, ""), 1);
+    }
 }

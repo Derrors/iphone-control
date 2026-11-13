@@ -95,6 +95,13 @@ pub const SPRINGBOARD: &str = "com.apple.springboard";
 const HID_PAGE_CONSUMER: u32 = 0x0C;
 /// 消费者页里的电源键
 const HID_POWER: u32 = 0x30;
+/// 电源键按多久。太长太短都锁不了屏，实测（每次先解锁，按完看 `/wda/locked`）：
+/// - iPhone 18 Pro Max（iOS 27.2.1）：0.05～0.15 秒约 0.7 秒锁屏；按住 0.5 秒没反应（当成了长按）
+/// - iPhone 15 Pro Max（iOS 27.0.1）：0.05、0.1 秒调用卡约 5.3 秒、不锁；0.15、0.2、0.3 秒都在 3 秒内锁上
+/// - iPad mini 5（iPadOS 26.7.3）：0.1 秒同样卡约 5.4 秒、不锁；0.15、0.2、0.3、0.5 秒都在 1 秒内锁上
+///
+/// 0.15 秒是这几台都能锁的
+const POWER_PRESS_SECS: f64 = 0.15;
 /// 消费者页里的 AC Home
 const HID_AC_HOME: u32 = 0x223;
 /// 启动 App 后至少过这么久才返回：App 切到前台的放大动画约 0.5 秒，期间的点击会被吞
@@ -663,12 +670,11 @@ impl<T: Transport> WdaClient<T> {
         self.hid_event(HID_PAGE_CONSUMER, HID_AC_HOME, 0.05).await
     }
 
-    /// 经 IOHID 短按电源键（0.1 秒，和手指按一下差不多）。WDA 自己的 `/wda/lock` 在 iOS 27 上按住 0.5 秒，
-    /// iOS 27 以下用 XCTest 的 `pressLockButton`，iPhone 12 mini（iOS 26.4.1）上锁不了屏。
-    /// 不能按住久：iPhone 18 Pro Max（iOS 27.2.1）上按住 0.5 秒完全没反应（当成了长按），0.05～0.15 秒约 0.7 秒锁屏。
+    /// 经 IOHID 短按电源键（[`POWER_PRESS_SECS`]，和手指按一下差不多）。WDA 自己的 `/wda/lock` 在 iOS 27 上按住 0.5 秒，
+    /// iOS 27 以下用 XCTest 的 `pressLockButton`，iPhone 12 mini（iOS 26.4.1）、iPad mini 5（iPadOS 26.7.3）上锁不了屏。
     /// 屏幕已熄灭时按它会把屏幕点亮，调用方要先确认没锁屏
     pub async fn press_power_hid(&mut self) -> Result<()> {
-        self.hid_event(HID_PAGE_CONSUMER, HID_POWER, 0.1).await
+        self.hid_event(HID_PAGE_CONSUMER, HID_POWER, POWER_PRESS_SECS).await
     }
 
     pub async fn lock(&mut self) -> Result<()> {
@@ -945,7 +951,8 @@ mod tests {
         let body = |i: usize| serde_json::from_str::<Value>(seen[i].2.as_deref().unwrap()).unwrap();
         assert_eq!((body(1)["page"].as_u64(), body(1)["usage"].as_u64()), (Some(0x0C), Some(0x223)));
         assert_eq!((body(2)["page"].as_u64(), body(2)["usage"].as_u64()), (Some(0x0C), Some(0x30)));
-        assert_eq!(body(2)["duration"], 0.1);
+        // 0.1 秒在 iPhone 15 Pro Max、iPad mini 5 上锁不了屏，0.5 秒在 iPhone 18 Pro Max 上锁不了（见 POWER_PRESS_SECS）
+        assert_eq!(body(2)["duration"], 0.15);
     }
 
     #[tokio::test]

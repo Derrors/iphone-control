@@ -31,6 +31,7 @@ All notable changes to this project are documented here. The format is based on 
 
 ### Fixed
 
+- `task run`: a command that ended its task with `task finish` is no longer stopped on its way out with exit code 1. It now has 5 seconds to exit with its own code; if it is stopped after that, the exit code is 0 when the task completed.
 - Holding an arrow key in a setup menu keeps moving the selection without echoing key sequences into the menu.
 - AI task summaries on the control page are formatted: bold, lists, inline code and line breaks show as such instead of raw Markdown.
 - On iOS 27 and later, a system alert (a permission prompt such as "Allow Calendar to use your location?") that the live picture on the control page doesn't show is now drawn on the picture where it is, with its buttons; a button there taps it on the phone.

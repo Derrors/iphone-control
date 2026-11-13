@@ -41,6 +41,9 @@ pub fn write(shell: Shell, output: &mut dyn Write) -> anyhow::Result<()> {
     let mut command = public_command(&super::Cli::command());
     command.build();
     let mut script = Vec::new();
+    // clap_complete 4.6.11 builds inconsistent Bash subcommand names for a
+    // hyphenated binary. Its Fish nested-command checks also match option
+    // values (e.g. the directory in `--data-dir check update`).
     match shell {
         Shell::Zsh => clap_complete::generate(clap_complete::Shell::Zsh, &mut command, "iphone-control", &mut script),
         Shell::Bash => bash::generate(&command, &mut script)?,

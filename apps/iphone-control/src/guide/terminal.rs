@@ -1,6 +1,6 @@
 //! Small, local menus for the guide. Text and secret input stay with the CLI.
 //!
-//! termion decodes complete key sequences and restores termios after each read.
+//! termion decodes complete key sequences and restores termios when the menu exits.
 //! We never hide the cursor or enter an alternate screen.
 use std::fmt;
 use std::io::{self, IsTerminal, Read};
@@ -54,7 +54,7 @@ impl MenuSignals {
 
 impl Drop for MenuSignals {
     fn drop(&mut self) {
-        // Restore before re-delivering, after read_key's raw terminal guard has dropped.
+        // Restore before re-delivering, after the menu's raw terminal guard has dropped.
         unsafe {
             for (signal, previous) in self.0.iter().rev() {
                 libc::sigaction(*signal, previous, std::ptr::null_mut());
@@ -164,15 +164,11 @@ fn decode(bytes: &[u8]) -> Key {
 /// terminal is simply idle, so the caller can skip repainting an unchanged
 /// frame. A byte that arrives but forms an unknown/partial sequence still
 /// returns `Some(Key::Unknown)`, as does every later timeout.
-fn read_key(utf8: &mut Vec<u8>, queued: &mut Option<u8>) -> io::Result<Option<Key>> {
-    // The input and output may be separate terminals. Read keys in raw mode
-    // on stdin and restore it before rendering the next frame.
-    let input = std::fs::File::from(std::io::stdin().as_fd().try_clone_to_owned()?);
-    let mut input = input.into_raw_mode()?;
+fn read_key(input: &mut std::fs::File, utf8: &mut Vec<u8>, queued: &mut Option<u8>) -> io::Result<Option<Key>> {
     // Periodic wakeups let the caller notice a resize, even without keys.
     let first = match queued.take() {
         Some(byte) => byte,
-        None => match read_byte(&mut input, Instant::now() + Duration::from_millis(100))? {
+        None => match read_byte(input, Instant::now() + Duration::from_millis(100))? {
             Some(byte) => byte,
             None => return Ok(None),
         },
@@ -197,12 +193,12 @@ fn read_key(utf8: &mut Vec<u8>, queued: &mut Option<u8>) -> io::Result<Option<Ke
     let deadline = Instant::now() + SEQUENCE_WAIT;
     let mut bytes = vec![first];
     if first == 0x1b {
-        let Some(second) = read_byte(&mut input, deadline)? else { return Ok(Some(Key::Escape)) };
+        let Some(second) = read_byte(input, deadline)? else { return Ok(Some(Key::Escape)) };
         bytes.push(second);
         if matches!(second, b'[' | b'O') {
             let mut overflow = false;
             loop {
-                let Some(next) = read_byte(&mut input, deadline)? else {
+                let Some(next) = read_byte(input, deadline)? else {
                     return Ok(Some(Key::Unknown));
                 };
                 if bytes.len() < 32 {
@@ -221,7 +217,7 @@ fn read_key(utf8: &mut Vec<u8>, queued: &mut Option<u8>) -> io::Result<Option<Ke
     }
     // An Alt-modified character is part of the ESC sequence.
     while std::str::from_utf8(&bytes).is_err_and(|error| error.error_len().is_none()) && bytes.len() < 6 {
-        let Some(next) = read_byte(&mut input, deadline)? else { return Ok(Some(Key::Unknown)) };
+        let Some(next) = read_byte(input, deadline)? else { return Ok(Some(Key::Unknown)) };
         bytes.push(next);
     }
     Ok(Some(decode(&bytes)))
@@ -443,6 +439,9 @@ fn frame(prompt: &str, options: &[&str], state: &Selection, size: (u16, u16)) ->
 
 fn menu(term: &Term, prompt: &str, options: &[&str], default: usize, confirmation: bool) -> anyhow::Result<usize> {
     let _signals = MenuSignals::install()?;
+    // Keep echo off during redraws too. Drop the input guard before MenuSignals
+    // re-delivers a signal. stdin and stdout may point to different terminals.
+    let mut input = std::fs::File::from(std::io::stdin().as_fd().try_clone_to_owned()?).into_raw_mode()?;
     let mut utf8 = Vec::with_capacity(4);
     let mut queued = None;
     let mut state = Selection::new(default, options.len(), confirmation);
@@ -465,16 +464,19 @@ fn menu(term: &Term, prompt: &str, options: &[&str], default: usize, confirmatio
                 // menu must never discard invalid input or accept a stale default.
                 // The prompt is written once per size; idle wakeups must not spam.
                 if resized {
-                    term.write_line(&fit(
-                        ictl_l10n::tr!("放大窗口；Esc 取消", "Enlarge window; Esc cancels"),
-                        usize::from(size.1.saturating_sub(1)),
-                    ))?;
+                    write_menu_line(
+                        term,
+                        &fit(
+                            ictl_l10n::tr!("放大窗口；Esc 取消", "Enlarge window; Esc cancels"),
+                            usize::from(size.1.saturating_sub(1)),
+                        ),
+                    )?;
                 }
                 previous = Some((size, 0));
             } else {
                 let lines = frame(prompt, options, &state, size);
                 for line in &lines {
-                    term.write_line(line)?;
+                    write_menu_line(term, line)?;
                 }
                 previous = Some((size, lines.len()));
             }
@@ -482,17 +484,23 @@ fn menu(term: &Term, prompt: &str, options: &[&str], default: usize, confirmatio
         }
         // An idle wait (no key) leaves the on-screen frame untouched; the next
         // iteration still re-checks term.size(), so resizes keep working.
-        let Some(key) = read_key(&mut utf8, &mut queued)? else { continue };
+        let Some(key) = read_key(&mut input, &mut utf8, &mut queued)? else { continue };
         needs_render = true;
         let current_size = term.size();
         if (current_size.0 < 6 || current_size.1 < 40) && !matches!(key, Key::Escape | Key::CtrlC) {
             continue;
         }
         if let Some(index) = state.key(key, capacity(current_size.0))? {
-            term.write_line(&format!("{}: {}", clean(prompt), clean(options[index])))?;
+            write_menu_line(term, &format!("{}: {}", clean(prompt), clean(options[index])))?;
             return Ok(index);
         }
     }
+}
+
+fn write_menu_line(term: &Term, line: &str) -> io::Result<()> {
+    // Raw mode disables the terminal's automatic carriage return on newline.
+    term.write_str(line)?;
+    term.write_str("\r\n")
 }
 
 #[cfg(test)]

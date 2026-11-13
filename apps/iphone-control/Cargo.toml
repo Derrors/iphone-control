@@ -18,8 +18,8 @@ ictl-sign.workspace = true
 ictl-wda = { workspace = true, optional = true }
 clap = { workspace = true, features = ["string"] }
 clap_complete.workspace = true
-console = "=0.15.11"
-termion = "=4.0.6"
+console.workspace = true
+termion.workspace = true
 tokio.workspace = true
 anyhow.workspace = true
 rustls.workspace = true

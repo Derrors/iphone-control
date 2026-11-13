@@ -1,15 +1,17 @@
-//! `task run --url`: a task on another machine's phone, through its viewer (docs/task-control.md 7.6).
+//! Another machine's viewer, for the phone connected there (docs/task-control.md 7.6, 7.7): `task … --url` and
+//! `mcp --url`.
 //!
-//! The viewer's `POST /api/agent/tasks/open` opens the task and keeps answering with its events (server-sent
-//! events); that response is the lease, as the socket's connection is for `task run` on the same machine. This side
-//! logs in with `IPHONE_CONTROL_VIEWER_TOKEN` (a token that may operate) and keeps it: the command only gets the
-//! task's token, with the viewer's address, so the agent can use `/mcp` for its task but can't control it.
+//! `task run --url`: the viewer's `POST /api/agent/tasks/open` opens the task and keeps answering with its events
+//! (server-sent events); that response is the lease, as the socket's connection is for `task run` on the same
+//! machine. This side logs in with `IPHONE_CONTROL_VIEWER_TOKEN` (a token that may operate) and keeps it: the command
+//! only gets the task's token, with the viewer's address, so the agent can use `/mcp` for its task but can't control
+//! it. The other `task` subcommands list, follow and steer tasks through the same viewer with that login.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{Context, bail};
-use ictl_daemon::protocol::{TaskEvent, TaskOpened};
+use ictl_daemon::protocol::{TaskEvent, TaskInfo, TaskOpened};
 use serde_json::{Value, json};
 
 /// The viewer's login token for `task run --url`
@@ -53,13 +55,6 @@ impl Remote {
         Ok(Self { client: b.build()?, base, ca: ca.map(Path::to_owned), login })
     }
 
-    /// From inside a command `task run --url` started (its environment), with the task's token only
-    pub fn from_env() -> Option<anyhow::Result<Self>> {
-        let url = std::env::var(URL_ENV).ok().filter(|u| !u.is_empty())?;
-        let ca = std::env::var_os(CA_ENV).filter(|c| !c.is_empty()).map(PathBuf::from);
-        Some(Self::new(&url, ca.as_deref(), None))
-    }
-
     /// The login token for opening and controlling tasks
     pub fn login_from_env() -> anyhow::Result<String> {
         std::env::var(LOGIN_ENV).ok().filter(|t| !t.trim().is_empty()).map(|t| t.trim().to_owned()).with_context(|| {
@@ -79,12 +74,53 @@ impl Remote {
         v
     }
 
-    fn post(&self, path: &str, body: &Value) -> reqwest::RequestBuilder {
-        let r = self.client.post(format!("{}{path}", self.base)).json(body);
+    /// A request to `path` on the viewer, with the login if there is one
+    pub fn request(&self, method: reqwest::Method, path: &str) -> reqwest::RequestBuilder {
+        let r = self.client.request(method, format!("{}{path}", self.base));
         match &self.login {
             Some(t) => r.bearer_auth(t),
             None => r,
         }
+    }
+
+    fn post(&self, path: &str, body: &Value) -> reqwest::RequestBuilder {
+        self.request(reqwest::Method::POST, path).json(body)
+    }
+
+    /// The viewer's address, for messages
+    pub fn base(&self) -> &str {
+        &self.base
+    }
+
+    /// Recent tasks, as `task_list` on the socket
+    pub async fn list(&self) -> anyhow::Result<Vec<TaskInfo>> {
+        let r = self.request(reqwest::Method::GET, "/api/agent/tasks").timeout(Duration::from_secs(15));
+        let r = r.send().await.with_context(|| self.base.clone())?;
+        if !r.status().is_success() {
+            bail!("{}", failure(r).await);
+        }
+        let v: Value = r.json().await?;
+        Ok(serde_json::from_value(v["tasks"].clone())?)
+    }
+
+    /// A task's events so far, then new ones until it ends
+    pub async fn events(&self, id: &str) -> anyhow::Result<Events> {
+        let r = self.request(reqwest::Method::GET, &format!("/api/agent/tasks/{id}/events"));
+        let resp = r.send().await.with_context(|| self.base.clone())?;
+        if !resp.status().is_success() {
+            bail!("{}", failure(resp).await);
+        }
+        Ok(Events::new(resp))
+    }
+
+    /// `pause`, `resume`, `takeover`, `handback`, `stop`, `confirm` (`body`: `{step, approve}`)
+    pub async fn control(&self, id: &str, action: &str, body: &Value) -> anyhow::Result<()> {
+        let r = self.post(&format!("/api/agent/tasks/{id}/{action}"), body).timeout(Duration::from_secs(15));
+        let r = r.send().await.with_context(|| self.base.clone())?;
+        if !r.status().is_success() {
+            bail!("{}", failure(r).await);
+        }
+        Ok(())
     }
 
     /// Opens a task: its id and token, and its events, whose response is the lease
@@ -94,7 +130,7 @@ impl Remote {
         if !resp.status().is_success() {
             bail!("{}", failure(resp).await);
         }
-        let mut events = Events { resp, buf: Vec::new() };
+        let mut events = Events::new(resp);
         match events.next().await {
             Some(e) if e.event == "opened" => Ok((serde_json::from_value(e.data)?, events)),
             _ => bail!(ictl_l10n::tr!("控制台没有开出任务", "The viewer didn't open the task")),
@@ -134,7 +170,7 @@ impl Remote {
 }
 
 /// What the viewer said when it refused
-async fn failure(r: reqwest::Response) -> String {
+pub async fn failure(r: reqwest::Response) -> String {
     let status = r.status();
     let text = r.text().await.unwrap_or_default();
     let message = serde_json::from_str::<Value>(&text).ok().and_then(|v| v["message"].as_str().map(str::to_owned));
@@ -153,12 +189,29 @@ pub struct Events {
 }
 
 impl Events {
+    pub fn new(resp: reqwest::Response) -> Self {
+        Self { resp, buf: Vec::new() }
+    }
+
     /// The next event; `None` when the response ended (the task ended, or the viewer went away)
     pub async fn next(&mut self) -> Option<TaskEvent> {
         loop {
-            if let Some(i) = self.buf.windows(2).position(|w| w == b"\n\n") {
-                let block: Vec<u8> = self.buf.drain(..i + 2).collect();
-                if let Some(e) = parse_event(&String::from_utf8_lossy(&block)) {
+            let (event, data) = self.next_raw().await?;
+            if let Some(e) = event.and_then(|event| Some(TaskEvent { event, data: serde_json::from_str(&data).ok()? }))
+            {
+                return Some(e);
+            }
+        }
+    }
+
+    /// The next event with data, as it came: its name if it had one, and its data
+    pub async fn next_raw(&mut self) -> Option<(Option<String>, String)> {
+        loop {
+            // events end with a blank line (CRLF too). Found in the bytes: a chunk may end inside a character
+            if let Some((end, next)) = event_end(&self.buf) {
+                let block = String::from_utf8_lossy(&self.buf[..end]).replace("\r\n", "\n");
+                self.buf.drain(..next);
+                if let Some(e) = parse_block(&block) {
                     return Some(e);
                 }
                 continue;
@@ -171,8 +224,19 @@ impl Events {
     }
 }
 
-/// One server-sent event (`event:` and `data:` lines); comments (`: ping`) and malformed ones are `None`
-fn parse_event(block: &str) -> Option<TaskEvent> {
+/// Where the first event in `buf` ends, and where the next one starts
+fn event_end(buf: &[u8]) -> Option<(usize, usize)> {
+    let lf = buf.windows(2).position(|w| w == b"\n\n").map(|i| (i, i + 2));
+    let crlf = buf.windows(4).position(|w| w == b"\r\n\r\n").map(|i| (i, i + 4));
+    match (lf, crlf) {
+        (Some(a), Some(b)) => Some(if a.0 <= b.0 { a } else { b }),
+        (a, b) => a.or(b),
+    }
+}
+
+/// One server-sent event: its `event:` name and `data:` lines; `None` for one without data (comments such as
+/// `: ping`, a `retry:` alone)
+fn parse_block(block: &str) -> Option<(Option<String>, String)> {
     let (mut event, mut data) = (None, Vec::new());
     for line in block.lines() {
         if let Some(v) = line.strip_prefix("event:") {
@@ -181,7 +245,15 @@ fn parse_event(block: &str) -> Option<TaskEvent> {
             data.push(v.strip_prefix(' ').unwrap_or(v));
         }
     }
-    Some(TaskEvent { event: event?, data: serde_json::from_str(&data.join("\n")).ok()? })
+    let data = data.join("\n");
+    (!data.trim().is_empty()).then_some((event, data))
+}
+
+/// One task event (named, with JSON data); `None` otherwise
+#[cfg(test)]
+fn parse_event(block: &str) -> Option<TaskEvent> {
+    let (event, data) = parse_block(block)?;
+    Some(TaskEvent { event: event?, data: serde_json::from_str(&data).ok()? })
 }
 
 #[cfg(test)]
@@ -196,6 +268,12 @@ mod tests {
         let e = parse_event("event: step\ndata:{\"id\":1}\n").unwrap();
         assert_eq!(e.data["id"], 1);
         assert!(parse_event("data: {}\n\n").is_none(), "no event name");
+        // MCP over HTTP: events without a name, priming ones without data
+        assert_eq!(parse_block("id: 1\nretry: 3000\ndata:\n"), None);
+        assert_eq!(parse_block("data: {\"id\":1}"), Some((None, "{\"id\":1}".into())));
+        assert_eq!(event_end(b"data: 1\r\n\r\ndata: 2\n\n"), Some((7, 11)));
+        assert_eq!(event_end(b"data: 1\n\ndata: 2\r\n\r\n"), Some((7, 9)));
+        assert_eq!(event_end("data: \"设".as_bytes()), None, "not yet");
     }
 
     #[test]

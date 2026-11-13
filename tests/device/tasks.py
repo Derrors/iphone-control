@@ -527,6 +527,17 @@ async def remote(stack):
                 data.append(line[5:].lstrip())
         return None, None
 
+    url = ["--url", VIEWER] + (["--ca", ca] if ca else [])
+    # the platform's command line (the login) and the agent's shell (the task's token and the address, no login)
+    platform_env = {k: v for k, v in os.environ.items() if k not in (TOKEN_ENV, "ICTL_VIEWER_TOKEN")}
+    platform_env["IPHONE_CONTROL_VIEWER_TOKEN"] = login
+
+    async def rcli(*args, env=None):
+        p = await asyncio.create_subprocess_exec(*BIN, "task", *args, *url, env=env or platform_env,
+                                                 stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
+        out, _ = await asyncio.wait_for(p.communicate(), 30)
+        return p.returncode, out.decode(errors="replace").strip()
+
     name, opened = await asyncio.wait_for(next_event(), 30)
     check(c, "the platform opens a task over HTTP (server-sent events)", resp.status_code == 200 and name == "opened",
           f"{resp.status_code} {name}")
@@ -558,6 +569,19 @@ async def remote(stack):
     r = await nobody.get("/api/info", headers=hdr)
     check(c, "nor see the page's API", r.status_code == 401, str(r.status_code))
 
+    # the platform's command line, through the viewer
+    code, out = await rcli("list")
+    check(c, "`task list --url` shows the task", code == 0 and task_id in out and "running" in out, out[-200:])
+    code, out = await rcli("pause", task_id)
+    check(c, "`task pause --url` pauses it", code == 0 and await state_is(task_id, "paused"), out)
+    code, out = await rcli("resume", task_id)
+    check(c, "`task resume --url` resumes it", code == 0 and await state_is(task_id, "running"), out)
+    agent_env = {k: v for k, v in os.environ.items() if k not in ("ICTL_VIEWER_TOKEN", "IPHONE_CONTROL_VIEWER_TOKEN")}
+    agent_env.update({TOKEN_ENV: token, "IPHONE_CONTROL_URL": VIEWER, **({"IPHONE_CONTROL_CA": ca} if ca else {})})
+    code, out = await rcli("pause", task_id, env=agent_env)
+    check(c, "in the agent's shell (no login) `task pause` is refused",
+          code != 0 and await state_is(task_id, "running"), out)
+
     # the platform pauses: the agent's next call waits until it resumes
     r = await platform.post(f"/api/agent/tasks/{task_id}/pause", json={})
     check(c, "the platform pauses it over HTTP", r.status_code == 200 and await state_is(task_id, "paused"), r.text)
@@ -575,9 +599,11 @@ async def remote(stack):
     waiting = await state_is(task_id, "waiting", 30)
     r = await nobody.post(f"/api/agent/tasks/{task_id}/confirm", json={"approve": True}, headers=hdr)
     check(c, "the agent waits for a confirmation it can't give itself", waiting and r.status_code == 401, str(r.status_code))
-    r = await platform.post(f"/api/agent/tasks/{task_id}/confirm", json={"approve": True})
+    code, out = await rcli("approve", task_id, env=agent_env)
+    check(c, "nor with `task approve` in its shell", code != 0 and await state_is(task_id, "waiting", 2), out)
+    code, out = await rcli("approve", task_id)
     err, text, _ = await asyncio.wait_for(asking, 30)
-    check(c, "the platform approves it over HTTP", r.status_code == 200 and not err, text)
+    check(c, "the platform's `task approve --url` answers it", code == 0 and not err, f"{out} / {text}")
     by = [d.get("by") for n, d in seen if n == "control"]
     check(c, "the log names the login token", bool(by) and all(str(b).startswith("viewer:") for b in by), json.dumps(by))
 
@@ -590,12 +616,16 @@ async def remote(stack):
     except Exception as e:  # noqa: BLE001 - any refusal will do
         err, text = True, f"{type(e).__name__}: {e}"
     check(c, "after that the agent is refused", err, text)
+    code, out = await rcli("events", task_id)
+    lines = [json.loads(line) for line in out.splitlines() if line.startswith("{")]
+    check(c, "`task events --url` replays the task to its end",
+          code == 0 and bool(lines) and lines[0]["event"] == "task" and lines[-1]["event"] == "done",
+          f"{len(lines)} events, last {lines[-1]['event'] if lines else None}")
 
     # `task run --url`: run.py under it, through the viewer only (no daemon socket here)
     env = {k: v for k, v in os.environ.items() if k not in (TOKEN_ENV, "MCP_URL", "MCP_CA", "ICTL_VIEWER_TOKEN")}
     env.update({"IPHONE_CONTROL_VIEWER_TOKEN": login, "ICTL_SOCKET": "/nonexistent/ctl.sock",
                 "SHOTS_DIR": tempfile.mkdtemp(prefix="ictl-shots-")})
-    url = ["--url", VIEWER] + (["--ca", ca] if ca else [])
     steps = [["iphone_status", {}], ["iphone_press_button", {"button": "home"}], ["iphone_list_elements", {"limit": 3}]]
     title = f"真机回归：task run --url {int(time.time())}"
     p = await asyncio.create_subprocess_exec(
@@ -610,6 +640,22 @@ async def remote(stack):
     check(c, "`task run --url` runs run.py through the viewer (exit 0)", p.returncode == 0, last[-1] if last else out[-300:])
     check(c, "its task completed with every call as a step",
           t.get("state") == "completed" and t.get("steps", 0) >= len(steps), json.dumps(t, ensure_ascii=False))
+
+    # an agent that only starts a command: plain `iphone-control mcp`, which bridges to the viewer by itself
+    title = f"真机回归：task run --url，stdio 转接 {int(time.time())}"
+    stdio_env = {**env, "MCP_CMD": shlex.join([*BIN, "mcp"])}
+    p = await asyncio.create_subprocess_exec(
+        *BIN, "task", "run", *url, "--title", title, "--owner", OWNER, "--",
+        "env", "-u", "IPHONE_CONTROL_MCP_URL", sys.executable, os.path.join(HERE, "run.py"), json.dumps(steps),
+        env=stdio_env, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
+    )
+    out, _ = await asyncio.wait_for(p.communicate(), 300)
+    out = out.decode(errors="replace")
+    last = [line for line in out.splitlines() if line.startswith("---")]
+    t = next((t for t in reversed(await tasks()) if t["title"] == title), {})
+    check(c, "a stdio MCP client under `task run --url` works through `iphone-control mcp` (the bridge)",
+          p.returncode == 0 and t.get("state") == "completed" and t.get("steps", 0) >= len(steps),
+          (last[-1] if last else out[-300:]) + f" / {t.get('state')}, {t.get('steps')} steps")
 
     title = f"真机回归：task run --url finish {int(time.time())}"
     script = '[ -z "$IPHONE_CONTROL_VIEWER_TOKEN" ] || exit 9; "$@" task finish 远端完成'

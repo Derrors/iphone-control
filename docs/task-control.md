@@ -136,7 +136,8 @@ Running → Waiting（等确认）→ Running
 | 四 | HTTP MCP（7.4） | 已完成（2026-11-13） |
 | 四 | 登录（7.5，一个令牌） | 已完成（2026-11-13） |
 | 四 | 有名字的令牌和只读令牌、跨主机开任务（7.6） | 已完成（2026-11-13） |
-| 四 | 远端 stdio MCP 转接、多设备租约 | 等需要时 |
+| 四 | 远端 stdio 转接、`task --url`（7.7） | 已完成（2026-11-13） |
+| 四 | 更细的权限、多设备租约 | 等需要时 |
 
 ## 5. 阶段一的具体设计
 
@@ -318,4 +319,11 @@ Running → Waiting（等确认）→ Running
 - `POST /api/agent/tasks/open`（能操作的令牌，`{title, owner?, apps?}`）：控制台替平台在守护进程的 socket 上 `task_open`，把 `{id, token}` 作为第一条 `opened` 事件发回，之后转发任务事件。这个 HTTP 响应就是租约：客户端断开，控制台丢掉 socket 上的租约，任务记为 abandoned。和本机一样不用心跳；每 15 秒一条注释防代理掐断空闲连接。控制台重启时这些任务也会中断。
 - **执行和控制分开**：平台留着登录令牌（控制方：`/api/agent/tasks/<id>/<动作>`），只把任务口令交给 agent（执行方）。`/mcp` 和 `POST /api/agent/tasks/finish` 认进行中任务的口令（请求头 `Iphone-Control-Task-Token`，控制台用新的守护进程请求 `task_check` 核对），别的路径不认。所以远端 agent 能为任务操作手机、结束任务，碰不到暂停、继续、接管、确认。这是 5.6 的进程检查在跨主机时做不到的部分；错的任务口令和错的登录令牌一起计入限速。
 - `task run --url <控制台> [--ca <证书>]`：登录令牌从 `IPHONE_CONTROL_VIEWER_TOKEN` 读，**不传给命令**（启动前从环境里去掉）；命令拿到 `IPHONE_CONTROL_TASK_TOKEN`、`IPHONE_CONTROL_TASK_ID`、`IPHONE_CONTROL_URL`、`IPHONE_CONTROL_MCP_URL`（和 `IPHONE_CONTROL_CA`）。命令里的 `task finish` 看到 `IPHONE_CONTROL_URL` 就经控制台结束任务。其余行为（Ctrl-C 停止、命令结束任务结束、在别处停止时停掉命令、`task finish` 后给 5 秒退出）和本机一样。
-- **局限**：stdio 方式的 MCP 客户端在远端还用不了（要有一个 stdio 到 HTTP 的转接，比如以后的 `iphone-control mcp --url`）；同一个控制台上的令牌都是全权或只读，还没有「只能开任务」这类更细的权限。
+- **局限**：同一个控制台上的令牌都是全权或只读，还没有「只能开任务」这类更细的权限。远端的 stdio 客户端和其他 `task` 命令见 7.7。
+
+### 7.7 远端的 stdio 转接和 `task --url`（2026-11-13）
+
+- **`iphone-control mcp --url <控制台> [--ca <证书>]`**：stdin/stdout 上是 MCP（每行一条 JSON-RPC），另一边是控制台的 `/mcp`（Streamable HTTP）。在 JSON-RPC 这一层转发，不用 rmcp 的 HTTP 客户端（免得多带一个 reqwest 版本）：每条消息 POST 过去，回来的 JSON 或 SSE（收到这个请求的回复就停）写回 stdout；`initialize` 单独先发，之后带上它给的 `Mcp-Session-Id` 和协议版本；请求并发（工具调用可能等人很久），通知和对服务端请求的回复按顺序发（`notifications/initialized` 先到）；HTTP 出错时给这条请求回一个 JSON-RPC 错误，客户端不会一直等；stdin 关了就 `DELETE` 会话。
+- **凭据**：有 `IPHONE_CONTROL_TASK_TOKEN` 就只带任务口令（不带登录，所以不能控制任务），否则用 `IPHONE_CONTROL_VIEWER_TOKEN` 登录。`--url` 默认取 `IPHONE_CONTROL_URL`、`--ca` 取 `IPHONE_CONTROL_CA`，正是 `task run --url` 给命令设的：里面的 agent 照常配置 `iphone-control mcp`，不用改。
+- **`task … --url`**：`--url`、`--ca` 放到 `task` 这一层（各子命令都能写，也从 `IPHONE_CONTROL_URL`、`IPHONE_CONTROL_CA` 取）。`list`、`events`、各种控制经控制台的 `GET /api/agent/tasks`、`GET /api/agent/tasks/<id>/events`、`POST /api/agent/tasks/<id>/<动作>`，用登录令牌；`finish` 用任务口令。`task run --url` 启动的命令有 `IPHONE_CONTROL_URL` 但没有登录令牌，所以 agent 在里面执行 `task approve` 之类会在本地就失败，即使绕过去也会被控制台 401。
+- **SSE 解析**：在字节里找事件边界（`\n\n` 或 `\r\n\r\n`），再把完整的事件转成文字，免得一块数据断在中文字符中间。

@@ -8,6 +8,8 @@
 
 ### 新增
 
+- `iphone-control mcp --url https://<那台机器>:8200`：把 stdio 转到另一台机器控制台的 `/mcp`，只能填命令的 MCP 客户端也能操作接在那台机器上的手机。有任务口令就只带它，否则用 `IPHONE_CONTROL_VIEWER_TOKEN` 登录；`task run --url` 启动的命令已经设好 `IPHONE_CONTROL_URL`，里面照常配置的 `iphone-control mcp` 自动转接。
+- `task` 的所有子命令都能加 `--url`（或设 `IPHONE_CONTROL_URL`）：`list`、`events`、`pause`、`resume`、`takeover`、`handback`、`stop`、`approve`、`reject` 经另一台机器的控制台操作，登录令牌放在 `IPHONE_CONTROL_VIEWER_TOKEN`。
 - 有名字的登录令牌，可以是只读的：`iphone-control viewer token add <名字> [--read-only]`、`list`、`show <名字> [--new]`、`remove <名字>`。只读令牌能看画面、设备状态和任务，所有操作（点按、输入、开任务、暂停、确认、切换设备、`/mcp`）都被拒绝，页面上也不显示操作入口。任务记录里写下是哪个令牌做的控制（`viewer:<名字>`）。令牌改存在 `viewer-tokens.json`，原来的令牌成了 `owner`，升级后不用重新登录；增删、换令牌马上生效，不用重启控制台。
 - 从另一台机器开任务：`iphone-control task run --url https://<那台机器>:8200 -- <命令>`（登录令牌放在 `IPHONE_CONTROL_VIEWER_TOKEN`），或者直接调 `POST /api/agent/tasks/open`，返回的事件流就是租约。另一台机器上的 agent 只拿任务口令：`/mcp` 认进行中任务的口令（请求头 `Iphone-Control-Task-Token`），它能为这个任务操作手机，但碰不到暂停、确认这些控制接口，不能批准自己。
 - 控制台和它的 `/mcp` 要登录了，本机也一样（控制台分不清本机的浏览器和经 frp、cloudflared 等反向代理转发进来的访问）。令牌第一次启动时生成，存在数据目录的 `viewer-token`（0600）；`iphone-control viewer token` 显示令牌、本机和局域网的登录链接以及接入 HTTP MCP 的命令，`--new` 换一个新令牌。浏览器登录一次后记住 30 天；程序和 MCP 客户端用 `Authorization: Bearer <令牌>`。输错太多次（一分钟 20 次）会暂停校验一分钟。命令行、`iphone-control mcp`（stdio）和 `task run` 走本机的 Unix socket，不受影响。

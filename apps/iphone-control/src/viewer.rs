@@ -1597,6 +1597,82 @@ mod tests {
         );
     }
 
+    /// `iphone-control mcp --url`: stdio on one side, this viewer's /mcp on the other; with the login, and with a
+    /// task's token alone (which lists the confirm tool)
+    #[tokio::test]
+    async fn a_stdio_client_reaches_mcp_over_http_through_the_bridge() {
+        use tokio::io::{AsyncBufReadExt, BufReader};
+        let temp = tempfile::tempdir_in("/tmp").unwrap();
+        let socket = temp.path().join("daemon.sock");
+        let daemon = tokio::net::UnixListener::bind(&socket).unwrap();
+        // a daemon that knows one active task, with the token `good`
+        tokio::spawn(async move {
+            while let Ok((mut peer, _)) = daemon.accept().await {
+                let mut line = String::new();
+                BufReader::new(&mut peer).read_line(&mut line).await.unwrap();
+                let req: Value = serde_json::from_str(&line).unwrap();
+                let reply = if req["task"] == "good" { Response::text("t1") } else { Response::error("no such task") };
+                let _ = peer.write_all(format!("{}\n", serde_json::to_string(&reply).unwrap()).as_bytes()).await;
+            }
+        });
+        let mut ctx = test_ctx(temp.path(), &socket);
+        let login = "o".repeat(64);
+        let entry = auth::Entry { name: "owner".into(), role: auth::Role::Operate, token: login.clone(), created: 0 };
+        ctx.auth = Some(auth::Auth::fixed(vec![entry], 8202));
+        ctx.mcp = Some(ictl_mcp::http_service(socket.clone()));
+        let ctx = Arc::new(ctx);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let served = ctx.clone();
+        tokio::spawn(async move {
+            while let Ok((tcp, _)) = listener.accept().await {
+                let ctx = served.clone();
+                tokio::spawn(async move { serve(Conn::Plain(tcp), &ctx).await });
+            }
+        });
+
+        for (login, task, confirm) in [(Some(login), None, false), (None, Some("good".to_owned()), true)] {
+            let remote = crate::remote::Remote::new(&url, None, login).unwrap();
+            let (mut to_bridge, from_client) = tokio::io::duplex(1 << 16);
+            let (to_client, from_bridge) = tokio::io::duplex(1 << 16);
+            let bridge = tokio::spawn(crate::mcp_bridge::bridge(remote, task, BufReader::new(from_client), to_client));
+            let mut answers = BufReader::new(from_bridge).lines();
+            let mut say = async |line: &str| to_bridge.write_all(format!("{line}\n").as_bytes()).await.unwrap();
+            say(r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"t","version":"1"}}}"#).await;
+            let a: Value = serde_json::from_str(&answers.next_line().await.unwrap().unwrap()).unwrap();
+            assert_eq!(a["id"], 1, "{a}");
+            assert!(a["result"]["serverInfo"].is_object(), "{a}");
+            say(r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#).await;
+            say(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#).await;
+            let a: Value = serde_json::from_str(&answers.next_line().await.unwrap().unwrap()).unwrap();
+            let names: Vec<&str> =
+                a["result"]["tools"].as_array().unwrap().iter().filter_map(|t| t["name"].as_str()).collect();
+            assert!(names.contains(&"iphone_tap"), "{names:?}");
+            assert_eq!(names.contains(&"iphone_confirm"), confirm, "the confirm tool only in a task");
+            // a broken line gets an error instead of silence
+            say("not json").await;
+            let a: Value = serde_json::from_str(&answers.next_line().await.unwrap().unwrap()).unwrap();
+            assert_eq!(a["error"]["code"], -32700);
+            drop(to_bridge);
+            bridge.await.unwrap().unwrap();
+        }
+
+        // a wrong login: the request gets an error, not a hang
+        let remote = crate::remote::Remote::new(&url, None, Some("nope".into())).unwrap();
+        let (mut to_bridge, from_client) = tokio::io::duplex(1 << 16);
+        let (to_client, from_bridge) = tokio::io::duplex(1 << 16);
+        let bridge = tokio::spawn(crate::mcp_bridge::bridge(remote, None, BufReader::new(from_client), to_client));
+        to_bridge.write_all(b"{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"initialize\",\"params\":{}}\n").await.unwrap();
+        let line = BufReader::new(from_bridge).lines().next_line().await.unwrap().unwrap();
+        let a: Value = serde_json::from_str(&line).unwrap();
+        assert!(
+            a["id"] == 7 && a["error"]["message"].as_str().is_some_and(|m| m.contains("登录") || m.contains("login")),
+            "{a}"
+        );
+        drop(to_bridge);
+        bridge.await.unwrap().unwrap();
+    }
+
     #[test]
     fn plain_http_from_the_network_goes_to_the_same_page_over_https() {
         let at = |raw: &[u8]| https_location(raw, &Head::parse(raw).unwrap(), 8202);

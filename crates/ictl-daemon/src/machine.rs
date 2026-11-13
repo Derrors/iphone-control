@@ -20,8 +20,8 @@ impl WdaStartHint {
                 "On your iPhone or iPad, open Settings → General → VPN & Device Management. Under Developer App, select the Apple ID used for signing and tap Trust."
             ),
             Self::LaunchRefused => ictl_l10n::tr!(
-                "设备拒绝启动 WDA。请运行 iphone-control doctor 查看诊断信息。",
-                "The device refused to launch WDA. Run iphone-control doctor for diagnostics."
+                "设备拒绝启动 WDA。请到「设置 → 通用 → VPN 与设备管理」，在「开发者 App」下检查签名用的 Apple ID。若显示「信任」，点它。若已信任，运行 iphone-control doctor 检查签名。",
+                "The device refused to launch WDA. Open Settings → General → VPN & Device Management. Under Developer App, select the Apple ID used for signing. Tap Trust if offered. If already trusted, run iphone-control doctor to check the signature."
             ),
             Self::InstallWda => ictl_l10n::tr!(
                 "这台设备还没有安装 WDA。运行 iphone-control setup 安装。",
@@ -76,7 +76,7 @@ impl DeviceState {
                     Some(e) => ictl_l10n::trf!("WDA 启动失败，稍后重试：{e}", "WDA failed to start, retrying later: {e}"),
                 };
                 if let Some(hint) = hint {
-                    text.push('\n');
+                    text.push_str(ictl_l10n::tr!("。", ". "));
                     text.push_str(hint.message());
                 }
                 text

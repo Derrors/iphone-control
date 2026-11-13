@@ -970,8 +970,10 @@ mod tests {
             "device": null, "persisted": {}, "auto_unlock": false, "unlock_disabled": false,
             "notify_configured": false, "log_tail": []
         });
-        for (lang, expected) in [(ictl_l10n::Lang::En, "The device refused"), (ictl_l10n::Lang::Zh, "设备拒绝启动")]
-        {
+        for (lang, expected, settings) in [
+            (ictl_l10n::Lang::En, "The device refused", "Settings → General → VPN & Device Management"),
+            (ictl_l10n::Lang::Zh, "设备拒绝启动", "设置 → 通用 → VPN 与设备管理"),
+        ] {
             let reply = async {
                 let (peer, _) = listener.accept().await.unwrap();
                 let (reader, mut writer) = peer.into_split();
@@ -983,7 +985,13 @@ mod tests {
             let (result, ()) = tokio::join!(ictl_l10n::scope(lang, daemon(&ctx)), reply);
             let v = result.unwrap();
             assert_eq!(v["wda_start_notice"]["kind"], "launch_refused");
-            assert!(v["wda_start_notice"]["message"].as_str().unwrap().starts_with(expected));
+            let message = v["wda_start_notice"]["message"].as_str().unwrap();
+            assert!(
+                message.starts_with(expected)
+                    && message.contains(settings)
+                    && message.contains("iphone-control doctor")
+            );
+            assert_eq!(v["state_text"].as_str().unwrap().lines().count(), 1);
             assert_eq!(v["last_error"], error);
         }
     }

@@ -2408,7 +2408,9 @@ function renderWdaNotice() {
   const message = $('#wda-start-message'), install = $('#wda-install');
   const text = hint?.message || '';
   if (message.textContent !== text) message.textContent = text;
-  install.hidden = hint?.kind !== 'install_wda' || !d?.signed_in;
+  const resign = hint?.kind === 'launch_refused';
+  install.hidden = !d?.signed_in || (!resign && hint?.kind !== 'install_wda');
+  install.textContent = tr(resign ? '重新签名并安装 WDA' : '签名并安装 WDA');
   install.disabled = !!S.signing;
   notice.hidden = !text;
 }

@@ -11,6 +11,7 @@ use std::time::Duration;
 use anyhow::{Context, bail};
 use clap::{Parser, Subcommand};
 use ictl_daemon::config::env as env_nonempty;
+use ictl_daemon::machine::DeviceState;
 use ictl_daemon::protocol::{self, Request, Response};
 
 mod agent;
@@ -821,6 +822,12 @@ where
     }
 }
 
+fn setup_start_message(state: &DeviceState) -> Option<&str> {
+    let DeviceState::WdaStarting { hint, last_error } = state else { return None };
+    // Older daemons put their startup guidance in last_error.
+    hint.map(|h| h.message()).or(last_error.as_deref())
+}
+
 /// The phone's part of the guide: connect, pair, Developer Mode, Apple ID, sign and install WDA, wait for WDA.
 /// Needs the daemon running ([`guide`] starts it first)
 async fn device_setup(cli: &Cli) -> anyhow::Result<()> {
@@ -961,7 +968,7 @@ async fn device_setup(cli: &Cli) -> anyhow::Result<()> {
     }
 
     println!("{}", ictl_l10n::tr!("[6/6] 等待 WDA 启动", "[6/6] Waiting for WDA to start"));
-    let ready_now = snapshot(socket).await.is_ok_and(|s| s.state == ictl_daemon::machine::DeviceState::Ready);
+    let ready_now = snapshot(socket).await.is_ok_and(|s| s.state == DeviceState::Ready);
     if !ready_now {
         println!(
             "{}",
@@ -977,16 +984,14 @@ async fn device_setup(cli: &Cli) -> anyhow::Result<()> {
         if !s.device.is_some_and(|d| d.udid == target) {
             return false;
         }
-        // Older daemons put their startup guidance in last_error.
-        if let ictl_daemon::machine::DeviceState::WdaStarting { last_error: Some(ref error), hint } = s.state {
-            let message = hint.map_or(error.as_str(), |h| h.message());
+        if let Some(message) = setup_start_message(&s.state) {
             let mut previous = shown.borrow_mut();
             if *previous != message {
                 println!("  {message}");
                 message.clone_into(&mut previous);
             }
         }
-        s.state == ictl_daemon::machine::DeviceState::Ready
+        s.state == DeviceState::Ready
     })
     .await;
     println!(
@@ -1105,6 +1110,21 @@ mod tests {
     use super::{host_is_loopback, mcp_command};
     use ictl_l10n::{Lang, with_lang};
     use std::path::Path;
+
+    #[test]
+    fn setup_shows_install_guidance_before_the_first_error() {
+        use super::{DeviceState, setup_start_message};
+        use ictl_daemon::machine::WdaStartHint::TrustDeveloper;
+
+        let installed = DeviceState::WdaStarting { last_error: None, hint: Some(TrustDeveloper) };
+        assert_eq!(setup_start_message(&installed), Some(TrustDeveloper.message()));
+        let refused = DeviceState::WdaStarting { last_error: Some("NSError".into()), hint: Some(TrustDeveloper) };
+        assert_eq!(setup_start_message(&refused), Some(TrustDeveloper.message()));
+        let legacy = DeviceState::WdaStarting { last_error: Some("old daemon error".into()), hint: None };
+        assert_eq!(setup_start_message(&legacy), Some("old daemon error"));
+        assert_eq!(setup_start_message(&DeviceState::WdaStarting { last_error: None, hint: None }), None);
+        assert_eq!(setup_start_message(&DeviceState::Ready), None);
+    }
 
     /// Only the commands that print once and end get SIGPIPE's default disposition back
     #[test]

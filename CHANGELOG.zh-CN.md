@@ -8,6 +8,7 @@
 
 ### 新增
 
+- 控制台和它的 `/mcp` 要登录了，本机也一样（控制台分不清本机的浏览器和经 frp、cloudflared 等反向代理转发进来的访问）。令牌第一次启动时生成，存在数据目录的 `viewer-token`（0600）；`iphone-control viewer token` 显示令牌、本机和局域网的登录链接以及接入 HTTP MCP 的命令，`--new` 换一个新令牌。浏览器登录一次后记住 30 天；程序和 MCP 客户端用 `Authorization: Bearer <令牌>`。输错太多次（一分钟 20 次）会暂停校验一分钟。命令行、`iphone-control mcp`（stdio）和 `task run` 走本机的 Unix socket，不受影响。
 - MCP over HTTP：控制台同一个端口上的 `/mcp`（Streamable HTTP）提供和 `iphone-control mcp` 一样的工具，只能填 URL 的客户端、局域网里另一台电脑上的 agent（`--lan`，走 HTTPS）都能接入，例如 `claude mcp add --transport http iphone http://127.0.0.1:8200/mcp`。任务里的 agent 在请求头 `Iphone-Control-Task-Token` 里带上任务口令。和控制台一样没有登录，`--mcp off`（`IPHONE_CONTROL_VIEWER_MCP=off`）关掉。
 - 控制台对局域网开放（`--lan`）时改用 HTTPS，还是同一个端口：局域网里打开时画面也能用 H.264 或手机自己的 HEVC，不再退回 MJPEG，传输也加了密。默认用本机生成的自签证书（存在数据目录的 `viewer-tls/`，一直沿用），浏览器第一次打开会提示不受信任，核对启动时或 `service status` 显示的 SHA-256 指纹后继续；也可以用 `--tls-cert`/`--tls-key`（`IPHONE_CONTROL_VIEWER_TLS_CERT`/`_KEY`）换成自己的证书。局域网来的 `http://` 跳转到 `https://`，本机的 `http://127.0.0.1` 照旧。`--tls off`（`IPHONE_CONTROL_VIEWER_TLS=off`）恢复成 HTTP。这不是登录：局域网里能连上的人照样能操作手机。
 - `iphone-control service viewer install` 把控制台装成登录后自动启动的后台服务（还有 `uninstall`、`start`、`stop`、`restart`）。端口和是否对局域网开放读设置文件（新增 `IPHONE_CONTROL_VIEWER_PORT`；`IPHONE_CONTROL_VIEWER_LAN`；新增 `IPHONE_CONTROL_VIEWER_LAN_HOSTS`），并记下安装时终端的 `PATH` 以找到 `claude` 和 `codex`。升级时先停下它、升级完再启动；有 AI 任务在跑时自动升级会推迟。

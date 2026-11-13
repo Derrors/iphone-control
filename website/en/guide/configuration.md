@@ -29,7 +29,7 @@ iphone-control service restart
 | `IPHONE_CONTROL_VIEWER_QP` | `20` | H.264 quality, 1 to 51: lower is sharper and larger. `20` looks like the source in normal use; `24` saves about a third of the traffic, small text blurs a little while scrolling fast |
 | `IPHONE_CONTROL_VIEWER_PORT` | `8200` | The viewer's port, like `viewer --port` (the viewer service reads it too) |
 | `IPHONE_CONTROL_VIEWER_LAN_HOSTS` | empty | With `--lan`, more host names the page answers to, comma-separated, like `--lan-host` |
-| `IPHONE_CONTROL_VIEWER_LAN` | off | Set to `1` to open the viewer to the local network too, like `viewer --lan`, over HTTPS there. There is no login yet: anyone on the network who can reach this machine can control the phone and start AI tasks, so only on a trusted network |
+| `IPHONE_CONTROL_VIEWER_LAN` | off | Set to `1` to open the viewer to the local network too, like `viewer --lan`, over HTTPS there. As on this machine, it needs the login token (`iphone-control viewer token`) |
 | `IPHONE_CONTROL_VIEWER_TLS` | `auto` | The viewer's HTTPS, like `--tls`: `auto` turns it on when open to the network or given a certificate; `on`, `off`. `http://127.0.0.1` on this machine always works |
 | `IPHONE_CONTROL_VIEWER_TLS_CERT`, `IPHONE_CONTROL_VIEWER_TLS_KEY` | empty | The viewer's own certificate and key (PEM), like `--tls-cert`, `--tls-key`; without them a self-signed one made on this machine |
 | `IPHONE_CONTROL_VIEWER_MCP` | `on` | MCP over HTTP on the viewer's port (`/mcp`), like `--mcp`; `off` turns it off |

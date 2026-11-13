@@ -15,10 +15,9 @@
 //! Protections, same model as `wda-bridge`: it binds to the loopback address only, every request needs a
 //! loopback `Host` (against DNS rebinding), every action also needs an `Origin` of this very page and a JSON
 //! content type (against other web pages posting to it), and a read whose `Sec-Fetch-Site` says another site
-//! sent it is refused (reading elements unlocks the phone). Other local users can still reach the port, which the
-//! command says when it starts. With `--lan` the same port is open to the local network, still without a login
-//! (see [`lan`]): only local-network addresses may connect, and `Host` and `Origin` may also be this machine's
-//! own network names.
+//! sent it is refused (reading elements unlocks the phone). Every request needs the login ([`auth`]), from this
+//! machine too. With `--lan` the same port is open to the local network (see [`lan`]): only local-network addresses
+//! may connect, and `Host` and `Origin` may also be this machine's own network names.
 //!
 //! The viewer follows one device, the one controlled when it starts or the one picked on the page: the picture
 //! always comes from it, and every action carries its UDID ([`ictl_daemon::protocol::EXPECT_UDID`]), so the daemon
@@ -26,6 +25,7 @@
 //! instead of tapping a phone the user isn't looking at. The device handle is looked up again for each stream, so a
 //! replug (new usbmuxd id) doesn't break the picture.
 
+pub mod auth;
 mod lan;
 mod mcp;
 mod peer;
@@ -80,6 +80,8 @@ struct Ctx {
     tls: Option<Arc<tls::Tls>>,
     /// MCP over HTTP at `/mcp` (`--mcp`, on by default)
     mcp: Option<ictl_mcp::HttpService>,
+    /// The login every HTTP request needs ([`auth`]); `None` only in tests
+    auth: Option<auth::Auth>,
 }
 
 /// A picture handler can be cancelled at any await, including while opening its source.
@@ -144,6 +146,8 @@ pub async fn run(
         false => None,
     };
     let agents = Agents::new(socket)?;
+    let token =
+        auth::load_or_create(data_dir).map_err(|e| anyhow::anyhow!("{}: {e}", auth::token_file(data_dir).display()))?;
     println!(
         "{}",
         ictl_l10n::trf!(
@@ -194,6 +198,13 @@ pub async fn run(
         }
     );
     let scheme = if tls.is_some() { "https" } else { "http" };
+    println!(
+        "{}",
+        ictl_l10n::tr!(
+            "登录:浏览器和 /mcp 都要先登录(本机也一样)。iphone-control viewer token 显示令牌和点开就能登录的链接",
+            "Login: browsers and /mcp need the token (on this machine too). iphone-control viewer token shows it, with a link that logs in"
+        )
+    );
     if let Some(t) = &tls {
         if t.made {
             println!(
@@ -233,29 +244,26 @@ pub async fn run(
                 println!("{}", ictl_l10n::trf!("  MCP:{scheme}://{a}:{port}/mcp", "  MCP: {scheme}://{a}:{port}/mcp"));
             }
         }
-        if tls.is_some() {
-            println!(
-                "{}",
+        println!(
+            "{}",
+            if tls.is_some() {
                 ictl_l10n::tr!(
-                    "注意:已对局域网开放,传输经 HTTPS 加密,但还没有登录:局域网里任何能连上这台机器的人都能看到屏幕、操作手机、用本机的 Claude Code / Codex 执行任务。只在可信的网络里开,用完就停掉。",
-                    "Note: open to the local network, encrypted with HTTPS but with no login yet: anyone on the network who can reach this machine can watch and control the phone and run tasks with this machine's Claude Code / Codex. Only on a trusted network, and stop it when you are done."
+                    "注意:已对局域网开放,传输经 HTTPS 加密。有令牌的人都能看到屏幕、操作手机、用本机的 Claude Code / Codex 执行任务:令牌别外传。",
+                    "Note: open to the local network, encrypted with HTTPS. Whoever has the token can watch and control the phone and run tasks with this machine's Claude Code / Codex: keep it to yourself."
                 )
-            );
-        } else {
-            println!(
-                "{}",
+            } else {
                 ictl_l10n::tr!(
-                    "注意:已对局域网开放,还没有登录:局域网里任何能连上这台机器的人都能看到屏幕、操作手机、用本机的 Claude Code / Codex 执行任务。只在可信的网络里开,用完就停掉。从局域网地址打开时浏览器不提供 WebCodecs,画面是 MJPEG。",
-                    "Note: open to the local network, with no login yet: anyone on the network who can reach this machine can watch and control the phone and run tasks with this machine's Claude Code / Codex. Only on a trusted network, and stop it when you are done. Opened at a network address, browsers don't offer WebCodecs, so the picture is MJPEG."
+                    "注意:已对局域网开放,但没有 HTTPS(--tls off):令牌和画面都以明文经过局域网。从局域网地址打开时浏览器不提供 WebCodecs,画面是 MJPEG。",
+                    "Note: open to the local network without HTTPS (--tls off): the token and the picture cross the network in the clear. Opened at a network address, browsers don't offer WebCodecs, so the picture is MJPEG."
                 )
-            );
-        }
+            }
+        );
     } else {
         println!(
             "{}",
             ictl_l10n::tr!(
-                "注意:本机所有用户都能经这个端口看到屏幕、操作手机、让 AI 执行任务,用完就停掉。",
-                "Note: every user on this machine can watch and control the phone and start AI tasks through this port; stop it when you are done."
+                "注意:只在本机。经反向代理或隧道(frp、cloudflared 等)转发出去的访问在这里也像本机,同样要令牌:令牌别外传。",
+                "Note: this machine only. Visits forwarded by a reverse proxy or tunnel (frp, cloudflared…) also look local here and need the token as well: keep it to yourself."
             )
         );
     }
@@ -276,6 +284,7 @@ pub async fn run(
         acks: Arc::default(),
         tls,
         mcp: mcp.then(|| ictl_mcp::http_service(socket.to_path_buf())),
+        auth: Some(auth::Auth::new(token, port)),
     });
     let slots = Arc::new(tokio::sync::Semaphore::new(crate::MAX_CONNECTIONS));
     loop {
@@ -308,6 +317,11 @@ pub async fn run(
             drop(slot);
         });
     }
+}
+
+/// This machine's network addresses `--lan` serves on (for `viewer token`)
+pub fn lan_addresses(lan_hosts: &[String]) -> Vec<std::net::Ipv4Addr> {
+    lan::Access::lan(lan_hosts).addresses().to_vec()
 }
 
 /// The page with `data-lang` set for English, which the page reads as its default language
@@ -343,6 +357,9 @@ async fn handle(mut client: Conn, ctx: &Ctx, head: Vec<u8>, req: Head, mut body:
             return reply(&mut client, 400, "text/plain", b"bad request").await;
         };
         return redirect(&mut client, &to).await;
+    }
+    if !login_gate(&mut client, ctx, &head, &req, &mut body).await? {
+        return Ok(());
     }
     let path = req.path.as_str();
     match (req.method.as_str(), path) {
@@ -673,20 +690,28 @@ async fn json_reply(client: &mut Conn, status: u16, v: &Value) -> anyhow::Result
 }
 
 async fn reply(client: &mut Conn, status: u16, kind: &str, body: &[u8]) -> anyhow::Result<()> {
+    reply_with(client, status, kind, body, "").await
+}
+
+/// [`reply`] with more header lines (`extra`: each ending with `\r\n`)
+async fn reply_with(client: &mut Conn, status: u16, kind: &str, body: &[u8], extra: &str) -> anyhow::Result<()> {
     let reason = match status {
         200 => "OK",
         202 => "Accepted",
+        303 => "See Other",
         400 => "Bad Request",
+        401 => "Unauthorized",
         403 => "Forbidden",
         404 => "Not Found",
         409 => "Conflict",
         411 => "Length Required",
         413 => "Payload Too Large",
+        429 => "Too Many Requests",
         _ => "Bad Gateway",
     };
     let head = format!(
         "HTTP/1.1 {status} {reason}\r\nContent-Type: {kind}\r\nContent-Length: {}\r\nCache-Control: no-store\r\n\
-         X-Content-Type-Options: nosniff\r\nX-Frame-Options: DENY\r\nConnection: close\r\n\r\n",
+         X-Content-Type-Options: nosniff\r\nX-Frame-Options: DENY\r\n{extra}Connection: close\r\n\r\n",
         body.len()
     );
     client.write_all(head.as_bytes()).await?;
@@ -694,6 +719,77 @@ async fn reply(client: &mut Conn, status: u16, kind: &str, body: &[u8]) -> anyho
     // over TLS the last record may still be buffered
     client.flush().await?;
     Ok(())
+}
+
+/// The login ([`auth`]) before anything else: `true` when the request may go on, otherwise it was answered (the
+/// login page, a login, or 401 / 429)
+async fn login_gate(client: &mut Conn, ctx: &Ctx, head: &[u8], req: &Head, body: &mut Vec<u8>) -> anyhow::Result<bool> {
+    use auth::Verdict;
+    let Some(a) = &ctx.auth else { return Ok(true) };
+    let secure = client.is_tls();
+    // the link `iphone-control viewer token` shows
+    if req.method == "GET"
+        && req.path == "/"
+        && let Some(t) = req.query("token")
+    {
+        match a.try_token(&t) {
+            Verdict::Ok => logged_in(client, a, secure).await?,
+            v => login_page(client, v).await?,
+        }
+        return Ok(false);
+    }
+    // the login page's form
+    if req.method == "POST" && req.path == "/login" {
+        if req.origin.as_deref().is_some_and(|o| !ctx.access.origin_allowed(o, ctx.port)) {
+            reply(client, 403, "text/plain", b"forbidden").await?;
+            return Ok(false);
+        }
+        let len = req.content_length.unwrap_or(0);
+        if len > 4096 {
+            reply(client, 413, "text/plain", b"too large").await?;
+            return Ok(false);
+        }
+        read_body(client, body, len).await?;
+        match auth::form_token(body).filter(|t| !t.trim().is_empty()).map(|t| a.try_token(&t)) {
+            Some(Verdict::Ok) => logged_in(client, a, secure).await?,
+            Some(v) => login_page(client, v).await?,
+            None => login_page(client, Verdict::Missing).await?,
+        }
+        return Ok(false);
+    }
+    let v = a.check(head);
+    if v == Verdict::Ok {
+        return Ok(true);
+    }
+    let status = if v == Verdict::Limited { 429 } else { 401 };
+    match (req.method.as_str(), req.path.as_str()) {
+        ("GET", "/") => login_page(client, v).await?,
+        // MCP clients: send the token as a bearer token (RFC 6750)
+        (_, "/mcp") => {
+            let extra = "WWW-Authenticate: Bearer realm=\"iphone-control\"\r\n";
+            reply_with(client, status, "text/plain", b"log in: Authorization: Bearer <token>", extra).await?
+        }
+        _ => reply(client, status, "text/plain", b"log in first").await?,
+    }
+    Ok(false)
+}
+
+/// Logged in: a session cookie, and the page without the token in its address (and history)
+async fn logged_in(client: &mut Conn, a: &auth::Auth, secure: bool) -> anyhow::Result<()> {
+    let extra = format!("Location: /\r\nSet-Cookie: {}\r\n", a.set_cookie(secure));
+    reply_with(client, 303, "text/plain", b"", &extra).await
+}
+
+/// The login page, saying why the last try failed
+async fn login_page(client: &mut Conn, v: auth::Verdict) -> anyhow::Result<()> {
+    let (status, why) = match v {
+        auth::Verdict::Wrong => (401, Some(ictl_l10n::tr!("令牌不对", "That isn't the token"))),
+        auth::Verdict::Limited => {
+            (429, Some(ictl_l10n::tr!("错误次数太多，一分钟后再试", "Too many wrong tokens; try again in a minute")))
+        }
+        _ => (401, None),
+    };
+    reply(client, status, "text/html; charset=utf-8", auth::login_page(why).as_bytes()).await
 }
 
 /// Where a plain HTTP request from the network goes: the same page over HTTPS, at the name it asked for (one of
@@ -1148,7 +1244,71 @@ mod tests {
             feeds: Mutex::default(),
             tls: None,
             mcp: None,
+            auth: None,
         }
+    }
+
+    /// One request through [`serve`] on a real connection; the whole answer
+    async fn exchange(ctx: &Ctx, raw: String) -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let client = tokio::spawn(async move {
+            let mut s = tokio::net::TcpStream::connect(addr).await.unwrap();
+            s.write_all(raw.as_bytes()).await.unwrap();
+            let mut out = String::new();
+            s.read_to_string(&mut out).await.unwrap();
+            out
+        });
+        let (tcp, _) = listener.accept().await.unwrap();
+        serve(Conn::Plain(tcp), ctx).await.unwrap();
+        client.await.unwrap()
+    }
+
+    /// Every request needs the login, from 127.0.0.1 too (a reverse proxy here looks just like it)
+    #[tokio::test]
+    async fn every_request_needs_the_login() {
+        let temp = tempfile::tempdir_in("/tmp").unwrap();
+        let mut ctx = test_ctx(temp.path(), &temp.path().join("none.sock"));
+        let token = "t".repeat(64);
+        ctx.auth = Some(auth::Auth::new(token.clone(), 8202));
+        let get = |path: &str, extra: &str| format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1:8202\r\n{extra}\r\n");
+        let status = |r: &str| r.split(' ').nth(1).unwrap_or_default().to_owned();
+
+        let r = exchange(&ctx, get("/api/agent/backends", "")).await;
+        assert_eq!(status(&r), "401", "{r}");
+        let r = exchange(&ctx, get("/", "")).await;
+        assert!(status(&r) == "401" && r.contains("action=\"/login\""), "the login page: {r}");
+        let r = exchange(&ctx, get("/?token=nope", "")).await;
+        assert!(status(&r) == "401" && r.contains("class=\"err\""), "{r}");
+
+        // the link: a cookie, and the page without the token
+        let r = exchange(&ctx, get(&format!("/?token={token}"), "")).await;
+        assert_eq!(status(&r), "303", "{r}");
+        assert!(r.contains("\r\nLocation: /\r\n"));
+        let cookie = r.lines().find_map(|l| l.strip_prefix("Set-Cookie: ")).unwrap().split(';').next().unwrap();
+        assert!(cookie.starts_with("ictl_viewer_8202=") && !cookie.contains(&token));
+        let r = exchange(&ctx, get("/api/agent/backends", &format!("Cookie: {cookie}\r\n"))).await;
+        assert_eq!(status(&r), "200", "{r}");
+        let r = exchange(&ctx, get("/api/agent/backends", &format!("Authorization: Bearer {token}\r\n"))).await;
+        assert_eq!(status(&r), "200", "a program: {r}");
+
+        // the login page's form; not from another site
+        let form = |origin: &str| {
+            let body = format!("token={token}");
+            format!(
+                "POST /login HTTP/1.1\r\nHost: 127.0.0.1:8202\r\nContent-Type: application/x-www-form-urlencoded\r\n\
+                 Origin: {origin}\r\nContent-Length: {}\r\n\r\n{body}",
+                body.len()
+            )
+        };
+        let r = exchange(&ctx, form("http://127.0.0.1:0")).await;
+        assert!(status(&r) == "303" && r.contains("Set-Cookie: ictl_viewer_8202="), "{r}");
+        let r = exchange(&ctx, form("https://evil.example")).await;
+        assert_eq!(status(&r), "403", "{r}");
+
+        // MCP clients are told to send a bearer token
+        let r = exchange(&ctx, "POST /mcp HTTP/1.1\r\nHost: 127.0.0.1:8202\r\nContent-Length: 0\r\n\r\n".into()).await;
+        assert!(status(&r) == "401" && r.contains("WWW-Authenticate: Bearer"), "{r}");
     }
 
     #[test]

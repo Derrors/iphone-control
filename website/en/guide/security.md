@@ -12,7 +12,7 @@ This page has the essentials. What is stored, who can reach it and the details o
 
 ## Built-in protections
 
-- **No network ports.** WDA is reached through usbmuxd. `wda-bridge` and the live `viewer` are explicit opt-ins that bind 127.0.0.1 only, and other web pages in your browser can't act through them. They have no login, though: every local user can use them, including starting AI tasks from the viewer, so stop them when done. `viewer --lan` opens the viewer to the local network too, still without a login: anyone on the network who can reach this machine can control the phone. It only accepts connections from local-network addresses; use it only on a trusted network. The same goes for MCP on the viewer's port (`/mcp`); `--mcp off` turns it off.
+- **No network ports.** WDA is reached through usbmuxd. `wda-bridge` and the live `viewer` are explicit opt-ins that bind 127.0.0.1 only, and other web pages in your browser can't act through them. `wda-bridge` has no login: every local user can use it, so stop it when done. The `viewer` and the MCP on its port (`/mcp`) need the login token, from this machine too, since the viewer can't tell a local browser from a visit forwarded by frp, cloudflared or another reverse proxy. The token is kept in the data directory (0600); `viewer token` shows it and `viewer token --new` replaces it. `viewer --lan` opens the viewer to the local network, only to local-network addresses and over HTTPS there.
 - **No root.** The daemon runs as your regular user, as a per-user service; the install script refuses to run as root.
 - **Auto-unlock is off by default** and disables itself after one wrong attempt.
 - **Developer tools are off by default.**

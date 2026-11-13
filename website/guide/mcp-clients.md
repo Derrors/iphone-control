@@ -44,13 +44,14 @@ MCP 服务经本机的 Unix socket 找守护进程。客户端在另一台电脑
 
 控制台（`iphone-control viewer`，或装成服务的 `service viewer install`）在同一个端口上还提供 MCP over HTTP（Streamable HTTP），路径是 `/mcp`，工具和上面的 stdio 方式完全一样。适合只能填 URL 的客户端，以及另一台电脑上的 agent。
 
-- **本机**：`http://127.0.0.1:8200/mcp`（端口跟着控制台）。Claude Code：`claude mcp add --transport http iphone http://127.0.0.1:8200/mcp`；配置文件里写 `{"type": "http", "url": "http://127.0.0.1:8200/mcp"}`。
+- **登录**：和控制台一样要令牌，请求头 `Authorization: Bearer <令牌>`。`iphone-control viewer token` 显示令牌和下面这条命令。
+- **本机**：`http://127.0.0.1:8200/mcp`（端口跟着控制台）。Claude Code：`claude mcp add --transport http iphone http://127.0.0.1:8200/mcp --header "Authorization: Bearer <令牌>"`；配置文件里写 `{"type": "http", "url": "http://127.0.0.1:8200/mcp", "headers": {"Authorization": "Bearer <令牌>"}}`。
 - **局域网里另一台电脑**：控制台要开 `--lan`（`IPHONE_CONTROL_VIEWER_LAN=1`），地址是 `https://<这台机器的 IP>:8200/mcp`。证书是本机生成的自签证书时，客户端要信任它：把那台机器上的 `~/.local/share/iphone-control/viewer-tls/cert.pem` 拷过来，Node 写的客户端（Claude Code 等）用 `NODE_EXTRA_CA_CERTS=cert.pem` 启动；也可以用 `--tls-cert`/`--tls-key` 换成自己的证书。客户端配了代理时，把这台机器的 IP 加进 `NO_PROXY`。
 - **在任务里**：agent 平台用 `task run` 开任务时，让 agent 的 MCP 请求带上请求头 `Iphone-Control-Task-Token: <IPHONE_CONTROL_TASK_TOKEN 的值>`，作用和 stdio 方式下的环境变量一样（每一步显示在控制台上，暂停时等待，多出 `iphone_confirm`）。
 - **关掉**：`viewer --mcp off`（`IPHONE_CONTROL_VIEWER_MCP=off`）。
 
-::: warning 还没有登录
-能打开控制台的人就能用 `/mcp`：本机是本机所有用户，开了 `--lan` 就是局域网里所有能连上这台机器的人。和控制台一样只接受局域网地址来的连接、检查 `Host`；浏览器里别的网页借不了它（带 `Origin` 的请求必须来自控制台自己）。
+::: warning 令牌就是钥匙
+有令牌就能操作手机：别写进会公开的配置。泄露了用 `iphone-control viewer token --new` 换掉。和控制台一样只接受局域网地址来的连接、检查 `Host`；浏览器里别的网页借不了它（带 `Origin` 的请求必须来自控制台自己）。
 :::
 
 ## 给 agent 的建议

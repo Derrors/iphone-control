@@ -7,7 +7,7 @@
 //!
 //! Who may call it is who may open the page: the viewer checks the peer address, `Host` and `Sec-Fetch-Site` first,
 //! and here a request that carries an `Origin` (a browser) must come from the page itself. Clients that aren't
-//! browsers send none. No login yet, as for the page.
+//! browsers send none. The login is the page's (`super::auth`): clients send `Authorization: Bearer <token>`.
 //!
 //! A task's agent sends the task's token in `Iphone-Control-Task-Token` ([`ictl_daemon::protocol::TASK_TOKEN_HEADER`]),
 //! as `IPHONE_CONTROL_TASK_TOKEN` does on stdio.

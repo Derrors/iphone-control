@@ -29,7 +29,7 @@ iphone-control service restart
 | `IPHONE_CONTROL_VIEWER_QP` | `20` | H.264 的画质，1～51，越小越清晰、流量越大。`20` 正常使用看不出和原画的差别；`24` 约省三分之一流量，快速滚动时小字略糊 |
 | `IPHONE_CONTROL_VIEWER_PORT` | `8200` | 控制台的端口，同 `viewer --port`（控制台服务也读它） |
 | `IPHONE_CONTROL_VIEWER_LAN_HOSTS` | 空 | `--lan` 时还认可的主机名，逗号分隔，同 `--lan-host` |
-| `IPHONE_CONTROL_VIEWER_LAN` | 关 | 设为 `1` 时控制台也对局域网开放，同 `viewer --lan`，局域网里用 HTTPS。还没有登录：局域网里任何能连上这台机器的人都能操作手机、开 AI 任务，只在可信的网络里开 |
+| `IPHONE_CONTROL_VIEWER_LAN` | 关 | 设为 `1` 时控制台也对局域网开放，同 `viewer --lan`，局域网里用 HTTPS。和本机一样要令牌登录（`iphone-control viewer token`） |
 | `IPHONE_CONTROL_VIEWER_TLS` | `auto` | 控制台的 HTTPS，同 `--tls`：`auto` 在对局域网开放或给了证书时开启，`on`、`off`。本机的 `http://127.0.0.1` 一直能用 |
 | `IPHONE_CONTROL_VIEWER_TLS_CERT`、`IPHONE_CONTROL_VIEWER_TLS_KEY` | 空 | 控制台用自己的证书和私钥（PEM），同 `--tls-cert`、`--tls-key`；不设就用本机生成的自签证书 |
 | `IPHONE_CONTROL_VIEWER_MCP` | `on` | 控制台同一个端口上的 MCP over HTTP（`/mcp`），同 `--mcp`；`off` 关掉 |

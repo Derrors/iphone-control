@@ -44,13 +44,14 @@ The MCP server reaches the daemon through a local Unix socket. If the client run
 
 The viewer (`iphone-control viewer`, or the service from `service viewer install`) also serves MCP over HTTP (Streamable HTTP) on its port, at `/mcp`, with the same tools as stdio above. For clients that only take a URL, and agents on another computer.
 
-- **This machine**: `http://127.0.0.1:8200/mcp` (the viewer's port). Claude Code: `claude mcp add --transport http iphone http://127.0.0.1:8200/mcp`; in a configuration file `{"type": "http", "url": "http://127.0.0.1:8200/mcp"}`.
+- **Login**: like the page, it needs the token, as `Authorization: Bearer <token>`. `iphone-control viewer token` shows it and the command below.
+- **This machine**: `http://127.0.0.1:8200/mcp` (the viewer's port). Claude Code: `claude mcp add --transport http iphone http://127.0.0.1:8200/mcp --header "Authorization: Bearer <token>"`; in a configuration file `{"type": "http", "url": "http://127.0.0.1:8200/mcp", "headers": {"Authorization": "Bearer <token>"}}`.
 - **Another computer on the local network**: the viewer needs `--lan` (`IPHONE_CONTROL_VIEWER_LAN=1`); the address is `https://<this machine's address>:8200/mcp`. With the self-signed certificate made there, the client has to trust it: copy `~/.local/share/iphone-control/viewer-tls/cert.pem` from that machine and start Node-based clients (Claude Code and others) with `NODE_EXTRA_CA_CERTS=cert.pem`; or give the viewer a certificate of your own (`--tls-cert`/`--tls-key`). If the client uses a proxy, add the machine's address to `NO_PROXY`.
 - **In a task**: when an agent platform opens a task with `task run`, have the agent's MCP requests carry the header `Iphone-Control-Task-Token: <the value of IPHONE_CONTROL_TASK_TOKEN>`; it does what that variable does on stdio (each step shows on the page, calls wait while paused, `iphone_confirm` is listed).
 - **Off**: `viewer --mcp off` (`IPHONE_CONTROL_VIEWER_MCP=off`).
 
-::: warning No login yet
-Whoever can open the viewer can use `/mcp`: every user on this machine, and with `--lan` anyone on the network who can reach it. As for the page, only local-network addresses may connect and `Host` is checked; other web pages in a browser can't use it (a request with an `Origin` must come from the page itself).
+::: warning The token is the key
+Whoever has it can control the phone: keep it out of configuration that gets shared, and replace it with `iphone-control viewer token --new` if it leaks. As for the page, only local-network addresses may connect and `Host` is checked; other web pages in a browser can't use it (a request with an `Origin` must come from the page itself).
 :::
 
 ## Tips for the agent

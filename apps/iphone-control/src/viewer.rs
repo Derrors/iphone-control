@@ -4,7 +4,8 @@
 //! - `GET /` the page, `GET /stream` WDA's MJPEG stream (port 9100 on the phone, over usbmuxd, read-only; repeated
 //!   frames dropped), `GET /video` the same frames as H.264 when ffmpeg can encode them ([`crate::video`]), about
 //!   1/15 of the traffic.
-//! - `GET /api/{info,daemon,status,devices,apps,elements}`: the daemon's answers as JSON for the page.
+//! - `GET /api/{info,daemon,status,devices,apps,elements}`: the daemon's answers as JSON for the page; `GET /api/alert`
+//!   a system alert on the phone with its buttons (the phone's own video can leave it out, see [`alert`]).
 //! - `POST /api/{tap,swipe,long_press,type,button,launch_app,terminate_app,open_url,tap_element,wait_for,select}`
 //!   turn into ordinary daemon requests, so they queue with an agent's calls, get auto-unlock and follow the
 //!   controlled device, exactly like an MCP tool call.
@@ -271,6 +272,7 @@ async fn handle(mut client: TcpStream, ctx: &Ctx, head: Vec<u8>, req: Head, mut 
                 "devices" => devices(ctx).await,
                 "apps" => apps(ctx, req.query("system").is_some_and(|v| v == "1")).await,
                 "elements" => elements(ctx, &req.query("filter").unwrap_or_default()).await,
+                "alert" => alert(ctx).await,
                 "agent/backends" => Ok(json!({"backends": agent::backends()})),
                 _ => return reply(&mut client, 404, "text/plain", b"not found").await,
             };
@@ -887,6 +889,52 @@ async fn elements(ctx: &Ctx, filter: &str) -> Result<Value, String> {
     Ok(json!({"elements": text.lines().filter_map(parse_element).collect::<Vec<_>>()}))
 }
 
+/// A system alert on the phone (a permission prompt and the like): `{ alert: null }` or
+/// `{ alert: { text, frame?: { x, y, width, height }, buttons: [{ label, x, y, width }] } }` in points: the alert's
+/// box (top left), each button's center and width. The page draws it where the real one is. The phone's own video
+/// (iOS 27, D16) can leave such an alert out: a location prompt showed there only as the dimmed screen behind it,
+/// while WDA's screenshot had it. The page asks while it shows that video and puts the alert next to the picture.
+/// `AlertCheck` is two quick WDA calls (the foreground app; the alert's text only when SpringBoard is in front); the
+/// element tree is only read when there is an alert
+async fn alert(ctx: &Ctx) -> Result<Value, String> {
+    let check = text_of(&ctx.socket, Request::AlertCheck, true).await?;
+    let Some(text) = alert_text(&check) else { return Ok(json!({"alert": null})) };
+    let req = Request::ListElements { filter: String::new(), limit: ELEMENT_LIMIT, max_age_ms: 0 };
+    // without its buttons the page still says there is an alert
+    let els: Vec<Value> = text_of(&ctx.socket, req, true)
+        .await
+        .map(|t| t.lines().filter_map(parse_element).collect())
+        .unwrap_or_default();
+    let (frame, buttons) = alert_parts(&els);
+    Ok(json!({"alert": {"text": text, "frame": frame, "buttons": buttons}}))
+}
+
+/// The alert's own text from `AlertCheck`'s English answer (`…a system alert is on screen: “text”, taps…`); `None`
+/// when it reports none
+fn alert_text(check: &str) -> Option<String> {
+    let start = check.find('“')? + '“'.len_utf8();
+    let end = check.rfind('”')?;
+    (end > start).then(|| check[start..end].trim().to_owned()).filter(|t| !t.is_empty())
+}
+
+/// The tree's alert box, and the buttons on it (whose center lies inside it) as `{ label, x, y, width }`
+fn alert_parts(els: &[Value]) -> (Value, Vec<Value>) {
+    let f = |e: &Value, k: &str| e[k].as_f64().unwrap_or(0.0);
+    let Some(a) = els.iter().find(|e| e["type"] == "Alert") else { return (Value::Null, Vec::new()) };
+    let frame = json!({"x": f(a, "x"), "y": f(a, "y"), "width": f(a, "width"), "height": f(a, "height")});
+    let inside = |x: f64, y: f64| {
+        x >= f(a, "x") && x <= f(a, "x") + f(a, "width") && y >= f(a, "y") && y <= f(a, "y") + f(a, "height")
+    };
+    let buttons = els
+        .iter()
+        .filter(|e| e["type"] == "Button")
+        .map(|e| (e, f(e, "x") + f(e, "width") / 2.0, f(e, "y") + f(e, "height") / 2.0))
+        .filter(|&(_, x, y)| inside(x, y))
+        .map(|(e, x, y)| json!({"label": e["label"], "x": x, "y": y, "width": f(e, "width")}))
+        .collect();
+    (frame, buttons)
+}
+
 /// One line of `iphone_list_elements`: `Type "label" [id="…"] [value="…"] @(cx,cy) WxH`. Other lines (a note
 /// that more were left out) are skipped
 fn parse_element(line: &str) -> Option<Value> {
@@ -1199,5 +1247,35 @@ mod tests {
         assert_eq!(quoted["label"], "say \"hi\"");
         assert!(parse_element("……另有 4 个未列出,可用 filter 缩小范围").is_none());
         assert!(parse_element("4 more not listed; narrow it down with filter").is_none());
+    }
+
+    /// The location prompt that the phone's own video didn't show (iPhone 15 Pro Max, iOS 27.0.1)
+    #[test]
+    fn a_system_alert_with_its_own_buttons() {
+        let check = "\nNote: a system alert is on screen: “Allow “Calendar” to use your location?\nYour location is used for travel time alerts.”, taps and swipes land on the alert; first tap a button on the alert with iphone_tap_element";
+        assert_eq!(
+            alert_text(check).as_deref(),
+            Some("Allow “Calendar” to use your location?\nYour location is used for travel time alerts.")
+        );
+        assert_eq!(alert_text(""), None, "no alert");
+        assert_eq!(alert_text("Launched x"), None);
+        let tree = [
+            "Button \"今天\" id=\"today-button\" @(61,880) 56x38",
+            "Alert \"允许“日历”使用你的位置？\" @(215,466) 270x320",
+            "StaticText \"允许“日历”使用你的位置？\" @(215,350) 230x44",
+            "Button \"允许一次\" @(215,520) 270x44",
+            "Button \"使用 App 时允许\" @(215,564) 270x44",
+            "Button \"不允许\" @(215,608) 270x44",
+        ];
+        let els: Vec<Value> = tree.iter().filter_map(|l| parse_element(l)).collect();
+        let (frame, b) = alert_parts(&els);
+        assert_eq!(frame, json!({"x": 80.0, "y": 306.0, "width": 270.0, "height": 320.0}));
+        let labels: Vec<&str> = b.iter().filter_map(|v| v["label"].as_str()).collect();
+        assert_eq!(labels, ["允许一次", "使用 App 时允许", "不允许"], "not the app's own button behind it");
+        assert_eq!(
+            (b[2]["x"].as_f64(), b[2]["y"].as_f64(), b[2]["width"].as_f64()),
+            (Some(215.0), Some(608.0), Some(270.0))
+        );
+        assert_eq!(alert_parts(&els[..1]), (Value::Null, Vec::new()), "no alert in the tree: no box, no buttons");
     }
 }

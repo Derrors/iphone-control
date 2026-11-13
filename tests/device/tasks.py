@@ -27,6 +27,7 @@ import os
 import shlex
 import sys
 import tempfile
+import traceback
 import time
 from contextlib import AsyncExitStack
 
@@ -477,6 +478,151 @@ async def run_cmd(stack):
               code == want and dt < max_s and state == ("failed" if want else "completed"))
 
 
+async def remote(stack):
+    """docs/task-control.md 7.6: a platform on another machine opens a task over HTTP and keeps the login; its agent
+    has only the task's token, works through /mcp and can't control the task; closing the response abandons it.
+    Then `task run --url`, the same from the command line"""
+    c = "remote"
+    login = os.environ.get("ICTL_VIEWER_TOKEN")
+    if not (VIEWER and login and mcp_http.URL):
+        print(f"SKIP [{c}] needs ICTL_VIEWER, ICTL_VIEWER_TOKEN and MCP_URL (the branch's viewer)", flush=True)
+        return
+    import ssl
+
+    import httpx2
+
+    ca = os.environ.get("MCP_CA")
+    verify = ssl.create_default_context(cafile=ca) if ca else True
+    timeout = httpx2.Timeout(30, read=300)
+    platform = httpx2.AsyncClient(base_url=VIEWER, headers={"Authorization": f"Bearer {login}"}, verify=verify,
+                                  trust_env=False, timeout=timeout)
+    nobody = httpx2.AsyncClient(base_url=VIEWER, verify=verify, trust_env=False, timeout=timeout)
+    await stack.enter_async_context(platform)
+    await stack.enter_async_context(nobody)
+
+    # the platform opens the task; the response is the lease
+    opening = platform.stream("POST", "/api/agent/tasks/open", json={"title": "真机回归：远端开任务", "owner": OWNER})
+    resp = await opening.__aenter__()
+    closed = False
+
+    async def close_lease():
+        nonlocal closed
+        if not closed:
+            closed = True
+            await opening.__aexit__(None, None, None)
+
+    stack.push_async_callback(close_lease)
+    lines = resp.aiter_lines()
+
+    async def next_event():
+        name, data = None, []
+        async for line in lines:
+            if not line:
+                if name:
+                    return name, json.loads("\n".join(data))
+                continue
+            if line.startswith("event:"):
+                name = line[6:].strip()
+            elif line.startswith("data:"):
+                data.append(line[5:].lstrip())
+        return None, None
+
+    name, opened = await asyncio.wait_for(next_event(), 30)
+    check(c, "the platform opens a task over HTTP (server-sent events)", resp.status_code == 200 and name == "opened",
+          f"{resp.status_code} {name}")
+    task_id, token = opened["id"], opened["token"]
+    seen: list[tuple[str, dict]] = []
+
+    async def follow():
+        while True:
+            n, d = await next_event()
+            if n is None:
+                return
+            seen.append((n, d))
+
+    follower = asyncio.create_task(follow())
+    stack.callback(follower.cancel)
+
+    # the agent: the task's token and the address, no login
+    saved = os.environ.pop("ICTL_VIEWER_TOKEN")
+    try:
+        agent = await mcp(stack, token)
+    finally:
+        os.environ["ICTL_VIEWER_TOKEN"] = saved
+    err, text, _ = await call(agent, "iphone_press_button", {"button": "home"})
+    check(c, "the agent acts through /mcp with the task's token alone", not err, text)
+    hdr = {"Iphone-Control-Task-Token": token}
+    for action, body in (("resume", {}), ("confirm", {"approve": True}), ("stop", {})):
+        r = await nobody.post(f"/api/agent/tasks/{task_id}/{action}", json=body, headers=hdr)
+        check(c, f"the agent can't {action} its task with that token", r.status_code == 401, f"{r.status_code} {r.text[:80]}")
+    r = await nobody.get("/api/info", headers=hdr)
+    check(c, "nor see the page's API", r.status_code == 401, str(r.status_code))
+
+    # the platform pauses: the agent's next call waits until it resumes
+    r = await platform.post(f"/api/agent/tasks/{task_id}/pause", json={})
+    check(c, "the platform pauses it over HTTP", r.status_code == 200 and await state_is(task_id, "paused"), r.text)
+    t0 = time.time()
+    held = asyncio.create_task(call(agent, "iphone_screenshot"))
+    await asyncio.sleep(3)
+    still = not held.done()
+    await platform.post(f"/api/agent/tasks/{task_id}/resume", json={})
+    err, text, _ = await asyncio.wait_for(held, 60)
+    check(c, f"the agent's call waited while paused ({time.time() - t0:.1f}s)", still and not err, text)
+
+    # a confirmation: only the platform answers it
+    args = {"action": "真机回归：远端确认", "detail": "只是测试，不会在手机上做任何事"}
+    asking = asyncio.create_task(call(agent, "iphone_confirm", args))
+    waiting = await state_is(task_id, "waiting", 30)
+    r = await nobody.post(f"/api/agent/tasks/{task_id}/confirm", json={"approve": True}, headers=hdr)
+    check(c, "the agent waits for a confirmation it can't give itself", waiting and r.status_code == 401, str(r.status_code))
+    r = await platform.post(f"/api/agent/tasks/{task_id}/confirm", json={"approve": True})
+    err, text, _ = await asyncio.wait_for(asking, 30)
+    check(c, "the platform approves it over HTTP", r.status_code == 200 and not err, text)
+    by = [d.get("by") for n, d in seen if n == "control"]
+    check(c, "the log names the login token", bool(by) and all(str(b).startswith("viewer:") for b in by), json.dumps(by))
+
+    # the platform goes away: the task is abandoned and the agent stops
+    await close_lease()
+    check(c, "closing the response abandons the task", await state_is(task_id, "abandoned", 15))
+    # with only the task's token, /mcp itself refuses it (401), which the client reports as an error
+    try:
+        err, text, _ = await call(agent, "iphone_screenshot")
+    except Exception as e:  # noqa: BLE001 - any refusal will do
+        err, text = True, f"{type(e).__name__}: {e}"
+    check(c, "after that the agent is refused", err, text)
+
+    # `task run --url`: run.py under it, through the viewer only (no daemon socket here)
+    env = {k: v for k, v in os.environ.items() if k not in (TOKEN_ENV, "MCP_URL", "MCP_CA", "ICTL_VIEWER_TOKEN")}
+    env.update({"IPHONE_CONTROL_VIEWER_TOKEN": login, "ICTL_SOCKET": "/nonexistent/ctl.sock",
+                "SHOTS_DIR": tempfile.mkdtemp(prefix="ictl-shots-")})
+    url = ["--url", VIEWER] + (["--ca", ca] if ca else [])
+    steps = [["iphone_status", {}], ["iphone_press_button", {"button": "home"}], ["iphone_list_elements", {"limit": 3}]]
+    title = f"真机回归：task run --url {int(time.time())}"
+    p = await asyncio.create_subprocess_exec(
+        *BIN, "task", "run", *url, "--title", title, "--owner", OWNER, "--",
+        sys.executable, os.path.join(HERE, "run.py"), json.dumps(steps), env=env,
+        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
+    )
+    out, _ = await asyncio.wait_for(p.communicate(), 300)
+    out = out.decode(errors="replace")
+    last = [line for line in out.splitlines() if line.startswith("---")]
+    t = next((t for t in reversed(await tasks()) if t["title"] == title), {})
+    check(c, "`task run --url` runs run.py through the viewer (exit 0)", p.returncode == 0, last[-1] if last else out[-300:])
+    check(c, "its task completed with every call as a step",
+          t.get("state") == "completed" and t.get("steps", 0) >= len(steps), json.dumps(t, ensure_ascii=False))
+
+    title = f"真机回归：task run --url finish {int(time.time())}"
+    script = '[ -z "$IPHONE_CONTROL_VIEWER_TOKEN" ] || exit 9; "$@" task finish 远端完成'
+    p = await asyncio.create_subprocess_exec(
+        *BIN, "task", "run", *url, "--title", title, "--owner", OWNER, "--", "sh", "-c", script, "sh", *BIN, env=env,
+        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
+    )
+    out, _ = await asyncio.wait_for(p.communicate(), 60)
+    t = next((t for t in reversed(await tasks()) if t["title"] == title), {})
+    check(c, "the command doesn't get the login, and `task finish` ends its task remotely",
+          p.returncode == 0 and t.get("state") == "completed", f"exit {p.returncode}, {t.get('state')}: {out.decode(errors='replace')[-200:]}")
+
+
 async def scope(stack):
     """#110: a task limited to Settings asks before going elsewhere; approving lets it in, rejecting refuses one step"""
     c = "scope"
@@ -559,6 +705,7 @@ SCENARIOS = {
     "lease": lease,
     "run": run_cmd,
     "scope": scope,
+    "remote": remote,
 }
 
 
@@ -585,6 +732,7 @@ async def main() -> int:
             try:
                 await (restart(stack, a.restart) if name == "restart" else SCENARIOS[name](stack))
             except Exception as e:  # noqa: BLE001 - a scenario that blew up is a failure, the next one still runs
+                traceback.print_exc()
                 check(name, f"scenario raised {type(e).__name__}", False, str(e))
             finally:
                 # never leave a task holding the phone

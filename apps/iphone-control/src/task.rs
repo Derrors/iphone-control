@@ -7,8 +7,12 @@
 //! taking over hold it, confirmations wait for the user). When the command exits the task ends with its exit
 //! status; when the task ends elsewhere (stopped on the page, the phone changed), the command is stopped. Ctrl-C
 //! stops the task. The other subcommands follow and steer tasks, whoever started them.
+//!
+//! `task run --url <viewer>` does the same for a phone on another machine, through its viewer ([`remote`]).
 
-use std::path::Path;
+mod remote;
+
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{Context, bail};
@@ -25,6 +29,10 @@ pub enum TaskAction {
         owner: String,
         #[arg(long = "app", value_name = "APP", help = ictl_l10n::tr!("任务只在这些 App 里操作（App 名或 Bundle ID，可以写多次）；到了别的 App 每一步都先等你确认。不写就不限制", "Limit the task to these apps (name or bundle ID, repeatable); in any other app each step waits for you first. No limit if not given"))]
         apps: Vec<String>,
+        #[arg(long, value_name = "URL", help = ictl_l10n::tr!("手机接在另一台机器上：那台机器的控制台地址，比如 https://192.168.1.5:8200。登录令牌放在环境变量 IPHONE_CONTROL_VIEWER_TOKEN 里；命令拿到的是 IPHONE_CONTROL_MCP_URL 和任务口令，agent 用 HTTP 方式的 MCP 接入", "The phone is on another machine: that machine's viewer, such as https://192.168.1.5:8200. The login token goes in IPHONE_CONTROL_VIEWER_TOKEN; the command gets IPHONE_CONTROL_MCP_URL and the task's token, and its agent connects to MCP over HTTP"))]
+        url: Option<String>,
+        #[arg(long, value_name = "PEM", requires = "url", help = ictl_l10n::tr!("--url 是本机生成的自签证书时，信任这张证书（那台机器上的 viewer-tls/cert.pem）", "With --url and a self-signed certificate made there: trust it (viewer-tls/cert.pem on that machine)"))]
+        ca: Option<PathBuf>,
         #[arg(required = true, trailing_var_arg = true, allow_hyphen_values = true)]
         command: Vec<String>,
     },
@@ -80,8 +88,14 @@ pub async fn run(socket: &Path, action: TaskAction) -> anyhow::Result<()> {
         for_pid: None,
     };
     let req = match action {
-        TaskAction::Run { title, owner, apps, command } => {
-            return run_command(socket, title, &owner, &apps, &command).await;
+        TaskAction::Run { title, owner, apps, url, ca, command } => {
+            let backend = match url {
+                Some(url) => {
+                    Backend::Remote(remote::Remote::new(&url, ca.as_deref(), Some(remote::Remote::login_from_env()?))?)
+                }
+                None => Backend::Local(socket),
+            };
+            return run_command(&backend, title, &owner, &apps, &command).await;
         }
         TaskAction::List { json } => return list(socket, json).await,
         TaskAction::Events { id } => {
@@ -95,6 +109,10 @@ pub async fn run(socket: &Path, action: TaskAction) -> anyhow::Result<()> {
             let token = std::env::var(protocol::TASK_TOKEN_ENV).ok().filter(|t| !t.is_empty()).with_context(|| {
                 ictl_l10n::trf!("没有设 {}：不在任务里", "{} isn't set: not inside a task", protocol::TASK_TOKEN_ENV)
             })?;
+            // under `task run --url`: the phone is on another machine
+            if let Some(r) = remote::Remote::from_env() {
+                return r?.finish(&token, !failed, &summary.join(" ")).await;
+            }
             let req = Request::TaskFinish { ok: !failed, summary: summary.join(" ") };
             return expect_ok(protocol::as_task(Some(token), None, ask(socket, &req)).await);
         }
@@ -144,26 +162,124 @@ async fn list(socket: &Path, json: bool) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Where `task run` opens its task
+enum Backend<'a> {
+    /// The daemon's socket, on this machine
+    Local(&'a Path),
+    /// Another machine's viewer (`--url`)
+    Remote(remote::Remote),
+}
+
+/// The open task's lease, with its events
+enum Lease {
+    Local(protocol::TaskStream),
+    Remote(remote::Events),
+}
+
+impl Lease {
+    async fn next(&mut self) -> Option<protocol::TaskEvent> {
+        match self {
+            Self::Local(s) => s.next().await,
+            Self::Remote(e) => e.next().await,
+        }
+    }
+}
+
+impl Backend<'_> {
+    async fn open(&self, title: &str, owner: &str, apps: &[String]) -> anyhow::Result<(protocol::TaskOpened, Lease)> {
+        Ok(match self {
+            Self::Local(socket) => {
+                let (o, s) = protocol::open_task(socket, title, owner, apps).await.map_err(anyhow::Error::msg)?;
+                (o, Lease::Local(s))
+            }
+            Self::Remote(r) => {
+                let (o, e) = r.open(title, owner, apps).await?;
+                (o, Lease::Remote(e))
+            }
+        })
+    }
+
+    /// Before the command starts: what it starts is the task's agent, which may not control the task. On another
+    /// machine the agent never has the login that could
+    async fn agent_follows(&self, token: &str) {
+        if let Self::Local(socket) = self {
+            let _ = protocol::as_task(Some(token.to_owned()), None, ask(socket, &Request::TaskAgent)).await;
+        }
+    }
+
+    /// The command's environment, besides the task's token and id
+    fn env(&self) -> Vec<(&'static str, String)> {
+        match self {
+            Self::Local(_) => Vec::new(),
+            Self::Remote(r) => r.env(),
+        }
+    }
+
+    /// Ends the task with the command's result (nothing changes if it ended already)
+    async fn finish(&self, token: &str, ok: bool, summary: &str) {
+        match self {
+            Self::Local(socket) => {
+                let req = Request::TaskFinish { ok, summary: summary.to_owned() };
+                let _ = protocol::as_task(Some(token.to_owned()), None, ask(socket, &req)).await;
+            }
+            Self::Remote(r) => {
+                let _ = r.finish(token, ok, summary).await;
+            }
+        }
+    }
+
+    /// The user stops the task (Ctrl-C, SIGTERM); whether it was taken
+    async fn stop(&self, id: &str) -> bool {
+        match self {
+            Self::Local(socket) => {
+                let req = Request::TaskControl {
+                    id: id.into(),
+                    action: "stop".into(),
+                    step: None,
+                    approve: false,
+                    by: Some("owner".into()),
+                    for_pid: None,
+                };
+                matches!(ask(socket, &req).await, Ok(Response::Text { .. }))
+            }
+            Self::Remote(r) => r.stop(id).await,
+        }
+    }
+
+    async fn state(&self, id: &str) -> Option<String> {
+        match self {
+            Self::Local(socket) => {
+                protocol::task_list(socket).await.ok()?.into_iter().find(|t| t.id == id).map(|t| t.state)
+            }
+            Self::Remote(r) => r.state(id).await,
+        }
+    }
+}
+
 /// `task run`: the task lives as long as the command
 async fn run_command(
-    socket: &Path,
+    backend: &Backend<'_>,
     title: Option<String>,
     owner: &str,
     apps: &[String],
     command: &[String],
 ) -> anyhow::Result<()> {
     let title = title.unwrap_or_else(|| command.join(" "));
-    let (opened, mut lease) = protocol::open_task(socket, &title, owner, apps).await.map_err(anyhow::Error::msg)?;
+    let (opened, mut lease) = backend.open(&title, owner, apps).await?;
     eprintln!("{}", ictl_l10n::trf!("任务 {} 已开始", "Task {} started", opened.id));
     if !apps.is_empty() {
         eprintln!("{}", ictl_l10n::trf!("只在这些 App 里操作：{}", "Limited to these apps: {}", apps.join(", ")));
     }
     // the command and what it starts may not control the task, only stop it; said before it starts
-    let _ = protocol::as_task(Some(opened.token.clone()), None, ask(socket, &Request::TaskAgent)).await;
+    backend.agent_follows(&opened.token).await;
     let spawned = tokio::process::Command::new(&command[0])
         .args(&command[1..])
         .env(protocol::TASK_TOKEN_ENV, &opened.token)
         .env("IPHONE_CONTROL_TASK_ID", &opened.id)
+        .envs(backend.env())
+        // the login stays with whoever runs `task run`: the agent only works for its task (it can't approve its own
+        // confirmations with a login)
+        .env_remove(remote::LOGIN_ENV)
         // its own group: stopping the task stops everything it started (an agent and its MCP server)
         .process_group(0)
         .kill_on_drop(true)
@@ -173,8 +289,7 @@ async fn run_command(
         Err(e) => {
             let why = ictl_l10n::trf!("启动不了 {}：{e}", "Can't start {}: {e}", command[0]);
             // ended as failed while the lease is still held (dropping it first would make it abandoned)
-            let req = Request::TaskFinish { ok: false, summary: why.clone() };
-            let _ = protocol::as_task(Some(opened.token.clone()), None, ask(socket, &req)).await;
+            backend.finish(&opened.token, false, &why).await;
             drop(lease);
             bail!("{why}");
         }
@@ -197,7 +312,7 @@ async fn run_command(
                 if finished_inside(outcome.as_deref()) {
                     grace = Some(Box::pin(tokio::time::sleep(FINISH_GRACE)));
                 } else {
-                    // stopped or interrupted elsewhere, or the daemon went away: the command can't go on
+                    // stopped or interrupted elsewhere, or the daemon (viewer) went away: the command can't go on
                     stop_group(pid);
                 }
             }
@@ -205,23 +320,17 @@ async fn run_command(
                 grace = None;
                 stop_group(pid);
             }
-            _ = tokio::signal::ctrl_c() => stop_here(socket, &opened.id, pid).await,
-            _ = term.recv() => stop_here(socket, &opened.id, pid).await,
+            _ = tokio::signal::ctrl_c() => stop_here(backend, &opened.id, pid).await,
+            _ = term.recv() => stop_here(backend, &opened.id, pid).await,
         }
     };
     if !ended {
         // the command may have ended the task itself (`task finish`); then this changes nothing
-        let req = Request::TaskFinish { ok: status.success(), summary: String::new() };
-        let _ = protocol::as_task(Some(opened.token.clone()), None, ask(socket, &req)).await;
+        backend.finish(&opened.token, status.success(), "").await;
     }
     let outcome = match outcome {
         Some(o) => o,
-        None => protocol::task_list(socket)
-            .await
-            .ok()
-            .and_then(|l| l.into_iter().find(|t| t.id == opened.id))
-            .map(|t| t.state)
-            .unwrap_or_default(),
+        None => backend.state(&opened.id).await.unwrap_or_default(),
     };
     eprintln!("{}", ictl_l10n::trf!("任务 {} 结束：{outcome}", "Task {} ended: {outcome}", opened.id));
     drop(lease);
@@ -242,17 +351,9 @@ fn exit_code(code: Option<i32>, outcome: &str) -> i32 {
     code.unwrap_or(if outcome == "completed" { 0 } else { 1 })
 }
 
-/// Ctrl-C or SIGTERM: the user stops the task (the lease stream then reports it, and the command is stopped)
-async fn stop_here(socket: &Path, id: &str, pid: Option<libc::pid_t>) {
-    let req = Request::TaskControl {
-        id: id.into(),
-        action: "stop".into(),
-        step: None,
-        approve: false,
-        by: Some("owner".into()),
-        for_pid: None,
-    };
-    if !matches!(ask(socket, &req).await, Ok(Response::Text { .. })) {
+/// Ctrl-C or SIGTERM: the user stops the task (the lease then reports it, and the command is stopped)
+async fn stop_here(backend: &Backend<'_>, id: &str, pid: Option<libc::pid_t>) {
+    if !backend.stop(id).await {
         stop_group(pid);
     }
 }

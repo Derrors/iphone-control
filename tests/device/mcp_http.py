@@ -11,7 +11,8 @@ from contextlib import AsyncExitStack
 import httpx2
 from mcp.client.streamable_http import streamable_http_client
 
-URL = os.environ.get("MCP_URL", "")
+# under `task run --url` the command gets the viewer's MCP address and certificate (its task's token is enough)
+URL = os.environ.get("MCP_URL") or os.environ.get("IPHONE_CONTROL_MCP_URL", "")
 TOKEN_HEADER = "Iphone-Control-Task-Token"
 
 
@@ -20,7 +21,7 @@ async def streams(stack: AsyncExitStack, token: str | None):
     headers = {TOKEN_HEADER: token} if token else {}
     if os.environ.get("ICTL_VIEWER_TOKEN"):
         headers["Authorization"] = "Bearer " + os.environ["ICTL_VIEWER_TOKEN"]
-    ca = os.environ.get("MCP_CA")
+    ca = os.environ.get("MCP_CA") or os.environ.get("IPHONE_CONTROL_CA")
     verify = ssl.create_default_context(cafile=ca) if ca else True
     # the SDK's default timeouts (create_mcp_http_client), plus the certificate; never through a proxy from the
     # environment (the viewer is on this machine or the local network)

@@ -530,6 +530,13 @@ async fn service_cmd(socket: &Path, data_dir: &Path, action: ServiceAction) -> a
     Ok(())
 }
 
+/// `s` padded to `width` columns, CJK and other wide characters taking two
+fn pad(s: &str, width: usize) -> String {
+    let w: usize =
+        s.chars().map(|c| if ('\u{1100}'..='\u{ffdc}').contains(&c) && c > '\u{2e7f}' { 2 } else { 1 }).sum();
+    format!("{s}{}", " ".repeat(width.saturating_sub(w)))
+}
+
 /// Where the viewer listens, for links that log in
 struct ViewerAt<'a> {
     port: u16,
@@ -559,7 +566,7 @@ fn viewer_token(data_dir: &Path, at: &ViewerAt, action: Option<TokenAction>, new
                 let created = chrono::DateTime::from_timestamp(e.created as i64, 0)
                     .map(|t| t.format("%Y-%m-%d").to_string())
                     .unwrap_or_default();
-                println!("{:<24} {role:<10} {created}", e.name);
+                println!("{} {} {created}", pad(&e.name, 24), pad(role, 10));
             }
             println!("{}", ictl_l10n::trf!("（存在 {}）", "(kept in {})", auth::tokens_file(data_dir).display()));
             return Ok(());
@@ -1392,6 +1399,13 @@ mod tests {
 
     /// The viewer's settings come from the settings file as environment variables (also for the viewer service):
     /// `IPHONE_CONTROL_VIEWER_LAN=1` turns `--lan` on. A plain flag only took true/false, so the service didn't start
+    #[test]
+    fn token_names_line_up_in_columns() {
+        assert_eq!(super::pad("owner", 8), "owner   ");
+        assert_eq!(super::pad("客厅电视", 10), "客厅电视  ", "four wide characters are eight columns");
+        assert_eq!(super::pad("toolongname", 4), "toolongname");
+    }
+
     #[test]
     fn viewer_settings_from_the_environment() {
         use clap::Parser;

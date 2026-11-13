@@ -115,6 +115,11 @@ impl Misses {
     pub fn reset(&mut self) {
         self.0 = 0;
     }
+
+    /// 有没应答的、但还没到 [`Self::LIMIT`]
+    pub fn pending(&self) -> bool {
+        self.0 > 0
+    }
 }
 
 #[cfg(test)]
@@ -181,9 +186,12 @@ mod tests {
     #[test]
     fn misses_need_three_in_a_row() {
         let mut m = Misses::default();
+        assert!(!m.pending());
         assert!(!m.hit());
+        assert!(m.pending());
         assert!(!m.hit());
         m.reset();
+        assert!(!m.pending());
         assert!(!m.hit());
         assert!(!m.hit());
         assert!(m.hit());

@@ -9,6 +9,7 @@ All notable changes to this project are documented here. The format is based on 
 ### Fixed
 
 - Locking no longer takes about 10 s every time on some iPhones (e.g. iPhone 15 Pro Max, iOS 27.0.1): pressing the power key via IOHID does nothing there, so the daemon remembers it per device and uses WDA's lock first (about 2 s).
+- A WDA that still answers `/status` but no longer answers anything that goes through XCTest (foreground app, screenshots, elements, lock state all time out) is now noticed and restarted within about 30 s. Before, the daemon kept showing it as ready, and in background mode (`ICTL_WDA_DETACHED`) even a daemon restart attached to the stuck WDA again.
 
 ## [0.2.3] - 2026-11-13
 

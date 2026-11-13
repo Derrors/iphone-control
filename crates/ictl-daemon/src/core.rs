@@ -307,6 +307,8 @@ pub(crate) struct Inner {
     pub starting: Option<JoinHandle<StartOutcome>>,
     pub resigning: bool,
     pub wda_misses: Misses,
+    /// 连续几轮 `/status` 正常、经 XCTest 的探测却没有应答（见 `WdaClient::xctest_responsive`）
+    pub wda_stalls: Misses,
     pub backoff: Backoff,
     /// 连续列不出设备的次数（usbmuxd 抖一下不立刻当成离线）
     pub list_errors: u32,
@@ -422,6 +424,7 @@ impl Daemon {
             starting: None,
             resigning: false,
             wda_misses: Misses::default(),
+            wda_stalls: Misses::default(),
             backoff: Backoff::default(),
             list_errors: 0,
             offline_since: Some(now),
@@ -573,6 +576,7 @@ impl Daemon {
         g.swiped_tree = None;
         drop_tunnel(g).await;
         g.wda_misses.reset();
+        g.wda_stalls.reset();
     }
 
     pub(crate) async fn ensure_tunnel<'a>(

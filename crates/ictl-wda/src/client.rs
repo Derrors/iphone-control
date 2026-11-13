@@ -10,6 +10,8 @@ use crate::http::Transport;
 use crate::{Result, WdaError, elements};
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
+/// [`WdaClient::xctest_responsive`] 的时限。正常几十到几百毫秒；守护进程每轮巡检问一次，等太久会拖住巡检
+pub const XCTEST_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 /// How long a measured screen size is trusted at the start of a gesture. `/wda/screen` takes about 100 ms (measured on
 /// iOS 27) and only Display Zoom changes the size, so a touch-down doesn't pay for it every time
 const SCREEN_RECHECK: Duration = Duration::from_secs(60);
@@ -242,6 +244,13 @@ impl<T: Transport> WdaClient<T> {
 
     pub async fn ready(&self) -> Result<bool> {
         Ok(self.call("GET", "/status", None, Duration::from_secs(5)).await?["value"]["ready"] == true)
+    }
+
+    /// WDA 还能不能经 XCTest 办事：问一次前台 App，限时 [`XCTEST_PROBE_TIMEOUT`]。
+    /// `/status` 不经 XCTest，WDA 半死（iPad 真机：`/status` 照常 200，前台 App、截图、读元素、`/wda/locked` 全部超时）时
+    /// 它照样报 ready；这一问才看得出来
+    pub async fn xctest_responsive(&self) -> Result<()> {
+        self.call("GET", "/wda/activeAppInfo", None, XCTEST_PROBE_TIMEOUT).await.map(drop)
     }
 
     /// Read the WDA screen size again, including changes to Display Zoom.
@@ -971,6 +980,30 @@ mod tests {
         // 应答了但不是 JSON：WDA 收到了请求
         let m = Mock::with(&[(200, "<html>")]);
         assert!(matches!(WdaClient::new(&m).active_app().await, Err(WdaError::Interrupted(_))));
+    }
+
+    /// 经 XCTest 的探测：只有「送到了却没有应答」算卡死的迹象；WDA 回了错误说明它还在办事，连不上归 `/status` 管
+    #[tokio::test]
+    async fn xctest_probe_counts_only_missing_answers() {
+        struct Fails(std::io::ErrorKind);
+        impl Transport for Fails {
+            async fn send(&self, _: &str, _: &str, _: Option<Vec<u8>>, t: Duration) -> std::io::Result<(u16, Vec<u8>)> {
+                assert_eq!(t, XCTEST_PROBE_TIMEOUT);
+                Err(std::io::Error::new(self.0, "x"))
+            }
+        }
+        let probe = |k| async move { WdaClient::new(Fails(k)).xctest_responsive().await };
+        assert!(probe(std::io::ErrorKind::TimedOut).await.unwrap_err().no_answer());
+        assert!(probe(crate::http::AFTER_SENT).await.unwrap_err().no_answer());
+        assert!(!probe(std::io::ErrorKind::NotConnected).await.unwrap_err().no_answer());
+        let m = Mock::with(&[
+            (200, r#"{"value":{"bundleId":"com.apple.springboard","pid":60}}"#),
+            (500, r#"{"value":{"error":"unknown error","message":"busy"}}"#),
+        ]);
+        let c = WdaClient::new(&m);
+        assert!(c.xctest_responsive().await.is_ok());
+        assert!(!c.xctest_responsive().await.unwrap_err().no_answer());
+        assert_eq!(m.seen.lock().unwrap()[0].1, "/wda/activeAppInfo");
     }
 
     #[tokio::test]

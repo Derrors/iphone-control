@@ -36,6 +36,13 @@ pub enum WdaError {
 
 pub type Result<T> = std::result::Result<T, WdaError>;
 
+impl WdaError {
+    /// 请求送到了 WDA，却没有完整的应答（超时，或应答到一半断了）。WDA 回了一个错误不算：它还在办事
+    pub fn no_answer(&self) -> bool {
+        matches!(self, Self::Timeout(_) | Self::Interrupted(_))
+    }
+}
+
 /// 识别 XCTest 启动失败是否是「等待自动化密码」：密码框 60 秒没输（toolkit 和 iOS 27 真机同一文字），
 /// 或手机锁屏时密码框弹不出来、被系统直接取消（LocalAuthentication 错误，如 Code=-4「认证已取消」）
 pub fn is_automation_pin_error(message: &str) -> bool {

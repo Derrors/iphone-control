@@ -7,7 +7,7 @@ use ictl_device::{Device, DeviceError, LogStream, Rotation, ScreenSize, Tunnel, 
 use ictl_wda::{WdaClient, WdaError, WdaRunner, http::DeviceTransport};
 
 use crate::core::{Daemon, DetachedWda, DeviceProfile, Inner, close_hid};
-use crate::machine::DeviceState;
+use crate::machine::{DeviceState, Misses};
 use crate::notify::Event;
 
 /// Three 10-second supervisor intervals. A missing background sample within this
@@ -305,7 +305,25 @@ impl Daemon {
             (Some(w), true) => w.ready().await.unwrap_or(false),
             _ => false,
         };
-        if ready {
+        // /status 不经 XCTest：WDA 半死时它照样 ready。再问一次经 XCTest 的，连续几轮没应答就当它卡死、重新启动
+        let stalled = ready && self.xctest_stalled(g).await;
+        if stalled {
+            self.log.log(&ictl_l10n::log_trf!(
+                "WDA 卡死：/status 正常，但经 XCTest 的请求连续 {} 轮没有应答，重新启动 WDA",
+                "WDA is stuck: /status answers, but requests that go through XCTest went unanswered {} checks in a row; restarting WDA",
+                Misses::LIMIT
+            ));
+            // 后台启动的那个不能再接上：忘掉它，下面重新后台启动时会先结束它
+            if g.persisted.detached_wda.take().is_some() {
+                g.persisted.save(&self.cfg.state_file());
+            }
+            self.update_display(g, None).await;
+            self.drop_session(g).await;
+        } else if ready && g.wda_stalls.pending() {
+            // 这一轮没应答、还没到判定卡死：先不采样屏幕（同样经 XCTest，每次还要白等 10 秒）
+            return;
+        }
+        if ready && !stalled {
             g.wda_misses.reset();
             self.sample_display(g, false).await;
             if g.state != DeviceState::Ready {
@@ -318,7 +336,7 @@ impl Daemon {
             }
             return;
         }
-        if !self.confirm_wda_loss(g, runner_alive).await {
+        if !stalled && !self.confirm_wda_loss(g, runner_alive).await {
             return;
         }
         if g.runner.is_some() {
@@ -332,6 +350,28 @@ impl Daemon {
             return;
         }
         self.spawn_start(g, device, bundle);
+    }
+
+    /// 经 XCTest 的探测（[`WdaClient::xctest_responsive`]）连续 [`Misses::LIMIT`] 轮没有应答时返回 true。
+    /// WDA 回了错误、或者应答了，都算活着
+    async fn xctest_stalled(&self, g: &mut Inner) -> bool {
+        let Some(w) = g.wda.as_ref() else { return false };
+        match w.xctest_responsive().await {
+            Err(e) if e.no_answer() => {
+                tracing::debug!(
+                    "{}",
+                    ictl_l10n::log_trf!(
+                        "WDA 经 XCTest 的探测没有应答：{e}",
+                        "WDA did not answer a probe that goes through XCTest: {e}"
+                    )
+                );
+                g.wda_stalls.hit()
+            }
+            _ => {
+                g.wda_stalls.reset();
+                false
+            }
+        }
     }
 
     /// Keep an active view and finger through the same transient status misses as the runner.

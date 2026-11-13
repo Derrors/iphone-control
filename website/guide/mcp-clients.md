@@ -37,7 +37,7 @@ codex mcp add iphone -- /path/to/iphone-control --socket <路径> mcp
 macOS 上没有 `XDG_RUNTIME_DIR`，socket 在 `~/.local/share/iphone-control/ctl.sock`，同样以 `mcp-config` 打印的为准。Claude Desktop 的配置文件在 `~/Library/Application Support/Claude/claude_desktop_config.json`。
 
 ::: warning 客户端和守护进程要在同一台机器上
-MCP 服务经本机的 Unix socket 找守护进程。客户端在另一台电脑上时，用下面的 [URL 方式](#通过-url-接入-http)，或者用 SSH 拉起，后面跟那台主机上 `mcp-config` 打印的程序路径和参数，例如 `"command": "ssh", "args": ["主机", "/home/you/.local/bin/iphone-control", "--socket", "/run/user/1000/iphone-control/ctl.sock", "mcp"]`。
+MCP 服务经本机的 Unix socket 找守护进程。客户端在另一台电脑上时，用下面的 [URL 方式](#通过-url-接入-http)；客户端只能填命令时，在那台电脑上装好 iphone-control，填 `iphone-control mcp --url https://<IP>:8200`（登录令牌放在 `IPHONE_CONTROL_VIEWER_TOKEN`，自签证书加 `--ca cert.pem`），它把 stdio 转到 HTTP；或者用 SSH 拉起，后面跟那台主机上 `mcp-config` 打印的程序路径和参数，例如 `"command": "ssh", "args": ["主机", "/home/you/.local/bin/iphone-control", "--socket", "/run/user/1000/iphone-control/ctl.sock", "mcp"]`。
 :::
 
 ## 通过 URL 接入（HTTP）
@@ -48,7 +48,7 @@ MCP 服务经本机的 Unix socket 找守护进程。客户端在另一台电脑
 - **本机**：`http://127.0.0.1:8200/mcp`（端口跟着控制台）。Claude Code：`claude mcp add --transport http iphone http://127.0.0.1:8200/mcp --header "Authorization: Bearer <令牌>"`；配置文件里写 `{"type": "http", "url": "http://127.0.0.1:8200/mcp", "headers": {"Authorization": "Bearer <令牌>"}}`。
 - **局域网里另一台电脑**：控制台要开 `--lan`（`IPHONE_CONTROL_VIEWER_LAN=1`），地址是 `https://<这台机器的 IP>:8200/mcp`。证书是本机生成的自签证书时，客户端要信任它：把那台机器上的 `~/.local/share/iphone-control/viewer-tls/cert.pem` 拷过来，Node 写的客户端（Claude Code 等）用 `NODE_EXTRA_CA_CERTS=cert.pem` 启动；也可以用 `--tls-cert`/`--tls-key` 换成自己的证书。客户端配了代理时，把这台机器的 IP 加进 `NO_PROXY`。
 - **在任务里**：agent 平台用 `task run` 开任务时，让 agent 的 MCP 请求带上请求头 `Iphone-Control-Task-Token: <IPHONE_CONTROL_TASK_TOKEN 的值>`，作用和 stdio 方式下的环境变量一样（每一步显示在控制台上，暂停时等待，多出 `iphone_confirm`）。**只带这个请求头、不带登录令牌也行**：任务进行中，`/mcp` 认这个任务口令，agent 只能为这个任务操作手机，碰不到暂停、确认这些控制接口。跨机器时就该这样：登录令牌留在平台手里，agent 只拿任务口令。
-- **另一台机器上的平台**：`iphone-control task run --url https://<IP>:8200 -- <命令>` 替你开任务并持有租约，命令里能用 `$IPHONE_CONTROL_MCP_URL` 和 `$IPHONE_CONTROL_TASK_TOKEN` 配置 agent。不装 iphone-control 的平台直接调接口：`POST /api/agent/tasks/open`（`Authorization: Bearer <登录令牌>`，JSON `{title, owner?, apps?}`）返回事件流，第一条 `opened` 带 `{id, token}`，连接保持着就是租约，断开任务就记为 abandoned；暂停、继续、接管、交还、停止、确认是 `POST /api/agent/tasks/<id>/<动作>`（确认带 `{"approve": true}`），事件是 `GET /api/agent/tasks/<id>/events`，任务列表是 `GET /api/agent/tasks`；agent 自己结束任务用 `POST /api/agent/tasks/finish`（带任务口令，`{ok, summary}`）。
+- **另一台机器上的平台**：`iphone-control task run --url https://<IP>:8200 -- <命令>` 替你开任务并持有租约。命令里的 agent 照常配置 stdio 方式的 `iphone-control mcp` 就行（它看到 `IPHONE_CONTROL_URL` 会自动转接、只带任务口令），也可以用 `$IPHONE_CONTROL_MCP_URL` 和 `$IPHONE_CONTROL_TASK_TOKEN` 直接走 HTTP。不装 iphone-control 的平台直接调接口：`POST /api/agent/tasks/open`（`Authorization: Bearer <登录令牌>`，JSON `{title, owner?, apps?}`）返回事件流，第一条 `opened` 带 `{id, token}`，连接保持着就是租约，断开任务就记为 abandoned；暂停、继续、接管、交还、停止、确认是 `POST /api/agent/tasks/<id>/<动作>`（确认带 `{"approve": true}`），事件是 `GET /api/agent/tasks/<id>/events`，任务列表是 `GET /api/agent/tasks`；agent 自己结束任务用 `POST /api/agent/tasks/finish`（带任务口令，`{ok, summary}`）。
 - **关掉**：`viewer --mcp off`（`IPHONE_CONTROL_VIEWER_MCP=off`）。
 
 ::: warning 令牌就是钥匙

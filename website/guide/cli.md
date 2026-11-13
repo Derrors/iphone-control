@@ -18,7 +18,7 @@
 | 命令 | 作用 |
 |---|---|
 | `daemon` | 常驻守护进程。一般由后台服务启动，也可以在终端里手动运行 |
-| `mcp` | MCP stdio 服务，由 AI 客户端拉起 |
+| `mcp [--url <控制台> [--ca <PEM>]]` | MCP stdio 服务，由 AI 客户端拉起。加 `--url`（或设了 `IPHONE_CONTROL_URL`）时转接另一台机器控制台的 `/mcp`：手机接在那台机器上、客户端又只能填命令时用。有任务口令（`IPHONE_CONTROL_TASK_TOKEN`）就只带它，否则用 `IPHONE_CONTROL_VIEWER_TOKEN` 登录；`task run --url` 启动的命令已经设好这些，照常配置 `iphone-control mcp` 就行 |
 | `mcp-config` | 打印把 MCP 注册到 Claude Code 的命令。程序路径用升级后不变的那个（Homebrew 用 `opt` 下的链接） |
 
 ## Shell 补全
@@ -135,7 +135,7 @@ Viewer 只监听本机回环地址。同机其他用户也能查看安装信息�
 | `viewer token add <名字> [--read-only]`、`list`、`show <名字> [--new]`、`remove <名字>` | 有名字的令牌，比如每人一个、每台设备一个；控制台的任务记录里记下是哪个令牌暂停、接管、确认的。`--read-only` 的令牌只能看画面、设备状态和任务，所有操作都被拒绝，页面上也不显示操作入口。`list` 不显示令牌本身；最后一个能操作的令牌不能删 |
 | `task run [--title <标题>] [--app <App>…] -- <命令>` | 给别的 agent 平台用的 AI 任务：在当前控制的设备上开一个任务，再运行这条命令。命令启动的 `iphone-control mcp` 自动加入任务（经环境变量 `IPHONE_CONTROL_TASK_TOKEN`），控制台上能看到每一步，可以暂停、接管、停止，付款、发消息之前会等你确认。命令结束，任务就结束；任务在别处被停止，命令也会被停止；按 Ctrl-C 等于停止任务。任务进行中，其他客户端只能看，不能操作手机。`--app`（可写多次，App 名或 Bundle ID）把任务限定在这些 App 里：到了别的 App、或者要打开网页以外的链接，每一步都先等你确认。**手机接在另一台机器上**时加 `--url https://<那台机器>:8200`（自签证书再加 `--ca cert.pem`），登录令牌放在环境变量 `IPHONE_CONTROL_VIEWER_TOKEN` 里：任务经那台机器的控制台开，命令拿到的是任务口令和 `IPHONE_CONTROL_MCP_URL`，它的 agent 用 HTTP 方式的 MCP 接入（见[接入 AI 客户端](./mcp-clients#通过-url-接入-http)）。登录令牌不会传给命令，所以 agent 不能暂停、确认自己的任务；命令里的 `task finish` 照样能用 |
 | `task list` / `task events <id>` | 最近的任务（`--json` 给程序读）；跟着一个任务的事件，每行一个 JSON |
-| `task pause\|resume\|takeover\|handback\|stop <id>`、`task approve\|reject <id>` | 在命令行里控制任务，和控制台上的按钮一样。只能由人来做：在任务里面（Agent 的环境或它启动的进程）执行会被拒绝，`stop` 除外 |
+| `task pause\|resume\|takeover\|handback\|stop <id>`、`task approve\|reject <id>` | 在命令行里控制任务，和控制台上的按钮一样。只能由人来做：在任务里面（Agent 的环境或它启动的进程）执行会被拒绝，`stop` 除外。`task` 的所有子命令（`list`、`events` 也是）都可以加 `--url <控制台> [--ca <PEM>]`（或设 `IPHONE_CONTROL_URL`），经另一台机器的控制台操作那里的手机，登录令牌放在 `IPHONE_CONTROL_VIEWER_TOKEN`；`task run --url` 启动的命令没有登录令牌，所以 Agent 在里面执行这些也会被拒绝 |
 
 调试用的 `debug` 子命令默认不编译，见[贡献指南](https://github.com/Derrors/iphone-control/blob/main/CONTRIBUTING.md#testing-on-a-real-phone)。
 

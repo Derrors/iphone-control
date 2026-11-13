@@ -1,6 +1,6 @@
 # 必须覆盖的回归用例
 
-#1～#34 来自 toolkit 和本项目早期实际踩过的坑，#35～#45 是多设备和 HID 横屏，#46～#58 是实时画面、开发者工具和英文界面，#59～#63 是 iPhone 18 Pro Max（iOS 27.2.1）真机全量测试发现的问题，#64 起是 viewer 的 AI 任务和新页面。能单测的写单测，不能单测的进真机回归清单。**每个 PR 都必须保持这里的全部用例通过**：单测的由 `cargo test` 覆盖；改到的范围里测试方式是真机、无头 Chrome 或手动测量的，要重跑并在 PR 里列出编号，写明设备和 iOS 版本；修了清单里没有的问题，要加一行。完整要求见 [CONTRIBUTING.md 的 Required tests](../../CONTRIBUTING.md#required-tests)。
+#1～#34 来自 toolkit 和本项目早期实际踩过的坑，#35～#45 是多设备和 HID 横屏，#46～#58 是实时画面、开发者工具和英文界面，#59～#63 是 iPhone 18 Pro Max（iOS 27.2.1）真机全量测试发现的问题，#64 起是 viewer 的 AI 任务和新页面，#116～#122 是任务的控制权、控制台的局域网访问与登录、跨主机。能单测的写单测，不能单测的进真机回归清单。**每个 PR 都必须保持这里的全部用例通过**：单测的由 `cargo test` 覆盖；改到的范围里测试方式是真机、无头 Chrome 或手动测量的，要重跑并在 PR 里列出编号，写明设备和 iOS 版本；修了清单里没有的问题，要加一行。完整要求见 [CONTRIBUTING.md 的 Required tests](../../CONTRIBUTING.md#required-tests)。
 
 | # | 坑 | 正确行为 | 测试方式 |
 |---|---|---|---|
@@ -119,3 +119,10 @@
 | 113 | 在控制台画面上拖动、滑动时，触控板双指一碰就变成了缩放画面（双指捏合在浏览器里是按住 Ctrl 的滚轮） | 画面只用上方的加减号缩放；画面区域里的 Ctrl/⌘ + 滚轮、Safari 的 gesture 事件都拦下，既不缩放画面也不缩放整页；触屏上画面周围不允许双指缩放（`touch-action: pan-x pan-y`） | 页面测试（`tests/viewer/zoom.test.mjs`）+ 真机（在画面上双指捏合，缩放比例不变） |
 | 114 | 设置菜单不能用方向键，长按方向键时重画期间会打开回显，取消后可能留下终端输入模式 | 菜单从第一帧到退出都关闭输入回显；方向键和编号选择一致，Esc/Ctrl+C 恢复原模式；基础终端保留逐行输入 | 菜单状态单测 + PTY 回归（含长按 ↓、输入输出在不同终端、取消和外部信号） |
 | 115 | 生成 Shell 补全触发配置读取或设备维护锁，脚本与 CLI 定义不同步 | Bash/Zsh/Fish 从实际命令树生成，生成路径不读取设置、不连接设备、不申请维护锁 | 补全单测、CLI 子进程回归、Bash/Fish 候选断言及 Zsh 交互验证 |
+| 116 | AI 任务的 Agent 用自己的 Bash 跑 `iphone-control task approve <id>`，就能批准它本该问人的越界确认和 `iphone_confirm`，或在用户暂停后自己继续 | 带任务口令、或来自开任务进程之下（Agent 及其子进程）的控制请求一律拒绝，停止除外；控制台接口在 Linux 上按调用进程同样拒绝 | 单测 `the_agent_cant_control_its_own_task`；真机 `tasks.py self` |
+| 117 | `task run` 下的命令自己 `task finish` 后正常退出，却被立刻发 SIGTERM，`task run` 退出码变成 1，平台当成失败 | 任务是命令自己结束的（completed/failed/rejected）就给它 5 秒退出，退出码用它自己的；在别处停止的照旧马上停 | 单测 `a_command_that_finished_its_task_is_given_time_to_exit`、`the_exit_code_is_the_command_s_or_the_task_s_result`；真机 `tasks.py run` |
+| 118 | `IPHONE_CONTROL_VIEWER_LAN=1`（文档写的值）让控制台启动就退出：`invalid value '1' for '--lan'` | 布尔设置接受 1/0、yes/no、on/off、true/false | 单测 `viewer_settings_from_the_environment` |
+| 119 | 从局域网地址（HTTP）打开控制台一直停在「正在连接」：不是安全上下文，没有 `crypto.randomUUID` | 页面不用只在安全上下文里才有的接口生成画面编号（`getRandomValues`） | 页面测试 `lan.test.mjs` |
+| 120 | 带请求体的请求被提前拒绝（没登录 401、403、413）时，控制台没读请求体就关连接，TCP 发 RST，客户端收不到回复（`connection reset by peer`，复用连接的程序约三次一次） | 回复后先关写方向，读完对方剩下的数据（最多 1 秒、1 MB）再关 | 单测 `every_request_needs_the_login`（256 KB 请求体仍收到 401）；真机 `tasks.py remote` 连跑 8 次 |
+| 121 | 任务事件流（SSE）的一块数据断在中文字符中间时，先整体转成文字会把这个字变成乱码 | 在字节里找事件边界，只转换完整的事件 | 单测 `remote::reads_server_sent_events` |
+| 122 | 升级时运行新程序的 `--version` 偶尔失败：`Text file busy`（同一进程的其他线程 fork 时，新程序还以写方式打开） | 遇到 `ETXTBSY` 等 50 毫秒重试，最多 20 次 | 单测 `the_candidate_runs_once_it_is_no_longer_open_for_writing`（修复前稳定复现） |

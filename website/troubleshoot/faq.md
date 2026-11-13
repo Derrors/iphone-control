@@ -56,6 +56,21 @@ iphone-control doctor    # 逐层检查，每项失败都给出修复办法
 - **点了没反应：** 可能有系统弹窗挡着，工具结果里会提示「屏幕上有系统弹窗…」，先点掉它。
 - **输入的字不全：** `iphone_type_text` 会读回核对并补上；仍提示对不上时，说明 App 在输入过程中改写了输入框，分几段输入。
 
+## 打开控制台要登录、提示「令牌不对」
+
+所有经 HTTP 的访问都要登录，本机也一样。在接着手机的机器上运行 `iphone-control viewer token`，点开它打印的链接（或者在登录页粘贴令牌）。之前登录过、现在又回到登录页，是令牌被换掉或删掉了（`viewer token show <名字> --new`、`remove`）。一分钟里输错 20 次后，这一分钟内不再校验令牌（会提示稍后再试）。只读令牌能看不能操作，页面上会显示「只读」。见[控制台与远程使用](../guide/remote)。
+
+## 局域网打开控制台时提示证书不受信任
+
+`--lan` 时用的是本机生成的自签证书，第一次打开浏览器会警告。在警告页的证书详情里核对 SHA-256 指纹，和 `iphone-control service status`（或控制台启动时）显示的一致就继续访问。机器换了 IP 会重新生成证书，要再核对一次。不想看到警告，用 `--tls-cert`/`--tls-key` 换成自己的证书（mkcert、`tailscale cert`）。
+
+## 从别的机器连不上控制台、`/mcp` 或 `task --url`
+
+- 401：没带登录令牌或令牌不对。命令行和 `mcp --url` 读 `IPHONE_CONTROL_VIEWER_TOKEN`；MCP 客户端要带请求头 `Authorization: Bearer <令牌>`；Agent 只带任务口令时，任务结束后也会是 401。
+- 证书错误：自签证书要信任它。iphone-control 的命令加 `--ca cert.pem`（`IPHONE_CONTROL_CA`），Node 写的客户端用 `NODE_EXTRA_CA_CERTS=cert.pem`；证书在接着手机的那台机器的 `~/.local/share/iphone-control/viewer-tls/cert.pem`。
+- 连接被拒绝或超时：控制台要开 `--lan`；只接受局域网地址（含 Tailscale 的 100.64/10）来的连接。这台电脑配了代理时，把那台机器的 IP 加进 `NO_PROXY`。
+- 403：只读令牌不能操作，或者 `Host` 不是那台机器的名字或地址（用 `--lan-host` 加名字）。
+
 ## 控制台切换设备后没有画面
 
 画面区域会写明原因：没连上、还要配对或打开开发者模式（运行 `iphone-control setup --reconfigure` 选「手机」）、WDA 正在启动（通常 10–60 秒）、要先解锁。新设备上还没装 WDA 时，已登录 Apple ID 的可以点「签名并安装 WDA」，大约 1–2 分钟，期间保持手机解锁；没登录的运行 `iphone-control setup --reconfigure` 选「Apple ID」。AI 任务执行中，或设了 `IPHONE_UDID` 时，不能切换设备。见[多台设备](../guide/multi-device)。

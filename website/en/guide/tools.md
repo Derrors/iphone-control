@@ -76,4 +76,8 @@ When WDA can't be reached, screenshots, taps, swipes and buttons go through Core
 - **Screen size:** while WDA is down, taps and swipes return an error if there is no record of this device's size. Wait for WDA to come up once, or set [`SCREEN_W`/`SCREEN_H`](./configuration#advanced).
 - **No redo:** if a request already reached WDA and the connection then dropped or the response was incomplete, it doesn't fall back to HID, because the action may have happened and redoing it would tap or type twice. The tool returns an error; the agent should take a screenshot first.
 
+## In an AI task: `iphone_confirm`
+
+When the agent works in an [AI task](./remote#for-agent-platforms-ai-tasks) (one the control page gave it, or one `task run` started), its tool list has one more, `iphone_confirm`: before paying, deleting, sending a message or changing account or privacy settings it asks you with it and waits for your answer, on the control page or with `iphone-control task approve`/`reject`; when you reject, it stops and doesn't do the step. A task limited to some apps also stops and asks in any other app. While a task runs, other clients can look but not act on the phone.
+
 All parameters: [docs/tools.md](https://github.com/Derrors/iphone-control/blob/main/docs/tools.md) in the repository.

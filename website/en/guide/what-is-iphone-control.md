@@ -9,6 +9,7 @@ It works as a set of [MCP](https://modelcontextprotocol.io) (Model Context Proto
 - Let an agent get things done on the phone: look things up, fill in forms, change settings, play games.
 - Test your own app or website on a real device; a Linux box will do, no Mac needed.
 - Turn a spare iPhone into a device you can script remotely.
+- Watch and act on the phone from a control page in the browser, or hand tasks to a local Claude Code or Codex and pause, take over or confirm each step; from the local network and other machines too, see [Viewer and Remote Use](./remote).
 
 ## How it works
 

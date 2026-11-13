@@ -854,6 +854,7 @@ pub fn wants_alert_check(req: &Request) -> bool {
         | Request::TaskList
         | Request::TaskControl { .. }
         | Request::TaskAgent
+        | Request::TaskCheck
         | Request::TaskStep { .. }
         | Request::TaskStepDone { .. }
         | Request::TaskConfirm { .. }

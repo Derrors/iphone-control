@@ -24,3 +24,14 @@ test('WebCodecs and the clipboard are only used where they may be missing', () =
   const clip = code.indexOf('navigator.clipboard.writeText');
   assert.match(code.slice(clip - 40, clip), /try \{/, 'a failure falls back to selecting the text');
 });
+
+// A read-only token (`viewer token add … --read-only`): the page says so and keeps its own hands off; the viewer
+// refuses the actions anyway
+test('a read-only login hides what it may not do', () => {
+  assert.match(html, /\[data-readonly\] #composer[^{]*#dock[^{]*\{ display: none !important; \}/);
+  const act = code.match(/^async function act\([^]*?^}/m)[0];
+  assert.match(act.split('\n')[1], /S\.readOnly/, 'act stops before sending anything');
+  const start = code.match(/^function startTask\([^]*?^}/m)[0];
+  assert.match(start, /S\.readOnly/);
+  assert.match(code, /S\.readOnly = S\.login\?\.role === 'view'/);
+});

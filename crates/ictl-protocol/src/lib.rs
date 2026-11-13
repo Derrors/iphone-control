@@ -225,6 +225,9 @@ pub enum Request {
     /// from now on (and the ones those start) is the task's agent, whose control requests are refused
     /// ([`Request::TaskControl`])
     TaskAgent,
+    /// With a task's token: the task's id while it is active, an error once it ended or for a token nobody knows.
+    /// The viewer lets an agent on another machine use `/mcp` by its task's token alone (docs/task-control.md 7.6)
+    TaskCheck,
     /// With the task's token ([`TASK`]): a tool call starts. Waits while the task isn't running, then records the
     /// step; the text is the step number. The calls the tool makes carry it ([`TASK_STEP`])
     TaskStep {
@@ -379,6 +382,7 @@ impl Request {
             | Self::TaskList
             | Self::TaskControl { .. }
             | Self::TaskAgent
+            | Self::TaskCheck
             | Self::TaskStep { .. }
             | Self::TaskStepDone { .. }
             | Self::TaskConfirm { .. }
@@ -691,6 +695,16 @@ pub async fn task_events(socket: &std::path::Path, id: &str) -> Result<TaskStrea
         (Response::Text { .. }, s) => Ok(s),
         (Response::Error { message, .. }, _) => Err(message),
         (Response::Image { caption, .. }, _) => Err(caption),
+    }
+}
+
+/// The id of the active task with `token` ([`Request::TaskCheck`]); `Err` is why not (ended, unknown, no daemon)
+pub async fn task_check(socket: &std::path::Path, token: &str) -> Result<String, String> {
+    let call = call(socket, &Request::TaskCheck, Some(std::time::Duration::from_secs(10)));
+    match as_task(Some(token.to_owned()), None, call).await.map_err(|e| e.to_string())? {
+        Response::Text { text, .. } => Ok(text),
+        Response::Error { message, .. } => Err(message),
+        Response::Image { caption, .. } => Err(caption),
     }
 }
 

@@ -1,53 +1,176 @@
-//! Login for the control page and `/mcp` (docs/task-control.md 7.5).
+//! Login for the control page and `/mcp` (docs/task-control.md 7.5, 7.6).
 //!
 //! Every HTTP request needs it, from this machine too: a reverse proxy or tunnel on this machine (frp, nginx,
 //! cloudflared, `tailscale serve`) makes every visitor's connection come from `127.0.0.1`, so the page can't tell
 //! the user at their own browser from someone on the internet. The Unix socket (the CLI, `iphone-control mcp` over
 //! stdio, `task run`) isn't HTTP and doesn't need it.
 //!
-//! One token, made on the first start and kept in `<data dir>/viewer-token` (0600); `iphone-control viewer token`
-//! shows it with a link that logs in, `--new` replaces it (and every session with it). A browser logs in once (the
-//! login page, or the link with `?token=`) and gets a session cookie: `HttpOnly`, `SameSite=Lax`, `Secure` over
-//! HTTPS, 30 days. Its value is an HMAC of the token, so it shows nothing of the token and ends when the token is
-//! replaced. Programs send `Authorization: Bearer <token>`.
+//! Tokens have a name and a role ([`Role`]): `operate` may do everything, `view` may only look (the picture, the
+//! device's state, tasks and their events). They are kept in `<data dir>/viewer-tokens.json` (0600); the first one,
+//! `owner`, is made on the first start (from the single `viewer-token` of earlier versions, if there is one).
+//! `iphone-control viewer token …` shows, adds, replaces and removes them; the viewer reads the file again when it
+//! changes, so that takes effect at once. Who did what goes into a task's log by the token's name.
+//!
+//! A browser logs in once (the login page, or the link with `?token=`) and gets a session cookie: `HttpOnly`,
+//! `SameSite=Lax`, `Secure` over HTTPS, 30 days. Its value is an HMAC of the token, so it shows nothing of the token
+//! and ends when the token is replaced or removed. Programs send `Authorization: Bearer <token>`.
 //!
 //! Wrong tokens are counted for the whole page, not per address (behind a proxy every address is `127.0.0.1`): after
-//! [`MAX_FAILURES`] in a minute, tokens aren't checked until the minute is over. The token is 256 random bits, so
+//! [`MAX_FAILURES`] in a minute, tokens aren't checked until the minute is over. A token is 256 random bits, so
 //! this only makes guessing slower still; a session that is already logged in isn't affected.
 
 use std::collections::VecDeque;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
-/// Under the data directory
-pub const TOKEN_FILE: &str = "viewer-token";
+use anyhow::{Context, bail};
+use serde::{Deserialize, Serialize};
+
+/// Under the data directory: the tokens
+pub const TOKENS_FILE: &str = "viewer-tokens.json";
+/// Under the data directory: the single token of earlier versions, which becomes [`OWNER`]
+const OLD_TOKEN_FILE: &str = "viewer-token";
+/// The first token's name
+pub const OWNER: &str = "owner";
 /// Wrong tokens in [`WINDOW`] before tokens are refused until it is over
 const MAX_FAILURES: usize = 20;
 const WINDOW: Duration = Duration::from_secs(60);
 /// How long a browser stays logged in
 const SESSION_DAYS: u64 = 30;
 
-pub fn token_file(data_dir: &Path) -> PathBuf {
-    data_dir.join(TOKEN_FILE)
+/// What a token may do
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Role {
+    /// Everything: act on the phone, start and control tasks, `/mcp`
+    Operate,
+    /// Only look: the picture, the device's state, tasks and their events
+    View,
 }
 
-/// The token, made now if there is none
-pub fn load_or_create(data_dir: &Path) -> io::Result<String> {
-    match std::fs::read_to_string(token_file(data_dir)) {
-        Ok(t) if valid_token(t.trim()) => Ok(t.trim().to_owned()),
-        Ok(_) => replace(data_dir),
-        Err(e) if e.kind() == io::ErrorKind::NotFound => replace(data_dir),
-        Err(e) => Err(e),
+impl Role {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Operate => "operate",
+            Self::View => "view",
+        }
     }
 }
 
-/// A new token in place of the old one; every browser has to log in again
-pub fn replace(data_dir: &Path) -> io::Result<String> {
-    let token = new_token()?;
-    write_private(&token_file(data_dir), token.as_bytes())?;
-    Ok(token)
+/// A token in [`TOKENS_FILE`]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Entry {
+    pub name: String,
+    pub role: Role,
+    pub token: String,
+    /// Unix seconds
+    #[serde(default)]
+    pub created: u64,
+}
+
+pub fn tokens_file(data_dir: &Path) -> PathBuf {
+    data_dir.join(TOKENS_FILE)
+}
+
+/// The tokens; the first start makes [`OWNER`] (from the earlier single token if there is one)
+pub fn load(data_dir: &Path) -> anyhow::Result<Vec<Entry>> {
+    if let Some(v) = read(data_dir)? {
+        return Ok(v);
+    }
+    let old = data_dir.join(OLD_TOKEN_FILE);
+    let token = match std::fs::read_to_string(&old) {
+        Ok(t) if valid_token(t.trim()) => t.trim().to_owned(),
+        _ => new_token()?,
+    };
+    let v = vec![Entry { name: OWNER.into(), role: Role::Operate, token, created: now() }];
+    save(data_dir, &v)?;
+    let _ = std::fs::remove_file(old);
+    Ok(v)
+}
+
+/// The tokens as they are on disk; `None` when there is no file yet
+fn read(data_dir: &Path) -> anyhow::Result<Option<Vec<Entry>>> {
+    let file = tokens_file(data_dir);
+    match std::fs::read(&file) {
+        Ok(b) => {
+            let v: Vec<Entry> = serde_json::from_slice(&b).with_context(|| file.display().to_string())?;
+            Ok(Some(v.into_iter().filter(|e| valid_token(&e.token)).collect()))
+        }
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(anyhow::Error::new(e).context(file.display().to_string())),
+    }
+}
+
+fn save(data_dir: &Path, v: &[Entry]) -> anyhow::Result<()> {
+    let mut json = serde_json::to_vec_pretty(v)?;
+    json.push(b'\n');
+    write_private(&tokens_file(data_dir), &json)?;
+    Ok(())
+}
+
+/// A name the CLI and the task log can show: letters, digits, `-`, `_`, `.`, at most 40
+pub fn valid_name(name: &str) -> bool {
+    (1..=40).contains(&name.chars().count()) && name.chars().all(|c| c.is_alphanumeric() || "-_.".contains(c))
+}
+
+/// A new token named `name`
+pub fn add(data_dir: &Path, name: &str, role: Role) -> anyhow::Result<Entry> {
+    if !valid_name(name) {
+        bail!(ictl_l10n::trf!(
+            "名字只能用字母、数字和 - _ .，最多 40 个字：{name}",
+            "A name takes letters, digits and - _ . only, 40 at most: {name}"
+        ));
+    }
+    let mut v = load(data_dir)?;
+    if v.iter().any(|e| e.name == name) {
+        bail!(ictl_l10n::trf!(
+            "已经有叫 {name} 的令牌了；要换新的用 viewer token show {name} --new",
+            "There is already a token named {name}; to replace it: viewer token show {name} --new"
+        ));
+    }
+    let e = Entry { name: name.into(), role, token: new_token()?, created: now() };
+    v.push(e.clone());
+    save(data_dir, &v)?;
+    Ok(e)
+}
+
+/// The token named `name`
+pub fn get(data_dir: &Path, name: &str) -> anyhow::Result<Entry> {
+    load(data_dir)?.into_iter().find(|e| e.name == name).ok_or_else(|| no_such(name))
+}
+
+/// A new token in place of `name`'s; its browsers have to log in again
+pub fn renew(data_dir: &Path, name: &str) -> anyhow::Result<Entry> {
+    let mut v = load(data_dir)?;
+    let e = v.iter_mut().find(|e| e.name == name).ok_or_else(|| no_such(name))?;
+    e.token = new_token()?;
+    e.created = now();
+    let e = e.clone();
+    save(data_dir, &v)?;
+    Ok(e)
+}
+
+/// Removes `name`; the last token that may operate stays (nobody could act otherwise)
+pub fn remove(data_dir: &Path, name: &str) -> anyhow::Result<()> {
+    let mut v = load(data_dir)?;
+    let Some(i) = v.iter().position(|e| e.name == name) else { return Err(no_such(name)) };
+    if v[i].role == Role::Operate && v.iter().filter(|e| e.role == Role::Operate).count() == 1 {
+        bail!(ictl_l10n::trf!(
+            "{name} 是最后一个能操作的令牌，不能删；要换掉它用 viewer token show {name} --new",
+            "{name} is the last token that may operate, so it stays; to replace it: viewer token show {name} --new"
+        ));
+    }
+    v.remove(i);
+    save(data_dir, &v)
+}
+
+fn no_such(name: &str) -> anyhow::Error {
+    anyhow::anyhow!(ictl_l10n::trf!(
+        "没有叫 {name} 的令牌（viewer token list 列出所有令牌）",
+        "No token named {name} (viewer token list shows them)"
+    ))
 }
 
 fn valid_token(t: &str) -> bool {
@@ -59,6 +182,10 @@ fn new_token() -> io::Result<String> {
     let mut b = [0u8; 32];
     ring::rand::SystemRandom::new().fill(&mut b).map_err(|_| io::Error::other("no random numbers"))?;
     Ok(b.iter().map(|x| format!("{x:02x}")).collect())
+}
+
+fn now() -> u64 {
+    SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
 }
 
 /// Only this user may read it; written whole or not at all
@@ -76,11 +203,21 @@ fn write_private(file: &Path, data: &[u8]) -> io::Result<()> {
     std::fs::rename(&tmp, file)
 }
 
+/// Who a request is logged in as
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Who {
+    pub name: String,
+    pub role: Role,
+    /// With `Authorization: Bearer` (a program), not a session cookie (a browser): no `Origin` needed, since a web
+    /// page can't make a browser send it
+    pub bearer: bool,
+}
+
 /// What a request shows of the login
 #[derive(Debug, PartialEq, Eq)]
 pub enum Verdict {
     /// A valid session cookie or `Authorization: Bearer` token
-    Ok,
+    Ok(Who),
     /// Nothing (or only a stale cookie): log in
     Missing,
     /// A wrong token
@@ -89,21 +226,73 @@ pub enum Verdict {
     Limited,
 }
 
-pub struct Auth {
+/// A token as the viewer checks it
+struct Known {
+    name: String,
+    role: Role,
     token: String,
     /// The session cookie's value: HMAC-SHA256 of a fixed text under the token
     session: String,
-    /// One per port: cookies aren't separated by port, and another viewer on this machine has another token
+}
+
+impl Known {
+    fn of(e: Entry) -> Self {
+        let key = ring::hmac::Key::new(ring::hmac::HMAC_SHA256, e.token.as_bytes());
+        let tag = ring::hmac::sign(&key, b"iphone-control viewer session v1");
+        let session = tag.as_ref().iter().map(|x| format!("{x:02x}")).collect();
+        Self { name: e.name, role: e.role, token: e.token, session }
+    }
+
+    fn who(&self, bearer: bool) -> Who {
+        Who { name: self.name.clone(), role: self.role, bearer }
+    }
+}
+
+/// The tokens, read again when the file changes (`viewer token …` while the viewer runs)
+struct Tokens {
+    known: Vec<Known>,
+    modified: Option<SystemTime>,
+}
+
+pub struct Auth {
+    /// `None`: fixed tokens (tests)
+    data_dir: Option<PathBuf>,
+    tokens: Mutex<Tokens>,
+    /// One per port: cookies aren't separated by port, and another viewer on this machine has other tokens
     cookie: String,
     failures: Mutex<VecDeque<Instant>>,
 }
 
 impl Auth {
-    pub fn new(token: String, port: u16) -> Self {
-        let key = ring::hmac::Key::new(ring::hmac::HMAC_SHA256, token.as_bytes());
-        let tag = ring::hmac::sign(&key, b"iphone-control viewer session v1");
-        let session = tag.as_ref().iter().map(|x| format!("{x:02x}")).collect();
-        Self { token, session, cookie: format!("ictl_viewer_{port}"), failures: Mutex::default() }
+    /// The tokens in `data_dir` ([`load`])
+    pub fn load(data_dir: &Path, port: u16) -> anyhow::Result<Self> {
+        let known = load(data_dir)?.into_iter().map(Known::of).collect();
+        let modified = std::fs::metadata(tokens_file(data_dir)).and_then(|m| m.modified()).ok();
+        Ok(Self::with(Some(data_dir.to_owned()), Tokens { known, modified }, port))
+    }
+
+    /// These tokens and no file
+    #[cfg(test)]
+    pub fn fixed(entries: Vec<Entry>, port: u16) -> Self {
+        Self::with(None, Tokens { known: entries.into_iter().map(Known::of).collect(), modified: None }, port)
+    }
+
+    fn with(data_dir: Option<PathBuf>, tokens: Tokens, port: u16) -> Self {
+        Self { data_dir, tokens: Mutex::new(tokens), cookie: format!("ictl_viewer_{port}"), failures: Mutex::default() }
+    }
+
+    /// The tokens, read again if the file changed. A file that can't be read leaves them as they were
+    fn tokens(&self) -> std::sync::MutexGuard<'_, Tokens> {
+        let mut t = self.tokens.lock().unwrap_or_else(|p| p.into_inner());
+        if let Some(dir) = &self.data_dir {
+            let modified = std::fs::metadata(tokens_file(dir)).and_then(|m| m.modified()).ok();
+            if modified != t.modified
+                && let Ok(Some(v)) = read(dir)
+            {
+                *t = Tokens { known: v.into_iter().map(Known::of).collect(), modified };
+            }
+        }
+        t
     }
 
     /// The request's session cookie or `Authorization: Bearer` token
@@ -115,8 +304,10 @@ impl Auth {
             let k = k.trim();
             if k.eq_ignore_ascii_case("cookie") {
                 let ours = v.split(';').filter_map(|c| c.trim().split_once('=')).find(|(n, _)| *n == self.cookie);
-                if ours.is_some_and(|(_, v)| same(v.trim(), &self.session)) {
-                    return Verdict::Ok;
+                if let Some((_, v)) = ours
+                    && let Some(k) = self.tokens().known.iter().find(|k| same(v.trim(), &k.session))
+                {
+                    return Verdict::Ok(k.who(false));
                 }
             } else if k.eq_ignore_ascii_case("authorization") {
                 let v = v.trim();
@@ -133,28 +324,46 @@ impl Auth {
 
     /// A token someone typed or sent: right, wrong (counted), or not checked now
     pub fn try_token(&self, presented: &str) -> Verdict {
+        if self.limited() {
+            return Verdict::Limited;
+        }
+        // every token is compared, so the time doesn't tell how many there are before the right one
+        let tokens = self.tokens();
+        let found =
+            tokens.known.iter().fold(None, |found, k| if same(presented.trim(), &k.token) { Some(k) } else { found });
+        match found {
+            Some(k) => Verdict::Ok(k.who(true)),
+            None => {
+                self.failed();
+                Verdict::Wrong
+            }
+        }
+    }
+
+    /// Too many wrong tokens just now
+    pub fn limited(&self) -> bool {
         let mut f = self.failures.lock().unwrap_or_else(|p| p.into_inner());
         let now = Instant::now();
         while f.front().is_some_and(|t| now.duration_since(*t) > WINDOW) {
             f.pop_front();
         }
-        if f.len() >= MAX_FAILURES {
-            return Verdict::Limited;
-        }
-        if same(presented.trim(), &self.token) {
-            Verdict::Ok
-        } else {
-            f.push_back(now);
-            Verdict::Wrong
-        }
+        f.len() >= MAX_FAILURES
     }
 
-    /// `Set-Cookie` for a browser that logged in; `secure` over HTTPS (the browser then only sends it there)
-    pub fn set_cookie(&self, secure: bool) -> String {
+    /// A wrong token (or task token, see `viewer::login_gate`) was sent
+    pub fn failed(&self) {
+        self.failures.lock().unwrap_or_else(|p| p.into_inner()).push_back(Instant::now());
+    }
+
+    /// `Set-Cookie` for a browser that logged in with the token named `name`; `secure` over HTTPS (the browser then
+    /// only sends it there)
+    pub fn set_cookie(&self, name: &str, secure: bool) -> String {
+        let session =
+            self.tokens().known.iter().find(|k| k.name == name).map(|k| k.session.clone()).unwrap_or_default();
         format!(
             "{}={}; Path=/; Max-Age={}; HttpOnly; SameSite=Lax{}",
             self.cookie,
-            self.session,
+            session,
             SESSION_DAYS * 24 * 60 * 60,
             if secure { "; Secure" } else { "" }
         )
@@ -176,7 +385,7 @@ pub fn login_page(error: Option<&str>) -> String {
             "This control page needs its token.",
             "Token",
             "Log in",
-            "Run <code>iphone-control viewer token</code> on the machine the phone is connected to: it shows the token and a link that logs in.",
+            "Run <code>iphone-control viewer token</code> on the machine the phone is connected to: it shows a token and a link that logs in.",
         ),
         ictl_l10n::Lang::Zh => (
             "zh-CN",
@@ -246,59 +455,112 @@ mod tests {
         h.into_bytes()
     }
 
-    #[test]
-    fn the_token_is_made_once_kept_private_and_replaced_on_demand() {
-        use std::os::unix::fs::PermissionsExt;
-        let tmp = tempfile::tempdir().unwrap();
-        let a = load_or_create(tmp.path()).unwrap();
-        assert_eq!(a.len(), 64);
-        assert!(valid_token(&a));
-        assert_eq!(load_or_create(tmp.path()).unwrap(), a, "kept");
-        let mode = std::fs::metadata(token_file(tmp.path())).unwrap().permissions().mode();
-        assert_eq!(mode & 0o777, 0o600);
-        let b = replace(tmp.path()).unwrap();
-        assert_ne!(a, b);
-        assert_eq!(load_or_create(tmp.path()).unwrap(), b);
-        std::fs::write(token_file(tmp.path()), "short").unwrap();
-        assert_ne!(load_or_create(tmp.path()).unwrap(), "short", "a broken file is replaced");
+    fn entry(name: &str, role: Role, c: char) -> Entry {
+        Entry { name: name.into(), role, token: c.to_string().repeat(64), created: 0 }
+    }
+
+    fn who(name: &str, role: Role, bearer: bool) -> Verdict {
+        Verdict::Ok(Who { name: name.into(), role, bearer })
     }
 
     #[test]
-    fn a_session_cookie_or_a_bearer_token_lets_a_request_in() {
-        let auth = Auth::new("a".repeat(64), 8202);
-        let cookie = auth.set_cookie(false);
+    fn the_owner_is_made_once_from_the_earlier_single_token() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join(OLD_TOKEN_FILE), format!("{}\n", "a".repeat(64))).unwrap();
+        let v = load(tmp.path()).unwrap();
+        assert_eq!((v.len(), v[0].name.as_str(), v[0].role), (1, OWNER, Role::Operate));
+        assert_eq!(v[0].token, "a".repeat(64), "upgrading keeps the token: nobody logs in again");
+        assert!(!tmp.path().join(OLD_TOKEN_FILE).exists());
+        let mode = std::fs::metadata(tokens_file(tmp.path())).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
+        assert_eq!(load(tmp.path()).unwrap()[0].token, v[0].token, "kept");
+
+        let fresh = tempfile::tempdir().unwrap();
+        let t = &load(fresh.path()).unwrap()[0].token;
+        assert!(t.len() == 64 && valid_token(t));
+    }
+
+    #[test]
+    fn tokens_are_added_renewed_and_removed_by_name() {
+        let tmp = tempfile::tempdir().unwrap();
+        let owner = load(tmp.path()).unwrap().remove(0);
+        let tv = add(tmp.path(), "客厅电视", Role::View).unwrap();
+        assert_eq!(tv.role, Role::View);
+        assert!(add(tmp.path(), "客厅电视", Role::Operate).is_err(), "taken");
+        assert!(add(tmp.path(), "has space", Role::View).is_err());
+        assert!(add(tmp.path(), "", Role::View).is_err());
+        assert_eq!(get(tmp.path(), "客厅电视").unwrap().token, tv.token);
+        let renewed = renew(tmp.path(), "客厅电视").unwrap();
+        assert_ne!(renewed.token, tv.token);
+        assert_eq!(get(tmp.path(), OWNER).unwrap().token, owner.token, "the others stay");
+        assert!(remove(tmp.path(), OWNER).is_err(), "the last that may operate");
+        remove(tmp.path(), "客厅电视").unwrap();
+        assert!(get(tmp.path(), "客厅电视").is_err());
+        add(tmp.path(), "ci", Role::Operate).unwrap();
+        remove(tmp.path(), OWNER).unwrap();
+        assert!(remove(tmp.path(), "nobody").is_err());
+    }
+
+    #[test]
+    fn a_session_cookie_or_a_bearer_token_says_who() {
+        let auth = Auth::fixed(vec![entry(OWNER, Role::Operate, 'a'), entry("tv", Role::View, 'b')], 8202);
+        let cookie = auth.set_cookie("tv", false);
         let pair = cookie.split(';').next().unwrap();
         assert!(cookie.contains("HttpOnly") && cookie.contains("SameSite=Lax") && !cookie.contains("Secure"));
-        assert!(auth.set_cookie(true).ends_with("; Secure"));
-        assert!(!pair.contains(&"a".repeat(64)), "the cookie doesn't carry the token");
+        assert!(auth.set_cookie(OWNER, true).ends_with("; Secure"));
+        assert!(!pair.contains(&"b".repeat(64)), "the cookie doesn't carry the token");
+        assert_ne!(pair, auth.set_cookie(OWNER, false).split(';').next().unwrap(), "one session per token");
 
         assert_eq!(auth.check(&head(&[])), Verdict::Missing);
-        assert_eq!(auth.check(&head(&[&format!("Cookie: theme=dark; {pair}")])), Verdict::Ok);
+        assert_eq!(auth.check(&head(&[&format!("Cookie: theme=dark; {pair}")])), who("tv", Role::View, false));
         assert_eq!(auth.check(&head(&["Cookie: ictl_viewer_8202=deadbeef"])), Verdict::Missing, "stale: log in");
         assert_eq!(auth.check(&head(&[&format!("Cookie: {}", pair.replace("8202", "8203"))])), Verdict::Missing);
-        assert_eq!(auth.check(&head(&[&format!("Authorization: Bearer {}", "a".repeat(64))])), Verdict::Ok);
-        assert_eq!(auth.check(&head(&[&format!("authorization: bearer {}", "a".repeat(64))])), Verdict::Ok);
+        let bearer = |t: char| format!("Authorization: Bearer {}", t.to_string().repeat(64));
+        assert_eq!(auth.check(&head(&[&bearer('a')])), who(OWNER, Role::Operate, true));
+        assert_eq!(auth.check(&head(&[&bearer('b').to_lowercase()])), who("tv", Role::View, true));
         assert_eq!(auth.check(&head(&["Authorization: Bearer nope"])), Verdict::Wrong);
         assert_eq!(auth.check(&head(&["Authorization: Basic Zm9vOmJhcg=="])), Verdict::Missing);
-        // a new token ends the old sessions
-        let other = Auth::new("b".repeat(64), 8202);
-        assert_eq!(other.check(&head(&[pair])), Verdict::Missing);
+        // another set of tokens: the old sessions end
+        let other = Auth::fixed(vec![entry(OWNER, Role::Operate, 'c')], 8202);
         assert_eq!(other.check(&head(&[&format!("Cookie: {pair}")])), Verdict::Missing);
+    }
+
+    /// `viewer token …` while the viewer runs takes effect without a restart
+    #[test]
+    fn the_viewer_follows_changes_to_the_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let auth = Auth::load(tmp.path(), 8202).unwrap();
+        let owner = get(tmp.path(), OWNER).unwrap();
+        let session = auth.set_cookie(OWNER, false).split(';').next().unwrap().to_owned();
+        assert!(matches!(auth.try_token(&owner.token), Verdict::Ok(_)));
+        // a file's time is often only accurate to the second
+        std::thread::sleep(Duration::from_millis(1100));
+        let tv = add(tmp.path(), "tv", Role::View).unwrap();
+        assert_eq!(auth.try_token(&tv.token), who("tv", Role::View, true));
+        std::thread::sleep(Duration::from_millis(1100));
+        let renewed = renew(tmp.path(), OWNER).unwrap();
+        assert_eq!(auth.try_token(&owner.token), Verdict::Wrong, "the old token");
+        assert_eq!(auth.check(&head(&[&format!("Cookie: {session}")])), Verdict::Missing, "and its sessions");
+        assert!(matches!(auth.try_token(&renewed.token), Verdict::Ok(_)));
     }
 
     #[test]
     fn wrong_tokens_are_limited_for_everyone() {
-        let auth = Auth::new("a".repeat(64), 8202);
-        let session = auth.set_cookie(false).split(';').next().unwrap().to_owned();
+        let auth = Auth::fixed(vec![entry(OWNER, Role::Operate, 'a')], 8202);
+        let session = auth.set_cookie(OWNER, false).split(';').next().unwrap().to_owned();
         for _ in 0..MAX_FAILURES {
             assert_eq!(auth.try_token("guess"), Verdict::Wrong);
         }
         assert_eq!(auth.try_token("guess"), Verdict::Limited);
         assert_eq!(auth.try_token(&"a".repeat(64)), Verdict::Limited, "not even checked for a minute");
-        assert_eq!(auth.check(&head(&[&format!("Cookie: {session}")])), Verdict::Ok, "logged-in browsers go on");
+        assert!(
+            matches!(auth.check(&head(&[&format!("Cookie: {session}")])), Verdict::Ok(_)),
+            "logged-in browsers go on"
+        );
         // the minute is over
         auth.failures.lock().unwrap().iter_mut().for_each(|t| *t -= WINDOW + Duration::from_secs(1));
-        assert_eq!(auth.try_token(&"a".repeat(64)), Verdict::Ok);
+        assert!(matches!(auth.try_token(&"a".repeat(64)), Verdict::Ok(_)));
     }
 
     #[test]

@@ -8,6 +8,8 @@
 
 ### 新增
 
+- 有名字的登录令牌，可以是只读的：`iphone-control viewer token add <名字> [--read-only]`、`list`、`show <名字> [--new]`、`remove <名字>`。只读令牌能看画面、设备状态和任务，所有操作（点按、输入、开任务、暂停、确认、切换设备、`/mcp`）都被拒绝，页面上也不显示操作入口。任务记录里写下是哪个令牌做的控制（`viewer:<名字>`）。令牌改存在 `viewer-tokens.json`，原来的令牌成了 `owner`，升级后不用重新登录；增删、换令牌马上生效，不用重启控制台。
+- 从另一台机器开任务：`iphone-control task run --url https://<那台机器>:8200 -- <命令>`（登录令牌放在 `IPHONE_CONTROL_VIEWER_TOKEN`），或者直接调 `POST /api/agent/tasks/open`，返回的事件流就是租约。另一台机器上的 agent 只拿任务口令：`/mcp` 认进行中任务的口令（请求头 `Iphone-Control-Task-Token`），它能为这个任务操作手机，但碰不到暂停、确认这些控制接口，不能批准自己。
 - 控制台和它的 `/mcp` 要登录了，本机也一样（控制台分不清本机的浏览器和经 frp、cloudflared 等反向代理转发进来的访问）。令牌第一次启动时生成，存在数据目录的 `viewer-token`（0600）；`iphone-control viewer token` 显示令牌、本机和局域网的登录链接以及接入 HTTP MCP 的命令，`--new` 换一个新令牌。浏览器登录一次后记住 30 天；程序和 MCP 客户端用 `Authorization: Bearer <令牌>`。输错太多次（一分钟 20 次）会暂停校验一分钟。命令行、`iphone-control mcp`（stdio）和 `task run` 走本机的 Unix socket，不受影响。
 - MCP over HTTP：控制台同一个端口上的 `/mcp`（Streamable HTTP）提供和 `iphone-control mcp` 一样的工具，只能填 URL 的客户端、局域网里另一台电脑上的 agent（`--lan`，走 HTTPS）都能接入，例如 `claude mcp add --transport http iphone http://127.0.0.1:8200/mcp`。任务里的 agent 在请求头 `Iphone-Control-Task-Token` 里带上任务口令。和控制台一样没有登录，`--mcp off`（`IPHONE_CONTROL_VIEWER_MCP=off`）关掉。
 - 控制台对局域网开放（`--lan`）时改用 HTTPS，还是同一个端口：局域网里打开时画面也能用 H.264 或手机自己的 HEVC，不再退回 MJPEG，传输也加了密。默认用本机生成的自签证书（存在数据目录的 `viewer-tls/`，一直沿用），浏览器第一次打开会提示不受信任，核对启动时或 `service status` 显示的 SHA-256 指纹后继续；也可以用 `--tls-cert`/`--tls-key`（`IPHONE_CONTROL_VIEWER_TLS_CERT`/`_KEY`）换成自己的证书。局域网来的 `http://` 跳转到 `https://`，本机的 `http://127.0.0.1` 照旧。`--tls off`（`IPHONE_CONTROL_VIEWER_TLS=off`）恢复成 HTTP。这不是登录：局域网里能连上的人照样能操作手机。

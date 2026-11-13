@@ -237,6 +237,7 @@ pub fn scope_check(req: &Request) -> Option<Check> {
         | Request::TaskList
         | Request::TaskControl { .. }
         | Request::TaskAgent
+        | Request::TaskCheck
         | Request::TaskStep { .. }
         | Request::TaskStepDone { .. }
         | Request::TaskConfirm { .. }
@@ -939,6 +940,10 @@ impl Tasks {
                 )),
                 Err(r) => r,
             },
+            Request::TaskCheck => match self.actor(token) {
+                Ok(t) => Response::text(t.id.clone()),
+                Err(r) => r,
+            },
             Request::TaskStep { tool, args } => match self.actor(token) {
                 Ok(t) => t.step(tool, args, gone).await,
                 Err(r) => r,
@@ -1299,6 +1304,22 @@ mod tests {
         // giving up is allowed from anywhere
         assert!(!refused(ts.handle(&control("stop", None), Some(&t.token), Some(me), &mut None).await));
         assert_eq!(t.info().state, "cancelled");
+    }
+
+    /// What lets an agent on another machine use the viewer's `/mcp` by its task's token alone
+    #[tokio::test]
+    async fn a_task_s_token_is_checked_while_it_is_active() {
+        let ts = tasks();
+        let t = open(&ts);
+        let check = |token: Option<String>| {
+            let ts = &ts;
+            async move { ts.handle(&Request::TaskCheck, token.as_deref(), None, &mut None).await.unwrap() }
+        };
+        assert!(matches!(check(Some(t.token.clone())).await, Response::Text { text, .. } if text == t.id));
+        assert!(matches!(check(Some("nobody's".into())).await, Response::Error { .. }));
+        assert!(matches!(check(None).await, Response::Error { .. }));
+        t.control("stop", None, false, None).unwrap();
+        assert!(matches!(check(Some(t.token.clone())).await, Response::Error { .. }), "ended");
     }
 
     #[tokio::test]

@@ -7,7 +7,7 @@ use ictl_device::{Device, DeviceError, LogStream, Rotation, ScreenSize, Tunnel, 
 use ictl_wda::{WdaClient, WdaError, WdaRunner, http::DeviceTransport};
 
 use crate::core::{Daemon, DetachedWda, DeviceProfile, Inner, close_hid};
-use crate::machine::{DeviceState, Misses};
+use crate::machine::DeviceState;
 use crate::notify::Event;
 
 /// Three 10-second supervisor intervals. A missing background sample within this
@@ -305,25 +305,15 @@ impl Daemon {
             (Some(w), true) => w.ready().await.unwrap_or(false),
             _ => false,
         };
-        // /status 不经 XCTest：WDA 半死时它照样 ready。再问一次经 XCTest 的，连续几轮没应答就当它卡死、重新启动
-        let stalled = ready && self.xctest_stalled(g).await;
-        if stalled {
-            self.log.log(&ictl_l10n::log_trf!(
-                "WDA 卡死：/status 正常，但经 XCTest 的请求连续 {} 轮没有应答，重新启动 WDA",
-                "WDA is stuck: /status answers, but requests that go through XCTest went unanswered {} checks in a row; restarting WDA",
-                Misses::LIMIT
-            ));
-            // 后台启动的那个不能再接上：忘掉它，下面重新后台启动时会先结束它
-            if g.persisted.detached_wda.take().is_some() {
-                g.persisted.save(&self.cfg.state_file());
-            }
-            self.update_display(g, None).await;
-            self.drop_session(g).await;
-        } else if ready && g.wda_stalls.pending() {
-            // 这一轮没应答、还没到判定卡死：先不采样屏幕（同样经 XCTest，每次还要白等 10 秒）
+        // /status 不经 XCTest：WDA 半死时它照样 ready。经 XCTest 的请求（工具调用的、这里探测的）接连没有应答就当它卡死
+        if ready && self.xctest_stalled(g).await {
+            return self.restart_stalled_wda(g).await;
+        }
+        if ready && g.wda.as_ref().is_some_and(|w| w.unanswered() > 0) {
+            // 刚有请求没应答、还没到判定卡死：先不采样屏幕（同样经 XCTest，每次还要白等 10 秒）
             return;
         }
-        if ready && !stalled {
+        if ready {
             g.wda_misses.reset();
             self.sample_display(g, false).await;
             if g.state != DeviceState::Ready {
@@ -336,7 +326,7 @@ impl Daemon {
             }
             return;
         }
-        if !stalled && !self.confirm_wda_loss(g, runner_alive).await {
+        if !self.confirm_wda_loss(g, runner_alive).await {
             return;
         }
         if g.runner.is_some() {
@@ -352,25 +342,42 @@ impl Daemon {
         self.spawn_start(g, device, bundle);
     }
 
-    /// 经 XCTest 的探测（[`WdaClient::xctest_responsive`]）连续 [`Misses::LIMIT`] 轮没有应答时返回 true。
-    /// WDA 回了错误、或者应答了，都算活着
+    /// WDA 卡死了没有：经 XCTest 的请求连续 [`ictl_wda::client::STALL_LIMIT`] 次没有应答（[`WdaClient::stalled`]）。
+    /// 还没到就再探测一次（[`WdaClient::xctest_responsive`]），算进同一个计数。WDA 回了错误、或者应答了，都算活着
     async fn xctest_stalled(&self, g: &mut Inner) -> bool {
         let Some(w) = g.wda.as_ref() else { return false };
-        match w.xctest_responsive().await {
-            Err(e) if e.no_answer() => {
-                tracing::debug!(
-                    "{}",
-                    ictl_l10n::log_trf!(
-                        "WDA 经 XCTest 的探测没有应答：{e}",
-                        "WDA did not answer a probe that goes through XCTest: {e}"
-                    )
-                );
-                g.wda_stalls.hit()
-            }
-            _ => {
-                g.wda_stalls.reset();
-                false
-            }
+        if !w.stalled()
+            && let Err(e) = w.xctest_responsive().await
+            && e.no_answer()
+        {
+            tracing::debug!(
+                "{}",
+                ictl_l10n::log_trf!(
+                    "WDA 经 XCTest 的探测没有应答：{e}",
+                    "WDA did not answer a probe that goes through XCTest: {e}"
+                )
+            );
+        }
+        w.stalled()
+    }
+
+    /// WDA 卡死（[`WdaClient::stalled`]）：丢掉会话，重新启动。巡检和每个工具请求开头都会检查：
+    /// 工具调用接连不断时巡检抢不到设备，不能只靠它
+    pub(crate) async fn restart_stalled_wda(&self, g: &mut Inner) {
+        self.log.log(&ictl_l10n::log_trf!(
+            "WDA 卡死：/status 正常，但经 XCTest 的请求连续 {} 次没有应答，重新启动 WDA",
+            "WDA is stuck: /status answers, but {} requests in a row through XCTest went unanswered; restarting WDA",
+            ictl_wda::client::STALL_LIMIT
+        ));
+        // 后台启动的那个不能再接上：忘掉它，重新后台启动时会先结束它
+        if g.persisted.detached_wda.take().is_some() {
+            g.persisted.save(&self.cfg.state_file());
+        }
+        self.update_display(g, None).await;
+        self.drop_session(g).await;
+        let (Some(device), Some(bundle)) = (g.device.clone(), g.persisted.wda_bundle.clone()) else { return };
+        if g.starting.is_none() && g.backoff.ready(Instant::now()) {
+            self.spawn_start(g, device, bundle);
         }
     }
 

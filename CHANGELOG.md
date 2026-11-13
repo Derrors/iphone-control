@@ -8,6 +8,7 @@ All notable changes to this project are documented here. The format is based on 
 
 ### Fixed
 
+- AI task summaries on the control page are formatted: bold, lists, inline code and line breaks show as such instead of raw Markdown.
 - Locking no longer takes about 10 s every time on some iPhones (e.g. iPhone 15 Pro Max, iOS 27.0.1): pressing the power key via IOHID does nothing there, so the daemon remembers it per device and uses WDA's lock first (about 2 s).
 - Locking now works on iPads below iOS 27 (iPad mini 5, iPadOS 26.7.3: it never locked) and takes about 2 s instead of 10 s the first time on an iPhone 15 Pro Max: the power key via IOHID is now held 0.15 s instead of 0.1 s, which those devices ignored.
 - A WDA that still answers `/status` but no longer answers anything that goes through XCTest (foreground app, screenshots, elements, lock state all time out) is now noticed and restarted within about 30 s, also while tool calls keep the device busy (requests through XCTest stop waiting out their timeouts once three in a row went unanswered). Before, the daemon kept showing it as ready, and in background mode (`ICTL_WDA_DETACHED`) even a daemon restart attached to the stuck WDA again.

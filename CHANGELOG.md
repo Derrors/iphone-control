@@ -26,6 +26,7 @@ All notable changes to this project are documented here. The format is based on 
 
 ### Fixed
 
+- Holding an arrow key in a setup menu keeps moving the selection without echoing key sequences into the menu.
 - AI task summaries on the control page are formatted: bold, lists, inline code and line breaks show as such instead of raw Markdown.
 - On iOS 27 and later, a system alert (a permission prompt such as "Allow Calendar to use your location?") that the live picture on the control page doesn't show is now drawn on the picture where it is, with its buttons; a button there taps it on the phone.
 - Locking no longer takes about 10 s every time on some iPhones (e.g. iPhone 15 Pro Max, iOS 27.0.1): pressing the power key via IOHID does nothing there, so the daemon remembers it per device and uses WDA's lock first (about 2 s).

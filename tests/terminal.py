@@ -129,6 +129,27 @@ def escape_with_separate_input_terminal(command, env):
             os.close(fd)
 
 
+def held_arrow_during_redraw(command, env):
+    session = Session(command, env)
+    try:
+        session.expect("Ctrl+C cancel")
+        session.wait_for_raw()
+        # Do not drain output between repeats. A slow renderer must keep echo
+        # disabled even when the next arrow arrives during a frame write.
+        for _ in range(50):
+            os.write(session.master, b"\x1b[B")
+            time.sleep(0.025)
+            assert not termios.tcgetattr(session.slave)[3] & termios.ECHO, "TTY echo enabled during a held Down key"
+        session.send(b"\x1b", raw=False)
+        session.finish("Setup cancelled.")
+        assert b"^[[B" not in session.output and b"\x1b[B" not in session.output, "Down was echoed into the menu"
+        # Fifty Down presses wrap the nine-item menu five times and select item 6.
+        assert session.output.rsplit(b"What do you want to set up again?", 1)[-1].count(b"> 6) Phone") == 1
+        assert b"\n" not in session.output.replace(b"\r\n", b""), "a menu line did not return to column one"
+    finally:
+        session.close()
+
+
 MENU_TEST = "guide::terminal::tests::pty_menu"
 
 
@@ -180,6 +201,7 @@ def main():
             command = [str(args.binary.resolve()), "--data-dir", str(root / "data"),
                        "--socket", str(root / "daemon.sock"), "setup", "--reconfigure"]
             escape_with_separate_input_terminal(command, env)
+            held_arrow_during_redraw(command, env)
             for key, status in [(b"\x1b", 0), (b"\x03", 130)]:
                 output = exercise(command, env, key, "Saved settings and completed steps are kept", status=status)
                 assert b"Done." not in output

@@ -21,6 +21,27 @@
 | `mcp` | MCP stdio 服务，由 AI 客户端拉起 |
 | `mcp-config` | 打印把 MCP 注册到 Claude Code 的命令。程序路径用升级后不变的那个（Homebrew 用 `opt` 下的链接） |
 
+## Shell 补全
+
+`iphone-control completions <bash|zsh|fish>` 将补全脚本写到标准输出，包含当前构建的子命令、选项和枚举值。它不读取设置文件、不申请设备维护锁，也不连接守护进程或手机。生成的帮助文字默认中文；需要英文时，在命令前设置 `IPHONE_CONTROL_LANG=en`。
+
+```bash
+# Bash：当前会话启用
+mkdir -p ~/.config/iphone-control
+iphone-control completions bash > ~/.config/iphone-control/completion.bash
+source ~/.config/iphone-control/completion.bash
+
+# Zsh：保存到自定义补全目录
+mkdir -p ~/.zsh/completions
+iphone-control completions zsh > ~/.zsh/completions/_iphone-control
+
+# Fish：自动加载目录
+mkdir -p ~/.config/fish/completions
+iphone-control completions fish > ~/.config/fish/completions/iphone-control.fish
+```
+
+Zsh 在 `~/.zshrc` 的 `compinit` 之前添加 `fpath=(~/.zsh/completions $fpath)`，并确保有 `autoload -Uz compinit; compinit`。Bash 若要每次启动生效，可将上面的 `source` 行放进 `~/.bashrc`。升级程序后，重新生成所用 shell 的补全文件。自定义 Fish 配置目录时使用对应的 `completions` 子目录。
+
 ## 主机软件更新
 
 运行 `iphone-control update` 检查发布者的最新稳定版。已是最新时，命令会显示结果并退出。有新版时，它先说明要做什么（从哪个版本升到哪个版本、会不会重启后台服务），问你是否继续，再按当前程序的安装方式升级。脚本里或没有终端时加 `--yes`，不询问直接升级。
@@ -68,6 +89,12 @@ Viewer 只监听本机回环地址。同机其他用户也能查看安装信息�
 | `sign` | 立即签名并安装 WDA，同 `resign --force`。会把设备注册到 Apple ID |
 | `resign [--force]` | 描述文件剩余不到 `RESIGN_MIN_DAYS` 天才重签；`--force` 立即重签。不带 `--force` 时不会替没装过 WDA 的设备注册 |
 
+设置菜单中用 ↑/↓ 移动、Enter 确认，也可以输入编号再回车；确认提示支持 ←/→ 选择。Esc 取消并退出向导。Ctrl+C 中断向导，退出码为 130。两者都会保留已保存的步骤。菜单始终用 `>` 标记选中项，不依赖颜色。窗口缩放后按键会按新宽度重绘。
+
+`TERM=dumb`、输出重定向或启动菜单时终端过小，菜单使用原来的编号/文字输入。交互菜单打开后再缩小窗口，会保留当前输入并暂停确认，放大窗口后继续，也可取消。设置向导仍要求标准输入连接终端，不能用管道无人值守执行。这里的快捷键只作用于菜单，密码继续隐藏。
+
+取消不会回滚已保存的设置；尚未保存的修改会丢弃。完整向导中的语言和代理设置会一起保存，因此在代理步骤取消时，刚选的语言也尚未保存。
+
 ## 查看状态
 
 | 命令 | 作用 |
@@ -112,7 +139,7 @@ Viewer 只监听本机回环地址。同机其他用户也能查看安装信息�
 
 - **要守护进程在运行的：** `setup` 的手机部分、`status`、`doctor`、`sign`、`resign`、`devices`、`select`、`unlock-reset`、`wda-bridge`、`viewer`、`task`，以及 MCP 工具调用。
 - **要在终端里交互运行的：** 不带命令的 `iphone-control`（首次运行时）、`setup`、`login`、`passcode set`。
-- **设置：** 每个命令启动时都会读 `~/.config/iphone-control/env`，环境里已经有的变量优先，见[配置](./configuration#settings-file)。
+- **设置：** 除 `completions` 外，每个命令启动时都会读 `~/.config/iphone-control/env`，环境里已经有的变量优先，见[配置](./configuration#settings-file)。
 
 ## 控制台的画面 {#viewer-picture}
 

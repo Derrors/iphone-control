@@ -18,6 +18,8 @@ You need Rust 1.88 or later (CI pins 1.99.1) and a C compiler. Everything except
 ```bash
 # --all-features also builds the debug-cmds feature, as CI does
 cargo test --workspace --all-features --locked
+# Linux/macOS PTY regression; temporary settings only, no daemon or device actions
+python3 tests/terminal.py --binary target/debug/iphone-control --test-dir target/debug/deps
 cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 # vendor/ is upstream code and isn't formatted; check only this repository's packages:
 for p in ictl-l10n ictl-webinspector ictl-device ictl-wda ictl-sign ictl-unlock ictl-daemon ictl-mcp ictl-protocol iphone-control; do cargo fmt -p $p -- --check; done

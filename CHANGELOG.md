@@ -10,6 +10,7 @@ All notable changes to this project are documented here. The format is based on 
 
 - AI tasks for any agent platform: `iphone-control task run -- <command>` runs a command in a task, and an `iphone-control mcp` it starts takes part (the control page shows its steps and can pause, take over, stop and confirm). `task list`, `task events`, `task pause`/`resume`/`takeover`/`handback`/`stop` and `task approve`/`reject` follow and steer tasks from the command line.
 - The control page picks up a task in progress: after a reload, and for tasks started elsewhere.
+- A task can be limited to some apps (`task run --app Settings`): in any other app, launching it, or opening a link that isn't a web page, each step waits for you to confirm; approving lets the task into that app.
 
 ### Changed
 

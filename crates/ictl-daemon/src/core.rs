@@ -692,8 +692,18 @@ impl Daemon {
                 Ok(a) => a,
                 Err(r) => return r,
             };
-        // held while the task was paused: the time in the queue starts now
-        let queued_at = if waited { Instant::now() } else { queued_at };
+        // a task limited to some apps: outside them, the action waits for the user (docs/task-control.md §2.6)
+        let mut asked = false;
+        if let crate::tasks::Admission::Actor(t) = &admission
+            && t.scoped()
+        {
+            match self.scope_gate(t, &req, &mut ctx.gone).await {
+                Ok(a) => asked = a,
+                Err(r) => return r,
+            }
+        }
+        // held while the task was paused or waiting for the user: the time in the queue starts now
+        let queued_at = if waited || asked { Instant::now() } else { queued_at };
         // an action of the task that no announced step covers is a step of its own
         let auto = match &admission {
             crate::tasks::Admission::Actor(t) if ctx.task_step.is_none() && req.is_device_action() => {
@@ -708,6 +718,58 @@ impl Daemon {
             self.tasks.auto_step_done(&t, step, &resp, t0.elapsed().as_millis() as u64);
         }
         resp
+    }
+
+    /// What an action of a scoped task touches, then [`crate::tasks::Task::check_scope`]. The device lock is only held
+    /// to look it up, not while the user decides (the user may take over meanwhile). Returns whether it waited
+    async fn scope_gate(
+        &self,
+        task: &crate::tasks::Task,
+        req: &Request,
+        gone: &mut Option<tokio::sync::oneshot::Receiver<()>>,
+    ) -> Result<bool, Response> {
+        use crate::tasks::{Check, Target};
+        let Some(check) = crate::tasks::scope_check(req) else { return Ok(false) };
+        let target = match check {
+            Check::Url(u) => Target::Url(u),
+            Check::Always { action, detail } => Target::Always { action, detail },
+            Check::Launch(app) => {
+                let mut g = acquire(&self.inner, gone).await?;
+                Target::Launch(self.resolve_app(&mut g, &app).await.map_err(Response::error)?)
+            }
+            Check::Foreground => {
+                let mut g = acquire(&self.inner, gone).await?;
+                // can't tell which app is in front: a scoped task doesn't act blind
+                let unknown = |why: String| {
+                    Response::error(ictl_l10n::trf!(
+                        "看不出前台是哪个 App（{why}）；这个任务限定了 App 范围，所以没有操作。稍后截图再试",
+                        "Can't tell which app is in front ({why}); this task is limited to some apps, so nothing was done. Take a screenshot and try again shortly"
+                    ))
+                };
+                let Some(w) = self.wda(&mut g) else {
+                    return Err(unknown(ictl_l10n::tr!("WDA 不可用", "WDA unavailable").into()));
+                };
+                Target::Foreground(w.active_app().await.map_err(|e| unknown(e.to_string()))?)
+            }
+        };
+        task.check_scope(&target, gone).await
+    }
+
+    /// A task's scope from names or bundle IDs: the bundle IDs, each once. `Err` names the app that isn't there
+    pub(crate) async fn resolve_scope(&self, apps: &[String]) -> Result<Vec<String>, String> {
+        let apps: Vec<&str> = apps.iter().map(|a| a.trim()).filter(|a| !a.is_empty()).collect();
+        if apps.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut g = self.inner.lock().await;
+        let mut out: Vec<String> = Vec::new();
+        for a in apps {
+            let b = self.resolve_app(&mut g, a).await?;
+            if !out.iter().any(|x| x.eq_ignore_ascii_case(&b)) {
+                out.push(b);
+            }
+        }
+        Ok(out)
     }
 
     /// [`Self::handle`] once the tasks let the request through

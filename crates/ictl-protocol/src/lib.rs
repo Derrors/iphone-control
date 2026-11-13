@@ -192,6 +192,10 @@ pub enum Request {
         /// Who runs it, shown on the control page (`claude`, `codex`, the name of an external platform…)
         #[serde(default)]
         owner: String,
+        /// Apps (names or bundle IDs) the task may act in; outside them each action waits for the user. Empty: no
+        /// limit
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        apps: Vec<String>,
     },
     /// Streaming like [`Request::TaskOpen`]: the task's events so far, then new ones, until it ends
     TaskEvents {
@@ -267,6 +271,9 @@ pub struct TaskInfo {
     /// Steps so far
     #[serde(default)]
     pub steps: u64,
+    /// Bundle IDs the task may act in (empty: no limit), including those the user let it into
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub apps: Vec<String>,
 }
 
 impl TaskInfo {
@@ -642,8 +649,14 @@ async fn open_stream(socket: &std::path::Path, req: &Request) -> std::io::Result
 }
 
 /// Opens a task bound to the device the daemon controls now ([`Request::TaskOpen`]). `Err` is a message
-pub async fn open_task(socket: &std::path::Path, title: &str, owner: &str) -> Result<(TaskOpened, TaskStream), String> {
-    let req = Request::TaskOpen { title: title.to_owned(), owner: owner.to_owned() };
+/// `apps`: the task's scope (see [`Request::TaskOpen`]), empty for none
+pub async fn open_task(
+    socket: &std::path::Path,
+    title: &str,
+    owner: &str,
+    apps: &[String],
+) -> Result<(TaskOpened, TaskStream), String> {
+    let req = Request::TaskOpen { title: title.to_owned(), owner: owner.to_owned(), apps: apps.to_vec() };
     match open_stream(socket, &req).await.map_err(|e| e.to_string())? {
         (Response::Text { text, .. }, s) => Ok((serde_json::from_str(&text).map_err(|e| e.to_string())?, s)),
         (Response::Error { message, .. }, _) => Err(message),

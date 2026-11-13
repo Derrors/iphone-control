@@ -824,7 +824,23 @@ async fn reply_with(client: &mut Conn, status: u16, kind: &str, body: &[u8], ext
     client.write_all(body).await?;
     // over TLS the last record may still be buffered
     client.flush().await?;
+    linger(client).await;
     Ok(())
+}
+
+/// Closes after an answer without losing it: a socket closed with request data it never read (a body refused before
+/// it was read: 401, 403, 413) sends a reset, and the client may then never see the answer. So: end our side, then
+/// read what the client still sends until it closes too, for a second and 1 MB at most
+async fn linger(client: &mut Conn) {
+    let _ = client.shutdown().await;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(1);
+    let (mut buf, mut left) = ([0u8; 8192], 1usize << 20);
+    while left > 0 {
+        match tokio::time::timeout_at(deadline, client.read(&mut buf)).await {
+            Ok(Ok(n)) if n > 0 => left = left.saturating_sub(n),
+            _ => return,
+        }
+    }
 }
 
 /// Who a request is, once [`login_gate`] let it in
@@ -1483,6 +1499,15 @@ mod tests {
         assert!(status(&r) == "303" && r.contains("Set-Cookie: ictl_viewer_8202="), "{r}");
         let r = exchange(&ctx, form("https://evil.example")).await;
         assert_eq!(status(&r), "403", "{r}");
+
+        // refused before its body was read: the client still gets the answer, not a reset
+        let big = "x".repeat(256 * 1024);
+        let r = exchange(
+            &ctx,
+            format!("POST /api/button HTTP/1.1\r\nHost: 127.0.0.1:8202\r\nContent-Length: {}\r\n\r\n{big}", big.len()),
+        )
+        .await;
+        assert_eq!(status(&r), "401", "{}", &r[..r.len().min(200)]);
 
         // MCP clients are told to send a bearer token
         let r = exchange(&ctx, "POST /mcp HTTP/1.1\r\nHost: 127.0.0.1:8202\r\nContent-Length: 0\r\n\r\n".into()).await;

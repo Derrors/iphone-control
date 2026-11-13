@@ -100,7 +100,7 @@ iphone-control
 
 第一次运行时，它在终端里一步步带你完成设置：语言、代理、后台服务、配对、开发者模式、Apple ID、签名并安装 WebDriverAgent，可选的自动解锁和通知，最后注册到 Claude Code 和 Codex。按提示在手机上操作即可。做过的步骤会跳过；设置好以后再运行 `iphone-control` 只显示状态。
 
-然后打开一个新的 Claude Code 或 Codex 会话，试着说：「打开时钟，切到秒表并启动」。也可以运行 `iphone-control viewer` 打开浏览器里的控制台（http://127.0.0.1:8200），在实时画面上直接操作，或把任务交给本机的 Claude Code 或 Codex。
+然后打开一个新的 Claude Code 或 Codex 会话，试着说：「打开时钟，切到秒表并启动」。也可以运行 `iphone-control viewer` 打开浏览器里的控制台（http://127.0.0.1:8200，用 `iphone-control viewer token` 打印的链接登录），在实时画面上直接操作，或把任务交给本机的 Claude Code 或 Codex；局域网和别的机器也能用，见[控制台与远程使用](https://derrors.github.io/iphone-control/guide/remote)。
 
 更多：[分步指南](https://derrors.github.io/iphone-control/guide/getting-started) · [从源码编译](https://derrors.github.io/iphone-control/deploy/source) · [macOS 指南](https://derrors.github.io/iphone-control/deploy/macos) · [其他 MCP 客户端](https://derrors.github.io/iphone-control/guide/mcp-clients)
 
@@ -148,7 +148,8 @@ iphone-control
 | `notify-test [事件]` | 发送测试通知 |
 | `mcp-config` | 打印注册 MCP 的命令 |
 | `wda-bridge [--port]` | 把 WebDriverAgent 桥接到 127.0.0.1 给别的工具用，用完就停 |
-| `viewer [--port]` | 控制台页面，地址 127.0.0.1:8200：实时画面可直接点击、滑动、输入，设备面板，还能把任务交给本机的 Claude Code 或 Codex 执行；用完就停 |
+| `viewer [--port] [--lan]` | 控制台页面，地址 127.0.0.1:8200，要登录（`viewer token` 显示令牌和登录链接，可以加只读令牌）：实时画面可直接点击、滑动、输入，设备面板，还能把任务交给本机的 Claude Code 或 Codex 执行。`--lan` 对局域网开放（HTTPS），同一个端口上还有 MCP over HTTP（`/mcp`） |
+| `task run [--url <控制台>] -- <命令>` | 给别的 agent 平台用的 AI 任务；`--url` 时手机在另一台机器上。`task list`、`pause`、`approve` 等查看和控制任务 |
 
 全部命令和参数见[命令行](https://derrors.github.io/iphone-control/guide/cli)。
 

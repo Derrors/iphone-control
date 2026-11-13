@@ -95,6 +95,12 @@ async fn brew_service_running(brew: &Path) -> bool {
 /// Restarts the background service if it was `running` and waits until the daemon answers with `version`. Failing
 /// that only prints what to run: the new program is installed either way
 async fn restart(socket: &Path, version: &str, running: bool, cmd: &[&std::ffi::OsStr], by_hand: &str) {
+    restart_daemon(socket, version, running, cmd, by_hand).await;
+    // the control page's own service runs the old program until it starts again
+    crate::service::restart_viewer_if_running();
+}
+
+async fn restart_daemon(socket: &Path, version: &str, running: bool, cmd: &[&std::ffi::OsStr], by_hand: &str) {
     if !running {
         println!(
             "{}",

@@ -8,16 +8,18 @@
 //! status; when the task ends elsewhere (stopped on the page, the phone changed), the command is stopped. Ctrl-C
 //! stops the task. The other subcommands follow and steer tasks, whoever started them.
 //!
-//! `task run --url <viewer>` does the same for a phone on another machine, through its viewer ([`remote`]).
+//! With `--url <viewer>` (or `IPHONE_CONTROL_URL`) every subcommand works on a phone on another machine, through
+//! its viewer ([`remote`]).
 
-mod remote;
-
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::Duration;
 
 use anyhow::{Context, bail};
 use clap::Subcommand;
 use ictl_daemon::protocol::{self, Request, Response};
+use serde_json::json;
+
+use crate::remote;
 
 #[derive(Subcommand)]
 pub enum TaskAction {
@@ -29,10 +31,6 @@ pub enum TaskAction {
         owner: String,
         #[arg(long = "app", value_name = "APP", help = ictl_l10n::tr!("任务只在这些 App 里操作（App 名或 Bundle ID，可以写多次）；到了别的 App 每一步都先等你确认。不写就不限制", "Limit the task to these apps (name or bundle ID, repeatable); in any other app each step waits for you first. No limit if not given"))]
         apps: Vec<String>,
-        #[arg(long, value_name = "URL", help = ictl_l10n::tr!("手机接在另一台机器上：那台机器的控制台地址，比如 https://192.168.1.5:8200。登录令牌放在环境变量 IPHONE_CONTROL_VIEWER_TOKEN 里；命令拿到的是 IPHONE_CONTROL_MCP_URL 和任务口令，agent 用 HTTP 方式的 MCP 接入", "The phone is on another machine: that machine's viewer, such as https://192.168.1.5:8200. The login token goes in IPHONE_CONTROL_VIEWER_TOKEN; the command gets IPHONE_CONTROL_MCP_URL and the task's token, and its agent connects to MCP over HTTP"))]
-        url: Option<String>,
-        #[arg(long, value_name = "PEM", requires = "url", help = ictl_l10n::tr!("--url 是本机生成的自签证书时，信任这张证书（那台机器上的 viewer-tls/cert.pem）", "With --url and a self-signed certificate made there: trust it (viewer-tls/cert.pem on that machine)"))]
-        ca: Option<PathBuf>,
         #[arg(required = true, trailing_var_arg = true, allow_hyphen_values = true)]
         command: Vec<String>,
     },
@@ -78,7 +76,16 @@ pub fn prints_and_exits(a: &TaskAction) -> bool {
     matches!(a, TaskAction::List { .. } | TaskAction::Events { .. })
 }
 
-pub async fn run(socket: &Path, action: TaskAction) -> anyhow::Result<()> {
+/// `url`, `ca`: the viewer of another machine (`--url`, `IPHONE_CONTROL_URL`) instead of the daemon here
+pub async fn run(
+    socket: &Path,
+    url: Option<String>,
+    ca: Option<std::path::PathBuf>,
+    action: TaskAction,
+) -> anyhow::Result<()> {
+    if let Some(url) = url {
+        return run_remote(&url, ca.as_deref(), action).await;
+    }
     let control = |id: String, action: &str, step: Option<u64>, approve: bool| Request::TaskControl {
         id,
         action: action.into(),
@@ -88,14 +95,8 @@ pub async fn run(socket: &Path, action: TaskAction) -> anyhow::Result<()> {
         for_pid: None,
     };
     let req = match action {
-        TaskAction::Run { title, owner, apps, url, ca, command } => {
-            let backend = match url {
-                Some(url) => {
-                    Backend::Remote(remote::Remote::new(&url, ca.as_deref(), Some(remote::Remote::login_from_env()?))?)
-                }
-                None => Backend::Local(socket),
-            };
-            return run_command(&backend, title, &owner, &apps, &command).await;
+        TaskAction::Run { title, owner, apps, command } => {
+            return run_command(&Backend::Local(socket), title, &owner, &apps, &command).await;
         }
         TaskAction::List { json } => return list(socket, json).await,
         TaskAction::Events { id } => {
@@ -109,10 +110,6 @@ pub async fn run(socket: &Path, action: TaskAction) -> anyhow::Result<()> {
             let token = std::env::var(protocol::TASK_TOKEN_ENV).ok().filter(|t| !t.is_empty()).with_context(|| {
                 ictl_l10n::trf!("没有设 {}：不在任务里", "{} isn't set: not inside a task", protocol::TASK_TOKEN_ENV)
             })?;
-            // under `task run --url`: the phone is on another machine
-            if let Some(r) = remote::Remote::from_env() {
-                return r?.finish(&token, !failed, &summary.join(" ")).await;
-            }
             let req = Request::TaskFinish { ok: !failed, summary: summary.join(" ") };
             return expect_ok(protocol::as_task(Some(token), None, ask(socket, &req)).await);
         }
@@ -147,7 +144,10 @@ fn expect_ok(r: anyhow::Result<Response>) -> anyhow::Result<()> {
 }
 
 async fn list(socket: &Path, json: bool) -> anyhow::Result<()> {
-    let tasks = protocol::task_list(socket).await.map_err(anyhow::Error::msg)?;
+    print_list(protocol::task_list(socket).await.map_err(anyhow::Error::msg)?, json)
+}
+
+fn print_list(tasks: Vec<protocol::TaskInfo>, json: bool) -> anyhow::Result<()> {
     if json {
         println!("{}", serde_json::to_string_pretty(&tasks)?);
         return Ok(());
@@ -160,6 +160,41 @@ async fn list(socket: &Path, json: bool) -> anyhow::Result<()> {
         println!("{}  {:<11} {:>3} {}  {:<10} {title}", t.id, t.state, t.steps, ictl_l10n::tr!("步", "steps"), t.owner);
     }
     Ok(())
+}
+
+/// Every subcommand through another machine's viewer: the login (`IPHONE_CONTROL_VIEWER_TOKEN`) for all of them but
+/// `finish`, which is the task's own (its token). In a command `task run --url` started the login isn't there, so
+/// the agent can't pause or confirm its own task, as on this machine
+async fn run_remote(url: &str, ca: Option<&Path>, action: TaskAction) -> anyhow::Result<()> {
+    if let TaskAction::Finish { failed, summary } = &action {
+        let token = std::env::var(protocol::TASK_TOKEN_ENV).ok().filter(|t| !t.is_empty()).with_context(|| {
+            ictl_l10n::trf!("没有设 {}：不在任务里", "{} isn't set: not inside a task", protocol::TASK_TOKEN_ENV)
+        })?;
+        return remote::Remote::new(url, ca, None)?.finish(&token, !failed, &summary.join(" ")).await;
+    }
+    let r = remote::Remote::new(url, ca, Some(remote::Remote::login_from_env()?))?;
+    let (id, action, body) = match action {
+        TaskAction::Run { title, owner, apps, command } => {
+            return run_command(&Backend::Remote(r), title, &owner, &apps, &command).await;
+        }
+        TaskAction::List { json } => return print_list(r.list().await?, json),
+        TaskAction::Events { id } => {
+            let mut events = r.events(&id).await?;
+            while let Some(e) = events.next().await {
+                println!("{}", serde_json::to_string(&e)?);
+            }
+            return Ok(());
+        }
+        TaskAction::Finish { .. } => unreachable!("handled above"),
+        TaskAction::Pause { id } => (id, "pause", json!({})),
+        TaskAction::Resume { id } => (id, "resume", json!({})),
+        TaskAction::Takeover { id } => (id, "takeover", json!({})),
+        TaskAction::Handback { id } => (id, "handback", json!({})),
+        TaskAction::Stop { id } => (id, "stop", json!({})),
+        TaskAction::Approve { id, step } => (id, "confirm", json!({"step": step, "approve": true})),
+        TaskAction::Reject { id, step } => (id, "confirm", json!({"step": step, "approve": false})),
+    };
+    r.control(&id, action, &body).await
 }
 
 /// Where `task run` opens its task

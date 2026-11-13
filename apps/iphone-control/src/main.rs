@@ -19,6 +19,8 @@ mod completions;
 mod debug;
 mod envfile;
 mod guide;
+mod mcp_bridge;
+mod remote;
 mod schedule;
 mod service;
 mod task;
@@ -57,8 +59,13 @@ enum Command {
     },
     #[command(about = ictl_l10n::tr!("常驻守护进程（安装时装成用户服务：macOS 是 launchd，Linux 是 systemd；也可以手动启动）", "The long-running daemon (installed as a user service: launchd on macOS, systemd on Linux; can also be started by hand)"))]
     Daemon,
-    #[command(about = ictl_l10n::tr!("MCP stdio 服务（由 agent 拉起）", "MCP stdio server (started by the agent)"))]
-    Mcp,
+    #[command(about = ictl_l10n::tr!("MCP stdio 服务（由 agent 拉起）。--url（或 IPHONE_CONTROL_URL）时转接另一台机器的控制台 /mcp：给只能填命令的 MCP 客户端用", "MCP stdio server (started by the agent). With --url (or IPHONE_CONTROL_URL), a bridge to another machine's viewer /mcp, for MCP clients that only start a command"))]
+    Mcp {
+        #[arg(long, value_name = "URL", env = "IPHONE_CONTROL_URL", help = ictl_l10n::tr!("手机接在另一台机器上：那台机器的控制台地址。有任务口令（IPHONE_CONTROL_TASK_TOKEN）就只带它，否则用 IPHONE_CONTROL_VIEWER_TOKEN 登录；task run --url 启动的命令会自动设好", "The phone is on another machine: that machine's viewer. With a task's token (IPHONE_CONTROL_TASK_TOKEN) only that is sent, otherwise the login from IPHONE_CONTROL_VIEWER_TOKEN; a command under task run --url has it set already"))]
+        url: Option<String>,
+        #[arg(long, value_name = "PEM", env = "IPHONE_CONTROL_CA", help = ictl_l10n::tr!("--url 是本机生成的自签证书时，信任这张证书", "With --url and a self-signed certificate: trust it"))]
+        ca: Option<PathBuf>,
+    },
     #[command(about = ictl_l10n::tr!("打印把 MCP 注册到 Claude Code 的命令", "Print the command that registers the MCP server with Claude Code"))]
     McpConfig,
     #[command(about = ictl_l10n::tr!("守护进程和设备状态、最近的日志", "Daemon and device state, recent log"))]
@@ -129,6 +136,10 @@ enum Command {
     },
     #[command(about = ictl_l10n::tr!("AI 任务：在任务里运行外部 agent（task run），查看、暂停、接管、停止、确认任务", "AI tasks: run an external agent in a task (task run); list, pause, take over, stop and confirm tasks"))]
     Task {
+        #[arg(long, global = true, value_name = "URL", env = "IPHONE_CONTROL_URL", help = ictl_l10n::tr!("手机接在另一台机器上：那台机器的控制台地址，比如 https://192.168.1.5:8200；登录令牌放在 IPHONE_CONTROL_VIEWER_TOKEN 里（task finish 用任务口令）", "The phone is on another machine: that machine's viewer, such as https://192.168.1.5:8200; the login token goes in IPHONE_CONTROL_VIEWER_TOKEN (task finish uses the task's token)"))]
+        url: Option<String>,
+        #[arg(long, global = true, value_name = "PEM", env = "IPHONE_CONTROL_CA", help = ictl_l10n::tr!("--url 是本机生成的自签证书时，信任这张证书（那台机器上的 viewer-tls/cert.pem）", "With --url and a self-signed certificate made there: trust it (viewer-tls/cert.pem on that machine)"))]
+        ca: Option<PathBuf>,
         #[command(subcommand)]
         action: task::TaskAction,
     },
@@ -272,7 +283,7 @@ fn prints_and_exits(command: Option<&Command>) -> bool {
                 | Command::NotifyTest { .. }
                 | Command::Update { action: Some(UpdateAction::Check { .. }), .. }
         )
-    ) || matches!(command, Some(Command::Task { action }) if task::prints_and_exits(action))
+    ) || matches!(command, Some(Command::Task { action, .. }) if task::prints_and_exits(action))
 }
 
 /// Rust starts every program with SIGPIPE ignored, so once the reader of stdout has gone (`iphone-control status |
@@ -295,7 +306,7 @@ async fn run() -> anyhow::Result<()> {
     if prints_and_exits(cli.command.as_ref()) {
         restore_sigpipe();
     }
-    let quiet = matches!(cli.command, Some(Command::Mcp));
+    let quiet = matches!(cli.command, Some(Command::Mcp { .. }));
     // ICTL_LOG 留空（配置文件里常见的 `ICTL_LOG=`）当作没设；原来空值会生成一个什么都不放行的过滤器
     let filter =
         env_nonempty("ICTL_LOG").and_then(|v| tracing_subscriber::EnvFilter::try_new(v).ok()).unwrap_or_else(|| {
@@ -329,7 +340,8 @@ async fn run() -> anyhow::Result<()> {
             cfg.socket = cli.socket;
             ictl_daemon::run(cfg).await
         }
-        Command::Mcp => ictl_mcp::serve_stdio(cli.socket).await,
+        Command::Mcp { url: Some(url), ca } => mcp_bridge::run(&url, ca.as_deref()).await,
+        Command::Mcp { url: None, .. } => ictl_mcp::serve_stdio(cli.socket).await,
         Command::McpConfig => {
             println!("{}", mcp_config(&cli.socket)?);
             Ok(())
@@ -356,7 +368,7 @@ async fn run() -> anyhow::Result<()> {
                 None => viewer::run(&cli.socket, &cli.data_dir, port, lan, &lan_hosts, &tls, mcp).await,
             }
         }
-        Command::Task { action } => task::run(&cli.socket, action).await,
+        Command::Task { url, ca, action } => task::run(&cli.socket, url, ca, action).await,
         #[cfg(feature = "debug-cmds")]
         Command::Debug(args) => debug::run(env_nonempty("IPHONE_UDID").as_deref(), args).await,
         Command::NotifyTest { event } => notify_test(&cli.data_dir, event.as_deref()).await,
@@ -1399,6 +1411,32 @@ mod tests {
 
     /// The viewer's settings come from the settings file as environment variables (also for the viewer service):
     /// `IPHONE_CONTROL_VIEWER_LAN=1` turns `--lan` on. A plain flag only took true/false, so the service didn't start
+    /// `--url` anywhere in `task …`, or from IPHONE_CONTROL_URL (which `task run --url` gives its command), and for
+    /// `mcp`
+    #[test]
+    fn the_remote_viewer_from_a_flag_or_the_environment() {
+        use clap::Parser;
+        let task = |args: &[&str]| match super::Cli::try_parse_from(args).unwrap().command {
+            Some(super::Command::Task { url, .. }) => url,
+            _ => panic!("not task"),
+        };
+        let mcp = |args: &[&str]| match super::Cli::try_parse_from(args).unwrap().command {
+            Some(super::Command::Mcp { url, .. }) => url,
+            _ => panic!("not mcp"),
+        };
+        // SAFETY: only this test sets this variable
+        unsafe { std::env::remove_var("IPHONE_CONTROL_URL") };
+        assert_eq!(task(&["i", "task", "pause", "abc"]), None);
+        assert_eq!(mcp(&["i", "mcp"]), None, "the local stdio server, as before");
+        assert_eq!(task(&["i", "task", "--url", "https://a:1", "pause", "abc"]).as_deref(), Some("https://a:1"));
+        assert_eq!(task(&["i", "task", "approve", "abc", "--url", "https://a:1"]).as_deref(), Some("https://a:1"));
+        assert_eq!(mcp(&["i", "mcp", "--url", "https://a:1"]).as_deref(), Some("https://a:1"));
+        unsafe { std::env::set_var("IPHONE_CONTROL_URL", "https://b:2") };
+        assert_eq!(task(&["i", "task", "finish", "done"]).as_deref(), Some("https://b:2"));
+        assert_eq!(mcp(&["i", "mcp"]).as_deref(), Some("https://b:2"));
+        unsafe { std::env::remove_var("IPHONE_CONTROL_URL") };
+    }
+
     #[test]
     fn token_names_line_up_in_columns() {
         assert_eq!(super::pad("owner", 8), "owner   ");

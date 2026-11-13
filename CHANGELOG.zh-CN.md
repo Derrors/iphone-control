@@ -8,6 +8,8 @@
 
 ### 新增
 
+- 设置菜单支持方向键选择、Enter 确认和 Esc 取消，保留数字选择；基础终端继续使用逐行提示。
+- `iphone-control completions <shell>` 可生成 Bash、Zsh 和 Fish 补全脚本，不启动守护进程、不访问设备。
 - 任何 agent 平台都能用 AI 任务：`iphone-control task run -- <命令>` 在任务里运行命令，它启动的 `iphone-control mcp` 自动加入任务（控制台能看到每一步，可以暂停、接管、停止、确认）。`task list`、`task events`、`task pause`/`resume`/`takeover`/`handback`/`stop`、`task approve`/`reject` 在命令行里查看和控制任务。
 - 控制台会接上正在进行的任务：页面刷新后，以及在别处开的任务。
 - 任务可以限定 App（`task run --app 设置`）：在别的 App 里操作、启动别的 App、打开网页以外的链接，每一步都先等你确认；同意后这个 App 就加入任务范围。
@@ -61,8 +63,6 @@
 
 ### 新增
 
-- 设置菜单支持方向键选择、Enter 确认和 Esc 取消，保留数字选择；基础终端继续使用逐行提示。
-- `iphone-control completions <shell>` 可生成 Bash、Zsh 和 Fish 补全脚本，不启动守护进程、不访问设备。
 - 运行 `iphone-control update check` 或打开控制台的「关于与更新」，可查看当前构建的发布者提供的最新稳定版。发现新版后，Viewer 会在按钮上显示红点。打开面板即可查看版本号，并在有适用命令时一键复制。
 - 通过签名发行包的安装脚本部署的用户服务可用 `iphone-control update apply` 升级，用 `iphone-control update rollback` 回滚。默认仅检查更新。运行 `iphone-control update policy auto-patch` 后，服务会在空闲时自动安装签名补丁，新守护进程健康检查失败时恢复旧版本。
 - 控制台改版：工作区适配宽窄窗口，侧栏和浮层用磨砂表面（高对比度或减少透明度时为实色），任务输入、执行器和设置集中在侧栏底部。设备显示商品名（如 iPhone 15 Pro，而不是 `iPhone16,1`）并套用 iPhone 或 iPad 外框；状态栏区分等待设备、正在连接、仅可观看、实时画面和画面断开。

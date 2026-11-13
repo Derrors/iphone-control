@@ -27,7 +27,9 @@ These go before the command, for example `iphone-control --socket /path/ctl.sock
 
 ```bash
 # Bash: enable in the current session
-source <(iphone-control completions bash)
+mkdir -p ~/.config/iphone-control
+iphone-control completions bash > ~/.config/iphone-control/completion.bash
+source ~/.config/iphone-control/completion.bash
 
 # Zsh: save in a custom completion directory
 mkdir -p ~/.zsh/completions
@@ -38,7 +40,7 @@ mkdir -p ~/.config/fish/completions
 iphone-control completions fish > ~/.config/fish/completions/iphone-control.fish
 ```
 
-For Zsh, add `fpath=(~/.zsh/completions $fpath)` before `compinit` in `~/.zshrc`, and make sure `autoload -Uz compinit; compinit` runs. For Bash, put the `source` line above in `~/.bashrc` to load completions on startup. Regenerate the Zsh/Fish files after upgrading; the Bash startup command reads the updated definitions automatically. If you use a custom Fish configuration directory, use its `completions` subdirectory.
+For Zsh, add `fpath=(~/.zsh/completions $fpath)` before `compinit` in `~/.zshrc`, and make sure `autoload -Uz compinit; compinit` runs. For Bash, put the `source` line above in `~/.bashrc` to load completions on startup. Regenerate the completion file for your shell after upgrading. If you use a custom Fish configuration directory, use its `completions` subdirectory.
 
 ## Host software updates
 
@@ -87,7 +89,7 @@ These commands find the service set up by the one-command install, `iphone-contr
 | `sign` | Sign and install WDA now, same as `resign --force`. Registers the device with the Apple ID |
 | `resign [--force]` | Re-sign only when fewer than `RESIGN_MIN_DAYS` days remain; `--force` re-signs now. Without `--force` it doesn't register a device that has never had WDA |
 
-In setup menus, use ↑/↓ to move and Enter to confirm, or type a number and press Enter. Confirmation prompts also accept ←/→. Esc or Ctrl+C cancels the guide: saved steps are kept, and the current unconfirmed choice is not submitted. A `>` marker identifies the selection without relying on color. After resizing the terminal, the next key redraws the menu at the new width.
+In setup menus, use ↑/↓ to move and Enter to confirm, or type a number and press Enter. Confirmation prompts also accept ←/→. Esc dismisses the guide. Ctrl+C interrupts it with exit status 130. Both preserve saved steps. A `>` marker identifies the selection without relying on color. After resizing the terminal, the next key redraws the menu at the new width.
 
 With `TERM=dumb`, redirected output or a terminal that is too small when the menu starts, menus use the original numbered/text prompts. Shrinking an active menu preserves its input and pauses confirmation until the window is enlarged; cancellation remains available. Setup still requires stdin to be a terminal; it cannot run unattended through a pipe. These shortcuts apply to menus only; passwords stay hidden.
 

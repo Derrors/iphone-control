@@ -41,29 +41,58 @@ fn run(root: &Path, args: &[&str], language: &str) -> Output {
     Output { status, stdout: fs::read(stdout).unwrap(), stderr: fs::read(stderr).unwrap() }
 }
 
-fn check_fish_candidates(script: &Path) {
+fn check_shell_candidates(shell: &str, script: &Path) {
     for (line, expected, present) in [
+        ("iphone-control setup --rec", "--reconfigure", true),
+        ("iphone-control update po", "policy", true),
+        ("iphone-control update --", "--yes", true),
         ("iphone-control completions ", "bash", true),
         ("iphone-control --data-dir policy completions ", "zsh", true),
+        ("iphone-control --data-dir status completions b", "bash", true),
+        ("iphone-control --data-dir check update ", "apply", true),
+        ("iphone-control --data-dir check update --", "--json", false),
         ("iphone-control --socket=policy update policy ", "manual", true),
         ("iphone-control update policy ", "auto-patch", true),
         ("iphone-control update policy manual ", "auto-patch", false),
         ("iphone-control --data-dir policy update check ", "manual", false),
         ("iphone-control --data-dir completions status ", "bash", false),
         ("iphone-control select policy ", "auto-patch", false),
+        ("iphone-control ", "debug", false),
+        ("iphone-control update ", "schedule", false),
+        ("iphone-control update ", "run", false),
+        ("iphone-control update ", "rollback", false),
+        ("iphone-control update recover --", "--scheduled", false),
     ] {
-        let output = Command::new("fish")
-            .args(["--no-config", "-c", "source $argv[1]; complete -C $argv[2]", "--"])
+        let mut cmd = Command::new(shell);
+        if shell == "fish" {
+            cmd.args(["--no-config", "-c", "source $argv[1]; complete -C $argv[2]", "--"]).arg(script).arg(line);
+        } else {
+            cmd.args([
+                "--noprofile",
+                "--norc",
+                "-c",
+                r#"
+                source "$1" || exit 1
+                shift
+                COMP_WORDS=("$@")
+                COMP_CWORD=$(( ${#COMP_WORDS[@]} - 1 ))
+                fn=$(complete -p iphone-control) || exit 1
+                fn=${fn#* -F }
+                "${fn%% *}" iphone-control "${COMP_WORDS[COMP_CWORD]}" "${COMP_WORDS[COMP_CWORD-1]}"
+                printf '%s\n' "${COMPREPLY[@]}"
+            "#,
+                "--",
+            ])
             .arg(script)
-            .arg(line)
-            .output()
-            .unwrap();
+            .args(line.split(' '));
+        }
+        let output = cmd.output().unwrap();
         assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
         let candidates = String::from_utf8(output.stdout).unwrap();
         assert_eq!(
             candidates.lines().any(|value| value.split('\t').next() == Some(expected)),
             present,
-            "{line:?}: {candidates}"
+            "{shell} {line:?}: {candidates}"
         );
     }
 }
@@ -95,8 +124,8 @@ fn scripts_help_and_errors_do_not_read_settings_create_state_or_contact_the_daem
             Ok(_) => {
                 let check = Command::new(shell).arg("-n").arg(&path).output().unwrap();
                 assert!(check.status.success(), "{shell}: {}", String::from_utf8_lossy(&check.stderr));
-                if shell == "fish" {
-                    check_fish_candidates(&path);
+                if shell != "zsh" {
+                    check_shell_candidates(shell, &path);
                 }
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {

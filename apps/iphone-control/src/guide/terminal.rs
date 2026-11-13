@@ -5,19 +5,73 @@
 use std::fmt;
 use std::io::{self, IsTerminal, Read};
 use std::os::fd::{AsFd, AsRawFd};
+use std::sync::atomic::{AtomicI32, Ordering};
 use std::time::{Duration, Instant};
 
 use termion::raw::IntoRawMode;
 
 use console::{Key, Term};
 
-// ESC alone is ambiguous on a byte stream. Allow up to 250ms for a whole
-// sequence (including fragmented UTF-8), never an unbounded wait or allocation.
+// ESC alone is ambiguous on a byte stream. Only escape sequences need a timeout.
 const SEQUENCE_WAIT: Duration = Duration::from_millis(250);
 const INPUT_LIMIT: usize = 256;
 
+// Only one setup menu owns stdin. Signal delivery can occur on any runtime thread.
+static MENU_SIGNAL: AtomicI32 = AtomicI32::new(0);
+
+extern "C" fn note_signal(signal: libc::c_int) {
+    MENU_SIGNAL.store(signal, Ordering::Relaxed);
+}
+
+struct MenuSignals(Vec<(libc::c_int, libc::sigaction)>);
+
+impl MenuSignals {
+    fn install() -> io::Result<Self> {
+        MENU_SIGNAL.store(0, Ordering::Relaxed);
+        let mut guard = Self(Vec::new());
+        // SAFETY: sigaction copies both structures. The handler only stores a signal number.
+        unsafe {
+            let mut action: libc::sigaction = std::mem::zeroed();
+            action.sa_sigaction = note_signal as *const () as libc::sighandler_t;
+            libc::sigemptyset(&mut action.sa_mask);
+            for signal in [libc::SIGINT, libc::SIGTERM, libc::SIGHUP] {
+                let mut previous = std::mem::zeroed();
+                if libc::sigaction(signal, std::ptr::null(), &mut previous) == -1 {
+                    return Err(io::Error::last_os_error());
+                }
+                if previous.sa_sigaction == libc::SIG_IGN {
+                    continue;
+                }
+                if libc::sigaction(signal, &action, &mut previous) == -1 {
+                    return Err(io::Error::last_os_error());
+                }
+                guard.0.push((signal, previous));
+            }
+        }
+        Ok(guard)
+    }
+}
+
+impl Drop for MenuSignals {
+    fn drop(&mut self) {
+        // Restore before re-delivering, after read_key's raw terminal guard has dropped.
+        unsafe {
+            for (signal, previous) in self.0.iter().rev() {
+                libc::sigaction(*signal, previous, std::ptr::null_mut());
+            }
+            let signal = MENU_SIGNAL.swap(0, Ordering::Relaxed);
+            if signal != 0 {
+                libc::raise(signal);
+            }
+        }
+    }
+}
+
 fn read_byte(input: &mut std::fs::File, deadline: Instant) -> io::Result<Option<u8>> {
     loop {
+        if MENU_SIGNAL.load(Ordering::Relaxed) != 0 {
+            return Err(io::ErrorKind::Interrupted.into());
+        }
         let remaining = deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() {
             return Ok(None);
@@ -96,7 +150,7 @@ fn decode(bytes: &[u8]) -> Key {
             Parsed::End => Key::End,
             Parsed::PageUp => Key::PageUp,
             Parsed::PageDown => Key::PageDown,
-            Parsed::Backspace => Key::Backspace,
+            Parsed::Backspace | Parsed::Ctrl('h') => Key::Backspace,
             Parsed::Char('\n') => Key::Enter,
             Parsed::Ctrl('c') => Key::CtrlC,
             Parsed::Char(c) => Key::Char(c),
@@ -110,15 +164,36 @@ fn decode(bytes: &[u8]) -> Key {
 /// terminal is simply idle, so the caller can skip repainting an unchanged
 /// frame. A byte that arrives but forms an unknown/partial sequence still
 /// returns `Some(Key::Unknown)`, as does every later timeout.
-fn read_key() -> io::Result<Option<Key>> {
+fn read_key(utf8: &mut Vec<u8>, queued: &mut Option<u8>) -> io::Result<Option<Key>> {
     // Duplicate stdin, with no read-ahead, just like crate::read_line. A raw
     // guard per read preserves normal output newline handling between frames.
     let mut input = std::fs::File::from(std::io::stdin().as_fd().try_clone_to_owned()?);
     let _raw = std::io::stdout().into_raw_mode()?;
     // Periodic wakeups let the caller notice a resize, even without keys.
-    let Some(first) = read_byte(&mut input, Instant::now() + Duration::from_millis(100))? else {
-        return Ok(None);
+    let first = match queued.take() {
+        Some(byte) => byte,
+        None => match read_byte(&mut input, Instant::now() + Duration::from_millis(100))? {
+            Some(byte) => byte,
+            None => return Ok(None),
+        },
     };
+    if !utf8.is_empty() && !(0x80..=0xbf).contains(&first) {
+        // Surface the broken character and then process the new byte (possibly Enter or Ctrl+C).
+        utf8.clear();
+        *queued = Some(first);
+        return Ok(Some(Key::Char(char::REPLACEMENT_CHARACTER)));
+    }
+    if !first.is_ascii() {
+        utf8.push(first);
+        return match std::str::from_utf8(utf8) {
+            Err(error) if error.error_len().is_none() => Ok(None),
+            decoded => {
+                let key = decoded.ok().and_then(|s| s.chars().next()).unwrap_or(char::REPLACEMENT_CHARACTER);
+                utf8.clear();
+                Ok(Some(Key::Char(key)))
+            }
+        };
+    }
     let deadline = Instant::now() + SEQUENCE_WAIT;
     let mut bytes = vec![first];
     if first == 0x1b {
@@ -144,7 +219,7 @@ fn read_key() -> io::Result<Option<Key>> {
             }
         }
     }
-    // Complete UTF-8 (also Alt+UTF-8) before handing it to the parser.
+    // An Alt-modified character is part of the ESC sequence.
     while std::str::from_utf8(&bytes).is_err_and(|error| error.error_len().is_none()) && bytes.len() < 6 {
         let Some(next) = read_byte(&mut input, deadline)? else { return Ok(Some(Key::Unknown)) };
         bytes.push(next);
@@ -152,8 +227,11 @@ fn read_key() -> io::Result<Option<Key>> {
     Ok(Some(decode(&bytes)))
 }
 
-#[derive(Debug)]
-pub(super) struct Cancelled;
+#[derive(Debug, PartialEq)]
+pub(super) enum Cancelled {
+    Escape,
+    Interrupt,
+}
 
 impl fmt::Display for Cancelled {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -256,7 +334,8 @@ impl Selection {
 
     fn key(&mut self, key: Key, page: usize) -> Result<Option<usize>, Cancelled> {
         let next = match key {
-            Key::Escape | Key::CtrlC => return Err(Cancelled),
+            Key::Escape => return Err(Cancelled::Escape),
+            Key::CtrlC => return Err(Cancelled::Interrupt),
             Key::Enter => {
                 return Ok(if self.input.is_empty() && !self.overflow { Some(self.selected) } else { self.answer() });
             }
@@ -363,6 +442,9 @@ fn frame(prompt: &str, options: &[&str], state: &Selection, size: (u16, u16)) ->
 }
 
 fn menu(term: &Term, prompt: &str, options: &[&str], default: usize, confirmation: bool) -> anyhow::Result<usize> {
+    let _signals = MenuSignals::install()?;
+    let mut utf8 = Vec::with_capacity(4);
+    let mut queued = None;
     let mut state = Selection::new(default, options.len(), confirmation);
     // (size, rendered line count) for the frame currently shown on screen.
     let mut previous = None;
@@ -400,7 +482,7 @@ fn menu(term: &Term, prompt: &str, options: &[&str], default: usize, confirmatio
         }
         // An idle wait (no key) leaves the on-screen frame untouched; the next
         // iteration still re-checks term.size(), so resizes keep working.
-        let Some(key) = read_key()? else { continue };
+        let Some(key) = read_key(&mut utf8, &mut queued)? else { continue };
         needs_render = true;
         let current_size = term.size();
         if (current_size.0 < 6 || current_size.1 < 40) && !matches!(key, Key::Escape | Key::CtrlC) {

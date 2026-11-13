@@ -1,6 +1,6 @@
 # 终端菜单与 Shell 补全验证
 
-2026-11-13，Linux x86_64，Rust 1.99.1。对应个人仓库 Issue #1、#4；未连接手机或启动设备守护进程。
+对应个人仓库 Issue #1、#4。以下检查均使用临时配置目录。
 
 ## 实现范围
 
@@ -9,14 +9,25 @@
 - `completions bash|zsh|fish` 从实际 Clap 定义生成，不读设置、不获取维护锁、不连接 daemon。
 - Issue #1 的更广泛体验建议（所有长任务进度、完整多面板 TUI、Kaku 外观对照）没有在本次实现中宣称完成。
 
-## 已通过
+## 2026-11-13 基于上游 `c4ffe03` 的复测
+
+macOS 26.6.2（Apple Silicon），Rust 1.99.1。
+
+- `cargo test --workspace --all-features --locked` 通过 342 项，3 项标记为忽略。另行运行 `tests/terminal.py` 执行其中的 PTY 菜单用例。
+- PTY 验证 Esc 返回 0、Ctrl+C 返回 130，以及 SIGINT、SIGTERM、SIGHUP 退出后恢复 termios。预先写入的 `setup-done` 在取消全量重配后保持原内容。确认框收到间隔 350ms 的「否」仍选择否。空闲用例从首帧末行开始计数。
+- Bash 3.2.57 和 Fish 4.9.3 验证实际候选，覆盖前置选项值与子命令同名、嵌套命令、枚举和隐藏的计划任务入口。Zsh 5.9 在 PTY 中用 Tab 验证 `update po`、`completions zs`、`--data-dir check update app` 以及隐藏命令和参数。
+- Clippy 全工作区检查、Viewer 的 5 项测试、安装器的 17 项测试和双语站点构建通过。
+
+## 初版 Linux x86_64 验证
+
+以下结果记录于移植到上述上游版本之前。
 
 - `cargo test --workspace --all-features --locked`。
 - `cargo clippy --workspace --all-targets --all-features --locked -- -D warnings`。
 - `cargo fmt` 对 CONTRIBUTING 指定的所有自有包执行 `--check`。
 - `cargo build --release --locked -p iphone-control`。
 - `python3 tests/terminal.py --binary <debug或release程序> --test-dir <target/debug/deps>`：方向键、编号与多位编号、确认左右键、Esc/Ctrl+C、termios 恢复、中文长列表、缩放、dumb/小窗口/重定向/管道回退及取消时保留已保存设置、丢弃未保存语言。已接入 Linux/macOS CI。
-- 扩展 PTY 回归：默认“是”时输入“否/不”、非法编号 `1x`、无效输入后缩窗、跨提示粘贴、输入长度上限、EOF 截断；CSI/SS3 方向键及中文 UTF-8 以每字节 40ms 分批发送。键盘序列总等待上限 250ms，不保证超过该时限的分片仍被识别为同一按键。
+- 扩展 PTY 回归：默认“是”时输入“否/不”、非法编号 `1x`、无效输入后缩窗、跨提示粘贴、输入长度上限、EOF 截断；CSI/SS3 方向键及中文 UTF-8 以每字节 40ms 分批发送。当前实现仅对 Esc 开头的控制序列使用 250ms 超时，普通 UTF-8 文字跨读保留。
 - 补全集成测试：FIFO 设置文件不被读取、未连接模拟 daemon socket、未创建状态目录、帮助中英文、错误参数，以及 Bash/Zsh/Fish 语法。Fish 3.6 通过临时解包的软件包验证实际 `complete -C` 候选、前置全局参数和相似参数值，不做全局安装。
 - `pnpm@12.16.1 install --frozen-lockfile` 与 `pnpm run docs:build`，双语站点构建通过。
 - `python3 packaging/test_installer.py`：16 项通过。
@@ -24,7 +35,7 @@
 
 ## 验证边界
 
-- macOS、真实 SSH/tmux/Kaku 环境仍需对应环境验证；PTY 回归已加入 Linux/macOS CI。
+- 上游基线复测在 macOS 上完成。Linux CI、真实 SSH/tmux/Kaku 和连机安装测试仍待验证。
 - 本机 Rust 1.88.0 多次下载未能完成，最终停止了本次下载；尝试 MSRV 检查返回 `missing manifest in toolchain`，未得到有效的编译结果。保留现有 CI 的 1.88.0 检查。
 - 未改变打包安装逻辑，补全安装方式为文档中的本地生成；未在本机执行 .deb 安装或 Homebrew 安装。
 - 新依赖 clap_complete 4.6.11 声明 MSRV 1.85，MIT OR Apache-2.0 符合现有许可证白名单；console 0.15.11 复用现有锁定版本；termion 4.0.6 使用 MIT 许可证。

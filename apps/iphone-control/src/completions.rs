@@ -5,6 +5,9 @@ use std::io::{self, Write};
 
 use clap::{CommandFactory, ValueEnum};
 
+mod bash;
+mod fish;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
 pub enum Shell {
     Bash,
@@ -34,18 +37,14 @@ pub fn requested(args: impl IntoIterator<Item = OsString>) -> bool {
 }
 
 pub fn write(shell: Shell, output: &mut dyn Write) -> anyhow::Result<()> {
-    let shell = match shell {
-        Shell::Bash => clap_complete::Shell::Bash,
-        Shell::Zsh => clap_complete::Shell::Zsh,
-        Shell::Fish => clap_complete::Shell::Fish,
-    };
-    // clap_complete expects writes to succeed. Buffer first so a closed stdout is an ordinary
-    // I/O error (or a successful early pipe close), rather than a panic inside the generator.
+    // Generate in memory: closing a downstream pipe should never panic inside a generator.
+    let mut command = public_command(&super::Cli::command());
+    command.build();
     let mut script = Vec::new();
-    let mut command = super::Cli::command();
-    clap_complete::generate(shell, &mut command, "iphone-control", &mut script);
-    if shell == clap_complete::Shell::Fish {
-        fish_positionals(&command, &mut Vec::new(), &mut 0, &mut script)?;
+    match shell {
+        Shell::Zsh => clap_complete::generate(clap_complete::Shell::Zsh, &mut command, "iphone-control", &mut script),
+        Shell::Bash => bash::generate(&command, &mut script)?,
+        Shell::Fish => fish::generate(&command, &mut script)?,
     }
     match output.write_all(&script) {
         Err(e) if e.kind() == io::ErrorKind::BrokenPipe => Ok(()),
@@ -53,69 +52,38 @@ pub fn write(shell: Shell, output: &mut dyn Write) -> anyhow::Result<()> {
     }
 }
 
-// clap_complete 4.6.11 deliberately omits Fish positional arguments. Add only the
-// static enum values it misses, still derived from the same built Clap tree.
-fn fish_positionals<'a>(
-    command: &'a clap::Command,
-    ancestors: &mut Vec<&'a clap::Command>,
-    next_id: &mut usize,
-    script: &mut Vec<u8>,
+// Project the public schema before Clap builds its help subcommands. Its stock
+// generators otherwise include private scheduler commands and their flags.
+fn public_command(source: &clap::Command) -> clap::Command {
+    let mut cmd = clap::Command::new(source.get_name().to_owned())
+        .visible_aliases(source.get_visible_aliases().map(str::to_owned))
+        .args(source.get_arguments().filter(|arg| !arg.is_hide_set()).cloned())
+        .subcommands(source.get_subcommands().filter(|cmd| !cmd.is_hide_set()).map(public_command));
+    if let Some(about) = source.get_about() {
+        cmd = cmd.about(about.clone());
+    }
+    if let Some(version) = source.get_version() {
+        cmd = cmd.version(version.to_owned());
+    }
+    cmd
+}
+
+fn visit(
+    cmd: &clap::Command,
+    path: &str,
+    emit: &mut impl FnMut(&clap::Command, &str) -> io::Result<()>,
 ) -> io::Result<()> {
-    ancestors.push(command);
-    for arg in command.get_positionals().filter(|arg| !arg.is_hide_set()) {
-        let Some(values) = arg.get_value_parser().possible_values() else { continue };
-        let values: Vec<_> = values.filter(|value| !value.is_hide_set()).collect();
-        if values.is_empty() {
-            continue;
-        }
-        let helper = format!("__fish_iphone_control_positional_{next_id}");
-        *next_id += 1;
-        writeln!(script, "\nfunction {helper}\n    set -l words (commandline -opc)\n    set -e words[1]")?;
-        for (depth, node) in ancestors.iter().enumerate() {
-            if depth > 0 {
-                writeln!(script, "    test (count $words) -gt 0; or return 1")?;
-                writeln!(script, "    test \"$words[1]\" = {}; or return 1", fish_quote(node.get_name()))?;
-                writeln!(script, "    set -e words[1]")?;
-            }
-            // `argparse -s` stops at the first positional, so an option value named
-            // `policy`/`completions` can never be mistaken for a subcommand.
-            let specs: Vec<_> = node
-                .get_arguments()
-                .filter(|arg| !arg.is_positional())
-                .map(|arg| {
-                    let mut spec = String::new();
-                    if let Some(short) = arg.get_short() {
-                        spec.push(short);
-                        if arg.get_long().is_some() {
-                            spec.push('/');
-                        }
-                    }
-                    if let Some(long) = arg.get_long() {
-                        spec.push_str(long);
-                    }
-                    if arg.get_num_args().is_some_and(|range| range.takes_values()) {
-                        spec.push('=');
-                    }
-                    fish_quote(&spec)
-                })
-                .collect();
-            writeln!(script, "    argparse -s {} -- $words 2>/dev/null; or return 1", specs.join(" "))?;
-            writeln!(script, "    set words $argv")?;
-        }
-        writeln!(script, "    test (count $words) -eq {}\nend", arg.get_index().unwrap_or(1) - 1)?;
-        for value in values {
-            writeln!(script, "complete -c iphone-control -n {helper} -f -a {}", fish_quote(value.get_name()))?;
+    emit(cmd, path)?;
+    for child in cmd.get_subcommands() {
+        for name in child.get_name_and_visible_aliases() {
+            visit(child, &format!("{path} {name}"), emit)?;
         }
     }
-    for subcommand in command.get_subcommands().filter(|cmd| !cmd.is_hide_set()) {
-        fish_positionals(subcommand, ancestors, next_id, script)?;
-    }
-    ancestors.pop();
     Ok(())
 }
 
-fn fish_quote(value: &str) -> String {
-    format!("'{}'", value.replace('\\', "\\\\").replace('\'', "\\'"))
+fn enum_values(arg: &clap::Arg) -> String {
+    arg.get_possible_values().iter().filter(|v| !v.is_hide_set()).map(|v| v.get_name()).collect::<Vec<_>>().join(" ")
 }
 
 #[cfg(test)]
@@ -162,7 +130,7 @@ mod tests {
                 "update",
                 "policy",
                 "check",
-                "rollback",
+                "unpin",
                 "recover",
                 "service",
                 "passcode",
@@ -182,6 +150,7 @@ mod tests {
             ] {
                 assert!(script.contains(word), "{shell:?} missing {word}");
             }
+            assert!(!script.contains("--scheduled"), "{shell:?} exposed a private recovery flag");
         }
     }
 

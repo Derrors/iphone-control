@@ -16,8 +16,10 @@ import os
 from pathlib import Path
 import pty
 import select
+import signal
 import struct
 import subprocess
+import sys
 import tempfile
 import termios
 import time
@@ -58,19 +60,31 @@ class Session:
                 break
         assert target in self.output, (text, self.output.decode(errors="replace"))
 
+    def wait_for_raw(self):
+        deadline = time.monotonic() + 8
+        while termios.tcgetattr(self.slave)[3] & termios.ICANON:
+            assert time.monotonic() < deadline, "menu did not start reading keys"
+            self.pump(0.01)
+
     def send(self, data, raw=True):
         if raw:
-            deadline = time.monotonic() + 8
-            while termios.tcgetattr(self.slave)[3] & termios.ICANON:
-                assert time.monotonic() < deadline, "menu did not start reading keys"
-                self.pump(0.01)
+            self.wait_for_raw()
         os.write(self.master, data)
 
-    def finish(self, result):
-        self.expect(result)
-        assert self.proc.wait(timeout=8) == 0, self.output.decode(errors="replace")
-        assert termios.tcgetattr(self.slave) == self.original, "terminal flags were not restored"
+    def assert_restored(self):
+        actual = termios.tcgetattr(self.slave)
+        expected = self.original.copy()
+        if sys.platform == "darwin":
+            # Darwin sets this transient kernel bit when canonical input resumes.
+            actual[3] &= ~termios.PENDIN
+            expected[3] &= ~termios.PENDIN
+        assert actual == expected, ("terminal flags were not restored", actual, expected)
         assert b"\x1b[?25l" not in self.output, "menu unexpectedly hid cursor"
+
+    def finish(self, result, status=0):
+        self.expect(result + "\r\n" if result.startswith("MENU_RESULT=") and not self.redirect else result)
+        assert self.proc.wait(timeout=8) == status, self.output.decode(errors="replace")
+        self.assert_restored()
 
     def close(self):
         if self.proc.poll() is None:
@@ -82,12 +96,12 @@ class Session:
         os.close(self.slave)
 
 
-def exercise(command, env, keys, result, ready="Esc", size=(24, 80), redirect=False):
+def exercise(command, env, keys, result, ready="Esc", size=(24, 80), redirect=False, status=0):
     session = Session(command, env, size, redirect)
     try:
         session.expect(ready)
         session.send(keys, raw=ready != "Choice:")
-        session.finish(result)
+        session.finish(result, status)
         return session.output
     finally:
         session.close()
@@ -96,7 +110,7 @@ def exercise(command, env, keys, result, ready="Esc", size=(24, 80), redirect=Fa
 MENU_TEST = "guide::terminal::tests::pty_menu"
 
 
-def discover_test_binary(directory):
+def discover_test_binary(directory, env):
     candidates = sorted(
         (path for path in directory.glob("iphone_control-*")
          if path.is_file() and os.access(path, os.X_OK)),
@@ -108,7 +122,7 @@ def discover_test_binary(directory):
         try:
             listed = subprocess.run(
                 [str(candidate.resolve()), "--list"], stdin=subprocess.DEVNULL,
-                capture_output=True, timeout=8,
+                capture_output=True, timeout=8, env=env,
             )
         except (OSError, subprocess.TimeoutExpired):
             continue
@@ -124,25 +138,37 @@ def main():
     tests.add_argument("--test-binary", type=Path)
     tests.add_argument("--test-dir", type=Path)
     args = parser.parse_args()
-    if args.test_dir:
-        try:
-            args.test_binary = discover_test_binary(args.test_dir)
-        except ValueError as error:
-            parser.error(str(error))
-        print(f"Menu test executable: {args.test_binary}")
-    if not args.binary and not args.test_binary:
+    if not (args.binary or args.test_binary or args.test_dir):
         parser.error("provide --binary and/or --test-dir (or --test-binary)")
     with tempfile.TemporaryDirectory(prefix="ictl-terminal-") as directory:
         root = Path(directory)
-        env = dict(os.environ, XDG_CONFIG_HOME=str(root / "config"),
+        env = dict(os.environ, HOME=str(root), XDG_CONFIG_HOME=str(root / "config"),
                    XDG_DATA_HOME=str(root / "data"), XDG_CACHE_HOME=str(root / "cache"),
+                   XDG_RUNTIME_DIR=str(root / "runtime"),
                    IPHONE_CONTROL_LANG="en", TERM="xterm-256color", NO_COLOR="1")
-        if args.binary:
+        if args.test_dir:
+            try:
+                args.test_binary = discover_test_binary(args.test_dir, env)
+            except ValueError as error:
+                parser.error(str(error))
+            print(f"Menu test executable: {args.test_binary}")
+        if args.binary and os.geteuid() == 0:
+            print("SKIP real CLI setup as root: it uses the system maintenance lock")
+        elif args.binary:
             command = [str(args.binary.resolve()), "--data-dir", str(root / "data"),
                        "--socket", str(root / "daemon.sock"), "setup", "--reconfigure"]
-            for key in [b"\x1b", b"\x03"]:
-                output = exercise(command, env, key, "Saved settings and completed steps are kept")
+            for key, status in [(b"\x1b", 0), (b"\x03", 130)]:
+                output = exercise(command, env, key, "Saved settings and completed steps are kept", status=status)
                 assert b"Done." not in output
+            for sig in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
+                session = Session(command, env)
+                try:
+                    session.wait_for_raw()
+                    session.proc.send_signal(sig)
+                    assert session.proc.wait(timeout=8) in (-sig, 128 + sig)
+                    session.assert_restored()
+                finally:
+                    session.close()
             for keys in [b"\x1b[B\r", b"2\r"]:
                 session = Session(command, env)
                 try:
@@ -159,6 +185,9 @@ def main():
             settings.parent.mkdir(parents=True, exist_ok=True)
             settings.write_text("IPHONE_CONTROL_LANG=zh\n")
             before = settings.read_bytes()
+            marker = settings.with_name("setup-done")
+            assert not marker.exists()
+            marker.write_bytes(b"previously completed\n")
             session = Session(command, env)
             try:
                 session.expect("What do you want to set up again?")
@@ -171,7 +200,7 @@ def main():
             finally:
                 session.close()
             assert settings.read_bytes() == before
-            assert not settings.with_name("setup-done").exists()
+            assert marker.read_bytes() == b"previously completed\n"
             exercise(command, env, b"\x1b", "Saved settings and completed steps are kept")
             assert settings.read_bytes() == before
             completed = subprocess.run(command, input=b"2\n", capture_output=True, env=env, timeout=8)
@@ -182,7 +211,7 @@ def main():
             command = [str(args.test_binary.resolve()), "--ignored", "--exact",
                        MENU_TEST, "--nocapture", "--test-threads=1"]
             for keys, result in [(b"\r", 1), (b"\x1b[A\r", 0), (b"\x1b[B\r", 2),
-                                 (b"12\r", 11), (b"99\x7f\r", 8), (b"\x1b[F\r", 29)]:
+                                 (b"12\r", 11), (b"12\x08\r", 0), (b"99\x7f\r", 8), (b"\x1b[F\r", 29)]:
                 exercise(command, env, keys, f"MENU_RESULT={result}")
             for key in [b"\x1b", b"\x03"]:
                 exercise(command, env, key, "MENU_CANCELLED")
@@ -216,8 +245,7 @@ def main():
             # poll for a resize, so a steady frame produces zero extra output.
             session = Session(command, env)
             try:
-                session.expect("Esc")
-                session.pump(0.3)
+                session.expect("Ctrl+C cancel\r\n")
                 baseline = len(session.output)
                 time.sleep(0.5)
                 session.pump(0.15)
@@ -247,6 +275,16 @@ def main():
             yes_env = dict(confirm_env, ICTL_TEST_DEFAULT="yes")
             for text in ["否", "不"]:
                 exercise(command, yes_env, (text + "\r").encode(), "MENU_RESULT=0")
+            session = Session(command, yes_env)
+            try:
+                session.expect("Esc")
+                answer = "否".encode()
+                session.send(answer[:1])
+                time.sleep(0.35)
+                session.send(answer[1:] + b"\r")
+                session.finish("MENU_RESULT=0")
+            finally:
+                session.close()
             # Send one byte at a time, well apart: a single write is not a
             # fragmented-input test. Every fragment stays within the 250ms budget.
             for fragmented_env, keys, result in [(env, b"\x1b[B", 2),

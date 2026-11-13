@@ -27,7 +27,9 @@
 
 ```bash
 # Bash：当前会话启用
-source <(iphone-control completions bash)
+mkdir -p ~/.config/iphone-control
+iphone-control completions bash > ~/.config/iphone-control/completion.bash
+source ~/.config/iphone-control/completion.bash
 
 # Zsh：保存到自定义补全目录
 mkdir -p ~/.zsh/completions
@@ -38,7 +40,7 @@ mkdir -p ~/.config/fish/completions
 iphone-control completions fish > ~/.config/fish/completions/iphone-control.fish
 ```
 
-Zsh 在 `~/.zshrc` 的 `compinit` 之前添加 `fpath=(~/.zsh/completions $fpath)`，并确保有 `autoload -Uz compinit; compinit`。Bash 若要每次启动生效，可将上面的 `source` 行放进 `~/.bashrc`。升级程序后重新生成 Zsh/Fish 文件，Bash 的启动命令会读取新版定义。自定义 Fish 配置目录时使用对应的 `completions` 子目录。
+Zsh 在 `~/.zshrc` 的 `compinit` 之前添加 `fpath=(~/.zsh/completions $fpath)`，并确保有 `autoload -Uz compinit; compinit`。Bash 若要每次启动生效，可将上面的 `source` 行放进 `~/.bashrc`。升级程序后，重新生成所用 shell 的补全文件。自定义 Fish 配置目录时使用对应的 `completions` 子目录。
 
 ## 主机软件更新
 
@@ -87,7 +89,7 @@ Viewer 只监听本机回环地址。同机其他用户也能查看安装信息�
 | `sign` | 立即签名并安装 WDA，同 `resign --force`。会把设备注册到 Apple ID |
 | `resign [--force]` | 描述文件剩余不到 `RESIGN_MIN_DAYS` 天才重签；`--force` 立即重签。不带 `--force` 时不会替没装过 WDA 的设备注册 |
 
-设置菜单中用 ↑/↓ 移动、Enter 确认，也可以输入编号再回车；确认提示支持 ←/→ 选择。Esc 或 Ctrl+C 取消当前向导，已保存的步骤保留，当前未确认的选项不提交。菜单始终用 `>` 标记选中项，不依赖颜色。窗口缩放后按键会按新宽度重绘。
+设置菜单中用 ↑/↓ 移动、Enter 确认，也可以输入编号再回车；确认提示支持 ←/→ 选择。Esc 取消并退出向导。Ctrl+C 中断向导，退出码为 130。两者都会保留已保存的步骤。菜单始终用 `>` 标记选中项，不依赖颜色。窗口缩放后按键会按新宽度重绘。
 
 `TERM=dumb`、输出重定向或启动菜单时终端过小，菜单使用原来的编号/文字输入。交互菜单打开后再缩小窗口，会保留当前输入并暂停确认，放大窗口后继续，也可取消。设置向导仍要求标准输入连接终端，不能用管道无人值守执行。这里的快捷键只作用于菜单，密码继续隐藏。
 

@@ -22,8 +22,7 @@ use crate::{Cli, service};
 mod terminal;
 use terminal::{ask_yes, choose};
 
-/// Cancellation is a normal end to the guide, not a failed setup. Completed
-/// steps may already have written settings or changed the system; do not undo them.
+/// Esc dismisses the guide. Ctrl+C also tells the calling shell it was interrupted.
 fn finish(result: anyhow::Result<()>) -> anyhow::Result<()> {
     match result {
         Err(error) if error.is::<terminal::Cancelled>() => {
@@ -34,6 +33,9 @@ fn finish(result: anyhow::Result<()>) -> anyhow::Result<()> {
                     "Setup cancelled. Saved settings and completed steps are kept; unsaved input is discarded. Run setup again to continue."
                 )
             );
+            if error.downcast_ref::<terminal::Cancelled>() == Some(&terminal::Cancelled::Interrupt) {
+                std::process::exit(128 + libc::SIGINT);
+            }
             Ok(())
         }
         other => other,
@@ -118,10 +120,7 @@ async fn setup_inner(cli: &Cli, reconfigure: bool) -> anyhow::Result<()> {
     let pick = choose(ictl_l10n::tr!("要重新设置哪一项？", "What do you want to set up again?"), &items, 0)?;
     let mut env = EnvFile::open(&envfile::path())?;
     match pick {
-        0 => {
-            let _ = std::fs::remove_file(marker());
-            return full_with(cli, true).await;
-        }
+        0 => return full_with(cli, true).await,
         1 => {
             if language(&mut env, true)? {
                 env.save()?;

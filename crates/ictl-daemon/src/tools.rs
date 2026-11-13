@@ -815,27 +815,52 @@ impl Daemon {
     }
 
     async fn lock_screen(&self, g: &mut Inner) -> Result<String, String> {
-        if let Some(w) = self.wda(g) {
-            // 已经锁着就不按：熄屏时再按电源键会把屏幕点亮
-            let locked = matches!(w.locked().await, Ok(true)) || lock_by_power_hid(w).await || {
-                // WDA 锁屏偶尔等 5 秒报 500（手机其实已锁）：确认锁了就不退到 HID（HID 会开屏幕媒体流）
-                match w.lock().await {
-                    Ok(()) => true,
-                    Err(e) => {
-                        tracing::info!(
-                            "{}",
-                            ictl_l10n::log_trf!("WDA 锁屏报错：{e}", "WDA lock returned an error: {e}")
-                        );
-                        w.wda_reports_locked().await.unwrap_or(false)
+        let via_wda = g.dev.lock_via_wda;
+        // Some(way)：用 way 锁上了；None：WDA 不可用或都没锁上，退到 HID
+        let outcome = match self.wda(g) {
+            Some(w) => {
+                // 已经锁着就不按：熄屏时再按电源键会把屏幕点亮
+                if matches!(w.locked().await, Ok(true)) {
+                    return self.locked_now(g);
+                }
+                let mut worked = None;
+                for way in lock_order(via_wda) {
+                    let locked = match way {
+                        LockWay::PowerKey => lock_by_power_hid(w).await,
+                        LockWay::Wda => lock_by_wda(w).await,
+                    };
+                    if locked {
+                        worked = Some(way);
+                        break;
                     }
                 }
-            };
-            if locked {
-                g.dev.last_lock = Some(Instant::now());
-                return Ok(ictl_l10n::tr!("已锁屏", "Locked").into());
+                worked
             }
+            None => None,
+        };
+        if let Some(way) = outcome {
+            let wda = way == LockWay::Wda;
+            if wda != via_wda {
+                self.log.log(if wda {
+                    ictl_l10n::log_tr!(
+                        "这台设备上经 IOHID 短按电源键锁不了屏，之后锁屏先用 WDA 的",
+                        "Pressing the power key via IOHID doesn't lock this device, WDA's lock goes first from now on"
+                    )
+                } else {
+                    ictl_l10n::log_tr!(
+                        "这台设备上 WDA 的锁屏不起作用，之后锁屏先经 IOHID 按电源键",
+                        "WDA's lock doesn't work on this device, the power key via IOHID goes first from now on"
+                    )
+                });
+            }
+            g.dev.lock_via_wda = wda;
+            return self.locked_now(g);
         }
         self.hid_do(g, |h| Box::pin(h.press(Button::Lock))).await?;
+        self.locked_now(g)
+    }
+
+    fn locked_now(&self, g: &mut Inner) -> Result<String, String> {
         g.dev.last_lock = Some(Instant::now());
         Ok(ictl_l10n::tr!("已锁屏", "Locked").into())
     }
@@ -1013,6 +1038,32 @@ async fn press_home(
     ))
 }
 
+/// 经 WDA 锁屏的两种办法
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LockWay {
+    PowerKey,
+    Wda,
+}
+
+/// 先试哪种：默认先经 IOHID 短按电源键（iPhone 18 Pro Max 上 `/wda/lock` 按住 0.5 秒不认，很慢），
+/// 这台设备上记过 `lock_via_wda` 就先用 WDA 的（见 [`crate::core::PerDevice::lock_via_wda`]）。
+/// 先试的那种不灵，另一种照样会试，所以记错了（比如系统升级后）也只是慢一次
+fn lock_order(via_wda: bool) -> [LockWay; 2] {
+    if via_wda { [LockWay::Wda, LockWay::PowerKey] } else { [LockWay::PowerKey, LockWay::Wda] }
+}
+
+/// WDA 的 `/wda/lock`。偶尔等 5 秒报 500（手机其实已锁）：报错时看 WDA 报的锁屏状态，确认锁了就不退到 HID
+/// （HID 会开屏幕媒体流）
+async fn lock_by_wda(w: &mut WdaClient<DeviceTransport>) -> bool {
+    match w.lock().await {
+        Ok(()) => true,
+        Err(e) => {
+            tracing::info!("{}", ictl_l10n::log_trf!("WDA 锁屏报错：{e}", "WDA lock returned an error: {e}"));
+            w.wda_reports_locked().await.unwrap_or(false)
+        }
+    }
+}
+
 /// 经 IOHID 按电源键锁屏，等 WDA 报锁屏，最多 [`LOCK_WAIT`]。锁上了返回 true。
 /// WDA 的 `/wda/lock` 在 iOS 27 以下用 XCTest 的 `pressLockButton`，iPhone 12 mini（iOS 26.4.1）上锁不了屏
 async fn lock_by_power_hid(w: &mut WdaClient<DeviceTransport>) -> bool {
@@ -1032,8 +1083,8 @@ async fn lock_by_power_hid(w: &mut WdaClient<DeviceTransport>) -> bool {
             tracing::info!(
                 "{}",
                 ictl_l10n::log_trf!(
-                    "经 IOHID 按电源键后 {} 秒还没锁屏,改用 WDA 的锁屏",
-                    "Still not locked {} s after pressing the power key via IOHID, using WDA's lock",
+                    "经 IOHID 按电源键后 {} 秒还没锁屏",
+                    "Still not locked {} s after pressing the power key via IOHID",
                     LOCK_WAIT.as_secs()
                 )
             );
@@ -1284,6 +1335,14 @@ async fn verify_typed(w: &mut WdaClient<DeviceTransport>, text: &str) -> Typed {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 默认先短按电源键；记过这台设备上它不灵，就先用 WDA 的。两种都会试
+    #[test]
+    fn lock_order_follows_what_worked_on_this_device() {
+        assert_eq!(lock_order(false), [LockWay::PowerKey, LockWay::Wda]);
+        assert_eq!(lock_order(true), [LockWay::Wda, LockWay::PowerKey]);
+        assert!(!crate::core::PerDevice::default().lock_via_wda, "a new device starts with the power key");
+    }
 
     #[tokio::test]
     async fn missing_hid_session_allows_retry_for_down_only() {

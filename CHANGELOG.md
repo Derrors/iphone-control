@@ -6,6 +6,10 @@ All notable changes to this project are documented here. The format is based on 
 
 ## [Unreleased]
 
+### Changed
+
+- On the control page the picture zooms only with the − and + buttons above it: pinching on a trackpad or touch screen, or Ctrl/⌘ + scroll, no longer zooms it (a drag easily turned into a zoom).
+
 ### Fixed
 
 - AI task summaries on the control page are formatted: bold, lists, inline code and line breaks show as such instead of raw Markdown.

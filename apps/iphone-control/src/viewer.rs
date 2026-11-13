@@ -115,10 +115,7 @@ pub async fn run(socket: &Path, data_dir: &Path, port: u16) -> anyhow::Result<()
     };
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", port)).await?;
     let port = listener.local_addr()?.port();
-    // next to the daemon's socket: a directory only this user can enter
-    let gate = socket.parent().unwrap_or(Path::new("/tmp")).join(format!("viewer-{port}.sock"));
-    let agents = Agents::new(socket, gate.clone())?;
-    agent::GateServer::serve(gate, agents.clone()).await?;
+    let agents = Agents::new(socket)?;
     println!(
         "{}",
         ictl_l10n::trf!(
@@ -247,12 +244,9 @@ async fn handle(mut client: TcpStream, ctx: &Ctx, head: Vec<u8>, req: Head, mut 
         }
         ("GET", p) if p.starts_with("/api/agent/tasks/") && p.ends_with("/events") => {
             let id = &p["/api/agent/tasks/".len()..p.len() - "/events".len()];
-            match ctx.agents.task(id) {
-                Some(t) => events(&mut client, &t).await,
-                None => {
-                    json_reply(&mut client, 404, &json!({"message": ictl_l10n::tr!("没有这个任务", "No such task")}))
-                        .await
-                }
+            match protocol::task_events(&ctx.socket, id).await {
+                Ok(stream) => events(&mut client, stream).await,
+                Err(m) => json_reply(&mut client, 404, &json!({"message": m})).await,
             }
         }
         ("GET", p) if p.starts_with("/api/") => {
@@ -274,6 +268,8 @@ async fn handle(mut client: TcpStream, ctx: &Ctx, head: Vec<u8>, req: Head, mut 
                 "elements" => elements(ctx, &req.query("filter").unwrap_or_default()).await,
                 "alert" => alert(ctx).await,
                 "agent/backends" => Ok(json!({"backends": agent::backends()})),
+                // every task the daemon knows, also those started elsewhere (`iphone-control task run`)
+                "agent/tasks" => protocol::task_list(&ctx.socket).await.map(|t| json!({"tasks": t})),
                 _ => return reply(&mut client, 404, "text/plain", b"not found").await,
             };
             match v {
@@ -408,7 +404,7 @@ async fn post(ctx: &Ctx, name: &str, b: &Value, device: Option<&str>) -> (u16, V
     if name == "agent/tasks" {
         let prompt = b["prompt"].as_str().unwrap_or_default();
         let backend = b["agent"].as_str().unwrap_or("claude");
-        return match ctx.agents.start(prompt, backend) {
+        return match ctx.agents.start(prompt, backend).await {
             Ok(id) => (200, json!({"ok": true, "id": id})),
             Err(m) => conflict(m),
         };
@@ -416,18 +412,14 @@ async fn post(ctx: &Ctx, name: &str, b: &Value, device: Option<&str>) -> (u16, V
     if let Some(rest) = name.strip_prefix("agent/tasks/")
         && let Some((id, action)) = rest.split_once('/')
     {
-        return match ctx.agents.control(id, action, b) {
+        return match ctx.agents.control(id, action, b).await {
             Ok(()) => (200, json!({"ok": true})),
             Err(m) => conflict(m),
         };
     }
+    // while a task runs the daemon refuses switching devices, signing and acting (unless the user took over), and
+    // says why; the page shows that message
     if name == "select" {
-        if ctx.agents.busy() {
-            return conflict(
-                ictl_l10n::tr!("AI 任务执行中，不能切换设备", "An AI task is running, so the device can't be switched")
-                    .into(),
-            );
-        }
         let Some(device) = b["device"].as_str() else { return (400, json!({"ok": false, "message": "bad action"})) };
         let v = run_action(&ctx.socket, &Request::SelectDevice { device: device.to_owned() }, None, SHORT).await;
         // the page follows the device it picked
@@ -443,27 +435,10 @@ async fn post(ctx: &Ctx, name: &str, b: &Value, device: Option<&str>) -> (u16, V
     // not known yet (the daemon wasn't up when this started): no device check rather than one that always fails
     let udid = Some(udid.as_str()).filter(|u| !u.is_empty());
     if name == "sign" {
-        if !ctx.agents.manual_allowed() {
-            return conflict(
-                ictl_l10n::tr!("AI 任务执行中，不能签名安装", "An AI task is running; signing has to wait").into(),
-            );
-        }
         // signing for the page's device: refused if the daemon has moved on to another one
         return (200, run_action(&ctx.socket, &Request::Resign { force: true }, udid, SIGN).await);
     }
     let Some(req) = action(name, b) else { return (400, json!({"ok": false, "message": "bad action"})) };
-    // reading is fine during a task, and so is lifting a finger that was down when it started; acting would compete
-    // with the agent
-    let harmless = matches!(req, Request::WaitFor { .. } | Request::Touch { phase: TouchPhase::Up, .. });
-    if !harmless && !ctx.agents.manual_allowed() {
-        return conflict(
-            ictl_l10n::tr!(
-                "AI 正在操作这台设备。要自己操作，先点「接管」。",
-                "The AI is operating this device. To act yourself, click “Take over” first."
-            )
-            .into(),
-        );
-    }
     if matches!(req, Request::TapElement { .. }) {
         // The daemon resolves the name in a fresh accessibility tree on this device.
         let Some(target) = device.filter(|id| !id.is_empty()) else {
@@ -490,32 +465,25 @@ async fn post(ctx: &Ctx, name: &str, b: &Value, device: Option<&str>) -> (u16, V
     (200, run_action(&ctx.socket, &req, udid, SHORT).await)
 }
 
-/// The task's events so far, then new ones as they come, as server-sent events, until it is done
-async fn events(client: &mut TcpStream, task: &agent::Task) -> anyhow::Result<()> {
+/// The task's events so far, then new ones as they come (from the daemon), as server-sent events, until it is done
+async fn events(client: &mut TcpStream, mut stream: protocol::TaskStream) -> anyhow::Result<()> {
     client
         .write_all(
             b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-store\r\n\
               X-Content-Type-Options: nosniff\r\nConnection: close\r\n\r\n",
         )
         .await?;
-    let (log, mut rx, done) = task.subscribe();
-    for e in &log {
-        client.write_all(sse(e).as_bytes()).await?;
-    }
-    if done {
-        return Ok(());
-    }
     loop {
         tokio::select! {
-            r = rx.recv() => match r {
-                Ok(e) => {
+            e = stream.next() => match e {
+                Some(e) => {
                     client.write_all(sse(&e).as_bytes()).await?;
-                    if e.name == "done" {
+                    if e.event == "done" {
                         return Ok(());
                     }
                 }
-                // fell behind (many screenshots at once): the page reconnects and gets everything again
-                Err(_) => return Ok(()),
+                // the daemon went away (restarting): the page reconnects
+                None => return Ok(()),
             },
             // a comment now and then finds a page that went away
             _ = tokio::time::sleep(Duration::from_secs(15)) => client.write_all(b": ping\n\n").await?,
@@ -523,8 +491,8 @@ async fn events(client: &mut TcpStream, task: &agent::Task) -> anyhow::Result<()
     }
 }
 
-fn sse(e: &agent::Event) -> String {
-    format!("event: {}\ndata: {}\n\n", e.name, e.data)
+fn sse(e: &protocol::TaskEvent) -> String {
+    format!("event: {}\ndata: {}\n\n", e.event, e.data)
 }
 
 async fn json_reply(client: &mut TcpStream, status: u16, v: &Value) -> anyhow::Result<()> {
@@ -971,7 +939,7 @@ mod tests {
 
     fn test_ctx(dir: &Path, socket: &Path) -> Ctx {
         Ctx {
-            agents: Agents::new(socket, dir.join("gate")).unwrap(),
+            agents: Agents::new(socket).unwrap(),
             socket: socket.to_owned(),
             data_dir: dir.into(),
             port: 0,

@@ -16,13 +16,17 @@
 //! loopback `Host` (against DNS rebinding), every action also needs an `Origin` of this very page and a JSON
 //! content type (against other web pages posting to it), and a read whose `Sec-Fetch-Site` says another site
 //! sent it is refused (reading elements unlocks the phone). Other local users can still reach the port, which the
-//! command says when it starts.
+//! command says when it starts. With `--lan` the same port is open to the local network, still without a login
+//! (see [`lan`]): only local-network addresses may connect, and `Host` and `Origin` may also be this machine's
+//! own network names.
 //!
 //! The viewer follows one device, the one controlled when it starts or the one picked on the page: the picture
 //! always comes from it, and every action carries its UDID ([`ictl_daemon::protocol::EXPECT_UDID`]), so the daemon
 //! refuses an action once it controls another device (after `select` elsewhere, or an unplug in automatic mode)
 //! instead of tapping a phone the user isn't looking at. The device handle is looked up again for each stream, so a
 //! replug (new usbmuxd id) doesn't break the picture.
+
+mod lan;
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -48,6 +52,8 @@ const SPRINGBOARD: &str = "com.apple.springboard";
 
 /// What every connection shares
 struct Ctx {
+    /// Who may reach the page: `127.0.0.1` only, or the local network too (`--lan`)
+    access: lan::Access,
     /// The data directory: whether an Apple ID is signed in (signing WDA from the page needs one)
     data_dir: PathBuf,
     /// The page, marked with the viewer's language (the page's default; it can switch)
@@ -96,7 +102,8 @@ impl Ctx {
     }
 }
 
-pub async fn run(socket: &Path, data_dir: &Path, port: u16) -> anyhow::Result<()> {
+/// `lan`: also open the page to the local network (`--lan`); `lan_hosts`: more names it answers to there
+pub async fn run(socket: &Path, data_dir: &Path, port: u16, lan: bool, lan_hosts: &[String]) -> anyhow::Result<()> {
     // only a first guess: the page follows whichever device the daemon controls (see `info`). Not knowing yet is
     // fine: the daemon may still be starting (started together with this at login), and with several devices
     // connected it is the one that picks
@@ -113,7 +120,8 @@ pub async fn run(socket: &Path, data_dir: &Path, port: u16) -> anyhow::Result<()
             String::new()
         }
     };
-    let listener = tokio::net::TcpListener::bind(("127.0.0.1", port)).await?;
+    let access = if lan { lan::Access::lan(lan_hosts) } else { lan::Access::local() };
+    let listener = tokio::net::TcpListener::bind((access.bind_ip(), port)).await?;
     let port = listener.local_addr()?.port();
     let agents = Agents::new(socket)?;
     println!(
@@ -165,14 +173,28 @@ pub async fn run(socket: &Path, data_dir: &Path, port: u16) -> anyhow::Result<()
             ictl_l10n::trf!("AI 任务可用:{}", "AI tasks available with: {}", found.join(", "))
         }
     );
-    println!(
-        "{}",
-        ictl_l10n::tr!(
-            "注意:本机所有用户都能经这个端口看到屏幕、操作手机、让 AI 执行任务,用完就停掉。",
-            "Note: every user on this machine can watch and control the phone and start AI tasks through this port; stop it when you are done."
-        )
-    );
+    if access.is_lan() {
+        for a in access.addresses() {
+            println!("{}", ictl_l10n::trf!("局域网:http://{a}:{port}/", "On the network: http://{a}:{port}/"));
+        }
+        println!(
+            "{}",
+            ictl_l10n::tr!(
+                "注意:已对局域网开放,还没有登录:局域网里任何能连上这台机器的人都能看到屏幕、操作手机、用本机的 Claude Code / Codex 执行任务。只在可信的网络里开,用完就停掉。从局域网地址打开时浏览器不提供 WebCodecs,画面是 MJPEG。",
+                "Note: open to the local network, with no login yet: anyone on the network who can reach this machine can watch and control the phone and run tasks with this machine's Claude Code / Codex. Only on a trusted network, and stop it when you are done. Opened at a network address, browsers don't offer WebCodecs, so the picture is MJPEG."
+            )
+        );
+    } else {
+        println!(
+            "{}",
+            ictl_l10n::tr!(
+                "注意:本机所有用户都能经这个端口看到屏幕、操作手机、让 AI 执行任务,用完就停掉。",
+                "Note: every user on this machine can watch and control the phone and start AI tasks through this port; stop it when you are done."
+            )
+        );
+    }
     let ctx = Arc::new(Ctx {
+        access,
         socket: socket.to_path_buf(),
         data_dir: data_dir.to_path_buf(),
         port,
@@ -189,7 +211,13 @@ pub async fn run(socket: &Path, data_dir: &Path, port: u16) -> anyhow::Result<()
     });
     let slots = Arc::new(tokio::sync::Semaphore::new(crate::MAX_CONNECTIONS));
     loop {
-        let (client, _) = listener.accept().await?;
+        let (client, peer) = listener.accept().await?;
+        // open to the network: only from the local network (a machine reachable from the internet isn't operated
+        // from there)
+        if !lan::peer_allowed(peer.ip()) {
+            tracing::warn!("viewer: refused a connection from {}", peer.ip());
+            continue;
+        }
         // too many open connections (for example many tabs): drop the new one
         let Ok(slot) = slots.clone().try_acquire_owned() else { continue };
         let ctx = ctx.clone();
@@ -225,7 +253,7 @@ async fn serve(mut client: TcpStream, ctx: &Ctx) -> anyhow::Result<()> {
 }
 
 async fn handle(mut client: TcpStream, ctx: &Ctx, head: Vec<u8>, req: Head, mut body: Vec<u8>) -> anyhow::Result<()> {
-    if !crate::host_is_loopback(&head) || (req.path != "/" && !fetch_site_ok(&req)) {
+    if !ctx.access.host_allowed(&head) || (req.path != "/" && !fetch_site_ok(&req)) {
         return reply(&mut client, 403, "text/plain", b"forbidden").await;
     }
     let path = req.path.as_str();
@@ -278,7 +306,7 @@ async fn handle(mut client: TcpStream, ctx: &Ctx, head: Vec<u8>, req: Head, mut 
             }
         }
         ("POST", p) if p.starts_with("/api/") => {
-            if !action_allowed(&req, ctx.port) {
+            if !action_allowed(&req, &ctx.access, ctx.port) {
                 return reply(&mut client, 403, "text/plain", b"forbidden").await;
             }
             let len = req.content_length.unwrap_or(0);
@@ -610,14 +638,12 @@ fn percent_decode(s: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
-/// An action must come from this page: `Origin` is the viewer's own address, and the body is JSON, which a
-/// cross-origin page can't send without a preflight that this server never answers
-fn action_allowed(req: &Head, port: u16) -> bool {
+/// An action must come from this page: `Origin` is the viewer's own address (one of this machine's names with
+/// `--lan`), and the body is JSON, which a cross-origin page can't send without a preflight that this server never
+/// answers
+fn action_allowed(req: &Head, access: &lan::Access, port: u16) -> bool {
     let json = req.content_type.as_deref().is_some_and(|c| c.split(';').next() == Some("application/json"));
-    let origin = req.origin.as_deref().is_some_and(|o| {
-        ["127.0.0.1", "localhost", "[::1]"].iter().any(|h| o.eq_ignore_ascii_case(&format!("http://{h}:{port}")))
-    });
-    json && origin
+    json && req.origin.as_deref().is_some_and(|o| access.origin_allowed(o, port))
 }
 
 /// A read from another site (an `<img>` or `<script>` on some page) is refused: browsers say so in
@@ -947,6 +973,7 @@ mod tests {
 
     fn test_ctx(dir: &Path, socket: &Path) -> Ctx {
         Ctx {
+            access: lan::Access::local(),
             agents: Agents::new(socket).unwrap(),
             socket: socket.to_owned(),
             data_dir: dir.into(),
@@ -1092,15 +1119,20 @@ mod tests {
 
     #[test]
     fn actions_need_own_origin_and_json() {
+        let local = lan::Access::local();
         let ok = "POST /api/tap HTTP/1.1\r\nHost: 127.0.0.1:8200\r\nOrigin: http://127.0.0.1:8200\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n";
-        assert!(action_allowed(&head(ok), 8200));
-        assert!(action_allowed(&head(&ok.replace("http://127.0.0.1:8200", "http://localhost:8200")), 8200));
+        assert!(action_allowed(&head(ok), &local, 8200));
+        assert!(action_allowed(&head(&ok.replace("http://127.0.0.1:8200", "http://localhost:8200")), &local, 8200));
         // another page, another port, no origin, a form post
-        assert!(!action_allowed(&head(&ok.replace("http://127.0.0.1:8200", "http://evil.example")), 8200));
-        assert!(!action_allowed(&head(&ok.replace("http://127.0.0.1:8200", "http://127.0.0.1:3000")), 8200));
-        assert!(!action_allowed(&head(&ok.replace("Origin: http://127.0.0.1:8200\r\n", "")), 8200));
-        assert!(!action_allowed(&head(&ok.replace("application/json", "text/plain")), 8200));
-        assert!(!action_allowed(&head(&ok.replace("Origin: http://127.0.0.1:8200", "Origin: null")), 8200));
+        assert!(!action_allowed(&head(&ok.replace("http://127.0.0.1:8200", "http://evil.example")), &local, 8200));
+        assert!(!action_allowed(&head(&ok.replace("http://127.0.0.1:8200", "http://127.0.0.1:3000")), &local, 8200));
+        assert!(!action_allowed(&head(&ok.replace("Origin: http://127.0.0.1:8200\r\n", "")), &local, 8200));
+        assert!(!action_allowed(&head(&ok.replace("application/json", "text/plain")), &local, 8200));
+        assert!(!action_allowed(&head(&ok.replace("Origin: http://127.0.0.1:8200", "Origin: null")), &local, 8200));
+        // only open to the network with --lan
+        let on_lan = ok.replace("http://127.0.0.1:8200", "http://192.168.10.100:8200");
+        assert!(!action_allowed(&head(&on_lan), &local, 8200));
+        assert!(action_allowed(&head(&on_lan), &lan::Access::with_hosts(["192.168.10.100".into()]), 8200));
     }
 
     #[test]

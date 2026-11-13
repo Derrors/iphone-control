@@ -2265,12 +2265,16 @@ function stopMjpegTurn() {
   M.on = false; cancelAnimationFrame(M.raf); live.style.opacity = '';
   if (!V.on) cv.hidden = true;
 }
+/* 画面流的编号。不用 crypto.randomUUID：它只在安全上下文（HTTPS 或 localhost）里有，从局域网地址（viewer --lan）打开时没有 */
+function newFeedId() {
+  return Array.from(crypto.getRandomValues(new Uint8Array(16)), x => x.toString(16).padStart(2, '0')).join('');
+}
 function connect() {
   stopMjpegTurn();
   cancelGestures(); const epoch = ++feedEpoch;
   clearTimeout(firstFrameTimer); clearTimeout(retryTimer);
   stopVideo(); cv.hidden = true;
-  feedId = crypto.randomUUID();
+  feedId = newFeedId();
   S.stream = 'connecting'; frameWidth = frameHeight = 0;
   applyZoom();
   stageMsg.textContent = tr('正在连接画面…'); delete stageMsg.dataset.note; stageMsg.hidden = false;

@@ -111,6 +111,10 @@ enum Command {
     Viewer {
         #[arg(long, default_value_t = 8200)]
         port: u16,
+        #[arg(long, env = "IPHONE_CONTROL_VIEWER_LAN", help = ictl_l10n::tr!("也对局域网开放（同一个端口、HTTP、还没有登录：局域网里任何人都能操作手机），只接受局域网地址来的连接", "Also open to the local network (same port, HTTP, no login yet: anyone on the network can control the phone); only connections from local-network addresses"))]
+        lan: bool,
+        #[arg(long = "lan-host", value_name = "HOST", help = ictl_l10n::tr!("--lan 时还认可的主机名（可写多次）；本机主机名、<主机名>.local 和各网卡 IP 已自动认可", "With --lan, another host name the page answers to (repeatable); this machine's name, <name>.local and its addresses are already accepted"))]
+        lan_hosts: Vec<String>,
     },
     #[command(about = ictl_l10n::tr!("AI 任务：在任务里运行外部 agent（task run），查看、暂停、接管、停止、确认任务", "AI tasks: run an external agent in a task (task run); list, pause, take over, stop and confirm tasks"))]
     Task {
@@ -284,7 +288,9 @@ async fn run() -> anyhow::Result<()> {
         Command::Devices => print_text(&cli.socket, Request::ListDevices).await,
         Command::Select { device } => print_text(&cli.socket, Request::SelectDevice { device }).await,
         Command::WdaBridge { port } => wda_bridge(&cli.socket, port).await,
-        Command::Viewer { port } => viewer::run(&cli.socket, &cli.data_dir, port).await,
+        Command::Viewer { port, lan, lan_hosts } => {
+            viewer::run(&cli.socket, &cli.data_dir, port, lan, &lan_hosts).await
+        }
         Command::Task { action } => task::run(&cli.socket, action).await,
         #[cfg(feature = "debug-cmds")]
         Command::Debug(args) => debug::run(env_nonempty("IPHONE_UDID").as_deref(), args).await,

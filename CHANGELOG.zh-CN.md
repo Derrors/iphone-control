@@ -10,6 +10,7 @@
 
 - 设置菜单支持方向键选择、Enter 确认和 Esc 取消，保留数字选择；基础终端继续使用逐行提示。
 - `iphone-control completions <shell>` 可生成 Bash、Zsh 和 Fish 补全脚本，不启动守护进程、不访问设备。
+- `iphone-control viewer --lan`（或 `IPHONE_CONTROL_VIEWER_LAN=1`）让控制台也对局域网开放，还是同一个端口。还没有登录：局域网里任何能连上这台机器的人都能操作手机，只在可信的网络里开。只接受局域网地址来的连接，只认本机自己的名字和地址；`--lan-host` 可以再加名字。从局域网地址打开时画面是 MJPEG，因为浏览器只在 localhost 或 HTTPS 上提供 WebCodecs。
 - 控制台上开任务前可以限定 App 范围（Agent 旁边的 App 按钮）：到了别的 App，每一步都先等你确认，和 `task run --app` 一样。任务卡片上显示范围，重新执行时沿用。
 - 任何 agent 平台都能用 AI 任务：`iphone-control task run -- <命令>` 在任务里运行命令，它启动的 `iphone-control mcp` 自动加入任务（控制台能看到每一步，可以暂停、接管、停止、确认）。`task list`、`task events`、`task pause`/`resume`/`takeover`/`handback`/`stop`、`task approve`/`reject` 在命令行里查看和控制任务。
 - 控制台会接上正在进行的任务：页面刷新后，以及在别处开的任务。

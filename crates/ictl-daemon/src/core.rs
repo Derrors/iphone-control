@@ -203,6 +203,8 @@ pub struct CallCtx {
     pub task: Option<String>,
     /// The task's step it belongs to ([`ictl_protocol::TASK_STEP`])
     pub task_step: Option<u64>,
+    /// The process that sent it (the socket's peer), when the system says
+    pub peer: Option<u32>,
 }
 
 /// Logical points measured on this connection. A different id invalidates queued coordinates.
@@ -683,7 +685,7 @@ impl Daemon {
         if let Err(e) = check_request(&req) {
             return Response::error(e);
         }
-        if let Some(r) = self.tasks.handle(&req, ctx.task.as_deref(), &mut ctx.gone).await {
+        if let Some(r) = self.tasks.handle(&req, ctx.task.as_deref(), ctx.peer, &mut ctx.gone).await {
             return r;
         }
         // while a task runs, only it acts on the phone (or the user, after taking over): see `crate::tasks`
@@ -930,6 +932,7 @@ impl Daemon {
             | Request::TaskEvents { .. }
             | Request::TaskList
             | Request::TaskControl { .. }
+            | Request::TaskAgent
             | Request::TaskStep { .. }
             | Request::TaskStepDone { .. }
             | Request::TaskConfirm { .. }
@@ -976,6 +979,7 @@ fn lane(req: &Request) -> Lane {
         | Request::TaskEvents { .. }
         | Request::TaskList
         | Request::TaskControl { .. }
+        | Request::TaskAgent
         | Request::TaskStep { .. }
         | Request::TaskStepDone { .. }
         | Request::TaskConfirm { .. }

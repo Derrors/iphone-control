@@ -76,6 +76,8 @@ pub async fn run(socket: &Path, action: TaskAction) -> anyhow::Result<()> {
         action: action.into(),
         step,
         approve,
+        by: Some("cli".into()),
+        for_pid: None,
     };
     let req = match action {
         TaskAction::Run { title, owner, apps, command } => {
@@ -104,7 +106,9 @@ pub async fn run(socket: &Path, action: TaskAction) -> anyhow::Result<()> {
         TaskAction::Approve { id, step } => control(id, "confirm", step, true),
         TaskAction::Reject { id, step } => control(id, "confirm", step, false),
     };
-    expect_ok(ask(socket, &req).await)
+    // inside a task (its agent's shell) the token goes along, and the daemon refuses: only the user controls a task
+    let token = std::env::var(protocol::TASK_TOKEN_ENV).ok().filter(|t| !t.is_empty());
+    expect_ok(protocol::as_task(token, None, ask(socket, &req)).await)
 }
 
 async fn ask(socket: &Path, req: &Request) -> anyhow::Result<Response> {
@@ -154,6 +158,8 @@ async fn run_command(
     if !apps.is_empty() {
         eprintln!("{}", ictl_l10n::trf!("只在这些 App 里操作：{}", "Limited to these apps: {}", apps.join(", ")));
     }
+    // the command and what it starts may not control the task, only stop it; said before it starts
+    let _ = protocol::as_task(Some(opened.token.clone()), None, ask(socket, &Request::TaskAgent)).await;
     let spawned = tokio::process::Command::new(&command[0])
         .args(&command[1..])
         .env(protocol::TASK_TOKEN_ENV, &opened.token)
@@ -214,7 +220,14 @@ async fn run_command(
 
 /// Ctrl-C or SIGTERM: the user stops the task (the lease stream then reports it, and the command is stopped)
 async fn stop_here(socket: &Path, id: &str, pid: Option<libc::pid_t>) {
-    let req = Request::TaskControl { id: id.into(), action: "stop".into(), step: None, approve: false };
+    let req = Request::TaskControl {
+        id: id.into(),
+        action: "stop".into(),
+        step: None,
+        approve: false,
+        by: Some("owner".into()),
+        for_pid: None,
+    };
     if !matches!(ask(socket, &req).await, Ok(Response::Text { .. })) {
         stop_group(pid);
     }

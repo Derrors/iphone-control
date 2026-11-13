@@ -512,7 +512,8 @@ impl Tasks {
             title: title.chars().take(4000).collect(),
             owner: owner.trim().chars().take(80).collect(),
             udid: udid.to_owned(),
-            started: now_ms(),
+            // after every task before it, even within the same millisecond: logs are ordered by it on the next start
+            started: now_ms().max(list.iter().map(|t| t.started + 1).max().unwrap_or(0)),
             st: Mutex::new(TaskState {
                 status: Status::Running,
                 log: Vec::new(),
@@ -1045,6 +1046,27 @@ mod tests {
         let ts = Tasks::load(Some(dir.clone()));
         let (log, _, _) = ts.get(&running.id).unwrap().subscribe();
         assert_eq!(log.iter().filter(|e| e.event == "done").count(), 1);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// Tasks opened within the same millisecond (a fast machine, a test) still come back in the order they were opened
+    #[test]
+    fn tasks_keep_their_order_across_a_restart_even_within_a_millisecond() {
+        let dir = std::env::temp_dir().join(format!("ictl-tasks-order-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let ts = Tasks::load(Some(dir.clone()));
+        let ids: Vec<String> = (0..8)
+            .map(|_| {
+                let t = open(&ts);
+                t.end(End::Completed, "");
+                t.id.clone()
+            })
+            .collect();
+        let started: Vec<u64> = ts.infos().iter().map(|t| t.started).collect();
+        assert!(started.windows(2).all(|w| w[0] < w[1]), "{started:?}");
+        drop(ts);
+        let again: Vec<String> = Tasks::load(Some(dir.clone())).infos().into_iter().map(|t| t.id).collect();
+        assert_eq!(again, ids);
         std::fs::remove_dir_all(dir).unwrap();
     }
 

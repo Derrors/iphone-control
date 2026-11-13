@@ -135,7 +135,8 @@ Running → Waiting（等确认）→ Running
 | 四 | 局域网访问控制台（7.2）、控制台后台服务、HTTPS（7.3） | 已完成（2026-11-13） |
 | 四 | HTTP MCP（7.4） | 已完成（2026-11-13） |
 | 四 | 登录（7.5，一个令牌） | 已完成（2026-11-13） |
-| 四 | 只读/可操作两种令牌、跨主机开任务（HTTP 控制面）、多设备租约 | 等需要时 |
+| 四 | 有名字的令牌和只读令牌、跨主机开任务（7.6） | 已完成（2026-11-13） |
+| 四 | 远端 stdio MCP 转接、多设备租约 | 等需要时 |
 
 ## 5. 阶段一的具体设计
 
@@ -297,4 +298,24 @@ Running → Waiting（等确认）→ Running
 - **程序**：`Authorization: Bearer <令牌>`。`/mcp` 的 401 带 `WWW-Authenticate: Bearer`（RFC 6750）。
 - **限速**：按全局算，不按地址（经反向代理时地址都是 `127.0.0.1`）。一分钟里错 20 次后，这一分钟内不再校验令牌，一律 429；已经登录的会话不受影响。令牌是 256 位随机数，限速只是多一层保险。
 - **比较**：令牌和 cookie 都用与内容无关的时间比较。
-- **还没有的**：只读和可操作两种令牌、事件里记下是哪个人（现在 `by` 只到 `viewer` / `viewer <IP>` / `cli`）、页面上的退出登录。
+- **还没有的**：页面上的退出登录。只读令牌和记下是哪个令牌见 7.6。
+
+### 7.6 只读令牌与跨主机开任务（2026-11-13）
+
+7.1 第 5、6 条，以及 2.5「真正的控制口令」在跨主机时的落地。
+
+**有名字的令牌**
+
+- 令牌改存 `<数据目录>/viewer-tokens.json`（0600），每个有名字（字母、数字、`-_.`，最多 40 个字）和权限：`operate` 什么都能做，`view` 只能看。第一次启动时把原来的 `viewer-token` 变成 `owner`（同一个令牌，会话 cookie 也不变），再删掉旧文件。
+- `viewer token` / `--new` 仍然是 `owner`；`viewer token add <名字> [--read-only]`、`list`（不显示令牌本身）、`show <名字> [--new]`、`remove <名字>`（最后一个能操作的令牌不能删）。
+- 控制台每次校验前看文件的修改时间，变了就重读：增删、换令牌马上生效，不用重启；被删或被换掉的令牌，它的会话随之失效。
+- 每个令牌的会话 cookie 值不同（各自的 HMAC），所以知道是谁；页面上的控制记成 `viewer:<名字>`（局域网来的再带 IP）。
+- **只读**：任何 `GET`（`/mcp` 除外）和 `POST /api/video/ack`（报告画面读到哪里）放行，其余一律 403。`/api/info` 带上 `login: {name, role}`，页面据此隐藏输入框、底栏按键和确认按钮，`act()` 也直接拦下。读元素、查系统弹窗会顺带自动解锁手机，算「看」，只读也能用。
+- **Origin**：带会话 cookie 的写请求（浏览器）照旧要 `Origin` 是控制台自己；用 `Authorization: Bearer` 或任务口令的（程序）可以不带 `Origin`，网页没法让浏览器带上这两种请求头。
+
+**跨主机开任务**
+
+- `POST /api/agent/tasks/open`（能操作的令牌，`{title, owner?, apps?}`）：控制台替平台在守护进程的 socket 上 `task_open`，把 `{id, token}` 作为第一条 `opened` 事件发回，之后转发任务事件。这个 HTTP 响应就是租约：客户端断开，控制台丢掉 socket 上的租约，任务记为 abandoned。和本机一样不用心跳；每 15 秒一条注释防代理掐断空闲连接。控制台重启时这些任务也会中断。
+- **执行和控制分开**：平台留着登录令牌（控制方：`/api/agent/tasks/<id>/<动作>`），只把任务口令交给 agent（执行方）。`/mcp` 和 `POST /api/agent/tasks/finish` 认进行中任务的口令（请求头 `Iphone-Control-Task-Token`，控制台用新的守护进程请求 `task_check` 核对），别的路径不认。所以远端 agent 能为任务操作手机、结束任务，碰不到暂停、继续、接管、确认。这是 5.6 的进程检查在跨主机时做不到的部分；错的任务口令和错的登录令牌一起计入限速。
+- `task run --url <控制台> [--ca <证书>]`：登录令牌从 `IPHONE_CONTROL_VIEWER_TOKEN` 读，**不传给命令**（启动前从环境里去掉）；命令拿到 `IPHONE_CONTROL_TASK_TOKEN`、`IPHONE_CONTROL_TASK_ID`、`IPHONE_CONTROL_URL`、`IPHONE_CONTROL_MCP_URL`（和 `IPHONE_CONTROL_CA`）。命令里的 `task finish` 看到 `IPHONE_CONTROL_URL` 就经控制台结束任务。其余行为（Ctrl-C 停止、命令结束任务结束、在别处停止时停掉命令、`task finish` 后给 5 秒退出）和本机一样。
+- **局限**：stdio 方式的 MCP 客户端在远端还用不了（要有一个 stdio 到 HTTP 的转接，比如以后的 `iphone-control mcp --url`）；同一个控制台上的令牌都是全权或只读，还没有「只能开任务」这类更细的权限。

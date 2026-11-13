@@ -502,6 +502,8 @@ pub const TASK: &str = "task";
 pub const TASK_STEP: &str = "task_step";
 /// The environment variable that hands a task's token to `iphone-control mcp` (and anything else using this crate)
 pub const TASK_TOKEN_ENV: &str = "IPHONE_CONTROL_TASK_TOKEN";
+/// The HTTP header that does the same for MCP over HTTP (the viewer's `/mcp`), per request
+pub const TASK_TOKEN_HEADER: &str = "iphone-control-task-token";
 
 static PROCESS_TASK: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 
@@ -525,6 +527,11 @@ pub fn process_task() -> Option<&'static str> {
 pub async fn as_task<F: std::future::Future>(token: Option<String>, step: Option<u64>, f: F) -> F::Output {
     let token = token.or_else(|| current_task().0);
     CALL_TASK.scope((token, step), f).await
+}
+
+/// Whether the requests sent from here belong to a task ([`as_task`] or [`join_task`])
+pub fn in_task() -> bool {
+    current_task().0.is_some()
 }
 
 fn current_task() -> (Option<String>, Option<u64>) {

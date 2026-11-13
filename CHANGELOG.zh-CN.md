@@ -8,6 +8,7 @@
 
 ### 新增
 
+- MCP over HTTP：控制台同一个端口上的 `/mcp`（Streamable HTTP）提供和 `iphone-control mcp` 一样的工具，只能填 URL 的客户端、局域网里另一台电脑上的 agent（`--lan`，走 HTTPS）都能接入，例如 `claude mcp add --transport http iphone http://127.0.0.1:8200/mcp`。任务里的 agent 在请求头 `Iphone-Control-Task-Token` 里带上任务口令。和控制台一样没有登录，`--mcp off`（`IPHONE_CONTROL_VIEWER_MCP=off`）关掉。
 - 控制台对局域网开放（`--lan`）时改用 HTTPS，还是同一个端口：局域网里打开时画面也能用 H.264 或手机自己的 HEVC，不再退回 MJPEG，传输也加了密。默认用本机生成的自签证书（存在数据目录的 `viewer-tls/`，一直沿用），浏览器第一次打开会提示不受信任，核对启动时或 `service status` 显示的 SHA-256 指纹后继续；也可以用 `--tls-cert`/`--tls-key`（`IPHONE_CONTROL_VIEWER_TLS_CERT`/`_KEY`）换成自己的证书。局域网来的 `http://` 跳转到 `https://`，本机的 `http://127.0.0.1` 照旧。`--tls off`（`IPHONE_CONTROL_VIEWER_TLS=off`）恢复成 HTTP。这不是登录：局域网里能连上的人照样能操作手机。
 - `iphone-control service viewer install` 把控制台装成登录后自动启动的后台服务（还有 `uninstall`、`start`、`stop`、`restart`）。端口和是否对局域网开放读设置文件（新增 `IPHONE_CONTROL_VIEWER_PORT`；`IPHONE_CONTROL_VIEWER_LAN`；新增 `IPHONE_CONTROL_VIEWER_LAN_HOSTS`），并记下安装时终端的 `PATH` 以找到 `claude` 和 `codex`。升级时先停下它、升级完再启动；有 AI 任务在跑时自动升级会推迟。
 - AI 任务的 Agent 不能再自己暂停、继续、接管、交还或确认，越界确认和 `iphone_confirm` 只能由人回答。带任务口令（`IPHONE_CONTROL_TASK_TOKEN`）的控制请求会被拒绝；控制台和 `task run` 启动的 Agent，连同它再启动的进程，也会被拒绝，即使去掉了口令，或者调用控制台的接口。在 macOS 上，调用控制台接口的这条路还查不出是哪个进程。停止任务不受限制。任务记录里会写下谁做了控制（控制台、命令行、任务的发起方）。

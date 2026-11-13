@@ -122,6 +122,8 @@ enum Command {
         tls_cert: Option<PathBuf>,
         #[arg(long = "tls-key", value_name = "PEM", env = "IPHONE_CONTROL_VIEWER_TLS_KEY", requires = "tls_cert", help = ictl_l10n::tr!("--tls-cert 的私钥（PEM）", "The private key of --tls-cert (PEM)"))]
         tls_key: Option<PathBuf>,
+        #[arg(long, env = "IPHONE_CONTROL_VIEWER_MCP", value_name = "on|off", default_value = "on", action = clap::ArgAction::Set, value_parser = clap::builder::BoolishValueParser::new(), help = ictl_l10n::tr!("同一个端口上的 MCP（HTTP）：/mcp，本机和（--lan 时）局域网的客户端用 URL 接入；off 关掉", "MCP over HTTP on the same port: /mcp, for clients on this machine and (with --lan) the local network that connect by URL; off turns it off"))]
+        mcp: bool,
     },
     #[command(about = ictl_l10n::tr!("AI 任务：在任务里运行外部 agent（task run），查看、暂停、接管、停止、确认任务", "AI tasks: run an external agent in a task (task run); list, pause, take over, stop and confirm tasks"))]
     Task {
@@ -311,9 +313,9 @@ async fn run() -> anyhow::Result<()> {
         Command::Devices => print_text(&cli.socket, Request::ListDevices).await,
         Command::Select { device } => print_text(&cli.socket, Request::SelectDevice { device }).await,
         Command::WdaBridge { port } => wda_bridge(&cli.socket, port).await,
-        Command::Viewer { port, lan, lan_hosts, tls, tls_cert, tls_key } => {
+        Command::Viewer { port, lan, lan_hosts, tls, tls_cert, tls_key, mcp } => {
             let tls = viewer::tls::Setting { mode: tls, cert: tls_cert, key: tls_key };
-            viewer::run(&cli.socket, &cli.data_dir, port, lan, &lan_hosts, &tls).await
+            viewer::run(&cli.socket, &cli.data_dir, port, lan, &lan_hosts, &tls, mcp).await
         }
         Command::Task { action } => task::run(&cli.socket, action).await,
         #[cfg(feature = "debug-cmds")]

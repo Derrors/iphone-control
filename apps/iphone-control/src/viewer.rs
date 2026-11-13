@@ -27,6 +27,7 @@
 //! replug (new usbmuxd id) doesn't break the picture.
 
 mod lan;
+mod mcp;
 mod peer;
 pub mod tls;
 
@@ -77,6 +78,8 @@ struct Ctx {
     acks: Arc<crate::video::Acks>,
     /// HTTPS on the same port (`--lan`); plain HTTP from the network is then sent there
     tls: Option<Arc<tls::Tls>>,
+    /// MCP over HTTP at `/mcp` (`--mcp`, on by default)
+    mcp: Option<ictl_mcp::HttpService>,
 }
 
 /// A picture handler can be cancelled at any await, including while opening its source.
@@ -107,7 +110,7 @@ impl Ctx {
 }
 
 /// `lan`: also open the page to the local network (`--lan`); `lan_hosts`: more names it answers to there; `tls`:
-/// whether and with which certificate it speaks HTTPS
+/// whether and with which certificate it speaks HTTPS; `mcp`: MCP over HTTP at `/mcp`
 pub async fn run(
     socket: &Path,
     data_dir: &Path,
@@ -115,6 +118,7 @@ pub async fn run(
     lan: bool,
     lan_hosts: &[String],
     tls: &tls::Setting,
+    mcp: bool,
 ) -> anyhow::Result<()> {
     // only a first guess: the page follows whichever device the daemon controls (see `info`). Not knowing yet is
     // fine: the daemon may still be starting (started together with this at login), and with several devices
@@ -213,9 +217,21 @@ pub async fn run(
             );
         }
     }
+    if mcp {
+        println!(
+            "{}",
+            ictl_l10n::trf!(
+                "MCP(HTTP):http://127.0.0.1:{port}/mcp;任务里的 agent 在请求头 Iphone-Control-Task-Token 里带上任务口令",
+                "MCP (HTTP): http://127.0.0.1:{port}/mcp; a task's agent sends the task's token in the Iphone-Control-Task-Token header"
+            )
+        );
+    }
     if access.is_lan() {
         for a in access.addresses() {
             println!("{}", ictl_l10n::trf!("局域网:{scheme}://{a}:{port}/", "On the network: {scheme}://{a}:{port}/"));
+            if mcp {
+                println!("{}", ictl_l10n::trf!("  MCP:{scheme}://{a}:{port}/mcp", "  MCP: {scheme}://{a}:{port}/mcp"));
+            }
         }
         if tls.is_some() {
             println!(
@@ -259,6 +275,7 @@ pub async fn run(
         video,
         acks: Arc::default(),
         tls,
+        mcp: mcp.then(|| ictl_mcp::http_service(socket.to_path_buf())),
     });
     let slots = Arc::new(tokio::sync::Semaphore::new(crate::MAX_CONNECTIONS));
     loop {
@@ -376,6 +393,22 @@ async fn handle(mut client: Conn, ctx: &Ctx, head: Vec<u8>, req: Head, mut body:
                 Err(m) => json_reply(&mut client, 502, &json!({"message": m})).await,
             }
         }
+        ("GET" | "POST" | "DELETE", "/mcp") if ctx.mcp.is_some() => {
+            // a browser says where it comes from: only the page itself. Other clients send no Origin
+            if req.origin.as_deref().is_some_and(|o| !ctx.access.origin_allowed(o, ctx.port)) {
+                return reply(&mut client, 403, "text/plain", b"forbidden").await;
+            }
+            if req.method == "POST" && req.content_length.is_none() {
+                return reply(&mut client, 411, "text/plain", b"length required").await;
+            }
+            let len = req.content_length.unwrap_or(0);
+            if len > mcp::MAX_BODY {
+                return reply(&mut client, 413, "text/plain", b"too large").await;
+            }
+            read_body(&mut client, &mut body, len).await?;
+            let svc = ctx.mcp.as_ref().expect("checked above");
+            mcp::serve(svc, &mut client, &head, body).await
+        }
         ("POST", p) if p.starts_with("/api/") => {
             if !action_allowed(&req, &ctx.access, ctx.port) {
                 return reply(&mut client, 403, "text/plain", b"forbidden").await;
@@ -384,15 +417,7 @@ async fn handle(mut client: Conn, ctx: &Ctx, head: Vec<u8>, req: Head, mut body:
             if len > MAX_BODY {
                 return reply(&mut client, 413, "text/plain", b"too large").await;
             }
-            while body.len() < len {
-                let mut buf = [0u8; 4096];
-                let n = tokio::time::timeout(crate::READ_TIMEOUT, client.read(&mut buf)).await??;
-                if n == 0 {
-                    bail!("body cut off");
-                }
-                body.extend_from_slice(&buf[..n]);
-            }
-            body.truncate(len);
+            read_body(&mut client, &mut body, len).await?;
             let Ok(b) = serde_json::from_slice::<Value>(&body) else {
                 return json_reply(&mut client, 400, &json!({"ok": false, "message": "bad request"})).await;
             };
@@ -629,6 +654,20 @@ fn sse(e: &protocol::TaskEvent) -> String {
     format!("event: {}\ndata: {}\n\n", e.event, e.data)
 }
 
+/// The rest of a request body: `body` holds what came with the head; `len` bytes in all
+async fn read_body(client: &mut Conn, body: &mut Vec<u8>, len: usize) -> anyhow::Result<()> {
+    while body.len() < len {
+        let mut buf = [0u8; 4096];
+        let n = tokio::time::timeout(crate::READ_TIMEOUT, client.read(&mut buf)).await??;
+        if n == 0 {
+            bail!("body cut off");
+        }
+        body.extend_from_slice(&buf[..n]);
+    }
+    body.truncate(len);
+    Ok(())
+}
+
 async fn json_reply(client: &mut Conn, status: u16, v: &Value) -> anyhow::Result<()> {
     reply(client, status, "application/json", v.to_string().as_bytes()).await
 }
@@ -641,6 +680,7 @@ async fn reply(client: &mut Conn, status: u16, kind: &str, body: &[u8]) -> anyho
         403 => "Forbidden",
         404 => "Not Found",
         409 => "Conflict",
+        411 => "Length Required",
         413 => "Payload Too Large",
         _ => "Bad Gateway",
     };
@@ -1107,6 +1147,7 @@ mod tests {
             acks: Arc::default(),
             feeds: Mutex::default(),
             tls: None,
+            mcp: None,
         }
     }
 

@@ -393,6 +393,10 @@ async def scope(stack):
         await cli("approve" if approve else "reject", lease.id)
         err, text, dt = await asyncio.wait_for(doing, 60)
         check(c, f"…{'approved: done' if approve else 'rejected: refused, the task goes on'} ({dt:.1f}s)", err != approve, text)
+        if not approve:
+            # the tool call the user kept out of scope shows as rejected on the page, not as failed
+            done = [e for e in lease.of("step") if "ms" in e and e.get("status") in ("rejected", "error")]
+            check(c, "…and its step is shown as rejected, not failed", bool(done) and done[-1]["status"] == "rejected", json.dumps(done[-1:], ensure_ascii=False))
         return shown
 
     shown = await outside("iphone_launch_app", {"app": "时钟"}, False)

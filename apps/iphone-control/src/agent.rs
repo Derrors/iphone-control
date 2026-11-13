@@ -104,7 +104,7 @@ impl Agents {
                 backend.id()
             ));
         };
-        let (opened, lease) = protocol::open_task(&self.socket, prompt, backend.id()).await?;
+        let (opened, lease) = protocol::open_task(&self.socket, prompt, backend.id(), &[]).await?;
         let id = opened.id.clone();
         let me = self.clone();
         let prompt = prompt.to_owned();

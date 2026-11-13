@@ -224,8 +224,9 @@ async fn task_stream(
         w.write_all(line.as_bytes()).await.is_ok()
     }
     let found = match req {
-        protocol::Request::TaskOpen { title, owner } => {
-            daemon.tasks.open(&title, &owner, daemon.controlled_udid().as_deref()).map(|t| {
+        protocol::Request::TaskOpen { title, owner, apps } => match daemon.resolve_scope(&apps).await {
+            Err(m) => Err(m),
+            Ok(apps) => daemon.tasks.open(&title, &owner, daemon.controlled_udid().as_deref(), apps).map(|t| {
                 daemon.log.log(&ictl_l10n::log_trf!(
                     "开始任务 {}（{owner}）：{title}",
                     "Task {} started ({owner}): {title}",
@@ -233,8 +234,8 @@ async fn task_stream(
                 ));
                 let opened = protocol::TaskOpened { id: t.id.clone(), token: tasks::Tasks::token_of(&t).to_owned() };
                 (t, Some(opened))
-            })
-        }
+            }),
+        },
         protocol::Request::TaskEvents { id } => daemon
             .tasks
             .get(&id)
@@ -319,9 +320,9 @@ mod tests {
                         tokio::task::spawn_local(serve_conn(daemon.clone(), s));
                     }
                 });
-                let (opened, mut events) = protocol::open_task(&socket, "看看设置", "test").await.unwrap();
+                let (opened, mut events) = protocol::open_task(&socket, "看看设置", "test", &[]).await.unwrap();
                 assert_eq!(events.next().await.unwrap().event, "task");
-                assert!(protocol::open_task(&socket, "又一个", "test").await.is_err(), "one at a time");
+                assert!(protocol::open_task(&socket, "又一个", "test", &[]).await.is_err(), "one at a time");
 
                 let tap = Request::Tap { x: 1.0, y: 2.0 };
                 let r = protocol::call(&socket, &tap, None).await.unwrap();
@@ -349,6 +350,19 @@ mod tests {
                 assert_eq!(list.last().unwrap().state, "abandoned");
                 let r = protocol::call(&socket, &tap, None).await.unwrap();
                 assert!(matches!(&r, Response::Error { message, .. } if !message.contains(&opened.id)), "free again");
+
+                // a scope is resolved when the task opens: bundle IDs as they are, names need the phone's app list
+                // (the tap above published a snapshot without the pretend device)
+                d.fake_controlled("00008150-000A");
+                let prefs = vec!["com.apple.Preferences".to_owned()];
+                let (scoped, _lease) = protocol::open_task(&socket, "改设置", "test", &prefs).await.unwrap();
+                let list = protocol::task_list(&socket).await.unwrap();
+                let info = list.iter().find(|t| t.id == scoped.id).unwrap();
+                assert_eq!(info.apps, prefs);
+                drop(_lease);
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                let named = vec!["没有这个 App".to_owned()];
+                assert!(protocol::open_task(&socket, "改设置", "test", &named).await.is_err());
                 std::fs::remove_dir_all(dir).unwrap();
             })
             .await;

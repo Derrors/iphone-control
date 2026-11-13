@@ -23,6 +23,8 @@ pub enum TaskAction {
         title: Option<String>,
         #[arg(long, default_value = "external", help = ictl_l10n::tr!("谁在执行，显示在控制台上", "Who runs it, shown on the control page"))]
         owner: String,
+        #[arg(long = "app", value_name = "APP", help = ictl_l10n::tr!("任务只在这些 App 里操作（App 名或 Bundle ID，可以写多次）；到了别的 App 每一步都先等你确认。不写就不限制", "Limit the task to these apps (name or bundle ID, repeatable); in any other app each step waits for you first. No limit if not given"))]
+        apps: Vec<String>,
         #[arg(required = true, trailing_var_arg = true, allow_hyphen_values = true)]
         command: Vec<String>,
     },
@@ -76,7 +78,9 @@ pub async fn run(socket: &Path, action: TaskAction) -> anyhow::Result<()> {
         approve,
     };
     let req = match action {
-        TaskAction::Run { title, owner, command } => return run_command(socket, title, &owner, &command).await,
+        TaskAction::Run { title, owner, apps, command } => {
+            return run_command(socket, title, &owner, &apps, &command).await;
+        }
         TaskAction::List { json } => return list(socket, json).await,
         TaskAction::Events { id } => {
             let mut s = protocol::task_events(socket, &id).await.map_err(anyhow::Error::msg)?;
@@ -137,10 +141,19 @@ async fn list(socket: &Path, json: bool) -> anyhow::Result<()> {
 }
 
 /// `task run`: the task lives as long as the command
-async fn run_command(socket: &Path, title: Option<String>, owner: &str, command: &[String]) -> anyhow::Result<()> {
+async fn run_command(
+    socket: &Path,
+    title: Option<String>,
+    owner: &str,
+    apps: &[String],
+    command: &[String],
+) -> anyhow::Result<()> {
     let title = title.unwrap_or_else(|| command.join(" "));
-    let (opened, mut lease) = protocol::open_task(socket, &title, owner).await.map_err(anyhow::Error::msg)?;
+    let (opened, mut lease) = protocol::open_task(socket, &title, owner, apps).await.map_err(anyhow::Error::msg)?;
     eprintln!("{}", ictl_l10n::trf!("任务 {} 已开始", "Task {} started", opened.id));
+    if !apps.is_empty() {
+        eprintln!("{}", ictl_l10n::trf!("只在这些 App 里操作：{}", "Limited to these apps: {}", apps.join(", ")));
+    }
     let spawned = tokio::process::Command::new(&command[0])
         .args(&command[1..])
         .env(protocol::TASK_TOKEN_ENV, &opened.token)

@@ -36,6 +36,7 @@ All notable changes to this project are documented here. The format is based on 
 
 ### Fixed
 
+- With several devices, every device's screen size is remembered: only the last one was, so after switching to another device and back, until WDA came up (say, stuck at the "Enable UI Automation" passcode prompt) the iOS 27 HID fallback didn't know the size, and screenshots, keys and taps failed with "the screen size is unknown".
 - Notification titles name the device: they always said "iPhone", also when an iPad needed its passcode, went offline or failed to re-sign, and with several devices you couldn't tell which. On an iPad the prompt is quoted as iOS shows it there ("Enter iPad passcode for XCTest"). `notify-test` samples use the controlled device.
 - Checking a new version during an update (running its `--version`) could fail now and then with "Text file busy": another thread started a process while the new program was still open for writing. It now waits a moment and tries again.
 - `task run`: a command that ended its task with `task finish` is no longer stopped on its way out with exit code 1. It now has 5 seconds to exit with its own code; if it is stopped after that, the exit code is 0 when the task completed.

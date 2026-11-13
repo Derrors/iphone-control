@@ -1403,8 +1403,7 @@ fn parse_element(line: &str) -> Option<Value> {
 /// The recorded screen size, only if it belongs to `udid` (a size recorded by an older version, without
 /// a device, is used as is, like the daemon does)
 fn screen_of(p: &ictl_daemon::core::Persisted, udid: &str) -> Option<ictl_device::ScreenSize> {
-    let same = p.screen_udid.as_deref().is_none_or(|u| u.eq_ignore_ascii_case(udid));
-    p.screen.filter(|_| same).map(|s| s.portrait())
+    p.screen_for(Some(udid)).map(|s| s.portrait())
 }
 
 #[cfg(test)]
@@ -1917,6 +1916,32 @@ mod tests {
         assert!(screen_of(&p, "BBB").is_none(), "another device's size would put taps in the wrong place");
         p.screen_udid = None;
         assert!(screen_of(&p, "BBB").is_some(), "older state without a device");
+    }
+
+    /// Switching to another device and back: the first one's size is still known (the HID fallback needs it while
+    /// its WDA is down)
+    #[test]
+    fn every_device_keeps_its_screen_size() {
+        let (phone, pad) = (
+            ictl_device::ScreenSize { width: 430.0, height: 932.0 },
+            ictl_device::ScreenSize { width: 768.0, height: 1024.0 },
+        );
+        let mut p = ictl_daemon::core::Persisted::default();
+        assert!(p.record_screen("PHONE", phone));
+        assert!(!p.record_screen("PHONE", phone), "nothing new: not saved again");
+        assert!(p.record_screen("PAD", pad));
+        assert_eq!(p.screen_for(Some("phone")), Some(phone), "after the switch, the phone's own");
+        assert_eq!(p.screen_for(Some("PAD")), Some(pad));
+        assert_eq!(p.screen_udid.as_deref(), Some("PAD"), "the last one stays where older versions look");
+        assert_eq!(p.screen_for(Some("OTHER")), None);
+        assert_eq!(p.screen_for(None), None);
+        // state.json from 0.2.3 (no `screens`) still reads, and an older version reads ours
+        let old: ictl_daemon::core::Persisted =
+            serde_json::from_str(r#"{"screen":{"width":430.0,"height":932.0},"screen_udid":"PHONE"}"#).unwrap();
+        assert_eq!(old.screen_for(Some("PHONE")), Some(phone));
+        let json = serde_json::to_value(&p).unwrap();
+        assert_eq!(json["screen_udid"], "PAD");
+        assert_eq!(json["screens"]["PHONE"]["width"], 430.0);
     }
 
     #[test]

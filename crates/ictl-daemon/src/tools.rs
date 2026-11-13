@@ -68,15 +68,9 @@ impl Daemon {
         {
             return Ok(s);
         }
-        // 记下的尺寸是别的设备的就不用（旧版本没记是哪台，照用）
-        let same = match (&g.persisted.screen_udid, &g.device) {
-            (Some(u), Some(d)) => *u == d.udid,
-            (Some(_), None) => false,
-            (None, _) => true,
-        };
+        // 这台设备记下的尺寸（别的设备的不用；旧版本没记是哪台，照用）
         g.persisted
-            .screen
-            .filter(|_| same)
+            .screen_for(g.device.as_ref().map(|d| d.udid.as_str()))
             .or(self.cfg.screen_fallback)
             .ok_or_else(|| ictl_l10n::tr!("WDA 不可用,也不知道屏幕尺寸;等 WDA 起来一次,或在 ~/.config/iphone-control/env 里设 SCREEN_W/SCREEN_H", "WDA is unavailable and the screen size is unknown; wait for WDA to start once, or set SCREEN_W/SCREEN_H in ~/.config/iphone-control/env").into())
     }

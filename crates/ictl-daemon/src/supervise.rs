@@ -184,12 +184,11 @@ impl Daemon {
             g.dev.last_rotation = Some((Instant::now(), r));
         }
         // Other clients use the last known size for HID even on WDA versions without /rotation.
-        if let (Some(size), Some(device)) = (size, &g.device)
-            && (g.persisted.screen != Some(size) || g.persisted.screen_udid.as_deref() != Some(&device.udid))
-        {
-            g.persisted.screen = Some(size);
-            g.persisted.screen_udid = Some(device.udid.clone());
-            g.persisted.save(&self.cfg.state_file());
+        if let (Some(size), Some(device)) = (size, &g.device) {
+            let udid = device.udid.clone();
+            if g.persisted.record_screen(&udid, size) {
+                g.persisted.save(&self.cfg.state_file());
+            }
         }
         let sample = size.zip(rotation);
         if sample.is_none()

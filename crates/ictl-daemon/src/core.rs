@@ -47,8 +47,12 @@ pub struct Persisted {
     pub profile_expires: Option<u64>,
     /// 设备竖放时的屏幕尺寸（WDA 不可用时 HID 换算坐标用；旧版本可能存的是横屏尺寸，用的时候都先转成竖放）
     pub screen: Option<ScreenSize>,
-    /// `screen` 是哪台设备的；换了设备就不能拿来给 HID 换算坐标
+    /// `screen` 是哪台设备的；换了设备就不能拿来给 HID 换算坐标。也是上次就绪的那台（自动选设备时先接着用它）
     pub screen_udid: Option<String>,
+    /// Every device's screen size, by UDID: `screen` only holds the last one, so after switching devices and back
+    /// the HID fallback didn't know the first one's size until its WDA came up again ([`Self::screen_for`])
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub screens: std::collections::BTreeMap<String, ScreenSize>,
     /// 上次重签的结果，旧格式：拼好的中文整句。照旧写，旧版本（降级、旧 CLI）还读它；新版本显示时用
     /// [`Self::resign_result`]
     pub last_resign: Option<String>,
@@ -82,6 +86,33 @@ pub struct ResignRecord {
 }
 
 impl Persisted {
+    /// The recorded screen size of `udid` (`None`: no device): its own entry, else `screen` if it is this device's
+    /// (or from an older version that didn't say whose)
+    pub fn screen_for(&self, udid: Option<&str>) -> Option<ScreenSize> {
+        if let Some(u) = udid
+            && let Some(s) = self.screens.iter().find(|(k, _)| k.eq_ignore_ascii_case(u)).map(|(_, s)| *s)
+        {
+            return Some(s);
+        }
+        let same = match (&self.screen_udid, udid) {
+            (Some(s), Some(u)) => s.eq_ignore_ascii_case(u),
+            (Some(_), None) => false,
+            (None, _) => true,
+        };
+        self.screen.filter(|_| same)
+    }
+
+    /// Records `udid`'s screen size; whether anything changed (then save)
+    pub fn record_screen(&mut self, udid: &str, size: ScreenSize) -> bool {
+        let changed = self.screen != Some(size)
+            || self.screen_udid.as_deref() != Some(udid)
+            || self.screens.get(udid) != Some(&size);
+        self.screen = Some(size);
+        self.screen_udid = Some(udid.to_owned());
+        self.screens.insert(udid.to_owned(), size);
+        changed
+    }
+
     /// 记下这次重签的结果：新字段，加上旧版本认的中文整句
     pub fn record_resign(&mut self, at: u64, error: Option<String>) {
         let when = crate::eventlog::format_utc(at);

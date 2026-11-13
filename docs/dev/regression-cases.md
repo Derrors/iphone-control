@@ -127,3 +127,4 @@
 | 121 | 任务事件流（SSE）的一块数据断在中文字符中间时，先整体转成文字会把这个字变成乱码 | 在字节里找事件边界，只转换完整的事件 | 单测 `remote::reads_server_sent_events` |
 | 122 | 升级时运行新程序的 `--version` 偶尔失败：`Text file busy`（同一进程的其他线程 fork 时，新程序还以写方式打开） | 遇到 `ETXTBSY` 等 50 毫秒重试，最多 20 次 | 单测 `the_candidate_runs_once_it_is_no_longer_open_for_writing`（修复前稳定复现） |
 | 123 | iPad（iPadOS 26）重启后要输入密码启用 UI 自动化时，通知写的是「iPhone 需要输入锁屏密码」；所有通知标题都写死「iPhone」，多台设备时看不出是哪一台 | 标题用设备名（没有名字时用型号类别），密码提示按设备类别写系统弹窗的说法；离线通知用离线前记下的名字 | 单测 `a_notification_names_its_device`；真机 `notify-test pin`（控制 iPad，经本地假 Bark 截到标题） |
+| 124 | 切到另一台设备再切回 iPhone（iOS 27）后，WDA 卡在「Enable UI Automation」密码框期间，HID 后备路线的截图、按键都报「WDA 不可用,也不知道屏幕尺寸」：state.json 只记最后一台的尺寸 | 每台设备的尺寸按 UDID 记下（`screens`），`screen`/`screen_udid` 照旧写给旧版本 | 单测 `every_device_keeps_its_screen_size`；真机：iPhone 和 iPad 来回切换后，iPhone 的 WDA 还没起来时截图、按 Home |

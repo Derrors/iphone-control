@@ -13,6 +13,10 @@
 //!   over; lifting a finger is always allowed, switching the device never is;
 //! - a token of a task that ended, or that the daemon doesn't know, is refused for everything: the agent stops.
 //!
+//! Controlling a task (pause, resume, take over, hand back, answer a confirmation) is the user's
+//! ([`Tasks::handle`]): refused with a task's token, and from the processes the opener starts as its agent
+//! ([`crate::procs`]). Stopping is always allowed: an agent may give up. Who controlled it goes into the log.
+//!
 //! Steps: a tool call announces itself ([`Tasks::step`]); the requests it makes carry the step number. An action
 //! with the token but no step (a client that doesn't announce) becomes a step of its own, so nothing the task does
 //! is missing from it. Every event goes to `tasks/<id>.jsonl` too; tasks that hadn't ended when the daemon stopped
@@ -102,6 +106,8 @@ struct TaskState {
     scope: Vec<String>,
     /// Steps whose action the user kept out of the task's scope: shown as rejected, not as failed
     declined: Vec<u64>,
+    /// The processes the opener starts are the agent ([`Request::TaskAgent`]): they may not control the task
+    agent_below_opener: bool,
 }
 
 pub struct Task {
@@ -111,6 +117,8 @@ pub struct Task {
     owner: String,
     udid: String,
     started: u64,
+    /// The process that opened it (holds the lease); only it may name the agent
+    opener: Option<u32>,
     file: Option<PathBuf>,
     st: Mutex<TaskState>,
     tx: broadcast::Sender<TaskEvent>,
@@ -228,6 +236,7 @@ pub fn scope_check(req: &Request) -> Option<Check> {
         | Request::TaskEvents { .. }
         | Request::TaskList
         | Request::TaskControl { .. }
+        | Request::TaskAgent
         | Request::TaskStep { .. }
         | Request::TaskStepDone { .. }
         | Request::TaskConfirm { .. }
@@ -629,10 +638,15 @@ impl Task {
         self.end(end, if summary.is_empty() { fallback } else { summary });
     }
 
-    fn control(&self, action: &str, step: Option<u64>, approve: bool) -> Result<(), String> {
+    /// `by`: who asked, for the log (a `control` event after the change)
+    fn control(&self, action: &str, step: Option<u64>, approve: bool, by: Option<&str>) -> Result<(), String> {
         let mut st = self.lock();
         if !st.status.active() {
             return Err(ictl_l10n::tr!("任务已经结束", "The task has ended").into());
+        }
+        let mut what = json!({"action": action});
+        if let Some(by) = by.map(|b| b.trim().chars().take(80).collect::<String>()).filter(|b| !b.is_empty()) {
+            what["by"] = json!(by);
         }
         match (action, st.status) {
             ("pause", Status::Running) => self.set_status(&mut st, Status::Paused),
@@ -644,6 +658,8 @@ impl Task {
             }
             ("confirm", Status::Waiting) => match st.confirm.take() {
                 Some((waiting, tx)) if step.is_none_or(|s| s == waiting) => {
+                    what["step"] = json!(waiting);
+                    what["approve"] = json!(approve);
                     let _ = tx.send(approve);
                 }
                 other => {
@@ -657,6 +673,7 @@ impl Task {
             },
             ("stop", _) => {
                 let n = st.next_step - 1;
+                self.emit(&mut st, "control", what);
                 drop(st);
                 self.end(
                     End::Cancelled,
@@ -669,6 +686,7 @@ impl Task {
             }
             (a, s) => return Err(ictl_l10n::trf!("现在（{}）不能{a}", "Can't {a} now ({})", s.name())),
         }
+        self.emit(&mut st, "control", what);
         Ok(())
     }
 }
@@ -719,7 +737,15 @@ impl Tasks {
 
     /// Opens a task on `udid` (the controlled device). `Err` is a message
     /// `apps`: bundle IDs it may act in, empty for no limit (see [`Task::check_scope`])
-    pub fn open(&self, title: &str, owner: &str, udid: Option<&str>, apps: Vec<String>) -> Result<Arc<Task>, String> {
+    /// `opener`: the process opening it, which may then name its agent ([`Request::TaskAgent`])
+    pub fn open(
+        &self,
+        title: &str,
+        owner: &str,
+        udid: Option<&str>,
+        apps: Vec<String>,
+        opener: Option<u32>,
+    ) -> Result<Arc<Task>, String> {
         let title = title.trim();
         if title.is_empty() {
             return Err(ictl_l10n::tr!("任务要有标题", "A task needs a title").into());
@@ -748,6 +774,7 @@ impl Tasks {
             title: title.chars().take(4000).collect(),
             owner: owner.trim().chars().take(80).collect(),
             udid: udid.to_owned(),
+            opener,
             // after every task before it, even within the same millisecond: logs are ordered by it on the next start
             started: now_ms().max(list.iter().map(|t| t.started + 1).max().unwrap_or(0)),
             st: Mutex::new(TaskState {
@@ -763,6 +790,7 @@ impl Tasks {
                 ended: None,
                 scope: apps,
                 declined: Vec::new(),
+                agent_below_opener: false,
             }),
             tx: broadcast::channel(4096).0,
             changed: Notify::new(),
@@ -875,20 +903,41 @@ impl Tasks {
     }
 
     /// The task requests that aren't about the device; `None` for any other request
+    /// `peer`: the process that sent it
     pub async fn handle(
         &self,
         req: &Request,
         token: Option<&str>,
+        peer: Option<u32>,
         gone: &mut Option<oneshot::Receiver<()>>,
     ) -> Option<Response> {
         Some(match req {
             Request::TaskList => Response::text(serde_json::to_string(&self.infos()).unwrap_or_default()),
-            Request::TaskControl { id, action, step, approve } => match self.get(id) {
-                Some(t) => match t.control(action, *step, *approve) {
-                    Ok(()) => Response::text("ok"),
-                    Err(m) => Response::error(m),
-                },
+            Request::TaskControl { id, action, step, approve, by, for_pid } => match self.get(id) {
+                Some(t) => {
+                    if action != "stop" && from_agent(&t, token, [peer, *for_pid]) {
+                        return Some(refuse(ictl_l10n::tr!(
+                            "AI 任务不能自己暂停、继续、接管、交还或确认：这些要由人在控制台或命令行（另开一个终端）里操作。要放弃任务，可以停止它",
+                            "An AI task can't pause, resume, take over, hand back or confirm itself: the user does that on the control page or from the command line (in a terminal of their own). To give up, stop the task"
+                        )));
+                    }
+                    match t.control(action, *step, *approve, by.as_deref()) {
+                        Ok(()) => Response::text("ok"),
+                        Err(m) => Response::error(m),
+                    }
+                }
                 None => Response::error(ictl_l10n::tr!("没有这个任务", "No such task")),
+            },
+            Request::TaskAgent => match self.actor(token) {
+                Ok(t) if peer.is_some() && peer == t.opener => {
+                    t.lock().agent_below_opener = true;
+                    Response::text("ok")
+                }
+                Ok(_) => refuse(ictl_l10n::tr!(
+                    "只有开任务的进程能说明 Agent 是谁",
+                    "Only the process that opened the task can say which processes are its agent"
+                )),
+                Err(r) => r,
             },
             Request::TaskStep { tool, args } => match self.actor(token) {
                 Ok(t) => t.step(tool, args, gone).await,
@@ -940,6 +989,17 @@ impl Tasks {
     }
 }
 
+/// A control request that comes from inside the task: it carries a task's token, or one of `pids` (the
+/// connection's process, the one the request was passed on for) was started by the opener after it said its children
+/// are the agent ([`Request::TaskAgent`]). The opener itself is the user's side (the page, `task run`)
+fn from_agent(task: &Task, token: Option<&str>, pids: [Option<u32>; 2]) -> bool {
+    if token.is_some() {
+        return true;
+    }
+    let Some(opener) = task.opener.filter(|_| task.lock().agent_below_opener) else { return false };
+    pids.into_iter().flatten().any(|p| p != opener && crate::procs::descends_from(p, opener))
+}
+
 fn append(file: &Path, e: &TaskEvent) {
     use std::io::Write;
     let line = json!({"t": now_ms(), "event": e.event, "data": e.data});
@@ -985,6 +1045,7 @@ fn restore(file: &Path) -> Option<Task> {
         owner: s("owner"),
         udid: s("udid"),
         started: first["started"].as_u64().unwrap_or(0),
+        opener: None,
         file: Some(file.to_owned()),
         st: Mutex::new(TaskState {
             status: Status::Running,
@@ -998,6 +1059,7 @@ fn restore(file: &Path) -> Option<Task> {
             rejected: false,
             ended: None,
             declined: Vec::new(),
+            agent_below_opener: false,
             scope: first["apps"]
                 .as_array()
                 .map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_owned)).collect())
@@ -1081,7 +1143,7 @@ mod tests {
     }
 
     fn open(ts: &Tasks) -> Arc<Task> {
-        ts.open("看看设置", "test", Some(PHONE), Vec::new()).unwrap()
+        ts.open("看看设置", "test", Some(PHONE), Vec::new(), None).unwrap()
     }
 
     fn tap() -> Request {
@@ -1111,12 +1173,12 @@ mod tests {
     #[tokio::test]
     async fn only_one_task_and_only_on_a_device() {
         let ts = tasks();
-        assert!(ts.open("x", "", None, Vec::new()).is_err());
-        assert!(ts.open(" ", "", Some(PHONE), Vec::new()).is_err());
+        assert!(ts.open("x", "", None, Vec::new(), None).is_err());
+        assert!(ts.open(" ", "", Some(PHONE), Vec::new(), None).is_err());
         let t = open(&ts);
-        assert!(ts.open("another", "", Some(PHONE), Vec::new()).err().unwrap().contains(&t.id));
+        assert!(ts.open("another", "", Some(PHONE), Vec::new(), None).err().unwrap().contains(&t.id));
         t.end(End::Completed, "");
-        assert!(ts.open("another", "", Some(PHONE), Vec::new()).is_ok());
+        assert!(ts.open("another", "", Some(PHONE), Vec::new(), None).is_ok());
     }
 
     /// The point of D17: while a task runs, a caller without its token can look but not act
@@ -1133,7 +1195,7 @@ mod tests {
         let select = Request::SelectDevice { device: "auto".into() };
         assert!(admit(&ts, &select, None).await.is_err());
 
-        t.control("takeover", None, false).unwrap();
+        t.control("takeover", None, false, None).unwrap();
         assert!(matches!(admit(&ts, &tap(), None).await, Ok((Admission::Supervisor(_), _))));
         assert!(admit(&ts, &select, None).await.is_err(), "not even while taken over");
     }
@@ -1154,12 +1216,12 @@ mod tests {
     async fn a_paused_task_holds_its_requests_until_resumed() {
         let ts = Arc::new(tasks());
         let t = open(&ts);
-        t.control("pause", None, false).unwrap();
+        t.control("pause", None, false, None).unwrap();
         let (ts2, token) = (ts.clone(), t.token.clone());
         let held = tokio::spawn(async move { admit(&ts2, &tap(), Some(&token)).await.map(|(_, w)| w) });
         tokio::time::sleep(Duration::from_millis(50)).await;
         assert!(!held.is_finished());
-        t.control("resume", None, false).unwrap();
+        t.control("resume", None, false, None).unwrap();
         assert!(matches!(held.await.unwrap(), Ok(true)), "let through, and it says it waited");
     }
 
@@ -1167,7 +1229,7 @@ mod tests {
     async fn a_held_request_whose_caller_left_is_dropped() {
         let ts = tasks();
         let t = open(&ts);
-        t.control("pause", None, false).unwrap();
+        t.control("pause", None, false, None).unwrap();
         let (tx, rx) = oneshot::channel();
         tx.send(()).unwrap();
         let r = ts.admit(&tap(), Some(&t.token), &mut None, &mut Some(rx)).await;
@@ -1178,9 +1240,9 @@ mod tests {
     async fn after_someone_else_acted_the_agent_looks_before_acting() {
         let ts = tasks();
         let t = open(&ts);
-        t.control("takeover", None, false).unwrap();
+        t.control("takeover", None, false, None).unwrap();
         assert!(admit(&ts, &tap(), None).await.is_ok());
-        t.control("handback", None, false).unwrap();
+        t.control("handback", None, false, None).unwrap();
         assert!(message(admit(&ts, &tap(), Some(&t.token)).await).contains("重新看"));
         assert!(admit(&ts, &tap(), Some(&t.token)).await.is_err(), "until it has looked, not just once");
         assert!(admit(&ts, &Request::Status, Some(&t.token)).await.is_ok(), "status isn't acting");
@@ -1189,20 +1251,70 @@ mod tests {
         assert!(admit(&ts, &tap(), Some(&t.token)).await.is_ok());
     }
 
+    /// The agent may not answer its own questions or resume itself; it may give up
+    #[tokio::test]
+    async fn the_agent_cant_control_its_own_task() {
+        let ts = tasks();
+        let me = std::process::id();
+        // this test process stands in for the agent: its parent opened the task
+        let opener = crate::procs::parent(me).expect("the test has a parent");
+        let t = ts.open("看看设置", "test", Some(PHONE), Vec::new(), Some(opener)).unwrap();
+        let control = |action: &str, for_pid: Option<u32>| Request::TaskControl {
+            id: t.id.clone(),
+            action: action.into(),
+            step: None,
+            approve: false,
+            by: Some("cli".into()),
+            for_pid,
+        };
+        let refused = |r: Option<Response>| matches!(r, Some(Response::Error { .. }));
+        let pause = |token: Option<&'static str>, peer: Option<u32>, for_pid: Option<u32>| {
+            let (ts, req) = (&ts, control("pause", for_pid));
+            let token = token.map(|_| t.token.clone());
+            async move { ts.handle(&req, token.as_deref(), peer, &mut None).await }
+        };
+        let agent = |from: Option<u32>| {
+            let (ts, token) = (&ts, t.token.clone());
+            async move { ts.handle(&Request::TaskAgent, Some(&token), from, &mut None).await }
+        };
+
+        // with the task's token (the CLI in the agent's environment sends it)
+        assert!(refused(pause(Some("token"), None, None).await));
+        // before the opener says its children are the agent, they are anyone
+        assert!(!refused(pause(None, Some(me), None).await));
+        assert!(!refused(ts.handle(&control("resume", None), None, Some(me), &mut None).await));
+        // only the opener says so
+        assert!(refused(agent(Some(me)).await));
+        assert!(refused(agent(None).await));
+        assert!(!refused(agent(Some(opener)).await));
+        assert!(refused(pause(None, Some(me), None).await), "the opener's child");
+        assert!(refused(pause(None, None, Some(me)).await), "passed on for it");
+        assert_eq!(t.info().state, "running");
+        // the opener itself (the page passing on the user's click), or someone else (the user's own terminal)
+        assert!(!refused(pause(None, Some(opener), None).await));
+        assert!(!refused(ts.handle(&control("resume", None), None, Some(1), &mut None).await));
+        let by: Vec<_> = t.subscribe().0.into_iter().filter(|e| e.event == "control").map(|e| e.data).collect();
+        assert_eq!(by.len(), 4);
+        assert_eq!((by[0]["action"].as_str(), by[0]["by"].as_str()), (Some("pause"), Some("cli")));
+        // giving up is allowed from anywhere
+        assert!(!refused(ts.handle(&control("stop", None), Some(&t.token), Some(me), &mut None).await));
+        assert_eq!(t.info().state, "cancelled");
+    }
+
     #[tokio::test]
     async fn an_ended_or_unknown_token_is_refused_for_everything() {
         let ts = Arc::new(tasks());
         let t = open(&ts);
-        t.control("pause", None, false).unwrap();
+        t.control("pause", None, false, None).unwrap();
         let (ts2, token) = (ts.clone(), t.token.clone());
         let held = tokio::spawn(async move { admit(&ts2, &Request::Status, Some(&token)).await.map(|_| ()) });
         tokio::time::sleep(Duration::from_millis(20)).await;
-        t.control("stop", None, false).unwrap();
+        t.control("stop", None, false, None).unwrap();
         assert!(held.await.unwrap().is_err(), "a held request is released with a refusal");
         assert!(message(admit(&ts, &Request::Status, Some(&t.token)).await).contains("结束"));
         assert!(message(admit(&ts, &Request::Status, Some("nobody")).await).contains("结束"));
         assert!(
-            ts.handle(&Request::TaskNote { text: "x".into() }, Some(&t.token), &mut None)
+            ts.handle(&Request::TaskNote { text: "x".into() }, Some(&t.token), None, &mut None)
                 .await
                 .is_some_and(|r| matches!(r, Response::Error { .. }))
         );
@@ -1216,12 +1328,12 @@ mod tests {
         let (ts2, token) = (ts.clone(), t.token.clone());
         let waiting = tokio::spawn(async move {
             let req = Request::TaskConfirm { action: "发送消息".into(), detail: "给妈妈".into() };
-            ts2.handle(&req, Some(&token), &mut None).await.unwrap()
+            ts2.handle(&req, Some(&token), None, &mut None).await.unwrap()
         });
         tokio::time::sleep(Duration::from_millis(20)).await;
         assert_eq!(t.info().state, "waiting");
-        assert!(t.control("confirm", Some(99), false).is_err(), "another step");
-        t.control("confirm", Some(1), false).unwrap();
+        assert!(t.control("confirm", Some(99), false, None).is_err(), "another step");
+        t.control("confirm", Some(1), false, None).unwrap();
         assert!(matches!(waiting.await.unwrap(), Response::Error { message, .. } if message.contains("拒绝")));
         assert_eq!(t.info().state, "running");
         t.finish(true, "done");
@@ -1234,11 +1346,11 @@ mod tests {
         let t = open(&ts);
         let req = |tool: &str, args: Value| Request::TaskStep { tool: tool.into(), args };
         t.thought("先点「通用」");
-        let r = ts.handle(&req("iphone_tap_element", json!({"text": "通用"})), Some(&t.token), &mut None).await;
+        let r = ts.handle(&req("iphone_tap_element", json!({"text": "通用"})), Some(&t.token), None, &mut None).await;
         assert_eq!(r, Some(Response::text("1")));
         t.step_done(1, true, 120, "已点击「通用」 @(200,300) 100x40", None);
         // a thought arriving just after its step started joins it
-        let r = ts.handle(&req("iphone_tap", json!({"x": 5, "y": 6})), Some(&t.token), &mut None).await;
+        let r = ts.handle(&req("iphone_tap", json!({"x": 5, "y": 6})), Some(&t.token), None, &mut None).await;
         assert_eq!(r, Some(Response::text("2")));
         t.thought("点一下");
         let n = ts.auto_step(&t, &Request::Swipe { from: (1.0, 2.0), to: (3.0, 4.0), seconds: 0.3 });
@@ -1359,14 +1471,14 @@ mod tests {
             while t.info().state != "waiting" {
                 tokio::time::sleep(Duration::from_millis(5)).await;
             }
-            t.control("confirm", None, approve).unwrap();
+            t.control("confirm", None, approve, None).unwrap();
         });
     }
 
     #[tokio::test]
     async fn an_approved_app_joins_the_scope_for_the_rest_of_the_task() {
         let ts = tasks();
-        let t = ts.open("改设置", "test", Some(PHONE), scope(&["com.apple.Preferences"])).unwrap();
+        let t = ts.open("改设置", "test", Some(PHONE), scope(&["com.apple.Preferences"]), None).unwrap();
         assert!(t.scoped());
         let wechat = Target::Foreground("com.tencent.xin".into());
         answer_soon(&t, true).await;
@@ -1379,7 +1491,7 @@ mod tests {
     #[tokio::test]
     async fn a_rejected_app_refuses_that_step_but_the_task_can_go_back() {
         let ts = tasks();
-        let t = ts.open("改设置", "test", Some(PHONE), scope(&["com.apple.Preferences"])).unwrap();
+        let t = ts.open("改设置", "test", Some(PHONE), scope(&["com.apple.Preferences"]), None).unwrap();
         answer_soon(&t, false).await;
         // the tool call that tried it (step 7) shows as rejected, not failed; another failing call stays an error
         let r = t.check_scope(&Target::Launch("com.apple.MobileSMS".into()), Some(7), &mut None).await;
@@ -1403,7 +1515,7 @@ mod tests {
     #[tokio::test]
     async fn a_question_nobody_waits_for_leaves_the_page() {
         let ts = tasks();
-        let t = ts.open("改设置", "test", Some(PHONE), scope(&["com.apple.Preferences"])).unwrap();
+        let t = ts.open("改设置", "test", Some(PHONE), scope(&["com.apple.Preferences"]), None).unwrap();
         let (tx, rx) = oneshot::channel();
         let t2 = t.clone();
         let asking = tokio::spawn(async move {
@@ -1415,7 +1527,7 @@ mod tests {
         tx.send(()).unwrap();
         assert!(matches!(asking.await.unwrap(), Err(Response::Error { message, .. }) if message.contains("取消")));
         assert_eq!(t.info().state, "running");
-        assert!(t.control("confirm", None, true).is_err(), "nothing waits for an answer any more");
+        assert!(t.control("confirm", None, true, None).is_err(), "nothing waits for an answer any more");
     }
 
     #[test]
@@ -1423,7 +1535,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("ictl-tasks-scope-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let ts = Tasks::load(Some(dir.clone()));
-        let t = ts.open("改设置", "test", Some(PHONE), scope(&["com.apple.Preferences"])).unwrap();
+        let t = ts.open("改设置", "test", Some(PHONE), scope(&["com.apple.Preferences"]), None).unwrap();
         t.end(End::Completed, "");
         let ts = Tasks::load(Some(dir.clone()));
         assert_eq!(ts.get(&t.id).unwrap().info().apps, scope(&["com.apple.Preferences"]));

@@ -129,13 +129,23 @@ impl Agents {
         Ok(id)
     }
 
-    /// pause / resume / takeover / handback / stop / confirm from the page
-    pub async fn control(&self, id: &str, action: &str, body: &Value) -> Result<(), String> {
+    /// pause / resume / takeover / handback / stop / confirm from the page. `by`: who, for the task's log;
+    /// `from`: the local process that called the page's API, when known (the daemon refuses the task's agent)
+    pub async fn control(
+        &self,
+        id: &str,
+        action: &str,
+        body: &Value,
+        by: String,
+        from: Option<u32>,
+    ) -> Result<(), String> {
         let req = Request::TaskControl {
             id: id.to_owned(),
             action: action.to_owned(),
             step: body["step"].as_u64(),
             approve: body["approve"].as_bool().unwrap_or(false),
+            by: Some(by),
+            for_pid: from,
         };
         match protocol::call(&self.socket, &req, Some(Duration::from_secs(10))).await {
             Ok(Response::Text { .. }) => Ok(()),
@@ -177,6 +187,9 @@ impl Agents {
             .env("MCP_TOOL_TIMEOUT", "86400000")
             .process_group(0)
             .kill_on_drop(true);
+        // the agent and what it starts may not control its task (answer its own confirmations, resume itself);
+        // said before it starts, so nothing it does comes first
+        self.as_task(token, Request::TaskAgent).await;
         let mut child = cmd.spawn()?;
         let pid = child.id();
         let stdout = child.stdout.take().ok_or_else(|| anyhow::anyhow!("no stdout"))?;

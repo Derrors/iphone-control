@@ -203,7 +203,9 @@ pub enum Request {
     },
     /// Recent tasks, newest last, as a JSON array of [`TaskInfo`]
     TaskList,
-    /// `pause` / `resume` / `takeover` / `handback` / `stop` / `confirm` (with `approve` and the waiting `step`)
+    /// `pause` / `resume` / `takeover` / `handback` / `stop` / `confirm` (with `approve` and the waiting `step`).
+    /// The user's: refused with a task's token, or from the task's agent ([`Request::TaskAgent`]), for everything but
+    /// `stop`
     TaskControl {
         id: String,
         action: String,
@@ -211,7 +213,18 @@ pub enum Request {
         step: Option<u64>,
         #[serde(default)]
         approve: bool,
+        /// Who asks, for the task's log: `viewer`, `cli`, `owner`…
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        by: Option<String>,
+        /// The process the request comes from when it is passed on (the page's API: the local client that called
+        /// it); checked like the connection's own process
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        for_pid: Option<u32>,
     },
+    /// From the process that opened the task, with its token, before it starts the agent: every process it starts
+    /// from now on (and the ones those start) is the task's agent, whose control requests are refused
+    /// ([`Request::TaskControl`])
+    TaskAgent,
     /// With the task's token ([`TASK`]): a tool call starts. Waits while the task isn't running, then records the
     /// step; the text is the step number. The calls the tool makes carry it ([`TASK_STEP`])
     TaskStep {
@@ -365,6 +378,7 @@ impl Request {
             | Self::TaskEvents { .. }
             | Self::TaskList
             | Self::TaskControl { .. }
+            | Self::TaskAgent
             | Self::TaskStep { .. }
             | Self::TaskStepDone { .. }
             | Self::TaskConfirm { .. }

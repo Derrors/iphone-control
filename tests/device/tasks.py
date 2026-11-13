@@ -1,4 +1,4 @@
-"""Real-device scenarios for AI tasks kept by the daemon (docs/task-control.md; regression cases #65–67, #106–110).
+"""Real-device scenarios for AI tasks kept by the daemon (docs/task-control.md; regression cases #65–67, #106–110, and an agent controlling itself).
 
     pip install -r tests/device/requirements.txt
     python tests/device/tasks.py                  # every scenario except `restart`
@@ -15,7 +15,9 @@ Harmless by design: it presses Home, opens Settings and Clock, takes screenshots
 to open (one of them a scheme no app handles). Nothing is sent, bought, deleted or changed.
 
 Environment: ICTL_BIN (default `iphone-control`; your branch's build for a pull request), MCP_CMD (default
-`$ICTL_BIN mcp`), ICTL_SOCKET (default `$XDG_RUNTIME_DIR/iphone-control/ctl.sock`).
+`$ICTL_BIN mcp`), ICTL_SOCKET (default `$XDG_RUNTIME_DIR/iphone-control/ctl.sock`), ICTL_VIEWER (the control page of
+the same build, such as `http://127.0.0.1:8202`; the `self` scenario then also tries the page's API from inside a
+task).
 """
 
 import argparse
@@ -39,6 +41,20 @@ SOCKET = os.environ.get("ICTL_SOCKET") or os.path.join(
 TOKEN_ENV = "IPHONE_CONTROL_TASK_TOKEN"
 OWNER = "device-test"
 HERE = os.path.dirname(os.path.abspath(__file__))
+VIEWER = os.environ.get("ICTL_VIEWER", "").rstrip("/")
+
+# Run under `task run`: asks the control page to pause the task it runs in, prints the answer
+PAGE_PAUSE = """
+import json, os, sys, urllib.error, urllib.request
+v, task = sys.argv[1], os.environ["IPHONE_CONTROL_TASK_ID"]
+req = urllib.request.Request(f"{v}/api/agent/tasks/{task}/pause", data=b"{}", method="POST",
+                             headers={"Content-Type": "application/json", "Origin": v})
+try:
+    r = urllib.request.urlopen(req, timeout=15)
+    print(r.status, r.read().decode())
+except urllib.error.HTTPError as e:
+    print(e.code, e.read().decode())
+"""
 
 results: list[bool] = []
 
@@ -63,6 +79,21 @@ async def ask(req: dict, timeout: float = 15) -> dict:
         w.write((json.dumps(req, ensure_ascii=False) + "\n").encode())
         await w.drain()
         return json.loads(await asyncio.wait_for(r.readline(), timeout))
+    finally:
+        w.close()
+
+
+async def events(task_id: str, timeout: float = 10) -> list[dict]:
+    """A task's events so far (it has ended, so the stream closes)"""
+    r, w = await asyncio.open_unix_connection(SOCKET)
+    try:
+        w.write((json.dumps({"op": "task_events", "id": task_id}) + "\n").encode())
+        await w.drain()
+        await asyncio.wait_for(r.readline(), timeout)
+        out = []
+        while line := await asyncio.wait_for(r.readline(), timeout):
+            out.append(json.loads(line))
+        return out
     finally:
         w.close()
 
@@ -166,10 +197,14 @@ async def call(s: ClientSession, name: str, args: dict | None = None, timeout: f
     return bool(res.is_error), text, time.time() - t
 
 
-async def cli(*args: str, timeout: float = 30):
-    """`iphone-control task …`: (exit code, output)"""
+async def cli(*args: str, timeout: float = 30, token: str | None = None):
+    """`iphone-control task …`: (exit code, output). `token`: run it inside that task (the agent's environment)"""
+    env = dict(os.environ)
+    env.pop(TOKEN_ENV, None)
+    if token:
+        env[TOKEN_ENV] = token
     p = await asyncio.create_subprocess_exec(
-        *BIN, "task", *args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT
+        *BIN, "task", *args, env=env, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT
     )
     out, _ = await asyncio.wait_for(p.communicate(), timeout)
     return p.returncode, out.decode(errors="replace").strip()
@@ -289,6 +324,56 @@ async def confirm(stack):
         check(c, f"{what} ({dt:.1f}s)", code == 0 and err != approve, text)
     await lease.finish(ok=True)
     check(c, "the task ends as rejected though the agent said ok", await state_is(lease.id, "rejected"))
+
+
+async def self_control(stack):
+    """An agent can't answer its own confirmation or pause itself: not with the task's token, nor from a process
+    `task run` started without it; the user can, and the log says who"""
+    c = "self"
+    lease = await Lease.open("真机回归：Agent 不能自己确认")
+    stack.callback(lease.close)
+    agent = await mcp(stack, lease.token)
+    args = {"action": "真机回归：Agent 自己确认", "detail": "只是测试，不会在手机上做任何事"}
+    asking = asyncio.create_task(call(agent, "iphone_confirm", args))
+    shown = await confirm_asked(lease, 0)
+    check(c, "the task waits for a confirmation", bool(shown), json.dumps(shown, ensure_ascii=False))
+    code, out = await cli("approve", lease.id, token=lease.token)
+    check(c, "`task approve` with the task's token is refused", code != 0, out)
+    check(c, "and the task still waits", (await info(lease.id)).get("state") == "waiting")
+    code, out = await cli("reject", lease.id)
+    err, text, _ = await asyncio.wait_for(asking, 30)
+    check(c, "the user's `task reject` answers it", code == 0 and err, text)
+    by = [d.get("by") for d in lease.of("control")]
+    check(c, "the log says it was the command line", by == ["cli"], json.dumps(by))
+    await lease.finish(ok=False)
+
+    # under `task run`, the command drops the token and tries anyway: it was started by the task, so no
+    title = f"真机回归：task run 里自己暂停 {int(time.time())}"
+    script = 'env -u IPHONE_CONTROL_TASK_TOKEN "$@" task pause "$IPHONE_CONTROL_TASK_ID"'
+    p = await asyncio.create_subprocess_exec(
+        *BIN, "task", "run", "--title", title, "--owner", OWNER, "--", "sh", "-c", script, "sh", *BIN,
+        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
+    )
+    out, _ = await asyncio.wait_for(p.communicate(), 60)
+    out = out.decode(errors="replace")
+    t = next((t for t in reversed(await tasks()) if t["title"] == title), {})
+    check(c, "a process `task run` started can't pause its task, even without the token",
+          p.returncode != 0 and t.get("state") == "failed", f"exit {p.returncode}, {t.get('state')}: {out}")
+
+    if not VIEWER:
+        print(f"SKIP [{c}] the page's API from inside a task: set ICTL_VIEWER", flush=True)
+        return
+    title = f"真机回归：task run 里调控制台暂停 {int(time.time())}"
+    p = await asyncio.create_subprocess_exec(
+        *BIN, "task", "run", "--title", title, "--owner", OWNER, "--", sys.executable, "-c", PAGE_PAUSE, VIEWER,
+        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
+    )
+    out, _ = await asyncio.wait_for(p.communicate(), 60)
+    out = out.decode(errors="replace")
+    t = next((t for t in reversed(await tasks()) if t["title"] == title), {})
+    paused = any(e["event"] == "control" for e in await events(t["id"])) if t else True
+    check(c, "nor through the control page's API (Linux)", '"ok":false' in out.replace(" ", "") and not paused,
+          f"{t.get('state')}: {out}")
 
 
 async def stop(stack):
@@ -444,6 +529,7 @@ SCENARIOS = {
     "pause": pause,
     "handback": handback,
     "confirm": confirm,
+    "self": self_control,
     "stop": stop,
     "lease": lease,
     "run": run_cmd,

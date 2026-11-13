@@ -27,6 +27,7 @@
 //! replug (new usbmuxd id) doesn't break the picture.
 
 mod lan;
+mod peer;
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -325,7 +326,9 @@ async fn handle(mut client: TcpStream, ctx: &Ctx, head: Vec<u8>, req: Head, mut 
             let Ok(b) = serde_json::from_slice::<Value>(&body) else {
                 return json_reply(&mut client, 400, &json!({"ok": false, "message": "bad request"})).await;
             };
-            let (code, v) = post(ctx, &p[5..], &b, req.device.as_deref()).await;
+            // controlling a task: who, for its log, and which local process (the daemon refuses the task's agent)
+            let caller = if p.starts_with("/api/agent/tasks/") { Caller::of(&client).await } else { Caller::default() };
+            let (code, v) = post(ctx, &p[5..], &b, req.device.as_deref(), caller).await;
             json_reply(&mut client, code, &v).await
         }
         _ => reply(&mut client, 404, "text/plain", b"not found").await,
@@ -405,7 +408,24 @@ async fn updates(ctx: &Ctx) -> Result<Value, String> {
 
 /// A POST under `/api/`: status code and JSON answer
 /// `device`: the one the page shows (`X-Ictl-Device`); actions only go to it
-async fn post(ctx: &Ctx, name: &str, b: &Value, device: Option<&str>) -> (u16, Value) {
+/// Who called the page's API to control a task
+#[derive(Default)]
+struct Caller {
+    by: String,
+    pid: Option<u32>,
+}
+
+impl Caller {
+    async fn of(client: &TcpStream) -> Self {
+        let (Ok(peer), Ok(local)) = (client.peer_addr(), client.local_addr()) else { return Self::default() };
+        // reads every process's open files: not on the runtime's threads
+        let pid = tokio::task::spawn_blocking(move || peer::local_client(peer, local)).await.ok().flatten();
+        let by = if peer.ip().to_canonical().is_loopback() { "viewer".into() } else { format!("viewer {}", peer.ip()) };
+        Self { by, pid }
+    }
+}
+
+async fn post(ctx: &Ctx, name: &str, b: &Value, device: Option<&str>, caller: Caller) -> (u16, Value) {
     let conflict = |m: String| (409, json!({"ok": false, "message": m}));
     if name == "updates/check" {
         if !b.as_object().is_some_and(serde_json::Map::is_empty) {
@@ -448,7 +468,7 @@ async fn post(ctx: &Ctx, name: &str, b: &Value, device: Option<&str>) -> (u16, V
     if let Some(rest) = name.strip_prefix("agent/tasks/")
         && let Some((id, action)) = rest.split_once('/')
     {
-        return match ctx.agents.control(id, action, b).await {
+        return match ctx.agents.control(id, action, b, caller.by, caller.pid).await {
             Ok(()) => (200, json!({"ok": true})),
             Err(m) => conflict(m),
         };
@@ -1054,11 +1074,11 @@ mod tests {
         let ctx = test_ctx(temp.path(), &socket);
         let body = json!({"text": "Settings", "index": 1});
         *ctx.udid.lock().unwrap() = "different-device".into();
-        assert_eq!(post(&ctx, "tap_element", &body, None).await.0, 409);
-        assert_eq!(post(&ctx, "tap", &json!({"x": 1, "y": 2}), Some("phone")).await.0, 409);
+        assert_eq!(post(&ctx, "tap_element", &body, None, Caller::default()).await.0, 409);
+        assert_eq!(post(&ctx, "tap", &json!({"x": 1, "y": 2}), Some("phone"), Caller::default()).await.0, 409);
         let (result, req) = tokio::time::timeout(Duration::from_secs(3), async {
             tokio::join!(
-                post(&ctx, "tap_element", &body, Some("phone")),
+                post(&ctx, "tap_element", &body, Some("phone"), Caller::default()),
                 reply_to_action(&daemon, Response::text("ok"))
             )
         })
@@ -1082,7 +1102,10 @@ mod tests {
             let reply = Response::Error { message: "touch failed".into(), retry_as_gesture: daemon_retry };
             // The result comes directly from the action, with no follow-up status request.
             let ((_, result), req) = tokio::time::timeout(Duration::from_secs(3), async {
-                tokio::join!(post(&ctx, "touch", &body, Some("phone")), reply_to_action(&daemon, reply))
+                tokio::join!(
+                    post(&ctx, "touch", &body, Some("phone"), Caller::default()),
+                    reply_to_action(&daemon, reply)
+                )
             })
             .await
             .unwrap();

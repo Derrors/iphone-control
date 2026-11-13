@@ -9,6 +9,7 @@
 ### 新增
 
 - `iphone-control service viewer install` 把控制台装成登录后自动启动的后台服务（还有 `uninstall`、`start`、`stop`、`restart`）。端口和是否对局域网开放读设置文件（新增 `IPHONE_CONTROL_VIEWER_PORT`；`IPHONE_CONTROL_VIEWER_LAN`；新增 `IPHONE_CONTROL_VIEWER_LAN_HOSTS`），并记下安装时终端的 `PATH` 以找到 `claude` 和 `codex`。升级时先停下它、升级完再启动；有 AI 任务在跑时自动升级会推迟。
+- AI 任务的 Agent 不能再自己暂停、继续、接管、交还或确认，越界确认和 `iphone_confirm` 只能由人回答。带任务口令（`IPHONE_CONTROL_TASK_TOKEN`）的控制请求会被拒绝；控制台和 `task run` 启动的 Agent，连同它再启动的进程，也会被拒绝，即使去掉了口令，或者调用控制台的接口。在 macOS 上，调用控制台接口的这条路还查不出是哪个进程。停止任务不受限制。任务记录里会写下谁做了控制（控制台、命令行、任务的发起方）。
 - 设置菜单支持方向键选择、Enter 确认和 Esc 取消，保留数字选择；基础终端继续使用逐行提示。
 - `iphone-control completions <shell>` 可生成 Bash、Zsh 和 Fish 补全脚本，不启动守护进程、不访问设备。
 - `iphone-control viewer --lan`（或 `IPHONE_CONTROL_VIEWER_LAN=1`）让控制台也对局域网开放，还是同一个端口。还没有登录：局域网里任何能连上这台机器的人都能操作手机，只在可信的网络里开。只接受局域网地址来的连接，只认本机自己的名字和地址；`--lan-host` 可以再加名字。从局域网地址打开时画面是 MJPEG，因为浏览器只在 localhost 或 HTTPS 上提供 WebCodecs。

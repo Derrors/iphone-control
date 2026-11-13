@@ -223,6 +223,7 @@ impl Daemon {
         let now = Instant::now();
         if g.device.take().is_some() {
             self.log.log(ictl_l10n::log_tr!("手机离线", "Phone offline"));
+            g.offline_target = Some(ictl_l10n::in_own_lang(|| crate::notify::Target::of(g.info.as_ref())));
             // 名字、型号、iOS 版本是这台的：留着的话状态、提示文字会把它当成还在控制的设备
             g.info = None;
             self.forget_device(g).await;

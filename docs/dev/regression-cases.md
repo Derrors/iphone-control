@@ -1,6 +1,6 @@
 # 必须覆盖的回归用例
 
-#1～#34 来自 toolkit 和本项目早期实际踩过的坑，#35～#45 是多设备和 HID 横屏，#46～#58 是实时画面、开发者工具和英文界面，#59～#63 是 iPhone 18 Pro Max（iOS 27.2.1）真机全量测试发现的问题，#64 起是 viewer 的 AI 任务和新页面，#116～#122 是任务的控制权、控制台的局域网访问与登录、跨主机。能单测的写单测，不能单测的进真机回归清单。**每个 PR 都必须保持这里的全部用例通过**：单测的由 `cargo test` 覆盖；改到的范围里测试方式是真机、无头 Chrome 或手动测量的，要重跑并在 PR 里列出编号，写明设备和 iOS 版本；修了清单里没有的问题，要加一行。完整要求见 [CONTRIBUTING.md 的 Required tests](../../CONTRIBUTING.md#required-tests)。
+#1～#34 来自 toolkit 和本项目早期实际踩过的坑，#35～#45 是多设备和 HID 横屏，#46～#58 是实时画面、开发者工具和英文界面，#59～#63 是 iPhone 18 Pro Max（iOS 27.2.1）真机全量测试发现的问题，#64 起是 viewer 的 AI 任务和新页面，#116～#122 是任务的控制权、控制台的局域网访问与登录、跨主机，#123 起是 0.2.4 发版前回归中发现的。能单测的写单测，不能单测的进真机回归清单。**每个 PR 都必须保持这里的全部用例通过**：单测的由 `cargo test` 覆盖；改到的范围里测试方式是真机、无头 Chrome 或手动测量的，要重跑并在 PR 里列出编号，写明设备和 iOS 版本；修了清单里没有的问题，要加一行。完整要求见 [CONTRIBUTING.md 的 Required tests](../../CONTRIBUTING.md#required-tests)。
 
 | # | 坑 | 正确行为 | 测试方式 |
 |---|---|---|---|
@@ -126,3 +126,4 @@
 | 120 | 带请求体的请求被提前拒绝（没登录 401、403、413）时，控制台没读请求体就关连接，TCP 发 RST，客户端收不到回复（`connection reset by peer`，复用连接的程序约三次一次） | 回复后先关写方向，读完对方剩下的数据（最多 1 秒、1 MB）再关 | 单测 `every_request_needs_the_login`（256 KB 请求体仍收到 401）；真机 `tasks.py remote` 连跑 8 次 |
 | 121 | 任务事件流（SSE）的一块数据断在中文字符中间时，先整体转成文字会把这个字变成乱码 | 在字节里找事件边界，只转换完整的事件 | 单测 `remote::reads_server_sent_events` |
 | 122 | 升级时运行新程序的 `--version` 偶尔失败：`Text file busy`（同一进程的其他线程 fork 时，新程序还以写方式打开） | 遇到 `ETXTBSY` 等 50 毫秒重试，最多 20 次 | 单测 `the_candidate_runs_once_it_is_no_longer_open_for_writing`（修复前稳定复现） |
+| 123 | iPad（iPadOS 26）重启后要输入密码启用 UI 自动化时，通知写的是「iPhone 需要输入锁屏密码」；所有通知标题都写死「iPhone」，多台设备时看不出是哪一台 | 标题用设备名（没有名字时用型号类别），密码提示按设备类别写系统弹窗的说法；离线通知用离线前记下的名字 | 单测 `a_notification_names_its_device`；真机 `notify-test pin`（控制 iPad，经本地假 Bark 截到标题） |

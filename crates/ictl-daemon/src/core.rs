@@ -317,6 +317,8 @@ pub(crate) struct Inner {
     /// 连续列不出设备的次数（usbmuxd 抖一下不立刻当成离线）
     pub list_errors: u32,
     pub offline_since: Option<Instant>,
+    /// The device that went offline, for the notification once it has been gone long enough (its details are gone)
+    pub offline_target: Option<crate::notify::Target>,
     /// HID 会话最近一次使用的时间；空闲超过 [`crate::supervise::HID_IDLE`] 就关掉（它持有屏幕媒体流）
     pub hid_used: Option<Instant>,
     /// Control pages watching the screen media stream (`screen.rs`): while there are any, the HID session (which owns
@@ -433,6 +435,7 @@ impl Daemon {
             backoff: Backoff::default(),
             list_errors: 0,
             offline_since: Some(now),
+            offline_target: None,
             hid_used: None,
             screen_viewers: 0,
             elements_cache: None,
@@ -525,7 +528,12 @@ impl Daemon {
             return;
         }
         // 通知和事件日志按守护进程自己的语言：触发它的可能是另一种语言的请求（例如自动解锁失败）
-        let (title, body) = ictl_l10n::in_own_lang(|| e.title_body());
+        // the device it is about; one that went offline has lost its details, so the one kept then
+        let target = match (&e, &g.offline_target) {
+            (Event::DeviceOffline { .. }, Some(t)) => t.clone(),
+            _ => ictl_l10n::in_own_lang(|| notify::Target::of(g.info.as_ref())),
+        };
+        let (title, body) = ictl_l10n::in_own_lang(|| e.title_body(&target));
         self.log.log(&ictl_l10n::log_trf!("通知：{title}", "Notification: {title}"));
         let cfg = self.cfg.notify.clone();
         if cfg.any() {

@@ -371,7 +371,7 @@ async fn run() -> anyhow::Result<()> {
         Command::Task { url, ca, action } => task::run(&cli.socket, url, ca, action).await,
         #[cfg(feature = "debug-cmds")]
         Command::Debug(args) => debug::run(env_nonempty("IPHONE_UDID").as_deref(), args).await,
-        Command::NotifyTest { event } => notify_test(&cli.data_dir, event.as_deref()).await,
+        Command::NotifyTest { event } => notify_test(&cli.socket, &cli.data_dir, event.as_deref()).await,
     }
 }
 
@@ -414,8 +414,8 @@ async fn update_command(action: UpdateAction, socket: &Path) -> anyhow::Result<(
     }
 }
 
-async fn notify_test(data_dir: &Path, only: Option<&str>) -> anyhow::Result<()> {
-    use ictl_daemon::notify::{Event, send};
+async fn notify_test(socket: &Path, data_dir: &Path, only: Option<&str>) -> anyhow::Result<()> {
+    use ictl_daemon::notify::{Event, Target, send};
     let cfg = ictl_daemon::Config::from_env(data_dir).notify;
     let channels =
         usize::from(cfg.bark_key.is_some()) + usize::from(cfg.tg_bot_token.is_some() && cfg.tg_chat_id.is_some());
@@ -435,9 +435,14 @@ async fn notify_test(data_dir: &Path, only: Option<&str>) -> anyhow::Result<()> 
         let names: Vec<&str> = Event::samples().iter().map(|e| e.sample_name()).collect();
         bail!("{}", ictl_l10n::trf!("没有这类事件，可选：{}", "No such event; choose from: {}", names.join(" / ")));
     }
+    // the device the daemon controls, as a real notification names it; without the daemon, a sample
+    let target = match tokio::time::timeout(Duration::from_secs(2), snapshot(socket)).await {
+        Ok(Ok(s)) if s.device.is_some() => Target::of(s.device.as_ref()),
+        _ => Target::sample(),
+    };
     let mut failed = 0;
     for e in &events {
-        let (title, body) = e.title_body();
+        let (title, body) = e.title_body(&target);
         let ok = send(&cfg, &ictl_l10n::trf!("[测试] {title}", "[test] {title}"), &body).await;
         println!(
             "{}",

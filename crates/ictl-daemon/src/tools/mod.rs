@@ -84,7 +84,12 @@ impl Daemon {
 
     /// 每次 HID 触摸前重新截图核对横竖，不依赖上次截图（转屏、回主屏、解锁都可能改变方向）。
     /// 截图只给宽高，不能分辨横屏左右；短暂掉线时借用近期实测方向，过期或不匹配就不触摸。
+    /// A device below iOS 27 has no HID fallback: said at once, like every other action, not after a screenshot
+    /// whose orientation doesn't matter (it used to answer "landscape without a fresh WDA rotation… or turn it")
     async fn hid_touch_rotation(&self, g: &mut Inner) -> crate::error::Result<Rotation> {
+        if !hid_supported(g.info.as_ref()) {
+            return Err(wda_down(&g.state, g.info.as_ref()).into());
+        }
         self.sample_display(g, false).await;
         let png = self.hid_screenshot(g).await.map_err(|e| {
             ictl_l10n::trf!(
@@ -373,6 +378,28 @@ mod tests {
             );
             assert!(g.dev.touch_rotation.is_none());
         }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// Without WDA, a device below iOS 27 gets the usual "no HID fallback" for taps, swipes and a finger, at once:
+    /// not an orientation error after a screenshot (iPad mini 5, iPadOS 26: "turn it to portrait")
+    #[tokio::test]
+    async fn no_hid_fallback_is_said_before_any_orientation_check() {
+        let (d, dir) = crate::core::tests::test_daemon("no-hid-touch");
+        let mut g = d.inner.lock().await;
+        g.info = Some(ictl_device::DeviceInfo { product_version: "26.7.3".into(), ..Default::default() });
+        g.state = crate::machine::DeviceState::WdaStarting { last_error: None };
+        let down = |e: &str| e.contains("没有 HID 后备路线") || e.contains("no HID fallback");
+        let tap = d.tap(&mut g, 20., 50., None).await.unwrap_err().to_string();
+        assert!(down(&tap), "{tap}");
+        let swipe = d.swipe(&mut g, (20., 50.), (20., 300.), 0.3, None).await.unwrap_err().to_string();
+        assert!(down(&swipe), "{swipe}");
+        // a finger: the same, and the page may still send the whole gesture once WDA is back
+        match d.touch(&mut g, TouchPhase::Down, 20., 50., None).await {
+            Err(Response::Error { message, retry_as_gesture: true }) => assert!(down(&message), "{message}"),
+            other => panic!("{other:?}"),
+        }
+        assert!(g.dev.touch_rotation.is_none());
         std::fs::remove_dir_all(dir).unwrap();
     }
 

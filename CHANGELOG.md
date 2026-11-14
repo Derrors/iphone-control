@@ -19,6 +19,7 @@ All notable changes to this project are documented here. The format is based on 
 
 ### Fixed
 
+- Without WDA, a device below iOS 27 (no HID fallback) is told so at once for taps, swipes and touches, like every other action, instead of an orientation error after a needless screenshot that suggested turning it to portrait.
 - A confirmation (`iphone_confirm`, or a step outside a task's apps) no longer cancels the user's pause or takeover: it is asked once the task runs again. Two at once are asked in turn; before, the first was counted as rejected and the second couldn't be answered.
 - A step the agent sent just before the user paused or took over no longer runs after it; a tap of the user's sent just before handing back no longer runs after that.
 - After the user handed back, the agent has to have actually seen the screen (a screenshot that worked) before acting.

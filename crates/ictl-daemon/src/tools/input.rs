@@ -92,6 +92,13 @@ impl Daemon {
                         g.dev.last_rotation = Some((Instant::now(), r));
                         r
                     }
+                    // no HID fallback below iOS 27: as `send_touch` says it, so the page sends the whole gesture
+                    None if !hid_supported(g.info.as_ref()) => {
+                        return Err(Response::Error {
+                            message: wda_down(&g.state, g.info.as_ref()),
+                            retry_as_gesture: true,
+                        });
+                    }
                     None => self.hid_touch_rotation(g).await.map_err(Response::error)?,
                 }
             };

@@ -6,6 +6,10 @@ All notable changes to this project are documented here. The format is based on 
 
 ## [Unreleased]
 
+### Changed
+
+- The control page's requests share a connection instead of opening one each (`Connection: keep-alive`). Over Wi-Fi a new connection and its TLS handshake cost two more round trips, for every tap, every check and each of the ten reports a second on the picture. With a 40 ms round trip a request from the page went from about 220 ms to 47 ms, and about 40 s on the page opened 19 connections instead of 763. A connection is kept only for a logged-in request, closes after 15 s of nothing, and isn't kept when fewer than 8 of the 32 places are free; streams (the picture, task events, `/mcp`) still have their own.
+
 ### Fixed
 
 - Home on the control page is pressed at once: about 0.5 s instead of 1 s on an iPhone's home screen. The daemon first looked for a system alert that would stop Home working (0.8 s on the home screen), which the person at the page sees anyway; the page's requests now say someone is watching (`watched`), and for them the daemon looks only when the press didn't get to the home screen. Agents (MCP, CLI) are checked first as before.

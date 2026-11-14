@@ -1013,7 +1013,7 @@ impl McpServer {
         // then 只对操作类工具有意义；看界面的工具本身就是返回界面
         let resp = self.call(&req).await;
         Ok(match resp {
-            Response::Text { text, outcome } if req.is_device_action() => {
+            Response::Text { text, outcome, .. } if req.is_device_action() => {
                 // 结果里已经说了有弹窗（启动 App 被挡）就不再查
                 let check = wants_alert_check(&req) && !protocol::alert_reported(&text, outcome);
                 self.finish(text, false, then, check).await
@@ -1133,7 +1133,9 @@ impl McpServer {
                 }
                 Step::Request { tool, req } => match self.call_on(&req, udid.as_deref()).await {
                     // 按名字没点到（toolkit 兼容：单独调用时是普通结果）在批量里要停下：后面的步骤都建立在它点中的前提上
-                    Response::Text { text, outcome } if tool == "iphone_tap_element" && tap_missed(&text, outcome) => {
+                    Response::Text { text, outcome, .. }
+                        if tool == "iphone_tap_element" && tap_missed(&text, outcome) =>
+                    {
                         lines.push(format!("{n}. {tool} → {text}"));
                         if n < total {
                             lines.push(ictl_l10n::trf!(
@@ -1144,7 +1146,7 @@ impl McpServer {
                         }
                         return self.finish(lines.join("\n"), true, then, false).await;
                     }
-                    Response::Text { text, outcome } => {
+                    Response::Text { text, outcome, .. } => {
                         check = wants_alert_check(&req) && !protocol::alert_reported(&text, outcome);
                         lines.push(format!("{n}. {tool} → {text}"));
                     }

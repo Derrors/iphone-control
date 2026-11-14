@@ -393,14 +393,11 @@ async fn stop_here(backend: &Backend<'_>, id: &str, pid: Option<libc::pid_t>) {
     }
 }
 
-/// SIGTERM to the command's process group, SIGKILL a little later if still there
+/// The command's process group ([`crate::procgroup::stop`])
 fn stop_group(pid: Option<libc::pid_t>) {
-    let Some(pgid) = pid else { return };
-    unsafe { libc::kill(-pgid, libc::SIGTERM) };
-    tokio::spawn(async move {
-        tokio::time::sleep(Duration::from_secs(3)).await;
-        unsafe { libc::kill(-pgid, libc::SIGKILL) };
-    });
+    if let Some(pid) = pid.and_then(|p| u32::try_from(p).ok()) {
+        crate::procgroup::stop(pid);
+    }
 }
 
 #[cfg(test)]

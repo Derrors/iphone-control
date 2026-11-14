@@ -310,6 +310,10 @@ pub enum Response {
         /// language). Daemons before this field existed don't send it; their text is always Chinese
         #[serde(default, skip_serializing_if = "Option::is_none")]
         outcome: Option<Outcome>,
+        /// The same facts as data, for programs such as the control page ([`Data`]): the text is worded for people
+        /// and agents, in their language, and may change. Only some requests have it
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        data: Option<Data>,
     },
     /// JPEG base64 + 说明文字（尺寸、放大倍数、坐标换算式）
     Image { jpeg_base64: String, caption: String },
@@ -332,13 +336,67 @@ pub struct Outcome {
     pub alert_reported: bool,
 }
 
+/// What [`Request::Status`], [`Request::ListElements`], [`Request::ListApps`] and [`Request::AlertCheck`] report, as
+/// data ([`Response::Text`]'s `data`)
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum Data {
+    Status(StatusData),
+    Elements {
+        elements: Vec<ElementData>,
+    },
+    Apps {
+        apps: Vec<AppData>,
+    },
+    /// A system alert in front (its text), or none
+    Alert {
+        text: Option<String>,
+    },
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct StatusData {
+    pub wda_ready: bool,
+    /// `None` when WDA couldn't say (it isn't running)
+    pub locked: Option<bool>,
+    /// Looks like the lock screen though WDA says unlocked (`locked` is then true too)
+    pub possibly_locked: bool,
+    /// The foreground app's bundle ID
+    pub foreground: Option<String>,
+    /// The screen in points, as it is turned now
+    pub width: Option<f64>,
+    pub height: Option<f64>,
+}
+
+/// An element on screen: its type, the text it shows, and its box in points (top left, size)
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ElementData {
+    #[serde(rename = "type")]
+    pub kind: String,
+    pub label: String,
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AppData {
+    pub name: String,
+    pub bundle_id: String,
+}
+
 impl Response {
     pub fn text(s: impl Into<String>) -> Self {
-        Self::Text { text: s.into(), outcome: None }
+        Self::Text { text: s.into(), outcome: None, data: None }
     }
     /// Text with its [`Outcome`] (the daemon answers every text request this way)
     pub fn text_with(s: impl Into<String>, outcome: Outcome) -> Self {
-        Self::Text { text: s.into(), outcome: Some(outcome) }
+        Self::Text { text: s.into(), outcome: Some(outcome), data: None }
+    }
+    /// Text with its [`Outcome`] and the same facts as [`Data`]
+    pub fn text_data(s: impl Into<String>, outcome: Outcome, data: Option<Data>) -> Self {
+        Self::Text { text: s.into(), outcome: Some(outcome), data }
     }
     pub fn error(s: impl Into<String>) -> Self {
         Self::Error { message: s.into(), retry_as_gesture: false }
@@ -818,6 +876,27 @@ mod tests {
         }
         let OldResponse::Text { text } = serde_json::from_str(&s).unwrap();
         assert_eq!(text, "Not found");
+    }
+
+    /// Data travels tagged by its type, and only when there is some
+    #[test]
+    fn data_travels_with_the_text() {
+        let status = Data::Status(StatusData {
+            wda_ready: true,
+            locked: Some(false),
+            foreground: Some("com.apple.springboard".into()),
+            width: Some(430.0),
+            height: Some(932.0),
+            ..Default::default()
+        });
+        let r = Response::text_data("WDA ready: True", Outcome::default(), Some(status));
+        let s = serde_json::to_string(&r).unwrap();
+        assert!(s.contains(r#""data":{"type":"status","wda_ready":true"#), "{s}");
+        assert_eq!(serde_json::from_str::<Response>(&s).unwrap(), r);
+        let el = ElementData { kind: "Button".into(), label: "OK".into(), x: 1.0, y: 2.0, width: 3.0, height: 4.0 };
+        let v = serde_json::to_value(Data::Elements { elements: vec![el] }).unwrap();
+        assert_eq!(v["elements"][0]["type"], "Button", "the page reads `type`");
+        assert!(!serde_json::to_string(&Response::text_with("x", Outcome::default())).unwrap().contains("data"));
     }
 
     /// The field decides; without it (older daemon) the Chinese text is read

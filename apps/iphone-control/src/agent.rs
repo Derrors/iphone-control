@@ -262,7 +262,7 @@ impl Agents {
                     if e.is_none_or(|e| e.event == "done") {
                         ended = true;
                         if let Some(pid) = pid {
-                            kill_group(pid);
+                            crate::procgroup::stop(pid);
                         }
                     }
                 }
@@ -403,16 +403,6 @@ fn parse_line(backend: Backend, v: &Value) -> Option<Out> {
             _ => None,
         },
     }
-}
-
-/// SIGTERM to the agent and everything it started (its MCP server), SIGKILL a little later if still there
-fn kill_group(pid: u32) {
-    let pgid = pid as libc::pid_t;
-    unsafe { libc::kill(-pgid, libc::SIGTERM) };
-    tokio::spawn(async move {
-        tokio::time::sleep(Duration::from_secs(3)).await;
-        unsafe { libc::kill(-pgid, libc::SIGKILL) };
-    });
 }
 
 /// What the agent is told, besides the task, in the task's language

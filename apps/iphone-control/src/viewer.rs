@@ -25,6 +25,7 @@
 //! instead of tapping a phone the user isn't looking at. The device handle is looked up again for each stream, so a
 //! replug (new usbmuxd id) doesn't break the picture.
 
+mod api;
 pub mod auth;
 mod lan;
 mod mcp;
@@ -37,6 +38,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::bail;
+use api::*;
 use ictl_daemon::machine::DeviceState;
 use ictl_daemon::protocol::{self, Request, Response, TouchPhase};
 use serde_json::{Value, json};
@@ -125,7 +127,7 @@ pub async fn run(
     // only a first guess: the page follows whichever device the daemon controls (see `info`). Not knowing yet is
     // fine: the daemon may still be starting (started together with this at login), and with several devices
     // connected it is the one that picks
-    let udid = match crate::target_device(socket, None).await {
+    let udid = match crate::client::target_device(socket, None).await {
         Ok(d) => d.udid,
         Err(e) => {
             eprintln!(
@@ -516,17 +518,7 @@ async fn route(
             }
         }
         ("POST", "/api/agent/tasks/open" | "/api/agent/tasks/finish") => {
-            if !action_allowed(&req, &ctx.access, ctx.port, pass.program()) {
-                return reply(&mut client, 403, "text/plain", b"forbidden").await;
-            }
-            let len = req.content_length.unwrap_or(0);
-            if len > MAX_BODY {
-                return reply(&mut client, 413, "text/plain", b"too large").await;
-            }
-            read_body(&mut client, &mut body, len).await?;
-            let Ok(b) = serde_json::from_slice::<Value>(&body) else {
-                return json_reply(&mut client, 400, &json!({"ok": false, "message": "bad request"})).await;
-            };
+            let Some(b) = action_body(&mut client, ctx, &req, pass, &mut body).await? else { return Ok(()) };
             if req.path == "/api/agent/tasks/open" {
                 let who = pass.who.as_ref().map_or("remote", |w| w.name.as_str());
                 return open_task(&mut client, ctx, &b, who).await;
@@ -565,17 +557,7 @@ async fn route(
             mcp::serve(svc, &mut client, &head, body).await
         }
         ("POST", p) if p.starts_with("/api/") => {
-            if !action_allowed(&req, &ctx.access, ctx.port, pass.program()) {
-                return reply(&mut client, 403, "text/plain", b"forbidden").await;
-            }
-            let len = req.content_length.unwrap_or(0);
-            if len > MAX_BODY {
-                return reply(&mut client, 413, "text/plain", b"too large").await;
-            }
-            read_body(&mut client, &mut body, len).await?;
-            let Ok(b) = serde_json::from_slice::<Value>(&body) else {
-                return json_reply(&mut client, 400, &json!({"ok": false, "message": "bad request"})).await;
-            };
+            let Some(b) = action_body(&mut client, ctx, &req, pass, &mut body).await? else { return Ok(()) };
             // controlling a task: who, for its log, and which local process (the daemon refuses the task's agent)
             let caller = if p.starts_with("/api/agent/tasks/") {
                 Caller::of(&client, pass.who.as_ref()).await
@@ -741,7 +723,7 @@ async fn post(ctx: &Ctx, name: &str, b: &Value, device: Option<&str>, caller: Ca
         let v = run_action(&ctx.socket, &Request::SelectDevice { device: device.to_owned() }, None, SHORT).await;
         // the page follows the device it picked
         if v["ok"] == true
-            && let Ok(s) = crate::snapshot(&ctx.socket).await
+            && let Ok(s) = crate::client::snapshot(&ctx.socket).await
             && let Some(d) = s.device
         {
             *ctx.udid.lock().unwrap_or_else(|p| p.into_inner()) = d.udid;
@@ -870,6 +852,34 @@ async fn open_task(client: &mut Conn, ctx: &Ctx, b: &Value, by: &str) -> anyhow:
 
 fn sse(e: &protocol::TaskEvent) -> String {
     format!("event: {}\ndata: {}\n\n", e.event, e.data)
+}
+
+/// An action's JSON body (`POST /api/…`), once it may be sent from where it comes ([`action_allowed`]); `None` when
+/// the request was answered already (refused, too large, not JSON)
+async fn action_body(
+    client: &mut Conn,
+    ctx: &Ctx,
+    req: &Head,
+    pass: &Pass,
+    body: &mut Vec<u8>,
+) -> anyhow::Result<Option<Value>> {
+    if !action_allowed(req, &ctx.access, ctx.port, pass.program()) {
+        reply(client, 403, "text/plain", b"forbidden").await?;
+        return Ok(None);
+    }
+    let len = req.content_length.unwrap_or(0);
+    if len > MAX_BODY {
+        reply(client, 413, "text/plain", b"too large").await?;
+        return Ok(None);
+    }
+    read_body(client, body, len).await?;
+    match serde_json::from_slice::<Value>(body) {
+        Ok(b) => Ok(Some(b)),
+        Err(_) => {
+            json_reply(client, 400, &json!({"ok": false, "message": "bad request"})).await?;
+            Ok(None)
+        }
+    }
 }
 
 /// `/api/agent/tasks/<id>/events`: the task's id
@@ -1257,7 +1267,7 @@ async fn run_action(socket: &Path, req: &Request, udid: Option<&str>, timeout: D
 fn action_result(req: &Request, result: Result<Response, impl std::fmt::Display>) -> Value {
     match result {
         // tapping by text that found nothing is an ordinary answer for the agent, a failure for the page
-        Ok(Response::Text { text, outcome }) => {
+        Ok(Response::Text { text, outcome, .. }) => {
             let missed = matches!(req, Request::TapElement { .. }) && protocol::tapped_nothing(&text, outcome);
             json!({"ok": !missed, "message": text})
         }
@@ -1266,255 +1276,6 @@ fn action_result(req: &Request, result: Result<Response, impl std::fmt::Display>
             "retry_as_gesture": retry_as_gesture && matches!(req, Request::Touch { phase: TouchPhase::Down, .. })}),
         Err(e) => json!({"ok": false, "message": e.to_string()}),
     }
-}
-
-/// One daemon request whose text the page needs as data. `en`: ask in English, whose wording the parsers expect
-async fn text_of(socket: &Path, req: Request, en: bool) -> Result<String, String> {
-    let call = protocol::call(socket, &req, Some(Duration::from_secs(60)));
-    let r = if en { ictl_l10n::scope(ictl_l10n::Lang::En, call).await } else { call.await };
-    match r {
-        Ok(Response::Text { text, .. }) => Ok(text),
-        Ok(Response::Error { message, .. }) => Err(message),
-        Ok(Response::Image { caption, .. }) => Ok(caption),
-        Err(e) => Err(e.to_string()),
-    }
-}
-
-/// Screen size in points (portrait) for turning a click on the picture into a tap, and the device the viewer follows.
-/// It follows the device the daemon controls: switched on this page, on another page, with `iphone-control select`,
-/// or automatically after an unplug. The page notices `udid` changing and moves its picture and panels over; until
-/// then its actions carry the old UDID and are refused, never sent to a phone the user isn't looking at
-async fn info(ctx: &Ctx) -> Result<Value, String> {
-    let s = crate::snapshot(&ctx.socket).await.map_err(|e| e.to_string())?;
-    let udid = s.device.as_ref().map(|d| d.udid.as_str()).unwrap_or_default();
-    *ctx.udid.lock().unwrap_or_else(|p| p.into_inner()) = udid.to_owned();
-    let screen = screen_of(&s.persisted, udid);
-    let live_touch = s.device.as_ref().is_some_and(|d| d.major_version() >= 27);
-    Ok(json!({
-        "display": s.display,
-        "width": screen.map(|s| s.width),
-        "height": screen.map(|s| s.height),
-        "udid": udid,
-        // the picture's pointer drives a finger over CoreDevice HID (iOS 27 and later); older phones get whole gestures
-        "live_touch": live_touch,
-        "device": s.device.as_ref().map(|d| &d.name),
-        "model": s.device.as_ref().map(|d| &d.product_type),
-        "model_name": s.device.as_ref().and_then(|d| d.model_name()),
-        "family": s.device.as_ref().map_or("unknown", |d| d.family()),
-        "state": state_of(&s.state).0,
-        // the picture as H.264 (`/video`) and with which encoder; null: MJPEG only
-        "video": ctx.video.as_ref().and_then(|e| e.label()),
-        // the phone's own screen video can be tried (`/video?src=device`): iOS 27 and later, not turned off
-        "device_video": ctx.device_video_allowed && live_touch,
-    }))
-}
-
-fn state_of(s: &DeviceState) -> (&'static str, Option<String>) {
-    match s {
-        DeviceState::Absent => ("Absent", None),
-        DeviceState::NeedsTrust => ("NeedsTrust", None),
-        DeviceState::DeveloperModeOff => ("DeveloperModeOff", None),
-        DeviceState::NeedsUnlock => ("NeedsUnlock", None),
-        DeviceState::NeedsSigning => ("NeedsSigning", None),
-        DeviceState::WdaStarting { last_error } => ("WdaStarting", last_error.clone()),
-        DeviceState::NeedsAutomationPin => ("NeedsAutomationPin", None),
-        DeviceState::Ready => ("Ready", None),
-    }
-}
-
-fn device_json(d: &ictl_device::DeviceInfo) -> Value {
-    json!({
-        "udid": d.udid, "name": d.name, "model": d.product_type, "ios": d.product_version,
-        "model_name": d.model_name(), "family": d.family(),
-    })
-}
-
-/// `{ state, last_error?, device: { name, model, model_name, family, ios, udid }, auto_unlock }`
-async fn daemon(ctx: &Ctx) -> Result<Value, String> {
-    let s = crate::snapshot(&ctx.socket).await.map_err(|e| e.to_string())?;
-    let (state, last_error) = state_of(&s.state);
-    Ok(json!({
-        "state": state,
-        "state_text": s.state.describe(),
-        "last_error": last_error,
-        "device": s.device.as_ref().map(device_json),
-        "auto_unlock": s.auto_unlock && !s.unlock_disabled,
-        // the page offers to sign and install WDA (NeedsSigning) only with an Apple ID to sign with
-        "signed_in": crate::account_dir(&ctx.data_dir).selected_email().await.is_ok(),
-    }))
-}
-
-/// `{ devices: [{ udid, name, model, model_name, family, ios, controlled }], fixed }`
-async fn devices(ctx: &Ctx) -> Result<Value, String> {
-    let s = crate::snapshot(&ctx.socket).await.map_err(|e| e.to_string())?;
-    let cur = s.device.as_ref().map(|d| d.udid.to_ascii_lowercase());
-    let list: Vec<Value> = s
-        .devices
-        .iter()
-        .map(|d| {
-            let mut v = device_json(d);
-            v["controlled"] = (cur.as_deref() == Some(d.udid.to_ascii_lowercase().as_str())).into();
-            v
-        })
-        .collect();
-    Ok(json!({"devices": list, "fixed": s.pinned_by_env, "auto": s.pinned.is_none()}))
-}
-
-/// `{ wda_ready, locked, foreground, foreground_id, width, height, route }`, from the English status text
-async fn status(ctx: &Ctx) -> Result<Value, String> {
-    let text = text_of(&ctx.socket, Request::Status, true).await?;
-    // the HID fallback needs iOS 27; an older device without WDA can't be operated at all
-    let hid = crate::snapshot(&ctx.socket).await.ok().and_then(|s| s.device).is_some_and(|d| d.major_version() >= 27);
-    let mut v = parse_status(&text, hid);
-    if let Some(id) = v["foreground_id"].as_str().map(str::to_owned) {
-        v["foreground"] = app_name(ctx, &id).await.into();
-    }
-    Ok(v)
-}
-
-fn parse_status(text: &str, hid: bool) -> Value {
-    let field = |k: &str| text.lines().find_map(|l| l.strip_prefix(k)).map(str::trim);
-    let ready = field("WDA ready:") == Some("True");
-    let lock = field("Locked:");
-    let locked = lock.map(|l| !l.starts_with("unlocked"));
-    let fg = field("Foreground app:").filter(|s| !s.is_empty());
-    let (w, h) = field("Screen:")
-        .and_then(|s| s.split_whitespace().next())
-        .and_then(|s| s.split_once('x'))
-        .and_then(|(w, h)| Some((w.parse::<f64>().ok()?, h.parse::<f64>().ok()?)))
-        .unzip();
-    json!({
-        "wda_ready": ready,
-        "locked": locked,
-        "possibly_locked": lock.is_some_and(|l| l.starts_with("possibly")),
-        "foreground_id": fg,
-        "foreground": fg,
-        "width": w,
-        "height": h,
-        // without WDA, screenshots, taps and keys go over CoreDevice HID (iOS 27 and later); otherwise nothing works
-        "route": if ready { "wda" } else if hid { "hid" } else { "none" },
-    })
-}
-
-/// The display name of an installed app (the home screen for SpringBoard); the bundle id when unknown
-async fn app_name(ctx: &Ctx, bundle: &str) -> String {
-    if bundle == SPRINGBOARD {
-        return ictl_l10n::tr!("主屏幕", "Home Screen").into();
-    }
-    let mut names = ctx.names.lock().await;
-    if !names.contains_key(bundle) {
-        for system in [false, true] {
-            if let Ok(list) = list_apps(ctx, system).await {
-                for (n, b) in list {
-                    names.insert(b, n);
-                }
-            }
-        }
-    }
-    names.get(bundle).cloned().unwrap_or_else(|| bundle.to_owned())
-}
-
-async fn list_apps(ctx: &Ctx, system: bool) -> Result<Vec<(String, String)>, String> {
-    let text = text_of(&ctx.socket, Request::ListApps { include_system: system }, false).await?;
-    Ok(text
-        .lines()
-        .filter_map(|l| l.split_once('\t'))
-        .map(|(n, b)| (n.trim().to_owned(), b.trim().to_owned()))
-        .collect())
-}
-
-/// `{ apps: [{ name, bundle_id }] }`: the user's apps, and with `system` the system's too
-async fn apps(ctx: &Ctx, system: bool) -> Result<Value, String> {
-    let mut all = list_apps(ctx, false).await?;
-    if system {
-        all.extend(list_apps(ctx, true).await?);
-    }
-    let mut seen = std::collections::HashSet::new();
-    all.retain(|(_, b)| seen.insert(b.clone()));
-    Ok(json!({"apps": all.iter().map(|(n, b)| json!({"name": n, "bundle_id": b})).collect::<Vec<_>>()}))
-}
-
-/// `{ elements: [{ type, label, x, y, width, height }] }`, `x`/`y` the top-left corner in points
-/// `keep_locked`: a read-only visitor, for whom a locked phone isn't unlocked
-async fn elements(ctx: &Ctx, filter: &str, keep_locked: bool) -> Result<Value, String> {
-    let req = Request::ListElements { filter: filter.to_owned(), limit: ELEMENT_LIMIT, max_age_ms: 0, keep_locked };
-    let text = text_of(&ctx.socket, req, true).await?;
-    Ok(json!({"elements": text.lines().filter_map(parse_element).collect::<Vec<_>>()}))
-}
-
-/// A system alert on the phone (a permission prompt and the like): `{ alert: null }` or
-/// `{ alert: { text, frame?: { x, y, width, height }, buttons: [{ label, x, y, width }] } }` in points: the alert's
-/// box (top left), each button's center and width. The page draws it where the real one is. The phone's own video
-/// (iOS 27, D16) can leave such an alert out: a location prompt showed there only as the dimmed screen behind it,
-/// while WDA's screenshot had it. The page asks while it shows that video and puts the alert next to the picture.
-/// `AlertCheck` is two quick WDA calls (the foreground app; the alert's text only when SpringBoard is in front); the
-/// element tree is only read when there is an alert
-async fn alert(ctx: &Ctx, keep_locked: bool) -> Result<Value, String> {
-    let check = text_of(&ctx.socket, Request::AlertCheck, true).await?;
-    let Some(text) = alert_text(&check) else { return Ok(json!({"alert": null})) };
-    let req = Request::ListElements { filter: String::new(), limit: ELEMENT_LIMIT, max_age_ms: 0, keep_locked };
-    // without its buttons the page still says there is an alert
-    let els: Vec<Value> = text_of(&ctx.socket, req, true)
-        .await
-        .map(|t| t.lines().filter_map(parse_element).collect())
-        .unwrap_or_default();
-    let (frame, buttons) = alert_parts(&els);
-    Ok(json!({"alert": {"text": text, "frame": frame, "buttons": buttons}}))
-}
-
-/// The alert's own text from `AlertCheck`'s English answer (`…a system alert is on screen: “text”, taps…`); `None`
-/// when it reports none
-fn alert_text(check: &str) -> Option<String> {
-    let start = check.find('“')? + '“'.len_utf8();
-    let end = check.rfind('”')?;
-    (end > start).then(|| check[start..end].trim().to_owned()).filter(|t| !t.is_empty())
-}
-
-/// The tree's alert box, and the buttons on it (whose center lies inside it) as `{ label, x, y, width }`
-fn alert_parts(els: &[Value]) -> (Value, Vec<Value>) {
-    let f = |e: &Value, k: &str| e[k].as_f64().unwrap_or(0.0);
-    let Some(a) = els.iter().find(|e| e["type"] == "Alert") else { return (Value::Null, Vec::new()) };
-    let frame = json!({"x": f(a, "x"), "y": f(a, "y"), "width": f(a, "width"), "height": f(a, "height")});
-    let inside = |x: f64, y: f64| {
-        x >= f(a, "x") && x <= f(a, "x") + f(a, "width") && y >= f(a, "y") && y <= f(a, "y") + f(a, "height")
-    };
-    let buttons = els
-        .iter()
-        .filter(|e| e["type"] == "Button")
-        .map(|e| (e, f(e, "x") + f(e, "width") / 2.0, f(e, "y") + f(e, "height") / 2.0))
-        .filter(|&(_, x, y)| inside(x, y))
-        .map(|(e, x, y)| json!({"label": e["label"], "x": x, "y": y, "width": f(e, "width")}))
-        .collect();
-    (frame, buttons)
-}
-
-/// One line of `iphone_list_elements`: `Type "label" [id="…"] [value="…"] @(cx,cy) WxH`. Other lines (a note
-/// that more were left out) are skipped
-fn parse_element(line: &str) -> Option<Value> {
-    let (kind, rest) = line.split_once(" \"")?;
-    if kind.is_empty() || kind.contains(' ') {
-        return None;
-    }
-    let at = rest.rfind(" @(")?;
-    let (desc, geom) = (&rest[..at], &rest[at + 3..]);
-    let label_end =
-        [desc.find("\" id=\""), desc.find("\" value=\"")].into_iter().flatten().min().unwrap_or_else(|| {
-            // no id or value: the label runs to the last quote
-            desc.rfind('"').unwrap_or(desc.len())
-        });
-    let label = &desc[..label_end];
-    let (center, size) = geom.split_once(") ")?;
-    let (cx, cy) = center.split_once(',')?;
-    let (w, h) = size.trim().split_once('x')?;
-    let n = |s: &str| s.trim().parse::<f64>().ok();
-    let (cx, cy, w, h) = (n(cx)?, n(cy)?, n(w)?, n(h)?);
-    Some(json!({"type": kind, "label": label, "x": cx - w / 2.0, "y": cy - h / 2.0, "width": w, "height": h}))
-}
-
-/// The recorded screen size, only if it belongs to `udid` (a size recorded by an older version, without
-/// a device, is used as is, like the daemon does)
-fn screen_of(p: &ictl_daemon::core::Persisted, udid: &str) -> Option<ictl_device::ScreenSize> {
-    p.screen_for(Some(udid)).map(|s| s.portrait())
 }
 
 #[cfg(test)]
@@ -2110,61 +1871,56 @@ mod tests {
     }
 
     #[test]
-    fn status_text_becomes_fields() {
-        let v = parse_status(
-            "WDA ready: True\nLocked: locked (actions unlock automatically)\nForeground app: com.apple.Preferences\nScreen: 440x956 points\nDaemon: Ready",
-            true,
-        );
+    fn the_daemon_s_status_becomes_the_page_s() {
+        let s = protocol::StatusData {
+            wda_ready: true,
+            locked: Some(true),
+            possibly_locked: false,
+            foreground: Some("com.apple.Preferences".into()),
+            width: Some(440.0),
+            height: Some(956.0),
+        };
+        let v = status_json(&s, true);
         assert_eq!(v["wda_ready"], true);
         assert_eq!(v["locked"], true);
         assert_eq!(v["foreground_id"], "com.apple.Preferences");
         assert_eq!((v["width"].as_f64(), v["height"].as_f64()), (Some(440.0), Some(956.0)));
         assert_eq!(v["route"], "wda");
-        assert_eq!(parse_status("WDA ready: True\nLocked: unlocked\n", false)["locked"], false);
-        let down = "WDA is starting\nreading elements … wait until WDA is back\nDaemon: Starting WDA";
-        assert_eq!(parse_status(down, true)["route"], "hid", "iOS 27 and later");
-        assert_eq!(parse_status(down, false)["route"], "none", "older: no HID fallback");
-        let down = parse_status(down, true);
-        assert_eq!(down["wda_ready"], false);
-        assert!(down["locked"].is_null());
-    }
-
-    #[test]
-    fn element_lines_become_boxes() {
-        let e = parse_element("Button \"通用\" id=\"com.apple.settings.general\" @(220,776) 400x52").unwrap();
-        assert_eq!(
-            e,
-            json!({"type": "Button", "label": "通用", "x": 20.0, "y": 750.0, "width": 400.0, "height": 52.0})
-        );
-        let v = parse_element("Button \"秒表\" value=\"1\" @(267,904) 108x54").unwrap();
-        assert_eq!((v["label"].as_str(), v["x"].as_f64()), (Some("秒表"), Some(213.0)));
-        let plain = parse_element("StaticText \"世界时钟\" @(83,140) 126x41").unwrap();
-        assert_eq!(plain["label"], "世界时钟");
-        let quoted = parse_element("StaticText \"say \"hi\"\" @(10,10) 4x4").unwrap();
-        assert_eq!(quoted["label"], "say \"hi\"");
-        assert!(parse_element("……另有 4 个未列出,可用 filter 缩小范围").is_none());
-        assert!(parse_element("4 more not listed; narrow it down with filter").is_none());
+        let down = protocol::StatusData::default();
+        assert_eq!(status_json(&down, true)["route"], "hid", "iOS 27 and later");
+        assert_eq!(status_json(&down, false)["route"], "none", "older: no HID fallback");
+        assert!(status_json(&down, true)["locked"].is_null());
     }
 
     /// The location prompt that the phone's own video didn't show (iPhone 15 Pro Max, iOS 27.0.1)
     #[test]
     fn a_system_alert_with_its_own_buttons() {
-        let check = "\nNote: a system alert is on screen: “Allow “Calendar” to use your location?\nYour location is used for travel time alerts.”, taps and swipes land on the alert; first tap a button on the alert with iphone_tap_element";
-        assert_eq!(
-            alert_text(check).as_deref(),
-            Some("Allow “Calendar” to use your location?\nYour location is used for travel time alerts.")
-        );
-        assert_eq!(alert_text(""), None, "no alert");
-        assert_eq!(alert_text("Launched x"), None);
+        // (type, label, center, size), as the daemon reads them
         let tree = [
-            "Button \"今天\" id=\"today-button\" @(61,880) 56x38",
-            "Alert \"允许“日历”使用你的位置？\" @(215,466) 270x320",
-            "StaticText \"允许“日历”使用你的位置？\" @(215,350) 230x44",
-            "Button \"允许一次\" @(215,520) 270x44",
-            "Button \"使用 App 时允许\" @(215,564) 270x44",
-            "Button \"不允许\" @(215,608) 270x44",
+            ("Button", "今天", (61.0, 880.0), (56.0, 38.0)),
+            ("Alert", "允许“日历”使用你的位置？", (215.0, 466.0), (270.0, 320.0)),
+            ("StaticText", "允许“日历”使用你的位置？", (215.0, 350.0), (230.0, 44.0)),
+            ("Button", "允许一次", (215.0, 520.0), (270.0, 44.0)),
+            ("Button", "使用 App 时允许", (215.0, 564.0), (270.0, 44.0)),
+            ("Button", "不允许", (215.0, 608.0), (270.0, 44.0)),
         ];
-        let els: Vec<Value> = tree.iter().filter_map(|l| parse_element(l)).collect();
+        let elements = tree
+            .iter()
+            .map(|&(kind, label, (cx, cy), (w, h))| protocol::ElementData {
+                kind: kind.into(),
+                label: label.into(),
+                x: cx - w / 2.0,
+                y: cy - h / 2.0,
+                width: w,
+                height: h,
+            })
+            .collect();
+        let els = element_list(Some(protocol::Data::Elements { elements }));
+        assert_eq!(
+            els[0],
+            json!({"type": "Button", "label": "今天", "x": 33.0, "y": 861.0, "width": 56.0, "height": 38.0})
+        );
+        assert!(element_list(Some(protocol::Data::Alert { text: None })).is_empty());
         let (frame, b) = alert_parts(&els);
         assert_eq!(frame, json!({"x": 80.0, "y": 306.0, "width": 270.0, "height": 320.0}));
         let labels: Vec<&str> = b.iter().filter_map(|v| v["label"].as_str()).collect();

@@ -138,7 +138,7 @@ async fn restart_daemon(socket: &Path, version: &str, running: bool, cmd: &[&std
 async fn wait_for_daemon(socket: &Path, version: &str, within: Duration) -> bool {
     let end = tokio::time::Instant::now() + within;
     while tokio::time::Instant::now() < end {
-        if let Ok(Ok(s)) = tokio::time::timeout(Duration::from_secs(2), crate::snapshot(socket)).await
+        if let Ok(Ok(s)) = tokio::time::timeout(Duration::from_secs(2), crate::client::snapshot(socket)).await
             && s.version.as_deref() == Some(version)
         {
             return true;

@@ -138,7 +138,7 @@ async fn setup_inner(cli: &Cli, reconfigure: bool) -> anyhow::Result<()> {
             daemon(cli, false).await?;
             crate::login(&cli.data_dir, None).await?;
             println!("{}", ictl_l10n::tr!("用新的账号重签 WDA…", "Re-signing WDA with the account…"));
-            crate::print_text(&cli.socket, ictl_daemon::protocol::Request::Resign { force: true }).await?;
+            crate::client::print_text(&cli.socket, ictl_daemon::protocol::Request::Resign { force: true }).await?;
         }
         5 => {
             daemon(cli, false).await?;
@@ -211,7 +211,7 @@ async fn full_with(cli: &Cli, force: bool) -> anyhow::Result<()> {
 
 /// Already set up: make sure the daemon runs, then show where things stand
 async fn already_set_up(cli: &Cli) -> anyhow::Result<()> {
-    if crate::snapshot(&cli.socket).await.is_err()
+    if crate::client::snapshot(&cli.socket).await.is_err()
         && let Some(s) = service::find()
     {
         println!("{}", ictl_l10n::tr!("守护进程没在运行，正在启动…", "The daemon isn't running, starting it…"));
@@ -278,12 +278,12 @@ fn proxy(env: &mut EnvFile, force: bool) -> anyhow::Result<bool> {
 }
 
 async fn wait_daemon(socket: &Path, timeout: Duration) -> bool {
-    crate::wait_until(timeout, Duration::from_secs(1), || async { crate::snapshot(socket).await.is_ok() }).await
+    crate::wait_until(timeout, Duration::from_secs(1), || async { crate::client::snapshot(socket).await.is_ok() }).await
 }
 
 /// Makes sure the daemon runs (as a service if the user agrees); `restart` reloads changed settings
 async fn daemon(cli: &Cli, restart: bool) -> anyhow::Result<()> {
-    let running = crate::snapshot(&cli.socket).await.is_ok();
+    let running = crate::client::snapshot(&cli.socket).await.is_ok();
     match (running, service::find()) {
         (true, Some(s)) if restart => {
             println!(
@@ -385,7 +385,7 @@ async fn reinstall_service(cli: &Cli) -> anyhow::Result<()> {
 
 async fn passcode(cli: &Cli, force: bool) -> anyhow::Result<()> {
     let cfg = ictl_daemon::Config::from_env(&cli.data_dir);
-    let device = crate::target_device(&cli.socket, None).await?;
+    let device = crate::client::target_device(&cli.socket, None).await?;
     let set = cfg.passcode_file_for(&device.udid).is_file();
     println!(
         "{}",

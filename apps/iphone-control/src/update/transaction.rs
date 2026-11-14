@@ -240,7 +240,7 @@ impl Host<'_> {
         if !self.owns_pid(pid) {
             return false;
         }
-        matches!(tokio::time::timeout(Duration::from_secs(2), crate::snapshot(self.socket)).await, Ok(Ok(s)) if s.maintenance == Some(true) && s.pid == Some(pid) && s.version.as_deref() == Some(version))
+        matches!(tokio::time::timeout(Duration::from_secs(2), crate::client::snapshot(self.socket)).await, Ok(Ok(s)) if s.maintenance == Some(true) && s.pid == Some(pid) && s.version.as_deref() == Some(version))
     }
 }
 

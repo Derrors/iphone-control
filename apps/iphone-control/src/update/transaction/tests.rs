@@ -117,7 +117,7 @@ impl Services for TestService {
         for _ in 0..2 {
             let snap = tokio::time::timeout(Duration::from_secs(5), async {
                 loop {
-                    if let Ok(s) = crate::snapshot(&self.socket).await {
+                    if let Ok(s) = crate::client::snapshot(&self.socket).await {
                         break s;
                     }
                     tokio::time::sleep(Duration::from_millis(20)).await;
@@ -180,7 +180,7 @@ async fn busy_then_replace_while_daemon_is_running() {
     f.host.busy.set(false);
     f.apply().await.unwrap();
     f.assert_installed(&f.new);
-    assert_eq!(crate::snapshot(&f.host.socket).await.unwrap().version.unwrap(), f.new.version);
+    assert_eq!(crate::client::snapshot(&f.host.socket).await.unwrap().version.unwrap(), f.new.version);
     assert_eq!(outcome(&f.store.binary).unwrap().unwrap().status, "installed");
     assert_eq!(fs::read_to_string(&state).unwrap(), "untouched device state");
 }
@@ -194,7 +194,7 @@ async fn unhealthy_daemon_restores_last_verified_executable_and_service() {
     f.host.start_healthy(&f.old.version).await.unwrap();
     assert!(f.apply().await.is_err());
     f.assert_installed(&f.old);
-    assert_eq!(crate::snapshot(&f.host.socket).await.unwrap().version.unwrap(), f.old.version);
+    assert_eq!(crate::client::snapshot(&f.host.socket).await.unwrap().version.unwrap(), f.old.version);
     let result = outcome(&f.store.binary).unwrap().unwrap();
     assert_eq!(result.status, "restored");
     assert_eq!(result.suppressed_version.unwrap(), f.new.version);
@@ -296,12 +296,12 @@ async fn recovers_after_process_death_using_only_durable_records() {
             write_json(&store.journal(), &tx).unwrap();
         }
         if phase == "starting" {
-            assert_eq!(crate::snapshot(&f.host.socket).await.unwrap().version.unwrap(), f.new.version);
+            assert_eq!(crate::client::snapshot(&f.host.socket).await.unwrap().version.unwrap(), f.new.version);
         }
         resume(&store, &f.host, &tx).await.unwrap();
         assert_eq!(digest(&store.binary).unwrap(), f.old.sha256);
         assert!(!store.journal().exists());
-        assert_eq!(crate::snapshot(&f.host.socket).await.unwrap().version.unwrap(), f.old.version);
+        assert_eq!(crate::client::snapshot(&f.host.socket).await.unwrap().version.unwrap(), f.old.version);
     }
 }
 

@@ -14,6 +14,7 @@ use crate::core::{Daemon, Inner, drop_tunnel, hid_supported, wda_down};
 use crate::imaging::{self, fmt_g};
 use crate::notify::Event;
 use crate::protocol::{ALERT_BLOCKING, Response, TAP_MISSED, TouchPhase};
+use crate::protocol::{ElementData, StatusData};
 
 /// 锁屏后至少等这么久再自动解锁：锁屏过渡没走完就唤醒，WDA 第一下上滑卡约 16 秒后报 `point.x != INFINITY`
 pub(crate) const LOCK_SETTLE: Duration = Duration::from_secs(3);
@@ -194,16 +195,18 @@ impl Daemon {
         }
     }
 
-    pub(crate) async fn status_text(&self, g: &mut Inner) -> String {
+    /// The status for people and agents, and the same as data for programs (the control page)
+    pub(crate) async fn status(&self, g: &mut Inner) -> (String, StatusData) {
         let mut daemon_line = ictl_l10n::trf!("守护进程: {}", "Daemon: {}", g.state.describe());
         if let Some(l) = self.devices_line(g) {
             daemon_line = format!("{l}\n{daemon_line}");
         }
         let unlock = self.unlock_cfg(g.device.as_ref().map(|d| d.udid.as_str()));
         let Some(w) = self.wda(g) else {
-            return format!("{}\n{}\n{daemon_line}", wda_down(&g.state, g.info.as_ref()), needs_wda());
+            let text = format!("{}\n{}\n{daemon_line}", wda_down(&g.state, g.info.as_ref()), needs_wda());
+            return (text, StatusData::default());
         };
-        let r: Result<String, WdaError> = async {
+        let r: Result<(String, StatusData), WdaError> = async {
             let ready = w.ready().await?;
             let app = w.active_app().await?;
             let s = w.screen_size().await?;
@@ -223,16 +226,25 @@ impl Daemon {
             if !locked && unlock.disabled_by_failure() {
                 lock += ictl_l10n::tr!(";自动解锁已停用", "; auto-unlock disabled");
             }
+            let data = StatusData {
+                wda_ready: ready,
+                locked: Some(locked || check.uncertain),
+                possibly_locked: check.uncertain,
+                foreground: Some(app.clone()).filter(|a| !a.is_empty()),
+                width: Some(s.width),
+                height: Some(s.height),
+            };
             let ready = if ready { "True" } else { "False" };
-            Ok(ictl_l10n::trf!("WDA 就绪: {ready}\n锁屏: {lock}\n前台 App: {app}\n屏幕: {}x{} 点", "WDA ready: {ready}\nLocked: {lock}\nForeground app: {app}\nScreen: {}x{} points",
+            let text = ictl_l10n::trf!("WDA 就绪: {ready}\n锁屏: {lock}\n前台 App: {app}\n屏幕: {}x{} 点", "WDA ready: {ready}\nLocked: {lock}\nForeground app: {app}\nScreen: {}x{} points",
                 fmt_g(s.width),
                 fmt_g(s.height)
-            ))
+            );
+            Ok((text, data))
         }
         .await;
         match r {
-            Ok(t) => format!("{t}\n{daemon_line}"),
-            Err(e) => format!("{e}\n{}\n{daemon_line}", needs_wda()),
+            Ok((t, data)) => (format!("{t}\n{daemon_line}"), data),
+            Err(e) => (format!("{e}\n{}\n{daemon_line}", needs_wda()), StatusData::default()),
         }
     }
 
@@ -299,7 +311,7 @@ impl Daemon {
         limit: usize,
         max_age: Duration,
         keep_locked: bool,
-    ) -> Result<String, String> {
+    ) -> Result<(String, Vec<ElementData>), String> {
         if keep_locked {
             // only looking (a read-only viewer): the passcode isn't typed for it
             if let Some(w) = self.wda(g)
@@ -318,6 +330,7 @@ impl Daemon {
         let shown: Vec<&elements::Element> =
             if filter.is_empty() { els.iter().collect() } else { elements::filter(&els, filter) };
         let lines: Vec<_> = shown.iter().take(limit).map(|e| e.describe()).collect();
+        let data = shown.iter().take(limit).map(|e| element_data(e)).collect();
         let more = if shown.len() > limit {
             ictl_l10n::trf!(
                 "\n……另有 {} 个未列出,可用 filter 缩小范围",
@@ -327,7 +340,7 @@ impl Daemon {
         } else {
             String::new()
         };
-        Ok(if lines.is_empty() { no_elements_text(filter, els.len()) } else { lines.join("\n") } + &more)
+        Ok((if lines.is_empty() { no_elements_text(filter, els.len()) } else { lines.join("\n") } + &more, data))
     }
 
     /// 等界面稳定，最多等 `max`：
@@ -427,14 +440,15 @@ impl Daemon {
     /// 前台是 SpringBoard 时查有没有系统弹窗（权限请求等），有就返回提醒，没有返回空串。
     /// 不带 then 的操作做完后调：弹窗挡着时点击、滑动都会落在弹窗上，WDA 却照样报成功。
     /// 前台是 App 时只多一次约 0.13 秒的查询；在主屏上再多约 0.4 秒
-    pub(crate) async fn alert_check(&self, g: &mut Inner) -> Result<String, String> {
-        let Some(w) = self.wda(g) else { return Ok(String::new()) };
+    /// A system alert in front: the note for the agent, and the alert's own text
+    pub(crate) async fn alert_check(&self, g: &mut Inner) -> Result<(String, Option<String>), String> {
+        let Some(w) = self.wda(g) else { return Ok((String::new(), None)) };
         if w.active_app().await.map_err(|e| e.to_string())? != SPRINGBOARD {
-            return Ok(String::new());
+            return Ok((String::new(), None));
         }
         Ok(match w.alert_text().await {
-            Ok(Some(text)) => alert_msg(&text),
-            _ => String::new(),
+            Ok(Some(text)) => (alert_msg(&text), Some(text)),
+            _ => (String::new(), None),
         })
     }
 
@@ -1250,6 +1264,20 @@ fn no_elements_text(filter: &str, total: usize) -> String {
             "没有找到包含 \"{filter}\" 的元素(屏幕上另有 {total} 个带文字的元素,不带 filter 可全部列出)",
             "No element containing \"{filter}\" ({total} other elements with text on screen; leave out filter to list them all)"
         )
+    }
+}
+
+/// An element as data: the text it shows (its label, else its name, else its value) and its box
+fn element_data(e: &elements::Element) -> ElementData {
+    let text = [&e.label, &e.name, &e.value].into_iter().find(|s| !s.is_empty()).cloned().unwrap_or_default();
+    let (w, h) = (e.size.0 as f64, e.size.1 as f64);
+    ElementData {
+        kind: e.kind.clone(),
+        label: text.chars().take(200).collect(),
+        x: e.center.0 as f64 - w / 2.0,
+        y: e.center.1 as f64 - h / 2.0,
+        width: w,
+        height: h,
     }
 }
 

@@ -961,8 +961,14 @@ impl Daemon {
     async fn dispatch(&self, g: &mut Inner, req: Request, view: Option<&str>) -> Response {
         // what the text reports, for clients that act on it (Response::Text.outcome)
         let mut outcome = crate::protocol::Outcome::default();
+        // the same facts as data, for programs (Response::Text.data)
+        let mut data = None;
         let r = match req {
-            Request::Status => Ok(self.status_text(g).await),
+            Request::Status => {
+                let (text, status) = self.status(g).await;
+                data = Some(crate::protocol::Data::Status(status));
+                Ok(text)
+            }
             // streams on its own connection (`lib::serve_conn` hands it to `screen::stream`); never queued here
             Request::ScreenStream => {
                 Err("screen_stream is a streaming request: open it with open_screen_stream".into())
@@ -970,9 +976,13 @@ impl Daemon {
             Request::Screenshot { region } => {
                 return self.screenshot(g, region).await.unwrap_or_else(Response::error);
             }
-            Request::ListElements { filter, limit, max_age_ms, keep_locked } => {
-                self.list_elements(g, &filter, limit, Duration::from_millis(max_age_ms), keep_locked).await
-            }
+            Request::ListElements { filter, limit, max_age_ms, keep_locked } => self
+                .list_elements(g, &filter, limit, Duration::from_millis(max_age_ms), keep_locked)
+                .await
+                .map(|(text, elements)| {
+                    data = Some(crate::protocol::Data::Elements { elements });
+                    text
+                }),
             Request::Tap { x, y } => self.tap(g, x, y, view).await,
             Request::TapElement { text, index, max_age_ms } => {
                 self.tap_element(g, &text, index, Duration::from_millis(max_age_ms)).await.map(|(t, missed)| {
@@ -991,10 +1001,14 @@ impl Daemon {
                     .map(|()| Response::text_with("", outcome))
                     .unwrap_or_else(|e| e);
             }
-            Request::ListApps { include_system } => self
-                .list_apps(g, include_system)
-                .await
-                .map(|a| a.iter().map(|a| format!("{}\t{}", a.name, a.bundle_id)).collect::<Vec<_>>().join("\n")),
+            Request::ListApps { include_system } => self.list_apps(g, include_system).await.map(|a| {
+                let apps = a
+                    .iter()
+                    .map(|a| crate::protocol::AppData { name: a.name.clone(), bundle_id: a.bundle_id.clone() })
+                    .collect();
+                data = Some(crate::protocol::Data::Apps { apps });
+                a.iter().map(|a| format!("{}\t{}", a.name, a.bundle_id)).collect::<Vec<_>>().join("\n")
+            }),
             Request::LaunchApp { app } => self.launch_app(g, &app).await.map(|(t, alert)| {
                 outcome.alert_reported = alert;
                 t
@@ -1005,7 +1019,10 @@ impl Daemon {
                 t
             }),
             Request::Settle { max_ms } => self.settle(g, Duration::from_millis(max_ms)).await,
-            Request::AlertCheck => self.alert_check(g).await,
+            Request::AlertCheck => self.alert_check(g).await.map(|(text, alert)| {
+                data = Some(crate::protocol::Data::Alert { text: alert });
+                text
+            }),
             Request::WaitFor { text, timeout_ms } => self.wait_for(g, &text, Duration::from_millis(timeout_ms)).await,
             Request::Doctor => Ok(self.doctor(g).await),
             Request::UnlockReset => {
@@ -1037,7 +1054,7 @@ impl Daemon {
             | Request::TaskNote { .. }
             | Request::TaskFinish { .. } => unreachable!("other lanes"),
         };
-        r.map(|t| Response::text_with(t, outcome)).unwrap_or_else(Response::error)
+        r.map(|t| Response::text_data(t, outcome, data)).unwrap_or_else(Response::error)
     }
 
     pub async fn shutdown(&self) {

@@ -74,7 +74,7 @@ pub async fn target_device(socket: &Path, query: Option<&str>) -> anyhow::Result
         let i = ictl_daemon::devices::resolve_device(&infos, q).map_err(anyhow::Error::msg)?;
         return Ok(infos[i].clone());
     }
-    if let Some(u) = env_nonempty("IPHONE_UDID") {
+    if let Some(u) = env_nonempty(ictl_daemon::protocol::env::UDID) {
         return Ok(pick(&u));
     }
     if let Some(s) = &snap {

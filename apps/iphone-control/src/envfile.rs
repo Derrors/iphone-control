@@ -159,13 +159,13 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("ictl-env-{}", std::process::id()));
         let p = dir.join("env");
         let mut f = EnvFile { path: p.clone(), text: "# proxy\nHTTP_PROXY=\nBARK_KEY=old\nBARK_KEY=older\n".into() };
-        assert_eq!(f.get("BARK_KEY").as_deref(), Some("older"), "the last one wins");
-        assert!(f.set("BARK_KEY", Some("new")).unwrap());
-        assert!(!f.set("BARK_KEY", Some("new")).unwrap(), "unchanged");
+        assert_eq!(f.get(ictl_daemon::protocol::env::BARK_KEY).as_deref(), Some("older"), "the last one wins");
+        assert!(f.set(ictl_daemon::protocol::env::BARK_KEY, Some("new")).unwrap());
+        assert!(!f.set(ictl_daemon::protocol::env::BARK_KEY, Some("new")).unwrap(), "unchanged");
         assert!(f.set("HTTP_PROXY", Some("http://127.0.0.1:7890")).unwrap());
-        assert!(f.set("TG_CHAT_ID", Some("-100 1")).unwrap());
+        assert!(f.set(ictl_daemon::protocol::env::TG_CHAT_ID, Some("-100 1")).unwrap());
         assert_eq!(f.text, "# proxy\nHTTP_PROXY=http://127.0.0.1:7890\nBARK_KEY=new\nTG_CHAT_ID='-100 1'\n");
-        assert_eq!(f.get("TG_CHAT_ID").as_deref(), Some("-100 1"));
+        assert_eq!(f.get(ictl_daemon::protocol::env::TG_CHAT_ID).as_deref(), Some("-100 1"));
         assert!(f.set("HTTP_PROXY", None).unwrap());
         assert_eq!(f.get("HTTP_PROXY"), None);
         assert!(f.set("X", Some("it's")).is_err());
@@ -179,7 +179,7 @@ mod tests {
     fn a_new_file_starts_from_the_example() {
         let f = EnvFile::open(Path::new("/nonexistent/ictl/env")).unwrap();
         assert!(f.text.contains("IPHONE_CONTROL_LANG="));
-        assert_eq!(f.get("IPHONE_CONTROL_LANG"), None);
-        assert_eq!(f.get("BARK_SERVER").as_deref(), Some("https://api.day.app"));
+        assert_eq!(f.get(ictl_daemon::protocol::env::LANG), None);
+        assert_eq!(f.get(ictl_daemon::protocol::env::BARK_SERVER).as_deref(), Some("https://api.day.app"));
     }
 }

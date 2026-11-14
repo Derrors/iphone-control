@@ -298,7 +298,7 @@ impl Agents {
         let mut env = Map::new();
         env.insert(protocol::TASK_TOKEN_ENV.into(), token.into());
         // the agent's tools answer in the task's language (this runs in its scope, see `start`)
-        env.insert("IPHONE_CONTROL_LANG".into(), ictl_l10n::lang().code().into());
+        env.insert(ictl_daemon::protocol::env::LANG.into(), ictl_l10n::lang().code().into());
         let s = |v: &str| v.to_owned();
         match backend {
             Backend::Claude => {

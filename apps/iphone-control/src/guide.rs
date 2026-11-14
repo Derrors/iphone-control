@@ -424,8 +424,8 @@ async fn passcode(cli: &Cli, force: bool) -> anyhow::Result<()> {
 
 /// Asks for a notification channel. Returns whether the file changed, and the settings to test if there are any
 fn notifications(env: &mut EnvFile, force: bool) -> anyhow::Result<(bool, Option<ictl_daemon::config::NotifyConfig>)> {
-    let bark = env.get("BARK_KEY");
-    let tg = env.get("TG_BOT_TOKEN").zip(env.get("TG_CHAT_ID"));
+    let bark = env.get(ictl_daemon::protocol::env::BARK_KEY);
+    let tg = env.get(ictl_daemon::protocol::env::TG_BOT_TOKEN).zip(env.get(ictl_daemon::protocol::env::TG_CHAT_ID));
     println!(
         "{}",
         ictl_l10n::tr!(
@@ -466,9 +466,13 @@ fn notifications(env: &mut EnvFile, force: bool) -> anyhow::Result<(bool, Option
                 "  Bark 服务器（回车用 https://api.day.app）: ",
                 "  Bark server (Enter for https://api.day.app): "
             ))?;
-            changed |= env.set("BARK_KEY", Some(&key))?;
-            changed |= env.set("BARK_SERVER", Some(if server.is_empty() { "https://api.day.app" } else { &server }))?;
-            changed |= env.set("TG_BOT_TOKEN", None)? | env.set("TG_CHAT_ID", None)?;
+            changed |= env.set(ictl_daemon::protocol::env::BARK_KEY, Some(&key))?;
+            changed |= env.set(
+                ictl_daemon::protocol::env::BARK_SERVER,
+                Some(if server.is_empty() { "https://api.day.app" } else { &server }),
+            )?;
+            changed |= env.set(ictl_daemon::protocol::env::TG_BOT_TOKEN, None)?
+                | env.set(ictl_daemon::protocol::env::TG_CHAT_ID, None)?;
         }
         2 => {
             let token = crate::read_secret(ictl_l10n::tr!(
@@ -482,11 +486,14 @@ fn notifications(env: &mut EnvFile, force: bool) -> anyhow::Result<(bool, Option
             if token.is_empty() || chat.is_empty() {
                 bail!("{}", ictl_l10n::tr!("token 和 chat id 都要填", "Both the token and the chat id are needed"));
             }
-            changed |= env.set("TG_BOT_TOKEN", Some(&token))? | env.set("TG_CHAT_ID", Some(&chat))?;
-            changed |= env.set("BARK_KEY", None)?;
+            changed |= env.set(ictl_daemon::protocol::env::TG_BOT_TOKEN, Some(&token))?
+                | env.set(ictl_daemon::protocol::env::TG_CHAT_ID, Some(&chat))?;
+            changed |= env.set(ictl_daemon::protocol::env::BARK_KEY, None)?;
         }
         _ => {
-            changed |= env.set("BARK_KEY", None)? | env.set("TG_BOT_TOKEN", None)? | env.set("TG_CHAT_ID", None)?;
+            changed |= env.set(ictl_daemon::protocol::env::BARK_KEY, None)?
+                | env.set(ictl_daemon::protocol::env::TG_BOT_TOKEN, None)?
+                | env.set(ictl_daemon::protocol::env::TG_CHAT_ID, None)?;
             return Ok((changed, None));
         }
     }
@@ -496,10 +503,12 @@ fn notifications(env: &mut EnvFile, force: bool) -> anyhow::Result<(bool, Option
     Ok((
         true,
         Some(ictl_daemon::config::NotifyConfig {
-            tg_bot_token: env.get("TG_BOT_TOKEN"),
-            tg_chat_id: env.get("TG_CHAT_ID"),
-            bark_server: env.get("BARK_SERVER").unwrap_or_else(|| "https://api.day.app".into()),
-            bark_key: env.get("BARK_KEY"),
+            tg_bot_token: env.get(ictl_daemon::protocol::env::TG_BOT_TOKEN),
+            tg_chat_id: env.get(ictl_daemon::protocol::env::TG_CHAT_ID),
+            bark_server: env
+                .get(ictl_daemon::protocol::env::BARK_SERVER)
+                .unwrap_or_else(|| "https://api.day.app".into()),
+            bark_key: env.get(ictl_daemon::protocol::env::BARK_KEY),
         }),
     ))
 }

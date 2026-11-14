@@ -45,7 +45,7 @@ use flv::Packet;
 
 /// `IPHONE_CONTROL_VIEWER_CODEC` allows the phone's own screen video ([`device`]): `auto` (the default) or `device`
 pub fn device_allowed() -> bool {
-    ictl_daemon::config::env("IPHONE_CONTROL_VIEWER_CODEC")
+    ictl_daemon::config::env(ictl_daemon::protocol::env::VIEWER_CODEC)
         .is_none_or(|v| v.eq_ignore_ascii_case("auto") || v.eq_ignore_ascii_case("device"))
 }
 

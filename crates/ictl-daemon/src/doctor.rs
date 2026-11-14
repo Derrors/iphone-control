@@ -280,7 +280,7 @@ impl Daemon {
 /// 其他系统要有 ffmpeg，Linux 上用显卡编码还要能打开 `/dev/dri/renderD*`（`render` 组）。只看前提，不试编码：
 /// 用哪个编码器，`viewer` 启动时会说
 async fn viewer_picture() -> String {
-    if crate::config::env("IPHONE_CONTROL_VIEWER_CODEC").is_some_and(|v| v.eq_ignore_ascii_case("mjpeg")) {
+    if crate::config::env(crate::protocol::env::VIEWER_CODEC).is_some_and(|v| v.eq_ignore_ascii_case("mjpeg")) {
         return ictl_l10n::tr!(
             "✅ 控制台画面按设置用 MJPEG(IPHONE_CONTROL_VIEWER_CODEC=mjpeg)",
             "✅ Viewer picture uses MJPEG as set (IPHONE_CONTROL_VIEWER_CODEC=mjpeg)"

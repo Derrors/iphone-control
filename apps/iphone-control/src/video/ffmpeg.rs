@@ -341,7 +341,7 @@ pub struct Encoders {
 impl Encoders {
     /// Finds and checks an encoder. `Err`: why the page keeps MJPEG (no ffmpeg, none works, or turned off)
     pub async fn detect() -> Result<Arc<Self>, String> {
-        let want = env("IPHONE_CONTROL_VIEWER_CODEC").map(|v| v.to_ascii_lowercase());
+        let want = env(ictl_daemon::protocol::env::VIEWER_CODEC).map(|v| v.to_ascii_lowercase());
         let want = want.as_deref().filter(|v| *v != "auto");
         if want == Some("mjpeg") {
             return Err(ictl_l10n::tr!("IPHONE_CONTROL_VIEWER_CODEC=mjpeg", "IPHONE_CONTROL_VIEWER_CODEC=mjpeg").into());
@@ -396,7 +396,7 @@ impl Encoders {
         });
         let e = Arc::new(Self {
             ffmpeg,
-            qp: qp_from(env("IPHONE_CONTROL_VIEWER_QP").as_deref()),
+            qp: qp_from(env(ictl_daemon::protocol::env::VIEWER_QP).as_deref()),
             old,
             list,
             sample,

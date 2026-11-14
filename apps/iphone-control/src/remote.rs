@@ -15,13 +15,13 @@ use ictl_daemon::protocol::{TaskEvent, TaskInfo, TaskOpened};
 use serde_json::{Value, json};
 
 /// The viewer's login token for `task run --url`
-pub const LOGIN_ENV: &str = "IPHONE_CONTROL_VIEWER_TOKEN";
+pub const LOGIN_ENV: &str = ictl_daemon::protocol::env::VIEWER_TOKEN;
 /// Given to the command: the viewer it works through
-pub const URL_ENV: &str = "IPHONE_CONTROL_URL";
+pub const URL_ENV: &str = ictl_daemon::protocol::env::URL;
 /// Given to the command: the viewer's MCP endpoint, for an agent that connects by URL
-pub const MCP_URL_ENV: &str = "IPHONE_CONTROL_MCP_URL";
+pub const MCP_URL_ENV: &str = ictl_daemon::protocol::env::MCP_URL;
 /// Given to the command when `--ca` was: the certificate to trust
-pub const CA_ENV: &str = "IPHONE_CONTROL_CA";
+pub const CA_ENV: &str = ictl_daemon::protocol::env::CA;
 
 /// A viewer on another machine
 pub struct Remote {

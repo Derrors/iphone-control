@@ -354,6 +354,8 @@ pub enum Data {
     Alert {
         text: Option<String>,
     },
+    /// Nothing was read: a [`BACKGROUND`] request gave way to an action
+    Busy,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -651,6 +653,10 @@ fn current_task() -> (Option<String>, Option<u64>) {
 /// Request key carrying the client's language (`zh` / `en`). The daemon answers in it; requests without it
 /// (older clients) get Chinese, as before. Older daemons ignore the extra key
 pub const LANG: &str = "lang";
+/// Request key: a poll the caller repeats anyway (the control page's status and alert checks). The daemon skips it
+/// when an action waits for the phone, and drops it when one comes while it runs, answering [`Data::Busy`]: such a
+/// check took the phone for up to a second (WDA's alert lookup on the home screen) while a tap waited behind it
+pub const BACKGROUND: &str = "background";
 
 /// 发一个请求、读一个响应（客户端用）。`timeout` 为 None 时一直等（例如 `sign` 要等签名装完）。
 /// 返回之前被丢掉（超时、调用方取消）时连接随之关闭，守护进程会放弃还在排队的这个请求
@@ -662,6 +668,15 @@ pub async fn call(
     call_expecting(socket, req, timeout, None).await
 }
 
+/// A [`BACKGROUND`] request: answered with [`Data::Busy`] instead of keeping an action waiting
+pub async fn call_background(
+    socket: &std::path::Path,
+    req: &Request,
+    timeout: Option<std::time::Duration>,
+) -> std::io::Result<Response> {
+    exchange_on(socket, req, timeout, None, None, true).await
+}
+
 /// 同 [`call`]；`expect_udid` 见 [`EXPECT_UDID`]
 pub async fn call_expecting(
     socket: &std::path::Path,
@@ -669,7 +684,7 @@ pub async fn call_expecting(
     timeout: Option<std::time::Duration>,
     expect_udid: Option<&str>,
 ) -> std::io::Result<Response> {
-    exchange_on(socket, req, timeout, expect_udid, None).await
+    exchange_on(socket, req, timeout, expect_udid, None, false).await
 }
 
 /// Send a coordinate action only if this device and its measured geometry still match.
@@ -680,7 +695,7 @@ pub async fn call_in_view(
     udid: &str,
     view: &str,
 ) -> std::io::Result<Response> {
-    exchange_on(socket, req, timeout, Some(udid), Some(view)).await
+    exchange_on(socket, req, timeout, Some(udid), Some(view), false).await
 }
 
 async fn exchange_on(
@@ -689,6 +704,7 @@ async fn exchange_on(
     timeout: Option<std::time::Duration>,
     expect_udid: Option<&str>,
     expect_view: Option<&str>,
+    background: bool,
 ) -> std::io::Result<Response> {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
     let exchange = async {
@@ -703,6 +719,9 @@ async fn exchange_on(
             }
             if let Some(u) = expect_udid {
                 o.insert(EXPECT_UDID.into(), u.into());
+            }
+            if background {
+                o.insert(BACKGROUND.into(), true.into());
             }
             add_task_keys(o);
         }

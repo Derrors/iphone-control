@@ -236,6 +236,8 @@ pub struct CallCtx {
     pub task_step: Option<u64>,
     /// The process that sent it (the socket's peer), when the system says
     pub peer: Option<u32>,
+    /// A poll that gives way to actions ([`ictl_protocol::BACKGROUND`])
+    pub background: bool,
 }
 
 /// Logical points measured on this connection. A different id invalidates queued coordinates.
@@ -383,6 +385,13 @@ pub struct Daemon {
     /// A supervision round is due now, not at the next [`TICK`]: starting WDA finished, so its outcome is taken
     /// (ready seconds sooner after a restart or a hang)
     pub(crate) wake: Arc<tokio::sync::Notify>,
+    /// Actions waiting for the device lock: a background check doesn't start while there are any
+    /// ([`ictl_protocol::BACKGROUND`])
+    waiting: std::sync::atomic::AtomicUsize,
+    /// An action started waiting: a background check that runs gives the phone up
+    give_way: tokio::sync::Notify,
+    /// When the last action was done: background checks wait for a quiet moment ([`quiet_before`])
+    last_action: std::sync::Mutex<Option<Instant>>,
 }
 
 /// 停掉 HID 会话（屏幕媒体流），隧道保留。媒体流不停的话手机一直以为「配对的电脑」在看屏幕：
@@ -509,6 +518,9 @@ impl Daemon {
             heartbeat: Heartbeat::new(),
             tasks,
             wake: Arc::default(),
+            waiting: std::sync::atomic::AtomicUsize::new(0),
+            give_way: tokio::sync::Notify::new(),
+            last_action: std::sync::Mutex::new(None),
         })
     }
 
@@ -932,10 +944,29 @@ impl Daemon {
             Lane::Device => {}
         }
 
-        // still let through now that it holds the lock: the task may have been paused or taken over meanwhile
-        let mut g = match self.lock_admitted(&self.inner, &req, admission, &mut queued_at, &mut ctx.gone).await {
-            Ok(g) => g,
-            Err(r) => return r,
+        // a check the page repeats anyway: only while nothing else wants the phone ([`ictl_protocol::BACKGROUND`])
+        let background = ctx.background && matches!(req, Request::Status | Request::AlertCheck);
+        // someone is acting on the phone: a slow check now would sit in WDA's queue before their next action (giving
+        // up waiting for its answer doesn't stop WDA working on it)
+        let acting = || {
+            let last = *self.last_action.lock().unwrap_or_else(|p| p.into_inner());
+            last.is_some_and(|t| t.elapsed() < quiet_before(&req))
+        };
+        let mut g = if background {
+            if acting() {
+                return gave_way();
+            }
+            match self.inner.try_lock() {
+                Ok(g) if self.waiting.load(std::sync::atomic::Ordering::SeqCst) == 0 => g,
+                _ => return gave_way(),
+            }
+        } else {
+            let _waiting = Waiting::new(self);
+            // still let through now that it holds the lock: the task may have been paused or taken over meanwhile
+            match self.lock_admitted(&self.inner, &req, admission, &mut queued_at, &mut ctx.gone).await {
+                Ok(g) => g,
+                Err(r) => return r,
+            }
         };
         let g = &mut *g;
         if let Err(r) = admit(&req, queued_at, &ctx, g.device.as_ref().map(|d| d.udid.as_str())) {
@@ -950,7 +981,28 @@ impl Daemon {
         if g.wda.as_ref().is_some_and(|w| w.stalled()) {
             self.restart_stalled_wda(g).await;
         }
-        let response = self.dispatch(g, req, view).await;
+        let response = if background {
+            // an action that comes meanwhile gets the phone at once: the check is read-only, dropping it is safe
+            let action = self.give_way.notified();
+            tokio::pin!(action);
+            action.as_mut().enable();
+            if self.waiting.load(std::sync::atomic::Ordering::SeqCst) > 0 {
+                gave_way()
+            } else {
+                tokio::select! {
+                    r = Box::pin(self.dispatch(g, req, view)) => r,
+                    () = action => gave_way(),
+                }
+            }
+        } else {
+            let acted = req.is_device_action();
+            // boxed, like the request in `handle`: two of its large state machine on the stack overflowed a test thread
+            let r = Box::pin(self.dispatch(g, req, view)).await;
+            if acted {
+                *self.last_action.lock().unwrap_or_else(|p| p.into_inner()) = Some(Instant::now());
+            }
+            r
+        };
         if invalidates {
             g.elements_cache = None;
         }
@@ -1151,6 +1203,45 @@ async fn acquire<'a, T>(
     }
 }
 
+/// How long after an action a background check waits. The alert check takes WDA about 0.8 s on the home screen
+/// (it snapshots SpringBoard; not waiting for idle doesn't help) and WDA does one thing at a time, so a tap or a Home
+/// press right after it waited that long; the status check is about 0.2 s
+fn quiet_before(req: &Request) -> Duration {
+    match req {
+        Request::AlertCheck => Duration::from_secs(4),
+        _ => Duration::from_secs(1),
+    }
+}
+
+/// A background check that didn't run, or stopped: an action wanted the phone ([`ictl_protocol::Data::Busy`])
+fn gave_way() -> Response {
+    Response::text_data(
+        ictl_l10n::tr!(
+            "手机正在执行操作，这次没查，稍后再查",
+            "The phone is busy with an action; not checked this time"
+        ),
+        crate::protocol::Outcome::default(),
+        Some(crate::protocol::Data::Busy),
+    )
+}
+
+/// An action waiting for the device lock, counted in [`Daemon::waiting`] until it has it
+struct Waiting<'a>(&'a Daemon);
+
+impl<'a> Waiting<'a> {
+    fn new(d: &'a Daemon) -> Self {
+        d.waiting.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        d.give_way.notify_waiters();
+        Self(d)
+    }
+}
+
+impl Drop for Waiting<'_> {
+    fn drop(&mut self) {
+        self.0.waiting.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
 /// Checks done once a request got its lock: the caller's expected device ([`CallCtx::expect_udid`]) and, for actions,
 /// how long it queued ([`STALE`])
 fn admit(req: &Request, queued_at: Instant, ctx: &CallCtx, controlled: Option<&str>) -> Result<(), Response> {
@@ -1258,6 +1349,44 @@ pub(crate) mod tests {
         let dir = std::env::temp_dir().join(format!("ictl-core-{tag}-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         (Daemon::new(Config::from_env(&dir)), dir)
+    }
+
+    /// A background check (the page's status and alert polls) gives way: it doesn't wait for the device lock, nor
+    /// start while an action waits for it; without the flag the same request waits as before
+    #[tokio::test]
+    async fn a_background_check_gives_way_to_actions() {
+        let (d, dir) = test_daemon("background");
+        let busy = |r: &Response| matches!(r, Response::Text { data: Some(crate::protocol::Data::Busy), .. });
+        let bg = || CallCtx { background: true, ..Default::default() };
+        // the lock taken (an action runs): at once, busy
+        let held = d.inner.lock().await;
+        let t = Instant::now();
+        let r = d.handle(Request::AlertCheck, Instant::now(), bg()).await;
+        assert!(busy(&r) && t.elapsed() < Duration::from_millis(100), "{r:?}");
+        let plain = d.handle(Request::Status, Instant::now(), CallCtx::default());
+        tokio::pin!(plain);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(50), &mut plain).await.is_err(),
+            "a check without the flag waits for the lock"
+        );
+        drop(held);
+        assert!(!busy(&plain.await));
+        // an action waiting for the lock: not started
+        let waiting = Waiting::new(&d);
+        assert!(busy(&d.handle(Request::Status, Instant::now(), bg()).await));
+        drop(waiting);
+        // nothing else wants the phone: it runs
+        let r = d.handle(Request::Status, Instant::now(), bg()).await;
+        assert!(matches!(r, Response::Text { data: Some(crate::protocol::Data::Status(_)), .. }), "{r:?}");
+        // right after an action: not yet (the alert check waits longer than the status check)
+        *d.last_action.lock().unwrap() = Some(Instant::now() - Duration::from_secs(2));
+        assert!(!busy(&d.handle(Request::Status, Instant::now(), bg()).await), "status: 1 s after");
+        assert!(busy(&d.handle(Request::AlertCheck, Instant::now(), bg()).await), "the alert check: 4 s after");
+        assert!(
+            !busy(&d.handle(Request::AlertCheck, Instant::now(), CallCtx::default()).await),
+            "unless asked outright"
+        );
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     /// 调用方已经断开：还在排队等设备锁的请求不执行

@@ -2455,7 +2455,9 @@ async function loadDeviceState() {
     // Video can reconnect while the same device is still waiting for trust or signing.
     if (udid !== S.udid || sequence !== statusSequence) return;
     S.daemon = d.status === 'fulfilled' ? d.value : null;
-    S.dstatus = s.status === 'fulfilled' ? s.value : null;
+    // busy: the phone was busy with one of the user's actions, so the check gave way; what was shown stays, asked again soon
+    if (s.status === 'fulfilled' && s.value.busy) refreshStatusSoon();
+    else S.dstatus = s.status === 'fulfilled' ? s.value : null;
     S.statusErr = d.status === 'rejected' ? String(d.reason.message) : s.status === 'rejected' ? String(s.reason.message) : '';
     if (l.status === 'fulfilled') { S.devices = l.value.devices || []; S.devicesFixed = !!l.value.fixed; S.devicesErr = ''; } else { S.devices = []; S.devicesErr = String(l.reason.message); }
   }
@@ -3162,7 +3164,8 @@ async function pollAlert() {
     return;
   }
   SA.busy = true;
-  try { S.sysAlert = (await api('/api/alert')).alert || null; } catch { /* 下一轮再问 */ } finally { SA.busy = false; }
+  // busy：手机正在执行操作，这次没查（让操作先走），保留上次的结果
+  try { const v = await api('/api/alert'); if (!v.busy) S.sysAlert = v.alert || null; } catch { /* 下一轮再问 */ } finally { SA.busy = false; }
   renderSysAlert();
 }
 function renderSysAlert() {

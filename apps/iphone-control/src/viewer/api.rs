@@ -6,7 +6,17 @@ use super::*;
 /// One daemon request whose answer the page needs as data ([`protocol::Data`], not the text: that is worded for
 /// people and agents and may change)
 pub(super) async fn data_of(socket: &Path, req: Request) -> Result<Option<protocol::Data>, String> {
-    match protocol::call(socket, &req, Some(Duration::from_secs(60))).await {
+    answer_data(protocol::call(socket, &req, Some(Duration::from_secs(60))).await)
+}
+
+/// [`data_of`] for a check the page repeats anyway: [`protocol::Data::Busy`] when an action wanted the phone
+/// ([`protocol::BACKGROUND`])
+pub(super) async fn polled(socket: &Path, req: Request) -> Result<Option<protocol::Data>, String> {
+    answer_data(protocol::call_background(socket, &req, Some(Duration::from_secs(60))).await)
+}
+
+fn answer_data(r: std::io::Result<Response>) -> Result<Option<protocol::Data>, String> {
+    match r {
         Ok(Response::Text { data, .. }) => Ok(data),
         Ok(Response::Error { message, .. }) => Err(message),
         Ok(Response::Image { caption, .. }) => Err(caption),
@@ -96,8 +106,10 @@ pub(super) async fn devices(ctx: &Ctx) -> Result<Value, String> {
 
 /// `{ wda_ready, locked, foreground, foreground_id, width, height, route }`
 pub(super) async fn status(ctx: &Ctx) -> Result<Value, String> {
-    let status = match data_of(&ctx.socket, Request::Status).await? {
+    let status = match polled(&ctx.socket, Request::Status).await? {
         Some(protocol::Data::Status(s)) => s,
+        // the phone was busy with an action: the page keeps what it showed and asks again
+        Some(protocol::Data::Busy) => return Ok(json!({"busy": true})),
         _ => protocol::StatusData::default(),
     };
     // the HID fallback needs iOS 27; an older device without WDA can't be operated at all
@@ -175,8 +187,10 @@ pub(super) async fn elements(ctx: &Ctx, filter: &str, keep_locked: bool) -> Resu
 /// `AlertCheck` is two quick WDA calls (the foreground app; the alert's text only when SpringBoard is in front); the
 /// element tree is only read when there is an alert
 pub(super) async fn alert(ctx: &Ctx, keep_locked: bool) -> Result<Value, String> {
-    let Some(protocol::Data::Alert { text: Some(text) }) = data_of(&ctx.socket, Request::AlertCheck).await? else {
-        return Ok(json!({"alert": null}));
+    let text = match polled(&ctx.socket, Request::AlertCheck).await? {
+        Some(protocol::Data::Alert { text: Some(text) }) => text,
+        Some(protocol::Data::Busy) => return Ok(json!({"busy": true})),
+        _ => return Ok(json!({"alert": null})),
     };
     let req = Request::ListElements { filter: String::new(), limit: ELEMENT_LIMIT, max_age_ms: 0, keep_locked };
     // without its buttons the page still says there is an alert

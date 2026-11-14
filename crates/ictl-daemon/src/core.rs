@@ -238,6 +238,8 @@ pub struct CallCtx {
     pub peer: Option<u32>,
     /// A poll that gives way to actions ([`ictl_protocol::BACKGROUND`])
     pub background: bool,
+    /// Someone watches the screen ([`ictl_protocol::WATCHED`])
+    pub watched: bool,
 }
 
 /// Logical points measured on this connection. A different id invalidates queued coordinates.
@@ -990,14 +992,14 @@ impl Daemon {
                 gave_way()
             } else {
                 tokio::select! {
-                    r = Box::pin(self.dispatch(g, req, view)) => r,
+                    r = Box::pin(self.dispatch(g, req, view, ctx.watched)) => r,
                     () = action => gave_way(),
                 }
             }
         } else {
             let acted = req.is_device_action();
             // boxed, like the request in `handle`: two of its large state machine on the stack overflowed a test thread
-            let r = Box::pin(self.dispatch(g, req, view)).await;
+            let r = Box::pin(self.dispatch(g, req, view, ctx.watched)).await;
             if acted {
                 *self.last_action.lock().unwrap_or_else(|p| p.into_inner()) = Some(Instant::now());
             }
@@ -1010,7 +1012,7 @@ impl Daemon {
         response
     }
 
-    async fn dispatch(&self, g: &mut Inner, req: Request, view: Option<&str>) -> Response {
+    async fn dispatch(&self, g: &mut Inner, req: Request, view: Option<&str>, watched: bool) -> Response {
         // what the text reports, for clients that act on it (Response::Text.outcome)
         let mut outcome = crate::protocol::Outcome::default();
         // the same facts as data, for programs (Response::Text.data)
@@ -1045,7 +1047,7 @@ impl Daemon {
             Request::LongPress { x, y, seconds } => self.long_press(g, x, y, seconds, view).await,
             Request::Swipe { from, to, seconds } => self.swipe(g, from, to, seconds, view).await,
             Request::TypeText { text, submit } => self.type_text(g, &text, submit).await,
-            Request::PressButton { button } => self.press_button(g, &button).await,
+            Request::PressButton { button } => self.press_button(g, &button, watched).await,
             Request::Touch { phase, x, y } => {
                 return self
                     .touch(g, phase, x, y, view)

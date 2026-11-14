@@ -3,7 +3,14 @@
 use super::*;
 
 impl Daemon {
-    pub(crate) async fn press_button(&self, g: &mut Inner, button: &str) -> crate::error::Result<String> {
+    /// `watched`: someone watches the screen ([`ictl_protocol::WATCHED`]), so Home is pressed without first looking for
+    /// an alert in the way; only when it didn't get to the home screen
+    pub(crate) async fn press_button(
+        &self,
+        g: &mut Inner,
+        button: &str,
+        watched: bool,
+    ) -> crate::error::Result<String> {
         let hid_button = Button::parse(button).ok_or(ictl_l10n::tr!(
             "button 只能是 home / volume_up / volume_down / lock",
             "button must be home / volume_up / volume_down / lock"
@@ -20,6 +27,7 @@ impl Daemon {
             // Home 在系统弹窗（定位、通知权限等）挡着时不生效，WDA 却照样返回成功。弹窗属于 SpringBoard，
             // 看前台 App 发现不了，要单独查；按之前查（App 静止时约 0.4 秒，按下后动画中查要好几秒）
             if hid_button == Button::Home
+                && !watched
                 && let Ok(Some(text)) = w.alert_text().await
             {
                 return Ok(ictl_l10n::trf!(
@@ -37,6 +45,19 @@ impl Daemon {
             } else {
                 w.press_button(wda_name).await.map(|()| ictl_l10n::trf!("已按 {button}", "Pressed {button}"))
             };
+            // not looked for before: an alert is the likely reason Home didn't get to the home screen
+            if watched
+                && hid_button == Button::Home
+                && home_worked.is_none()
+                && r.is_ok()
+                && let Ok(Some(text)) = w.alert_text().await
+            {
+                return Ok(ictl_l10n::trf!(
+                    "{},按 Home 没有生效,先点弹窗上的按钮",
+                    "{}, pressing Home had no effect; first tap a button on the alert",
+                    blocking(&text)
+                ));
+            }
             if let Some(via_xctest) = home_worked {
                 g.dev.home_via_xctest = via_xctest;
             }

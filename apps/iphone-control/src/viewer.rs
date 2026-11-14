@@ -1258,8 +1258,9 @@ fn action(name: &str, b: &Value) -> Option<Request> {
 const SHORT: Duration = Duration::from_secs(120);
 const SIGN: Duration = Duration::from_secs(16 * 60);
 
+/// An action from the page: the person sees the screen ([`protocol::WATCHED`])
 async fn run_action(socket: &Path, req: &Request, udid: Option<&str>, timeout: Duration) -> Value {
-    action_result(req, protocol::call_expecting(socket, req, Some(timeout), udid).await)
+    action_result(req, protocol::call_watched(socket, req, Some(timeout), udid).await)
 }
 
 fn action_result(req: &Request, result: Result<Response, impl std::fmt::Display>) -> Value {

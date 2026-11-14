@@ -7,19 +7,26 @@
 //! second that cost WDA over 100 % of a core, and iOS kills a process above 80 % over a minute).
 //!
 //! While a page watches, the HID session stays open (`Inner::screen_viewers`): the phone keeps its screen on and
-//! shows "viewed remotely" meanwhile, as it does during HID use. The video is always portrait; the rotation of the
+//! shows "viewed remotely" meanwhile, as it does during HID use.
+//!
+//! A page in low-bandwidth mode ([`crate::protocol::LOW_BANDWIDTH`]) gets the video capped at
+//! [`ictl_device::LOW_BANDWIDTH_BITRATE`] while it watches. There is one stream per phone and its cap is set when it
+//! starts, so the HID session is closed and opened again when the cap has to change: when the first such page comes,
+//! and when the last one goes while others still watch (they get the full rate back). Every page's picture stops for
+//! about half a second then and reconnects, and a touch under way ends ([`crate::tools::video_bitrate`]). The video is always portrait; the rotation of the
 //! interface is sent alongside ([`ScreenMsg::Info`]) and the page turns the picture.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use ictl_device::Rotation;
+use ictl_device::{Rotation, Tunnel};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::sync::broadcast::error::RecvError;
 
-use crate::core::{Daemon, hid_supported};
+use crate::core::{Daemon, close_hid, hid_supported};
 use crate::protocol::{Response, SCREEN_KEYFRAME, ScreenMsg};
+use crate::tools::video_bitrate;
 
 /// How often the interface rotation is asked of WDA while streaming (about 20 ms each, only when the device lock is
 /// free)
@@ -34,15 +41,34 @@ fn degrees(r: Rotation) -> u32 {
     }
 }
 
-/// One watching page: counted while it lives, so the HID session isn't closed under it
-struct Viewer(Arc<Daemon>);
+/// One watching page: counted while it lives, so the HID session isn't closed under it. The flag: in low-bandwidth
+/// mode (`Inner::low_bandwidth_viewers`)
+struct Viewer(Arc<Daemon>, bool);
 
 impl Drop for Viewer {
     fn drop(&mut self) {
-        let d = self.0.clone();
+        let (d, low) = (self.0.clone(), self.1);
         tokio::spawn(async move {
             let mut g = d.inner.lock().await;
             g.screen_viewers = g.screen_viewers.saturating_sub(1);
+            if low {
+                g.low_bandwidth_viewers = g.low_bandwidth_viewers.saturating_sub(1);
+                // the last page in low-bandwidth mode is gone: the others get the full rate (they reconnect)
+                let full = video_bitrate(&g);
+                if g.low_bandwidth_viewers == 0
+                    && g.screen_viewers > 0
+                    && g.tunnel.as_mut().and_then(Tunnel::open_hid).is_some_and(|h| h.max_bitrate() < full)
+                {
+                    close_hid(&mut g).await;
+                    tracing::info!(
+                        "{}",
+                        ictl_l10n::log_tr!(
+                            "控制台上没有弱网模式的页面了：屏幕媒体流按原码率重新开始",
+                            "No control page is in low-bandwidth mode any more: the screen media stream starts again at the full bitrate"
+                        )
+                    );
+                }
+            }
             // the idle countdown starts now
             g.hid_used = Some(Instant::now());
         });
@@ -56,8 +82,9 @@ impl Daemon {
         mut reader: tokio::io::BufReader<OwnedReadHalf>,
         mut w: OwnedWriteHalf,
         expect_udid: Option<String>,
+        low_bandwidth: bool,
     ) {
-        let (feed, viewer) = match self.screen_feed(expect_udid.as_deref()).await {
+        let (feed, viewer) = match self.screen_feed(expect_udid.as_deref(), low_bandwidth).await {
             Ok(f) => f,
             Err(e) => {
                 let mut line = serde_json::to_string(&Response::error(e)).unwrap_or_default();
@@ -158,10 +185,12 @@ impl Daemon {
         rotation.map(degrees)
     }
 
-    /// The screen feed of the controlled device, opening the HID session for it if needed
+    /// The screen feed of the controlled device, opening the HID session for it if needed (again, at the lower rate,
+    /// for a page in low-bandwidth mode: see the module docs)
     async fn screen_feed(
         self: &Arc<Self>,
         expect_udid: Option<&str>,
+        low_bandwidth: bool,
     ) -> crate::error::Result<(ictl_device::ScreenFeed, Viewer)> {
         let mut g = self.inner.lock().await;
         let g = &mut *g;
@@ -175,14 +204,35 @@ impl Daemon {
                 ictl_l10n::tr!("屏幕媒体流要 iOS 27 及以上", "The screen media stream needs iOS 27 or later").into()
             );
         }
+        let rate = if low_bandwidth { ictl_device::LOW_BANDWIDTH_BITRATE } else { video_bitrate(g) };
+        if g.tunnel.as_mut().and_then(Tunnel::open_hid).is_some_and(|h| h.max_bitrate() != rate) {
+            close_hid(g).await;
+            tracing::info!(
+                "{}",
+                if low_bandwidth {
+                    ictl_l10n::log_tr!(
+                        "控制台有页面开了弱网模式：屏幕媒体流降低码率重新开始",
+                        "A control page is in low-bandwidth mode: the screen media stream starts again at a lower bitrate"
+                    )
+                } else {
+                    ictl_l10n::log_tr!(
+                        "控制台上没有弱网模式的页面了：屏幕媒体流按原码率重新开始",
+                        "No control page is in low-bandwidth mode any more: the screen media stream starts again at the full bitrate"
+                    )
+                }
+            );
+        }
         let feed = self
-            .hid(g)
+            .hid_at(g, rate)
             .await?
             .screen_feed()
             .ok_or(ictl_l10n::tr!("屏幕媒体流已停止", "The screen media stream stopped"))?;
         g.screen_viewers += 1;
+        if low_bandwidth {
+            g.low_bandwidth_viewers += 1;
+        }
         g.hid_used = Some(Instant::now());
-        Ok((feed, Viewer(self.clone())))
+        Ok((feed, Viewer(self.clone(), low_bandwidth)))
     }
 }
 

@@ -118,6 +118,16 @@ impl Daemon {
 
     /// HID 会话（WDA 不可用时的后备路线）。开不起来就丢掉隧道，下次重建
     pub(crate) async fn hid<'a>(&self, g: &'a mut Inner) -> crate::error::Result<&'a mut HidSession> {
+        let rate = video_bitrate(g);
+        self.hid_at(g, rate).await
+    }
+
+    /// [`Self::hid`], its screen video capped at `max_bitrate` if it has to be opened
+    pub(crate) async fn hid_at<'a>(
+        &self,
+        g: &'a mut Inner,
+        max_bitrate: u32,
+    ) -> crate::error::Result<&'a mut HidSession> {
         // 低版本建隧道只会报 service not found：直接说清楚
         if !hid_supported(g.info.as_ref()) {
             return Err(wda_down(&g.state, g.info.as_ref()).into());
@@ -130,12 +140,12 @@ impl Daemon {
             .ensure_tunnel(g, &device)
             .await
             .map_err(|e| ictl_l10n::trf!("HID 后备路线不可用：{e}", "HID fallback unavailable: {e}"))?;
-        if let Err(e) = t.hid(screen).await {
+        if let Err(e) = t.hid(screen, max_bitrate).await {
             drop_tunnel(g).await;
             return Err(ictl_l10n::trf!("HID 后备路线不可用：{e}", "HID fallback unavailable: {e}").into());
         }
         // 第二次调用直接返回已开好的会话（这样写是为了绕开借用检查对条件返回的限制）
-        Ok(g.tunnel.as_mut().expect("刚建好").hid(screen).await?)
+        Ok(g.tunnel.as_mut().expect("刚建好").hid(screen, max_bitrate).await?)
     }
 
     async fn hid_do<F>(&self, g: &mut Inner, f: F) -> crate::error::Result<()>
@@ -337,6 +347,12 @@ async fn thumbnail(png: Vec<u8>) -> crate::error::Result<Vec<u8>> {
 
 fn needs_wda() -> &'static str {
     if ictl_l10n::is_en() { NEEDS_WDA_EN } else { NEEDS_WDA }
+}
+
+/// The screen video's bitrate cap for a HID session opened now: low while a page in low-bandwidth mode watches
+/// (`crate::screen` opens the session again when that changes)
+pub(crate) fn video_bitrate(g: &Inner) -> u32 {
+    if g.low_bandwidth_viewers > 0 { ictl_device::LOW_BANDWIDTH_BITRATE } else { ictl_device::FULL_BITRATE }
 }
 
 #[cfg(test)]

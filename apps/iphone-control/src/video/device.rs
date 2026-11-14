@@ -38,8 +38,9 @@ const MAX_MESSAGE: usize = 16 * 1024 * 1024;
 pub async fn open(
     socket: &std::path::Path,
     udid: &str,
+    low_bandwidth: bool,
 ) -> Result<(tokio::io::BufReader<tokio::net::unix::OwnedReadHalf>, tokio::net::unix::OwnedWriteHalf), String> {
-    match ictl_daemon::protocol::open_screen_stream(socket, Some(udid)).await {
+    match ictl_daemon::protocol::open_screen_stream(socket, Some(udid), low_bandwidth).await {
         Ok(r) => r,
         Err(e) => Err(e.to_string()),
     }

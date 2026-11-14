@@ -9,6 +9,9 @@
 //! 每秒一个接收报告。上游说不回 RCTL 的话，剧烈运动时编码器和接收端的参考帧会对不上、画面花掉而解码不报错。
 //! 关键帧只在开头有一个（KeyFrameInterval 0），之后要靠 PLI/FIR 请求（实测 15～20 毫秒后到）。
 //!
+//! 码率上限在起流时协商（[`FULL_BITRATE`]，弱网模式 [`LOW_BANDWIDTH_BITRATE`]），之后改不了：换上限要关掉 HID 会话重开。
+//! 手机实测只认上限：报价里写更小的分辨率，它照样编原生分辨率；帧率也不随上限变（约 60 帧/秒，见 [`video_offer`]）。
+//!
 //! 起流部分移植自 idevice v0.1.68 `tools/src/coredevice_stream.rs`（MIT，Copyright Jackson Coxson），
 //! 去掉了日志输出和应答转储，错误改成 `DeviceError`。
 
@@ -17,7 +20,7 @@ use idevice::{
     core_device::{
         CallInfoBlob, DisplayServiceClient, HevcDepacketizer, RtpPacket, build_frame_ack, build_keyframe_request,
         build_liveness, build_rctl, build_screen_audio_offer, build_screen_video_offer, build_start_audio_parameters,
-        build_start_video_parameters, is_rtcp,
+        build_start_video_parameters, is_rtcp, negotiation::build_screen_media_blob,
     },
     rsd::RsdHandshake,
     tcp::handle::{AdapterHandle, UdpSocketHandle},
@@ -285,6 +288,7 @@ pub(crate) async fn start(
     adapter: &mut AdapterHandle,
     handshake: &mut RsdHandshake,
     display_id: i64,
+    max_bitrate: u32,
 ) -> Result<ScreenMediaStream> {
     let fail = |what: &str, e: &dyn std::fmt::Display| {
         DeviceError::Idevice(ictl_l10n::trf!("媒体流 {what}：{e}", "media stream {what}: {e}"))
@@ -331,7 +335,7 @@ pub(crate) async fn start(
 
     let call_id = uuid::Uuid::new_v4().to_string().to_uppercase();
     let ssrc = uuid::Uuid::new_v4().as_u128() as u32;
-    let offer = build_screen_video_offer(&call_id, &call_info, ssrc)
+    let offer = video_offer(&call_id, &call_info, ssrc, max_bitrate)
         .map_err(|e| fail(ictl_l10n::tr!("视频报价", "video offer"), &e))?;
     let params = build_start_video_parameters(
         &receiver_ip,
@@ -364,6 +368,98 @@ pub(crate) async fn start(
     let (keyframe, keyframe_rx) = mpsc::unbounded_channel();
     let feed = ScreenFeed { frames: frames.clone(), keyframe };
     Ok(ScreenMediaStream { client, receive: receive(audio_udp, video_udp, ssrc, frames, keyframe_rx), feed })
+}
+
+/// What the screen video may use (bit/s), as idevice's offer has it: about 3 Mbit/s while swiping on an iPhone's home
+/// screen, 1.9 Mbit/s still (iPhone 15 Pro Max, iOS 27.2.1)
+pub const FULL_BITRATE: u32 = 6_000_000;
+/// The control page's low-bandwidth mode: about half the traffic (1.4 Mbit/s swiping, 0.8 still) at the same frame
+/// rate. A still screen looks the same; while things move, edges show blocks, gone about half a second after
+pub const LOW_BANDWIDTH_BITRATE: u32 = 2_000_000;
+
+/// The video offer with the bitrate cap `max_bitrate`. idevice's offer ([`build_screen_video_offer`]) asks for
+/// [`FULL_BITRATE`]; for another cap its media blob is built again with that entry of the parameter list changed (the
+/// phone takes it as `TXMaxBitrate`), and put into the same offer
+fn video_offer(
+    call_id: &str,
+    info: &CallInfoBlob,
+    ssrc: u32,
+    max_bitrate: u32,
+) -> std::result::Result<Vec<u8>, String> {
+    let offer = build_screen_video_offer(call_id, info, ssrc).map_err(|e| e.to_string())?;
+    if max_bitrate == FULL_BITRATE {
+        return Ok(offer);
+    }
+    let blob = build_screen_media_blob(ssrc, ntp_now());
+    let blob = with_max_bitrate(&blob, max_bitrate).ok_or("idevice's offer has no bitrate cap to change")?;
+    let mut d: plist::Dictionary = plist::from_bytes(&offer).map_err(|e| e.to_string())?;
+    d.insert(MEDIA_BLOB.into(), plist::Value::Data(zlib_stored(&blob)));
+    let mut out = Vec::new();
+    plist::to_writer_binary(&mut out, &plist::Value::Dictionary(d)).map_err(|e| e.to_string())?;
+    Ok(out)
+}
+
+/// The offer's key for the (zlib) media blob
+const MEDIA_BLOB: &str = "avcMediaStreamNegotiatorMediaBlob";
+
+/// The blob with the parameter `{1: 0, 2: FULL_BITRATE, 3: 0x20000}` (field 9) giving `max_bitrate` instead
+fn with_max_bitrate(blob: &[u8], max_bitrate: u32) -> Option<Vec<u8>> {
+    let old = bitrate_param(FULL_BITRATE);
+    let at = blob.windows(old.len()).position(|w| w == old.as_slice())?;
+    let mut out = blob[..at].to_vec();
+    out.extend(bitrate_param(max_bitrate));
+    out.extend_from_slice(&blob[at + old.len()..]);
+    Some(out)
+}
+
+/// Field 9 `{1: 0, 2: value, 3: 0x20000}` as protobuf
+fn bitrate_param(value: u32) -> Vec<u8> {
+    fn varint(o: &mut Vec<u8>, mut v: u64) {
+        while v >= 0x80 {
+            o.push((v as u8) | 0x80);
+            v >>= 7;
+        }
+        o.push(v as u8);
+    }
+    let mut m = Vec::new();
+    for (field, v) in [(1u64, 0u64), (2, u64::from(value)), (3, 0x20000)] {
+        varint(&mut m, field << 3);
+        varint(&mut m, v);
+    }
+    let mut o = Vec::new();
+    varint(&mut o, (9 << 3) | 2);
+    varint(&mut o, m.len() as u64);
+    o.extend(m);
+    o
+}
+
+/// zlib of `data` in stored (uncompressed) blocks: the blob is a few hundred bytes, and this needs no deflate
+fn zlib_stored(data: &[u8]) -> Vec<u8> {
+    let mut z = vec![0x78, 0x01];
+    let chunks: Vec<&[u8]> = data.chunks(0xffff).collect();
+    for (i, c) in chunks.iter().enumerate() {
+        z.push(u8::from(i + 1 == chunks.len()));
+        let n = c.len() as u16;
+        z.extend_from_slice(&n.to_le_bytes());
+        z.extend_from_slice(&(!n).to_le_bytes());
+        z.extend_from_slice(c);
+    }
+    if chunks.is_empty() {
+        z.extend_from_slice(&[1, 0, 0, 0xff, 0xff]);
+    }
+    let (mut a, mut b) = (1u32, 0u32);
+    for &x in data {
+        a = (a + u32::from(x)) % 65521;
+        b = (b + a) % 65521;
+    }
+    z.extend_from_slice(&((b << 16) | a).to_be_bytes());
+    z
+}
+
+/// Now as NTP (seconds since 1900 in the high 32 bits), for the media blob
+fn ntp_now() -> u64 {
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
+    ((now.as_secs() + 2_208_988_800) << 32) | ((u64::from(now.subsec_nanos()) << 32) / 1_000_000_000)
 }
 
 async fn stop(client: &mut DisplayServiceClient<Box<dyn ReadWrite>>) {
@@ -417,5 +513,46 @@ mod tests {
         ];
         assert_eq!(hevc_codec(&sps).as_deref(), Some("hvc1.1.6.L150.B0"));
         assert_eq!(hevc_codec(&[0, 0, 0, 1, 0x28, 1, 0xAA]), None, "no SPS");
+    }
+
+    /// The cap is the one entry of idevice's blob that changes; the offer is idevice's but for that blob, which the
+    /// phone reads (zlib, stored blocks)
+    #[test]
+    fn the_offer_carries_the_bitrate_cap() {
+        let blob = build_screen_media_blob(7, 1 << 32);
+        assert_eq!(with_max_bitrate(&blob, FULL_BITRATE).as_deref(), Some(blob.as_slice()));
+        let low = with_max_bitrate(&blob, LOW_BANDWIDTH_BITRATE).expect("idevice's blob has the 6M cap");
+        assert_ne!(low, blob);
+        assert!(
+            low.windows(bitrate_param(LOW_BANDWIDTH_BITRATE).len()).any(|w| w == bitrate_param(LOW_BANDWIDTH_BITRATE))
+        );
+        assert_eq!(low.len(), blob.len() - 1, "2_000_000 is one varint byte shorter");
+
+        let info = CallInfoBlob { device_type: "Mac17,7".into(), ..Default::default() };
+        let full = video_offer("C", &info, 7, FULL_BITRATE).unwrap();
+        let offer: plist::Dictionary =
+            plist::from_bytes(&video_offer("C", &info, 7, LOW_BANDWIDTH_BITRATE).unwrap()).unwrap();
+        let theirs: plist::Dictionary = plist::from_bytes(&full).unwrap();
+        assert_eq!(offer.keys().collect::<Vec<_>>(), theirs.keys().collect::<Vec<_>>());
+        for k in theirs.keys().filter(|k| *k != MEDIA_BLOB) {
+            assert_eq!(offer[k], theirs[k], "{k}");
+        }
+        let z = offer[MEDIA_BLOB].as_data().unwrap();
+        assert!(idevice::core_device::MediaNegotiationBlob::from_negotiator_offer(z).is_ok(), "valid zlib");
+        let raw = &z[7..z.len() - 4];
+        assert!(
+            raw.windows(bitrate_param(LOW_BANDWIDTH_BITRATE).len()).any(|w| w == bitrate_param(LOW_BANDWIDTH_BITRATE))
+        );
+        assert!(!raw.windows(bitrate_param(FULL_BITRATE).len()).any(|w| w == bitrate_param(FULL_BITRATE)));
+    }
+
+    #[test]
+    fn stored_zlib_inflates() {
+        for data in [vec![], b"abc".to_vec(), vec![7u8; 70_000]] {
+            let z = zlib_stored(&data);
+            // the decoder idevice uses for answers: a wrong checksum or block header fails
+            assert!(idevice::core_device::MediaNegotiationBlob::from_negotiator_offer(&z).is_ok(), "{}", data.len());
+        }
+        assert_eq!(zlib_stored(b"a"), [0x78, 0x01, 1, 1, 0, 0xfe, 0xff, b'a', 0, 0x62, 0, 0x62]);
     }
 }

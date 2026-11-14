@@ -669,11 +669,14 @@ async fn picture(mut client: Conn, ctx: &Ctx, req: &Head) -> anyhow::Result<()> 
     if udid.is_empty() {
         return reply(&mut client, 503, "text/plain", b"no device yet").await;
     }
+    // the page's low-bandwidth mode (`?low=1`): the phone's own video at a lower bitrate (for every page on that
+    // phone, see `ictl_daemon::protocol::LOW_BANDWIDTH`), the H.264 picture at a higher quantizer (this page's only)
+    let low = req.query("low").as_deref() == Some("1");
     if req.path == "/video" && req.query("src").as_deref() == Some("device") {
         if !ctx.device_video_allowed {
             return reply(&mut client, 404, "text/plain", b"turned off by IPHONE_CONTROL_VIEWER_CODEC").await;
         }
-        return match crate::video::device::open(&ctx.socket, &udid).await {
+        return match crate::video::device::open(&ctx.socket, &udid, low).await {
             // the page takes 404 as "not this way" and falls back to H.264 or MJPEG
             Err(e) => reply(&mut client, 404, "text/plain; charset=utf-8", e.as_bytes()).await,
             Ok((src, w)) => {
@@ -701,7 +704,8 @@ async fn picture(mut client: Conn, ctx: &Ctx, req: &Head) -> anyhow::Result<()> 
     match video {
         Some(enc) => {
             video_head(&mut client).await?;
-            crate::video::serve(enc, ctx.acks.clone(), remote, client).await;
+            let qp = if low { enc.qp().max(crate::video::LOW_BANDWIDTH_QP) } else { enc.qp() };
+            crate::video::serve(enc, qp, ctx.acks.clone(), remote, client).await;
         }
         None => crate::video::serve_mjpeg(remote, client, crate::video::STREAM_IDLE).await,
     }

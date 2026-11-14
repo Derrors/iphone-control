@@ -238,6 +238,8 @@ pub struct CallCtx {
     pub peer: Option<u32>,
     /// A poll that gives way to actions ([`ictl_protocol::BACKGROUND`])
     pub background: bool,
+    /// A screen stream for a page in low-bandwidth mode ([`ictl_protocol::LOW_BANDWIDTH`])
+    pub low_bandwidth: bool,
     /// Someone watches the screen ([`ictl_protocol::WATCHED`])
     pub watched: bool,
 }
@@ -359,6 +361,9 @@ pub(crate) struct Inner {
     /// Control pages watching the screen media stream (`screen.rs`): while there are any, the HID session (which owns
     /// the stream) stays open however long it is idle
     pub screen_viewers: usize,
+    /// Of those, the pages in low-bandwidth mode ([`ictl_protocol::LOW_BANDWIDTH`]): while there are any, the HID
+    /// session's video is capped at [`ictl_device::LOW_BANDWIDTH_BITRATE`]
+    pub low_bandwidth_viewers: usize,
     /// 最近一次读到的元素树。只在调用方允许（max_age_ms）时复用；改变界面的操作做完就清掉
     pub elements_cache: Option<(Instant, ictl_wda::elements::Tree)>,
     /// 滑动等列表停下时最后读到的树（[`crate::tools`] 的 `settle` 拿来当比较的起点）
@@ -483,6 +488,7 @@ impl Daemon {
             offline_target: None,
             hid_used: None,
             screen_viewers: 0,
+            low_bandwidth_viewers: 0,
             elements_cache: None,
             swiped_tree: None,
             dedup: Dedup::default(),

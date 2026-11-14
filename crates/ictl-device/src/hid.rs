@@ -111,6 +111,8 @@ pub struct HidSession {
     pub rotation: Rotation,
     contact: Option<(u16, u16)>,
     stream: Option<ScreenMediaStream>,
+    /// The screen video's bitrate cap, set when it started ([`crate::media::FULL_BITRATE`])
+    max_bitrate: u32,
     touch: UniversalHidServiceClient<Box<dyn ReadWrite>>,
     indigo: IndigoHidClient<Box<dyn ReadWrite>>,
 }
@@ -120,8 +122,9 @@ impl HidSession {
         adapter: &mut AdapterHandle,
         handshake: &mut RsdHandshake,
         screen: ScreenSize,
+        max_bitrate: u32,
     ) -> Result<Self> {
-        let stream = crate::media::start(adapter, handshake, 1).await?;
+        let stream = crate::media::start(adapter, handshake, 1, max_bitrate).await?;
         // 时限加在这里而不是外层：外层取消会直接丢掉媒体流，走不到下面的 stop
         let clients =
             limit(ictl_l10n::tr!("连接 HID 服务", "connect to the HID service"), Duration::from_secs(20), async {
@@ -138,6 +141,7 @@ impl HidSession {
                 rotation: Rotation::Portrait,
                 contact: None,
                 stream: Some(stream),
+                max_bitrate,
                 touch,
                 indigo,
             }),
@@ -232,6 +236,11 @@ impl HidSession {
     }
 
     /// 屏幕媒体流的画面（控制台用）；流已经停了时为 None
+    /// The screen video's bitrate cap (bit/s): to change it, close the session and open another
+    pub fn max_bitrate(&self) -> u32 {
+        self.max_bitrate
+    }
+
     pub fn screen_feed(&self) -> Option<crate::ScreenFeed> {
         self.stream.as_ref().map(|s| s.feed())
     }

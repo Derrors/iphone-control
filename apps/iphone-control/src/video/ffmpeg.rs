@@ -35,6 +35,9 @@ use super::mjpeg;
 
 /// Default quantizer: about x264's crf 19, which looks the same as the source in normal use (see the docs)
 pub const DEFAULT_QP: u8 = 20;
+/// A page in low-bandwidth mode: about half the bit rate of [`DEFAULT_QP`] (it doubles every 6 steps down); a higher
+/// `IPHONE_CONTROL_VIEWER_QP` stays
+pub const LOW_BANDWIDTH_QP: u8 = 26;
 /// A keyframe every this many frames. Frames only flow while the screen changes, and a page that falls behind gets a
 /// keyframe by restarting the encoder, so keyframes are rarely needed and cost about as much as 40 other frames
 pub const GOP_FRAMES: u32 = 600;
@@ -431,24 +434,30 @@ impl Encoders {
     }
 
     /// Starts an encoder session for frames of `w`×`h`
-    pub fn start(&self, w: u32, h: u32) -> Result<Session, String> {
+    /// A session at quantizer `qp` ([`Self::qp`], or more for a page in low-bandwidth mode)
+    pub fn start(&self, w: u32, h: u32, qp: u8) -> Result<Session, String> {
         let c = self.current().ok_or_else(|| ictl_l10n::tr!("没有可用的编码器", "no working encoder").to_owned())?;
-        self.session(&self.list[c.index], w, h, c.kicks, c.index, None)
+        self.session(&self.list[c.index], (w, h), qp, c.kicks, c.index, None)
     }
 
-    /// A session of `kind`; `info`: told how the native encoder was set up
+    /// The quantizer set for the picture (`IPHONE_CONTROL_VIEWER_QP`)
+    pub fn qp(&self) -> u8 {
+        self.qp
+    }
+
+    /// A session of `kind` for frames of `(w, h)`; `info`: told how the native encoder was set up
     fn session(
         &self,
         kind: &Kind,
-        w: u32,
-        h: u32,
+        (w, h): (u32, u32),
+        qp: u8,
         kicks: usize,
         index: usize,
         info: Option<tokio::sync::oneshot::Sender<NativeInfo>>,
     ) -> Result<Session, String> {
         let inner = match kind {
             #[cfg(target_os = "macos")]
-            Kind::Native => Inner::Native(super::vt::Session::start(w, h, self.qp, kicks, info)),
+            Kind::Native => Inner::Native(super::vt::Session::start(w, h, qp, kicks, info)),
             #[cfg(not(target_os = "macos"))]
             Kind::Native => {
                 let _ = info;
@@ -456,7 +465,7 @@ impl Encoders {
             }
             k => {
                 let ffmpeg = self.ffmpeg.as_deref().ok_or_else(|| "no ffmpeg".to_owned())?;
-                Inner::Process(Box::new(Process::spawn(ffmpeg, &args(k, w, h, self.qp, self.old), kicks)?))
+                Inner::Process(Box::new(Process::spawn(ffmpeg, &args(k, w, h, qp, self.old), kicks)?))
             }
         };
         Ok(Session { size: (w, h), index, inner })
@@ -513,7 +522,7 @@ impl Encoders {
     async fn calibrate(&self, kind: &Kind) -> Result<(usize, bool), String> {
         let (w, h) = SAMPLE;
         let (info_tx, info) = tokio::sync::oneshot::channel();
-        let mut s = self.session(kind, w, h, 0, 0, Some(info_tx))?;
+        let mut s = self.session(kind, (w, h), self.qp, 0, 0, Some(info_tx))?;
         let deadline = Instant::now() + CALIBRATE_FOR;
         let mut out = 0;
         while out == 0 {
@@ -876,7 +885,7 @@ mod tests {
                 return;
             }
         };
-        let mut s = e.start(SAMPLE.0, SAMPLE.1).unwrap();
+        let mut s = e.start(SAMPLE.0, SAMPLE.1, e.qp()).unwrap();
         s.push(e.sample.clone());
         let mut config = None;
         let deadline = tokio::time::Instant::now() + Duration::from_secs(10);

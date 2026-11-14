@@ -214,7 +214,7 @@ async fn serve_conn(daemon: Arc<Daemon>, stream: tokio::net::UnixStream) {
 /// No language (an older client) means Chinese, which is what those clients expect and parse
 fn parse_request(line: &[u8]) -> serde_json::Result<(protocol::Request, bool, core::CallCtx, ictl_l10n::Lang)> {
     let mut v: serde_json::Value = serde_json::from_slice(line)?;
-    let (cancel, udid, view, lang, task, task_step) = match v.as_object_mut() {
+    let (cancel, udid, view, lang, task, task_step, background) = match v.as_object_mut() {
         Some(o) => (
             o.remove(protocol::CANCEL_ON_CLOSE).is_some_and(|c| c == true),
             o.remove(protocol::EXPECT_UDID).and_then(|u| u.as_str().map(str::to_owned)),
@@ -222,13 +222,14 @@ fn parse_request(line: &[u8]) -> serde_json::Result<(protocol::Request, bool, co
             o.remove(protocol::LANG).and_then(|l| l.as_str().and_then(ictl_l10n::parse)),
             o.remove(protocol::TASK).and_then(|t| t.as_str().map(str::to_owned)),
             o.remove(protocol::TASK_STEP).and_then(|s| s.as_u64()),
+            o.remove(protocol::BACKGROUND).is_some_and(|b| b == true),
         ),
-        None => (false, None, None, None, None, None),
+        None => (false, None, None, None, None, None, false),
     };
     Ok((
         serde_json::from_value(v)?,
         cancel,
-        core::CallCtx { gone: None, expect_udid: udid, expect_view: view, task, task_step, peer: None },
+        core::CallCtx { gone: None, expect_udid: udid, expect_view: view, task, task_step, peer: None, background },
         lang.unwrap_or(ictl_l10n::Lang::Zh),
     ))
 }

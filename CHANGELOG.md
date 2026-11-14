@@ -8,6 +8,7 @@ All notable changes to this project are documented here. The format is based on 
 
 ### Fixed
 
+- Taps and Home presses on the control page no longer wait behind its background checks. While it shows the phone's own picture the page asks every few seconds whether a system alert is up, which on the home screen keeps WDA busy for about 0.8 s, and its status check takes the phone too: an action that came meanwhile waited for them. These checks now give way: they don't start within 4 s (the status: 1 s) of an action, nor while one waits, and one that runs is dropped when an action comes. With the page checking, a finger's press went from 775 ms to 25 ms at the 90th percentile, a Home press from 1.8 s to 1.3 s.
 - The phone's own picture (HEVC) on the control page no longer stops for half a second to a second now and then over Wi-Fi. A report from the page that came a few hundred milliseconds late made the picture skip to the next keyframe; frames now wait up to 400 ms for such a page, the allowance follows how much the link's round trip varies, and the page has two reports on the way at most instead of one. Under emulated Wi-Fi delays the longest stop went from 1.1 s to 0.1 s.
 
 ## [0.2.5] - 2026-11-14

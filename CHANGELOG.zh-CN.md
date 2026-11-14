@@ -6,9 +6,26 @@
 
 ## [Unreleased]
 
+### 变更
+
+- 守护进程重启、或重启 WDA 后就绪快了约 10 秒（iPhone 上从 11 秒降到 1.4 秒）：WDA 启动的结果一出来就收，不再等下一轮巡检。
+- 等「Enable UI Automation」密码时，每半分钟重新启动一次 WDA，原来是约 3 分钟一次。密码框只在启动 WDA 时出现（约 45 秒，且不是每次都出现），现在手机上大部分时间都有框可输，原来只有约四分之一的时间。
+- WDA 卡死后，一个请求没应答、再用 5 秒确认一次就判定卡死，工具调用等重启约 35 秒，原来要 90 秒。
+- 守护进程重启时，命令、MCP 调用和控制台会等它回来（最多 10 秒），不再直接失败；守护进程没在运行时照样马上报错。
+- 输错登录令牌太多次（一分钟 20 次）后不再连正确的令牌也拒绝：正确的令牌总能进，只有错的返回 429。原来谁能连上页面，就能借此让 `mcp --url`、远端的 `task` 命令和远端任务的 agent 都连不上。
+- `--url` 只有指向本机时才接受 `http://`：令牌不会明文发到另一台机器（请用 `https://`），也不再跟随跳转。
+
 ### 修复
 
 - 首次安装 WDA 后，命令行和 Viewer 会显示信任开发者的设置路径。设备拒绝启动 WDA 时也会提示先检查信任，已信任则用 `iphone-control doctor` 检查签名。Viewer 在实时画面旁保留提示；启动超时等错误也提供重签按钮，签名时显示进度，原始错误保留在设备状态面板。
+- 确认（`iphone_confirm`，或任务范围外的一步）不再冲掉你的暂停或接管：等任务恢复运行后才问。同时出现两个确认时依次问；原来第一个会被记成拒绝，第二个无法回答。
+- 你暂停或接管前 agent 刚发出的一步，不会在暂停或接管之后才执行；你交还前刚发出的点按，也不会在交还之后才执行。
+- 你交还控制后，agent 必须真的看过屏幕（截图成功）才能操作。
+- 只读令牌不会再让守护进程解锁手机（手机锁着时读元素会说明已锁屏）。
+- 删除或更换登录令牌后，用它打开的画面、任务事件、`/mcp` 流和任务租约 5 秒内断开。
+- 控制台启动的 agent 改在私有目录里工作（`$XDG_RUNTIME_DIR` 下，0700），不再用 `/tmp` 里别的用户能抢先建好、往里放文件的目录。
+- 控制台遇到文件描述符用完这类错误后不会再停止接受连接；一直不发完请求的连接 10 秒后断开（局域网里每台机器同时最多 8 个）；`GET /api/agent/tasks/events` 不再让连接崩溃。
+- 断电时写了一半的任务记录会被删掉，不再越积越多。
 
 ## [0.2.4] - 2026-11-14
 
@@ -23,14 +40,14 @@
 - `task` 的所有子命令都能加 `--url`（或设 `IPHONE_CONTROL_URL`）：`list`、`events`、`pause`、`resume`、`takeover`、`handback`、`stop`、`approve`、`reject` 经另一台机器的控制台操作，登录令牌放在 `IPHONE_CONTROL_VIEWER_TOKEN`。
 - 有名字的登录令牌，可以是只读的：`iphone-control viewer token add <名字> [--read-only]`、`list`、`show <名字> [--new]`、`remove <名字>`。只读令牌能看画面、设备状态和任务，所有操作（点按、输入、开任务、暂停、确认、切换设备、`/mcp`）都被拒绝，页面上也不显示操作入口。任务记录里写下是哪个令牌做的控制（`viewer:<名字>`）。令牌改存在 `viewer-tokens.json`，原来的令牌成了 `owner`，升级后不用重新登录；增删、换令牌马上生效，不用重启控制台。
 - 从另一台机器开任务：`iphone-control task run --url https://<那台机器>:8200 -- <命令>`（登录令牌放在 `IPHONE_CONTROL_VIEWER_TOKEN`），或者直接调 `POST /api/agent/tasks/open`，返回的事件流就是租约。另一台机器上的 agent 只拿任务口令：`/mcp` 认进行中任务的口令（请求头 `Iphone-Control-Task-Token`），它能为这个任务操作手机，但碰不到暂停、确认这些控制接口，不能批准自己。
-- 控制台和它的 `/mcp` 要登录了，本机也一样（控制台分不清本机的浏览器和经 frp、cloudflared 等反向代理转发进来的访问）。令牌第一次启动时生成，存在数据目录的 `viewer-token`（0600）；`iphone-control viewer token` 显示令牌、本机和局域网的登录链接以及接入 HTTP MCP 的命令，`--new` 换一个新令牌。浏览器登录一次后记住 30 天；程序和 MCP 客户端用 `Authorization: Bearer <令牌>`。输错太多次（一分钟 20 次）会暂停校验一分钟。命令行、`iphone-control mcp`（stdio）和 `task run` 走本机的 Unix socket，不受影响。
-- MCP over HTTP：控制台同一个端口上的 `/mcp`（Streamable HTTP）提供和 `iphone-control mcp` 一样的工具，只能填 URL 的客户端、局域网里另一台电脑上的 agent（`--lan`，走 HTTPS）都能接入，例如 `claude mcp add --transport http iphone http://127.0.0.1:8200/mcp`。任务里的 agent 在请求头 `Iphone-Control-Task-Token` 里带上任务口令。和控制台一样没有登录，`--mcp off`（`IPHONE_CONTROL_VIEWER_MCP=off`）关掉。
-- 控制台对局域网开放（`--lan`）时改用 HTTPS，还是同一个端口：局域网里打开时画面也能用 H.264 或手机自己的 HEVC，不再退回 MJPEG，传输也加了密。默认用本机生成的自签证书（存在数据目录的 `viewer-tls/`，一直沿用），浏览器第一次打开会提示不受信任，核对启动时或 `service status` 显示的 SHA-256 指纹后继续；也可以用 `--tls-cert`/`--tls-key`（`IPHONE_CONTROL_VIEWER_TLS_CERT`/`_KEY`）换成自己的证书。局域网来的 `http://` 跳转到 `https://`，本机的 `http://127.0.0.1` 照旧。`--tls off`（`IPHONE_CONTROL_VIEWER_TLS=off`）恢复成 HTTP。这不是登录：局域网里能连上的人照样能操作手机。
+- 控制台和它的 `/mcp` 要登录了，本机也一样（控制台分不清本机的浏览器和经 frp、cloudflared 等反向代理转发进来的访问）。令牌第一次启动时生成，存在数据目录的 `viewer-tokens.json`（0600）；`iphone-control viewer token` 显示令牌、本机和局域网的登录链接以及接入 HTTP MCP 的命令，`--new` 换一个新令牌。浏览器登录一次后记住 30 天；程序和 MCP 客户端用 `Authorization: Bearer <令牌>`。输错太多次（一分钟 20 次）后，一分钟内错的令牌一律返回 429。命令行、`iphone-control mcp`（stdio）和 `task run` 走本机的 Unix socket，不受影响。
+- MCP over HTTP：控制台同一个端口上的 `/mcp`（Streamable HTTP）提供和 `iphone-control mcp` 一样的工具，只能填 URL 的客户端、局域网里另一台电脑上的 agent（`--lan`，走 HTTPS）都能接入，例如 `claude mcp add --transport http iphone http://127.0.0.1:8200/mcp`。任务里的 agent 在请求头 `Iphone-Control-Task-Token` 里带上任务口令。和页面一样要登录；`--mcp off`（`IPHONE_CONTROL_VIEWER_MCP=off`）关掉。
+- 控制台对局域网开放（`--lan`）时改用 HTTPS，还是同一个端口：局域网里打开时画面也能用 H.264 或手机自己的 HEVC，不再退回 MJPEG，传输也加了密。默认用本机生成的自签证书（存在数据目录的 `viewer-tls/`，一直沿用），浏览器第一次打开会提示不受信任，核对启动时或 `service status` 显示的 SHA-256 指纹后继续；也可以用 `--tls-cert`/`--tls-key`（`IPHONE_CONTROL_VIEWER_TLS_CERT`/`_KEY`）换成自己的证书。局域网来的 `http://` 跳转到 `https://`，本机的 `http://127.0.0.1` 照旧。`--tls off`（`IPHONE_CONTROL_VIEWER_TLS=off`）恢复成 HTTP。
 - `iphone-control service viewer install` 把控制台装成登录后自动启动的后台服务（还有 `uninstall`、`start`、`stop`、`restart`）。端口和是否对局域网开放读设置文件（新增 `IPHONE_CONTROL_VIEWER_PORT`；`IPHONE_CONTROL_VIEWER_LAN`；新增 `IPHONE_CONTROL_VIEWER_LAN_HOSTS`），并记下安装时终端的 `PATH` 以找到 `claude` 和 `codex`。升级时先停下它、升级完再启动；有 AI 任务在跑时自动升级会推迟。
 - AI 任务的 Agent 不能再自己暂停、继续、接管、交还或确认，越界确认和 `iphone_confirm` 只能由人回答。带任务口令（`IPHONE_CONTROL_TASK_TOKEN`）的控制请求会被拒绝；控制台和 `task run` 启动的 Agent，连同它再启动的进程，也会被拒绝，即使去掉了口令，或者调用控制台的接口。在 macOS 上，调用控制台接口的这条路还查不出是哪个进程。停止任务不受限制。任务记录里会写下谁做了控制（控制台、命令行、任务的发起方）。
 - 设置菜单支持方向键选择、Enter 确认和 Esc 取消，保留数字选择；基础终端继续使用逐行提示。
 - `iphone-control completions <shell>` 可生成 Bash、Zsh 和 Fish 补全脚本，不启动守护进程、不访问设备。
-- `iphone-control viewer --lan`（或 `IPHONE_CONTROL_VIEWER_LAN=1`）让控制台也对局域网开放，还是同一个端口。还没有登录：局域网里任何能连上这台机器的人都能操作手机，只在可信的网络里开。只接受局域网地址来的连接，只认本机自己的名字和地址；`--lan-host` 可以再加名字。从局域网地址打开时画面是 MJPEG，因为浏览器只在 localhost 或 HTTPS 上提供 WebCodecs。
+- `iphone-control viewer --lan`（或 `IPHONE_CONTROL_VIEWER_LAN=1`）让控制台也对局域网开放，还是同一个端口，走 HTTPS、要登录（见上文）。只接受局域网地址来的连接，只认本机自己的名字和地址；`--lan-host` 可以再加名字。
 - 控制台上开任务前可以限定 App 范围（Agent 旁边的 App 按钮）：到了别的 App，每一步都先等你确认，和 `task run --app` 一样。任务卡片上显示范围，重新执行时沿用。
 - 任何 agent 平台都能用 AI 任务：`iphone-control task run -- <命令>` 在任务里运行命令，它启动的 `iphone-control mcp` 自动加入任务（控制台能看到每一步，可以暂停、接管、停止、确认）。`task list`、`task events`、`task pause`/`resume`/`takeover`/`handback`/`stop`、`task approve`/`reject` 在命令行里查看和控制任务。
 - 控制台会接上正在进行的任务：页面刷新后，以及在别处开的任务。

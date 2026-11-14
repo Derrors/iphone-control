@@ -136,7 +136,7 @@ iphone-control
 | `setup [--reconfigure]` | 重新走一遍设置引导；`--reconfigure` 只改其中一项（语言、代理、后台服务、Apple ID、手机、自动解锁、通知、注册 MCP） |
 | `service install\|uninstall\|start\|stop\|restart\|status` | 后台服务（macOS 是 launchd，Linux 是 systemd 用户服务） |
 | `daemon` | 常驻守护进程；由后台服务运行，也可以手动启动 |
-| `mcp` | MCP 服务，由 AI 客户端拉起 |
+| `mcp [--url <控制台>]` | MCP 服务，由 AI 客户端拉起；加 `--url` 时转接到另一台机器的控制台 |
 | `status` | 守护进程状态、描述文件还剩多久、最近日志 |
 | `doctor` | 逐层诊断，每项失败都给出修复办法 |
 | `login` | Apple ID 会话失效时重新登录 |
@@ -150,6 +150,10 @@ iphone-control
 | `wda-bridge [--port]` | 把 WebDriverAgent 桥接到 127.0.0.1 给别的工具用，用完就停 |
 | `viewer [--port] [--lan]` | 控制台页面，地址 127.0.0.1:8200，要登录（`viewer token` 显示令牌和登录链接，可以加只读令牌）：实时画面可直接点击、滑动、输入，设备面板，还能把任务交给本机的 Claude Code 或 Codex 执行。`--lan` 对局域网开放（HTTPS），同一个端口上还有 MCP over HTTP（`/mcp`） |
 | `task run [--url <控制台>] -- <命令>` | 给别的 agent 平台用的 AI 任务；`--url` 时手机在另一台机器上。`task list`、`pause`、`approve` 等查看和控制任务 |
+| `viewer token [add <名字> [--read-only]\|list\|show <名字>\|remove <名字>]` | 控制台的登录令牌：显示 owner 的令牌，或者加有名字的、只读的令牌 |
+| `service viewer install\|uninstall\|start\|stop\|restart` | 把控制台装成单独的后台服务 |
+| `update check\|apply\|policy` | 检查、安装更新，或设置更新策略 |
+| `completions <shell>` | 生成 Bash、Zsh 或 Fish 的补全脚本 |
 
 全部命令和参数见[命令行](https://derrors.github.io/iphone-control/guide/cli)。
 

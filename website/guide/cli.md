@@ -155,5 +155,6 @@ macOS 上，以及 Linux 上装了 ffmpeg 时，控制台的画面是 H.264，�
 - **编码器：** `viewer` 启动时按顺序试，第一个能用的就用，并在终端里显示：NVIDIA 用 NVENC；AMD、Intel 用 VAAPI（JPEG 也交给显卡解码）；Intel 还可以用 QSV；树莓派一类的 ARM 板用 V4L2；macOS 用 VideoToolbox（本程序直接调用，JPEG 也由硬件解码；装了 ffmpeg 时，它的 VideoToolbox 作备用）；都不行就用 x264 软件编码（占 CPU）。处理真实画面时出错，会换下一个。Linux 上要用显卡，用户得在 `render` 组里，`doctor` 会检查。
 - **链路慢时：** 页面每 100 毫秒告诉 viewer 收到了多少。链路跟不上时少编几帧，画面帧率下降，但不会越来越滞后。比如每秒 200 KB 的链路，滚动停下后约 0.6 秒画面追上。
 - **自动改用 MJPEG：** Linux 上没有 ffmpeg、没有能用的编码器、浏览器不支持 WebCodecs（较旧的浏览器）时自动改用 MJPEG；画面静止时不再重复发同一张图，链路慢时只发最新的一张。
+- **弱网模式：** 控制台「设置」里的开关，适合外网或信号差时用。画面流量减少约一半，帧率不变；画面静止时看不出区别，动起来时边缘会有些糊块，停下约半秒后恢复。手机自己的视频（HEVC）每台手机只有一路，码率上限在开始时和手机协商，所以开着时所有在看这台手机的页面都会一起降（约 6 Mbit/s 上限降到 2 Mbit/s），第一个开它和最后一个关它的页面会让所有人的画面断开半秒左右再接上，进行中的触摸也会中断。H.264 只影响开它的那个页面（qp 提到 26）。开着时画面下方会写「弱网模式」。
 - **看现在用的是哪种：** 画面下方写着，例如「实时画面 · WDA · HEVC iPhone 312 KB/s」（手机自己的视频）或「实时画面 · WDA · H.264 VAAPI 254 KB/s」。
 - **设置：** `IPHONE_CONTROL_VIEWER_CODEC`（`device` 只用手机自己的视频，`mjpeg` 只用 MJPEG）、`IPHONE_CONTROL_VIEWER_QP`、`ICTL_FFMPEG`，见[配置](./configuration)。Linux 上安装 ffmpeg：`sudo apt install ffmpeg`，deb 包会推荐安装它；macOS 上不用装。

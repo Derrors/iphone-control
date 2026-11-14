@@ -313,11 +313,11 @@ pub(crate) struct PerDevice {
     /// 最近一次经本进程锁屏的时间（自动解锁要等锁屏过渡走完，见 [`crate::tools::LOCK_SETTLE`]）
     pub last_lock: Option<Instant>,
     /// 这台手机上 Home 先用 XCTest 的：上一次 IOHID 的没回到主屏、XCTest 的回到了（iPhone 18 Pro Max /
-    /// iOS 27.2.1 上 IOHID 的 Home 基本不起作用）。iPhone 12 mini 正相反，所以按设备记，见 `tools::press_home`
+    /// iOS 27.2.1 上 IOHID 的 Home 基本不起作用）。iPhone 12 mini 正相反，所以按设备记，见 `tools::keys::press_home`
     pub home_via_xctest: bool,
     /// 这台手机上锁屏先用 WDA 的 `/wda/lock`：上一次经 IOHID 短按电源键没锁上、WDA 的锁上了。iPhone 15 Pro Max
     /// （iOS 27.0.1）上短按电源键不起作用（调用卡约 5 秒，再等 3 秒才退回，一次锁屏约 10 秒），`/wda/lock` 约 2 秒；
-    /// iPhone 18 Pro Max（iOS 27.2.1）正相反，所以按设备记，见 `tools::lock_order`
+    /// iPhone 18 Pro Max（iOS 27.2.1）正相反，所以按设备记，见 `tools::keys::lock_order`
     pub lock_via_wda: bool,
     /// The orientation of the finger the web viewer is moving (`Request::Touch`), worked out when it touched down
     pub touch_rotation: Option<Rotation>,

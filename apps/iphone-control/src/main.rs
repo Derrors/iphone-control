@@ -1372,26 +1372,33 @@ const MAX_CONNECTIONS: usize = 32;
 const MAX_HEAD: usize = 16 * 1024;
 /// 客户端发请求头、请求体时单次读的等待上限：连上不发的连接不能一直占着名额
 const READ_TIMEOUT: Duration = Duration::from_secs(10);
+/// 整个请求头（以及 TLS 握手）的时限：每隔几秒发一个字节的连接也不能一直占着名额
+const HEAD_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// 读到请求头结束；返回头部和跟着一起到的那部分请求体
 async fn read_head(client: &mut (impl tokio::io::AsyncRead + Unpin)) -> anyhow::Result<(Vec<u8>, Vec<u8>)> {
     use tokio::io::AsyncReadExt;
-    let mut data = Vec::new();
-    let mut buf = [0u8; 4096];
-    loop {
-        if let Some(i) = data.windows(4).position(|w| w == b"\r\n\r\n") {
-            let body = data.split_off(i + 4);
-            return Ok((data, body));
+    let read = async {
+        let mut data = Vec::new();
+        let mut buf = [0u8; 4096];
+        loop {
+            if let Some(i) = data.windows(4).position(|w| w == b"\r\n\r\n") {
+                let body = data.split_off(i + 4);
+                return Ok((data, body));
+            }
+            if data.len() > MAX_HEAD {
+                bail!("{}", ictl_l10n::tr!("请求头太长", "request headers too long"));
+            }
+            let n = tokio::time::timeout(READ_TIMEOUT, client.read(&mut buf)).await??;
+            if n == 0 {
+                bail!("{}", ictl_l10n::tr!("连接已关闭", "connection closed"));
+            }
+            data.extend_from_slice(&buf[..n]);
         }
-        if data.len() > MAX_HEAD {
-            bail!("{}", ictl_l10n::tr!("请求头太长", "request headers too long"));
-        }
-        let n = tokio::time::timeout(READ_TIMEOUT, client.read(&mut buf)).await??;
-        if n == 0 {
-            bail!("{}", ictl_l10n::tr!("连接已关闭", "connection closed"));
-        }
-        data.extend_from_slice(&buf[..n]);
-    }
+    };
+    tokio::time::timeout(HEAD_TIMEOUT, read)
+        .await
+        .map_err(|_| anyhow::anyhow!("{}", ictl_l10n::tr!("请求头没有按时发完", "request headers took too long")))?
 }
 
 /// HTTP 请求头里的 Host 是不是 localhost / 127.0.0.1 / [::1]（端口不限）

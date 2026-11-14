@@ -286,35 +286,93 @@ pub async fn run(
         auth: Some(auth),
     });
     let slots = Arc::new(tokio::sync::Semaphore::new(crate::MAX_CONNECTIONS));
+    let arriving = Arriving::default();
     loop {
-        let (client, peer) = listener.accept().await?;
+        let (client, peer) = match listener.accept().await {
+            Ok(c) => c,
+            // for example out of file descriptors: the viewer goes on (and retrying at once would only spin)
+            Err(e) => {
+                tracing::warn!("viewer: accepting a connection failed: {e}");
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                continue;
+            }
+        };
         // open to the network: only from the local network (a machine reachable from the internet isn't operated
         // from there)
         if !lan::peer_allowed(peer.ip()) {
             tracing::warn!("viewer: refused a connection from {}", peer.ip());
             continue;
         }
+        // one machine on the network can't take every place with connections that never send a request
+        let Some(early) = arriving.enter(peer.ip()) else { continue };
         // too many open connections (for example many tabs): drop the new one
         let Ok(slot) = slots.clone().try_acquire_owned() else { continue };
         let ctx = ctx.clone();
         tokio::spawn(async move {
             let client = match &ctx.tls {
                 // the handshake in the connection's own task: a slow client doesn't hold up the others
-                Some(t) => match t.accept(client).await {
-                    Ok(c) => c,
-                    Err(e) => {
+                Some(t) => match tokio::time::timeout(crate::HEAD_TIMEOUT, t.accept(client)).await {
+                    Ok(Ok(c)) => c,
+                    Ok(Err(e)) => {
                         tracing::debug!("viewer TLS: {e}");
+                        drop(slot);
+                        return;
+                    }
+                    Err(_) => {
+                        tracing::debug!("viewer TLS: the handshake took too long");
                         drop(slot);
                         return;
                     }
                 },
                 None => Conn::Plain(client),
             };
-            if let Err(e) = serve(client, &ctx).await {
+            if let Err(e) = serve(client, &ctx, Some(early)).await {
                 tracing::debug!("viewer connection: {e}");
             }
             drop(slot);
         });
+    }
+}
+
+/// Connections from a machine on the network that haven't sent their request yet (handshake and head), at most
+/// [`ARRIVING_PER_PEER`] each. This machine isn't limited: the page's own requests come from it, and so does
+/// everything a reverse proxy forwards
+#[derive(Default, Clone)]
+struct Arriving(Arc<Mutex<std::collections::HashMap<std::net::IpAddr, usize>>>);
+
+const ARRIVING_PER_PEER: usize = 8;
+
+/// One connection counted in [`Arriving`] until it has sent its request
+struct Early(Option<(Arriving, std::net::IpAddr)>);
+
+impl Arriving {
+    fn enter(&self, ip: std::net::IpAddr) -> Option<Early> {
+        let ip = ip.to_canonical();
+        if ip.is_loopback() {
+            return Some(Early(None));
+        }
+        let mut m = self.0.lock().unwrap_or_else(|p| p.into_inner());
+        let n = m.entry(ip).or_default();
+        if *n >= ARRIVING_PER_PEER {
+            tracing::debug!("viewer: too many connections from {ip} still sending their request");
+            return None;
+        }
+        *n += 1;
+        Some(Early(Some((self.clone(), ip))))
+    }
+}
+
+impl Drop for Early {
+    fn drop(&mut self) {
+        if let Some((a, ip)) = self.0.take() {
+            let mut m = a.0.lock().unwrap_or_else(|p| p.into_inner());
+            if let Some(n) = m.get_mut(&ip) {
+                *n -= 1;
+                if *n == 0 {
+                    m.remove(&ip);
+                }
+            }
+        }
     }
 }
 
@@ -334,8 +392,9 @@ fn page_in(lang: ictl_l10n::Lang) -> String {
 
 /// One request per connection (`Connection: close`), which keeps the parser small. It is handled in the page's
 /// language (`X-Ictl-Lang`), so the daemon's messages match the page
-async fn serve(mut client: Conn, ctx: &Ctx) -> anyhow::Result<()> {
+async fn serve(mut client: Conn, ctx: &Ctx, early: Option<Early>) -> anyhow::Result<()> {
     let (head, body) = crate::read_head(&mut client).await?;
+    drop(early);
     let Some(req) = Head::parse(&head) else {
         return reply(&mut client, 400, "text/plain", b"bad request").await;
     };
@@ -381,8 +440,8 @@ async fn handle(mut client: Conn, ctx: &Ctx, head: Vec<u8>, req: Head, mut body:
             };
             picture(client, ctx, &req).await
         }
-        ("GET", p) if p.starts_with("/api/agent/tasks/") && p.ends_with("/events") => {
-            let id = &p["/api/agent/tasks/".len()..p.len() - "/events".len()];
+        ("GET", p) if task_events_id(p).is_some() => {
+            let id = task_events_id(p).unwrap_or_default();
             match protocol::task_events(&ctx.socket, id).await {
                 Ok(stream) => events(&mut client, stream).await,
                 Err(m) => json_reply(&mut client, 404, &json!({"message": m})).await,
@@ -777,19 +836,31 @@ fn sse(e: &protocol::TaskEvent) -> String {
     format!("event: {}\ndata: {}\n\n", e.event, e.data)
 }
 
+/// `/api/agent/tasks/<id>/events`: the task's id
+fn task_events_id(path: &str) -> Option<&str> {
+    path.strip_prefix("/api/agent/tasks/")?.strip_suffix("/events").filter(|id| !id.is_empty() && !id.contains('/'))
+}
+
 /// The rest of a request body: `body` holds what came with the head; `len` bytes in all
 async fn read_body(client: &mut Conn, body: &mut Vec<u8>, len: usize) -> anyhow::Result<()> {
-    while body.len() < len {
-        let mut buf = [0u8; 4096];
-        let n = tokio::time::timeout(crate::READ_TIMEOUT, client.read(&mut buf)).await??;
-        if n == 0 {
-            bail!("body cut off");
+    let read = async {
+        while body.len() < len {
+            let mut buf = [0u8; 4096];
+            let n = tokio::time::timeout(crate::READ_TIMEOUT, client.read(&mut buf)).await??;
+            if n == 0 {
+                bail!("body cut off");
+            }
+            body.extend_from_slice(&buf[..n]);
         }
-        body.extend_from_slice(&buf[..n]);
-    }
+        anyhow::Ok(())
+    };
+    // a whole body (at most `mcp::MAX_BODY`) in this time, however slowly it trickles in
+    tokio::time::timeout(BODY_TIMEOUT, read).await.map_err(|_| anyhow::anyhow!("body took too long"))??;
     body.truncate(len);
     Ok(())
 }
+
+const BODY_TIMEOUT: Duration = Duration::from_secs(60);
 
 async fn json_reply(client: &mut Conn, status: u16, v: &Value) -> anyhow::Result<()> {
     reply(client, status, "application/json", v.to_string().as_bytes()).await
@@ -1444,7 +1515,7 @@ mod tests {
             out
         });
         let (tcp, _) = listener.accept().await.unwrap();
-        serve(Conn::Plain(tcp), ctx).await.unwrap();
+        serve(Conn::Plain(tcp), ctx, None).await.unwrap();
         client.await.unwrap()
     }
 
@@ -1626,7 +1697,7 @@ mod tests {
         tokio::spawn(async move {
             while let Ok((tcp, _)) = listener.accept().await {
                 let ctx = served.clone();
-                tokio::spawn(async move { serve(Conn::Plain(tcp), &ctx).await });
+                tokio::spawn(async move { serve(Conn::Plain(tcp), &ctx, None).await });
             }
         });
 
@@ -1670,6 +1741,32 @@ mod tests {
         );
         drop(to_bridge);
         bridge.await.unwrap().unwrap();
+    }
+
+    #[test]
+    fn the_task_events_route_takes_an_id() {
+        assert_eq!(task_events_id("/api/agent/tasks/0a1b2c/events"), Some("0a1b2c"));
+        // starts with the prefix and ends with the suffix, overlapping: no id (this used to panic)
+        assert_eq!(task_events_id("/api/agent/tasks/events"), None);
+        assert_eq!(task_events_id("/api/agent/tasks//events"), None);
+        assert_eq!(task_events_id("/api/agent/tasks/a/b/events"), None);
+        assert_eq!(task_events_id("/api/agent/tasks/abc"), None);
+    }
+
+    #[test]
+    fn a_machine_on_the_network_has_a_few_connections_arriving_at_a_time() {
+        let a = Arriving::default();
+        let lan: std::net::IpAddr = "192.168.1.9".parse().unwrap();
+        let other: std::net::IpAddr = "192.168.1.10".parse().unwrap();
+        let held: Vec<_> = (0..ARRIVING_PER_PEER).map(|_| a.enter(lan).unwrap()).collect();
+        assert!(a.enter(lan).is_none());
+        assert!(a.enter(other).is_some(), "another machine isn't held up");
+        let local: std::net::IpAddr = "127.0.0.1".parse().unwrap();
+        let many: Vec<_> = (0..100).map(|_| a.enter(local)).collect();
+        assert!(many.iter().all(Option::is_some), "this machine isn't limited");
+        drop(held);
+        assert!(a.enter(lan).is_some(), "once they sent their requests");
+        assert!(a.0.lock().unwrap().get(&lan).is_none_or(|n| *n == 0));
     }
 
     #[test]

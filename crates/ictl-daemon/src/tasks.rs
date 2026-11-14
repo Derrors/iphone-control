@@ -784,7 +784,7 @@ impl Tasks {
         udid: Option<&str>,
         apps: Vec<String>,
         opener: Option<u32>,
-    ) -> Result<Arc<Task>, String> {
+    ) -> crate::error::Result<Arc<Task>> {
         let title = title.trim();
         if title.is_empty() {
             return Err(ictl_l10n::tr!("任务要有标题", "A task needs a title").into());
@@ -803,7 +803,8 @@ impl Tasks {
                 "A task is already running ({}, {}): wait for it to end or stop it first",
                 t.id,
                 t.title
-            ));
+            )
+            .into());
         }
         let id = uuid::Uuid::new_v4().simple().to_string()[..12].to_owned();
         let task = Arc::new(Task {
@@ -1247,7 +1248,7 @@ mod tests {
         assert!(ts.open("x", "", None, Vec::new(), None).is_err());
         assert!(ts.open(" ", "", Some(PHONE), Vec::new(), None).is_err());
         let t = open(&ts);
-        assert!(ts.open("another", "", Some(PHONE), Vec::new(), None).err().unwrap().contains(&t.id));
+        assert!(ts.open("another", "", Some(PHONE), Vec::new(), None).err().unwrap().to_string().contains(&t.id));
         t.end(End::Completed, "");
         assert!(ts.open("another", "", Some(PHONE), Vec::new(), None).is_ok());
     }

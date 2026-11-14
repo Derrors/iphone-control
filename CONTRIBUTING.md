@@ -83,6 +83,7 @@ Notes:
 - **Vendored code** (`vendor/`) keeps its license. Record any change in [THIRD_PARTY.md](THIRD_PARTY.md); changed MPL-2.0 files stay MPL-2.0.
 - **Never commit** `data/`, `~/.config/iphone-control/env` or other settings files with secrets, certificates, provisioning profiles, pairing records or anything Apple ships (Developer Disk Images, frameworks).
 - Comments explain *why*, especially device quirks; put measured numbers next to timeouts and thresholds.
+- **Errors:** the daemon returns `crate::error::Result` (`ictl_daemon::error::Error`): WDA's, the device's and unlocking's errors pass through `?` as they are, the daemon's own messages are `Error::Msg`; small pure helpers may keep `Result<_, String>`. The caller gets the text in its language, so word messages for it. The CLI uses `anyhow` (with context for people reading it), the control page's JSON carries a `message` string. New facts a client acts on go into a structured field (`Outcome`, `Data`, `retry_as_gesture`), never into wording it has to match.
 
 ## Required tests
 

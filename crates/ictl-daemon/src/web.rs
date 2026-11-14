@@ -33,7 +33,11 @@ const MAX_RESULT_CHARS: usize = 50_000;
 
 impl Daemon {
     /// `slot` is [`Daemon::web`], already locked by the caller (see `Daemon::handle`)
-    pub(crate) async fn web_targets(&self, slot: &mut Option<WebConn>, device: &Device) -> Result<String, String> {
+    pub(crate) async fn web_targets(
+        &self,
+        slot: &mut Option<WebConn>,
+        device: &Device,
+    ) -> crate::error::Result<String> {
         let (apps, pages) = web_pages(slot, device).await?;
         if pages.is_empty() {
             return Ok(ictl_l10n::tr!(
@@ -61,7 +65,7 @@ impl Daemon {
         target: &str,
         expression: &str,
         timeout: Duration,
-    ) -> Result<String, String> {
+    ) -> crate::error::Result<String> {
         let (apps, pages) = web_pages(slot, device).await?;
         let page = pick(&pages, target).map_err(|e| match e {
             Pick::None => ictl_l10n::trf!(
@@ -83,13 +87,13 @@ impl Daemon {
                 if breaks_connection(&e) {
                     *slot = None;
                 }
-                return Err(page_error(&e));
+                return Err(page_error(&e).into());
             }
         };
         Ok(match r {
             Eval::Value(None) => "undefined".into(),
             Eval::Value(Some(v)) => truncate(v.to_string()),
-            Eval::Thrown(d) => return Err(ictl_l10n::trf!("页面里抛出异常:{d}", "The page threw: {d}")),
+            Eval::Thrown(d) => return Err(ictl_l10n::trf!("页面里抛出异常:{d}", "The page threw: {d}").into()),
         })
     }
 
@@ -106,7 +110,7 @@ impl Daemon {
 
 /// The pages, on the kept connection (opened if there is none, or it belongs to another device). A connection that
 /// turns out to be broken is replaced once: listing pages changes nothing on the phone
-async fn web_pages(slot: &mut Option<WebConn>, device: &Device) -> Result<(Vec<App>, Vec<Page>), String> {
+async fn web_pages(slot: &mut Option<WebConn>, device: &Device) -> crate::error::Result<(Vec<App>, Vec<Page>)> {
     if slot.as_ref().is_some_and(|c| c.udid != device.udid) {
         *slot = None;
     }
@@ -125,11 +129,11 @@ async fn web_pages(slot: &mut Option<WebConn>, device: &Device) -> Result<(Vec<A
             Err(e) if breaks_connection(&e) => {
                 *slot = None;
                 if attempt == 1 {
-                    return Err(page_error(&e));
+                    return Err(page_error(&e).into());
                 }
                 tracing::debug!("Web Inspector connection broken, opening a new one: {e}");
             }
-            Err(e) => return Err(page_error(&e)),
+            Err(e) => return Err(page_error(&e).into()),
         }
     }
     unreachable!("the second attempt returns")

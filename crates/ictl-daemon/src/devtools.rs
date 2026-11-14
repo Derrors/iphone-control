@@ -59,11 +59,11 @@ impl Daemon {
         since: Duration,
         limit: usize,
         errors_only: bool,
-    ) -> Result<String, String> {
+    ) -> crate::error::Result<String> {
         let device = g.device.clone().ok_or(ictl_l10n::tr!("手机未连接", "Phone not connected"))?;
         let running = g.dev.log_capture.as_ref().is_some_and(|c| c.udid == device.udid && !c.task.is_finished());
         if !running {
-            let mut stream = device.log_stream().await.map_err(|e| e.to_string())?;
+            let mut stream = device.log_stream().await?;
             let buf = Arc::new(Mutex::new(Buffer::default()));
             let b = buf.clone();
             let task = tokio::spawn(async move {
@@ -155,7 +155,7 @@ impl Daemon {
         process.to_owned()
     }
 
-    pub(crate) async fn crash_reports(&self, g: &mut Inner, filter: &str, name: &str) -> Result<String, String> {
+    pub(crate) async fn crash_reports(&self, g: &mut Inner, filter: &str, name: &str) -> crate::error::Result<String> {
         let device = g.device.clone().ok_or(ictl_l10n::tr!("手机未连接", "Phone not connected"))?;
         if !name.is_empty() {
             if name.contains('/') || name.contains("..") {
@@ -165,7 +165,7 @@ impl Daemon {
                 )
                 .into());
             }
-            let data = device.crash_report(name).await.map_err(|e| e.to_string())?;
+            let data = device.crash_report(name).await?;
             let text = String::from_utf8_lossy(&data);
             let n = text.chars().count();
             if n <= MAX_REPORT_CHARS {
@@ -178,7 +178,7 @@ impl Daemon {
                     "\n… ({n} characters in total, only the first {MAX_REPORT_CHARS} returned)"
                 ));
         }
-        let names = device.crash_reports().await.map_err(|e| e.to_string())?;
+        let names = device.crash_reports().await?;
         let list = crash_list(names, filter);
         if list.is_empty() {
             return Ok(if filter.is_empty() {
@@ -197,22 +197,23 @@ impl Daemon {
 
     /// Runs without holding the daemon lock (an install can take minutes), like re-signing
     /// Installs are queued one at a time inside `Device::install` (they share one upload path on the phone)
-    pub(crate) async fn install_app(&self, device: &ictl_device::Device, path: &str) -> Result<String, String> {
+    pub(crate) async fn install_app(&self, device: &ictl_device::Device, path: &str) -> crate::error::Result<String> {
         let p = std::path::Path::new(path);
         if !p.exists() {
             return Err(ictl_l10n::trf!(
                 "找不到 {path}(路径要在运行守护进程的机器上)",
                 "{path} not found (the path is on the machine that runs the daemon)"
-            ));
+            )
+            .into());
         }
-        device.install(p).await.map_err(|e| e.to_string())?;
+        device.install(p).await?;
         self.inner.lock().await.dev.apps.clear();
         Ok(ictl_l10n::trf!("已安装 {path}", "Installed {path}"))
     }
 
     /// Uninstalling deletes the app's data, so unlike launching, the name must match exactly: a bundle ID or the
     /// whole display name. The app lists are read again first, so an app installed a moment ago is found
-    pub(crate) async fn uninstall_app(&self, g: &mut Inner, app: &str) -> Result<String, String> {
+    pub(crate) async fn uninstall_app(&self, g: &mut Inner, app: &str) -> crate::error::Result<String> {
         g.dev.apps.clear();
         let mut all = self.list_apps(g, false).await?;
         all.extend(self.list_apps(g, true).await?);
@@ -221,10 +222,11 @@ impl Daemon {
             return Err(ictl_l10n::trf!(
                 "{bid} 是 WebDriverAgent,iphone-control 靠它控制手机,不能卸载",
                 "{bid} is WebDriverAgent, which iphone-control needs to control the phone; it can't be uninstalled"
-            ));
+            )
+            .into());
         }
         let device = g.device.clone().ok_or(ictl_l10n::tr!("手机未连接", "Phone not connected"))?;
-        device.uninstall(&bid).await.map_err(|e| e.to_string())?;
+        device.uninstall(&bid).await?;
         g.dev.apps.clear();
         Ok(ictl_l10n::trf!("已卸载 {bid}", "Uninstalled {bid}"))
     }

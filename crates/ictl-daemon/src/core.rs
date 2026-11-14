@@ -657,9 +657,9 @@ impl Daemon {
         if g.runner.as_ref().is_some_and(|r| r.alive()) { g.wda.as_mut() } else { None }
     }
 
-    pub(crate) fn require_wda<'a>(&self, g: &'a mut Inner) -> Result<&'a mut WdaClient<DeviceTransport>, String> {
+    pub(crate) fn require_wda<'a>(&self, g: &'a mut Inner) -> crate::error::Result<&'a mut WdaClient<DeviceTransport>> {
         let msg = wda_down(&g.state, g.info.as_ref());
-        self.wda(g).ok_or(msg)
+        self.wda(g).ok_or(msg.into())
     }
 
     pub(crate) fn account(&self) -> ictl_sign::AccountDir {
@@ -836,7 +836,7 @@ impl Daemon {
     }
 
     /// A task's scope from names or bundle IDs: the bundle IDs, each once. `Err` names the app that isn't there
-    pub(crate) async fn resolve_scope(&self, apps: &[String]) -> Result<Vec<String>, String> {
+    pub(crate) async fn resolve_scope(&self, apps: &[String]) -> crate::error::Result<Vec<String>> {
         let apps: Vec<&str> = apps.iter().map(|a| a.trim()).filter(|a| !a.is_empty()).collect();
         if apps.is_empty() {
             return Ok(Vec::new());
@@ -860,7 +860,7 @@ impl Daemon {
         mut ctx: CallCtx,
         admission: &crate::tasks::Admission,
     ) -> Response {
-        let text = |r: Result<String, String>| {
+        let text = |r: crate::error::Result<String>| {
             r.map(|t| Response::text_with(t, crate::protocol::Outcome::default())).unwrap_or_else(Response::error)
         };
         match lane(&req) {

@@ -567,8 +567,14 @@ pub const ALERT_BLOCKING: &str = "屏幕上有系统弹窗";
 /// `iphone_tap_element` 没点到时结果开头的几种写法（不算出错，单独调用时是普通结果；批量里要停下）
 pub const TAP_MISSED: [&str; 3] = ["没找到", "只匹配到", "被挡住"];
 
+/// The version from which clients and daemons no longer read results by their wording, only by [`Outcome`]
+/// (every one since 0.1.5 sends it): remove the text fallbacks then
+pub const TEXT_FALLBACK_UNTIL: (u64, u64) = (0, 3);
+
 /// Did `iphone_tap_element` tap nothing? Daemons that send [`Outcome`] say so there; older ones only write
-/// Chinese text, recognised by its [`TAP_MISSED`] prefix
+/// Chinese text, recognised by its [`TAP_MISSED`] prefix. [`Outcome`] came with 0.1.5: the text fallback (here,
+/// in [`alert_reported`], and the fixed Chinese prefixes the daemon keeps for older MCP servers) goes in 0.3.0
+/// ([`TEXT_FALLBACK_UNTIL`])
 pub fn tapped_nothing(text: &str, outcome: Option<Outcome>) -> bool {
     match outcome {
         Some(o) => o.tapped_nothing,
@@ -897,6 +903,14 @@ mod tests {
         let v = serde_json::to_value(Data::Elements { elements: vec![el] }).unwrap();
         assert_eq!(v["elements"][0]["type"], "Button", "the page reads `type`");
         assert!(!serde_json::to_string(&Response::text_with("x", Outcome::default())).unwrap().contains("data"));
+    }
+
+    /// A reminder that fails on time: from [`TEXT_FALLBACK_UNTIL`] on, delete the text fallbacks (`tapped_nothing`,
+    /// `alert_reported`, the daemon's fixed Chinese prefixes) and this test
+    #[test]
+    fn the_text_fallback_is_removed_in_time() {
+        let v: Vec<u64> = env!("CARGO_PKG_VERSION").split('.').map(|n| n.parse().unwrap()).collect();
+        assert!((v[0], v[1]) < TEXT_FALLBACK_UNTIL, "remove the text fallbacks: every supported version sends Outcome");
     }
 
     /// The field decides; without it (older daemon) the Chinese text is read

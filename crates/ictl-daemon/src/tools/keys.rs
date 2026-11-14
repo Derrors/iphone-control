@@ -3,7 +3,7 @@
 use super::*;
 
 impl Daemon {
-    pub(crate) async fn press_button(&self, g: &mut Inner, button: &str) -> Result<String, String> {
+    pub(crate) async fn press_button(&self, g: &mut Inner, button: &str) -> crate::error::Result<String> {
         let hid_button = Button::parse(button).ok_or(ictl_l10n::tr!(
             "button 只能是 home / volume_up / volume_down / lock",
             "button must be home / volume_up / volume_down / lock"
@@ -43,14 +43,14 @@ impl Daemon {
             match r {
                 Ok(text) => return Ok(text),
                 Err(WdaError::Unavailable(_)) => {}
-                Err(e) => return Err(e.to_string()),
+                Err(e) => return Err(e.into()),
             }
         }
         self.hid_do(g, |h| Box::pin(h.press(hid_button))).await?;
         Ok(ictl_l10n::trf!("已按 {button}", "Pressed {button}"))
     }
 
-    pub(super) async fn lock_screen(&self, g: &mut Inner) -> Result<String, String> {
+    pub(super) async fn lock_screen(&self, g: &mut Inner) -> crate::error::Result<String> {
         let via_wda = g.dev.lock_via_wda;
         // Ok(way)：用 way 锁上了；Err：WDA 两种办法没锁上的原因（WDA 不可用时为空），退到 HID
         let outcome = match self.wda(g) {
@@ -71,7 +71,7 @@ impl Daemon {
                             worked = Some(way);
                             break;
                         }
-                        Err(why) => failed.push(why),
+                        Err(why) => failed.push(why.to_string()),
                     }
                 }
                 worked.ok_or(failed)
@@ -82,7 +82,7 @@ impl Daemon {
             Ok(way) => Some(way),
             // WDA 在、只是没锁上：没有 HID 后备时如实说两种办法各自怎么了，不能说成「WDA 不可用」
             Err(failed) if !failed.is_empty() && !hid_supported(g.info.as_ref()) => {
-                return Err(lock_failed(&failed));
+                return Err(lock_failed(&failed).into());
             }
             Err(_) => None,
         };
@@ -108,7 +108,7 @@ impl Daemon {
         self.locked_now(g)
     }
 
-    pub(super) fn locked_now(&self, g: &mut Inner) -> Result<String, String> {
+    pub(super) fn locked_now(&self, g: &mut Inner) -> crate::error::Result<String> {
         g.dev.last_lock = Some(Instant::now());
         Ok(ictl_l10n::tr!("已锁屏", "Locked").into())
     }
@@ -192,7 +192,7 @@ pub(super) fn lock_order(via_wda: bool) -> [LockWay; 2] {
 
 /// WDA 的 `/wda/lock`。偶尔等 5 秒报 500（手机其实已锁）：报错时看 WDA 报的锁屏状态，确认锁了就不退到 HID
 /// （HID 会开屏幕媒体流）。没锁上时返回原因
-pub(super) async fn lock_by_wda(w: &mut WdaClient<DeviceTransport>) -> Result<(), String> {
+pub(super) async fn lock_by_wda(w: &mut WdaClient<DeviceTransport>) -> crate::error::Result<()> {
     match w.lock().await {
         Ok(()) => Ok(()),
         Err(e) => {
@@ -200,20 +200,22 @@ pub(super) async fn lock_by_wda(w: &mut WdaClient<DeviceTransport>) -> Result<()
             if w.wda_reports_locked().await.unwrap_or(false) {
                 return Ok(());
             }
-            Err(ictl_l10n::trf!("WDA 的锁屏报错：{e}", "WDA's lock returned an error: {e}"))
+            Err(ictl_l10n::trf!("WDA 的锁屏报错：{e}", "WDA's lock returned an error: {e}").into())
         }
     }
 }
 
 /// 经 IOHID 按电源键锁屏，等 WDA 报锁屏，最多 [`LOCK_WAIT`]。没锁上时返回原因。
 /// WDA 的 `/wda/lock` 在 iOS 27 以下用 XCTest 的 `pressLockButton`，iPhone 12 mini（iOS 26.4.1）上锁不了屏
-pub(super) async fn lock_by_power_hid(w: &mut WdaClient<DeviceTransport>) -> Result<(), String> {
+pub(super) async fn lock_by_power_hid(w: &mut WdaClient<DeviceTransport>) -> crate::error::Result<()> {
     if let Err(e) = w.press_power_hid().await {
         tracing::info!(
             "{}",
             ictl_l10n::log_trf!("经 IOHID 按电源键报错：{e}", "Pressing the power key via IOHID failed: {e}")
         );
-        return Err(ictl_l10n::trf!("经 IOHID 按电源键报错：{e}", "pressing the power key via IOHID failed: {e}"));
+        return Err(
+            ictl_l10n::trf!("经 IOHID 按电源键报错：{e}", "pressing the power key via IOHID failed: {e}").into()
+        );
     }
     let deadline = Instant::now() + LOCK_WAIT;
     loop {
@@ -232,7 +234,8 @@ pub(super) async fn lock_by_power_hid(w: &mut WdaClient<DeviceTransport>) -> Res
             return Err(ictl_l10n::trf!(
                 "经 IOHID 按电源键后 {secs} 秒还没锁屏",
                 "still not locked {secs} s after pressing the power key via IOHID"
-            ));
+            )
+            .into());
         }
         tokio::time::sleep(Duration::from_millis(200)).await;
     }

@@ -140,7 +140,7 @@ impl Daemon {
     }
 
     /// 改为控制 `query` 指的那台（UDID、设备名或 `auto`），选定的写进 state.json，重启后还记得
-    pub(crate) async fn select_device(&self, g: &mut Inner, query: &str) -> Result<String, String> {
+    pub(crate) async fn select_device(&self, g: &mut Inner, query: &str) -> crate::error::Result<String> {
         if let Ok(d) = ictl_device::list_devices().await {
             self.note_connected(g, d).await;
         }
@@ -150,7 +150,7 @@ impl Daemon {
                 return Err(ictl_l10n::trf!(
                     "IPHONE_UDID 固定为 {u};要改回自动选,先从 ~/.config/iphone-control/env 里删掉它,再重启守护进程",
                     "IPHONE_UDID pins {u}; to go back to automatic, remove it from ~/.config/iphone-control/env and restart the daemon"
-                ));
+                ).into());
             }
             g.persisted.selected_udid = None;
             g.persisted.save(&self.cfg.state_file());
@@ -168,7 +168,7 @@ impl Daemon {
             return Err(ictl_l10n::trf!(
                 "IPHONE_UDID 固定为 {u};要换设备,先改 ~/.config/iphone-control/env 里的 IPHONE_UDID,再重启守护进程",
                 "IPHONE_UDID pins {u}; to switch devices, change IPHONE_UDID in ~/.config/iphone-control/env and restart the daemon"
-            ));
+            ).into());
         }
         if self.cfg.udid.is_none() {
             g.persisted.selected_udid = Some(target.udid.clone());

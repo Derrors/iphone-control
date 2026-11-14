@@ -11,6 +11,7 @@ pub mod core;
 pub mod devices;
 mod devtools;
 mod doctor;
+pub mod error;
 pub mod eventlog;
 pub mod imaging;
 pub mod machine;

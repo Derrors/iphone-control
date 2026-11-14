@@ -1,0 +1,265 @@
+<!doctype html>
+<html lang="{{html_lang}}" data-lang="{{lang}}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title data-t="page_title">{{page_title}}</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='9' y='3' width='14' height='26' rx='3.5' fill='none' stroke='%23365b7c' stroke-width='2'/%3E%3Ccircle cx='16' cy='14' r='3' fill='%23365b7c'/%3E%3C/svg%3E">
+<script>
+// Light or dark as chosen on the control page (its appearance setting), else as the system: before the first paint
+(() => {
+  let theme = null;
+  try { theme = JSON.parse(localStorage.getItem('ictl.appearance.v1'))?.theme; } catch {}
+  const dark = theme === 'dark' || (theme !== 'light' && matchMedia('(prefers-color-scheme: dark)').matches);
+  document.documentElement.dataset.scheme = dark ? 'dark' : 'light';
+})();
+</script>
+<style>
+/* The control page's design tokens (viewer.html), the ones this page uses */
+:root {
+  color-scheme: light;
+  --font-ui: -apple-system, BlinkMacSystemFont, system-ui, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
+  --font-mono: "SF Mono", SFMono-Regular, ui-monospace, Menlo, Consolas, monospace;
+  --canvas-light: #f7f9fb; --canvas-shade: #cddae2; --canvas: #e2e9ed;
+  --panel: #ffffff; --sunken: #f4f6f8; --hover: #eff2f4; --press: #e5e9ec;
+  --line: #e3e7ea; --line-strong: #cbd2d8;
+  --text: #11161a; --text-2: #3b444c; --muted: #5f6a73;
+  --accent: #365b7c; --accent-hover: #294965; --on-accent: #ffffff; --accent-soft: #e2eaf1; --accent-line: #bfcedc; --accent-text: #2e4e69;
+  --danger-soft: #fdeeec; --danger-line: #f4cdc8; --danger-text: #a52c23;
+  --ok-text: #0b6b4f;
+  --focus: #2457d6;
+  --glass-tint: rgb(252 253 255 / 72%);
+  --glass-border: rgb(54 75 93 / 19%);
+  --glass-highlight: rgb(255 255 255 / 87%);
+  --shadow-card: inset 0 1px 0 var(--glass-highlight), 0 2px 6px rgb(16 24 32 / 6%), 0 24px 48px -16px rgb(16 36 52 / 22%);
+  --glow: rgb(54 91 124 / 16%);
+}
+:root[data-scheme="dark"] {
+  color-scheme: dark;
+  --canvas-light: #28323b; --canvas-shade: #34434d; --canvas: #222428;
+  --panel: #111518; --sunken: #0b0e10; --hover: #191e22; --press: #20262b;
+  --line: #20262b; --line-strong: #333b42;
+  --text: #e8ecef; --text-2: #c2c9cf; --muted: #96a0aa;
+  --accent: #a1c8ef; --accent-hover: #bdd9f6; --on-accent: #162536; --accent-soft: #273746; --accent-line: #42596d; --accent-text: #b8d5ee;
+  --danger-soft: rgba(242, 130, 122, .12); --danger-line: rgba(242, 130, 122, .30); --danger-text: #f8b0aa;
+  --ok-text: #7ae0c8;
+  --focus: #8ab4f8;
+  --glass-tint: rgb(27 33 39 / 80%);
+  --glass-border: rgb(191 212 230 / 20%);
+  --glass-highlight: rgb(238 248 255 / 8%);
+  --shadow-card: inset 0 1px 0 var(--glass-highlight), 0 2px 6px rgb(0 0 0 / 40%), 0 24px 48px -16px rgb(0 0 0 / 60%);
+  --glow: rgb(161 200 239 / 10%);
+}
+
+* { box-sizing: border-box; }
+html { height: 100%; }
+body {
+  margin: 0; min-height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 20px; padding: 32px 16px;
+  font: .875rem/1.55 var(--font-ui); color: var(--text); -webkit-font-smoothing: antialiased;
+  background:
+    radial-gradient(600px 400px at 50% 38%, var(--glow), transparent 70%),
+    linear-gradient(127deg, var(--canvas-light) 0%, transparent 42%, var(--canvas-shade) 73%, transparent 100%),
+    var(--canvas);
+}
+
+.card {
+  width: min(420px, 100%); padding: 32px;
+  border: 1px solid var(--glass-border); border-radius: 20px;
+  background: var(--panel); box-shadow: var(--shadow-card);
+}
+@supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .card { background: var(--glass-tint); backdrop-filter: blur(24px) saturate(1.4); -webkit-backdrop-filter: blur(24px) saturate(1.4); }
+}
+@media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
+  .card { background: var(--panel); backdrop-filter: none; -webkit-backdrop-filter: none; }
+}
+
+.brand { display: flex; align-items: center; gap: 12px; margin-bottom: 28px; }
+.brand-mark { flex: none; width: 44px; height: 44px; padding: 6px; border-radius: 12px; background: var(--accent-soft); color: var(--accent-text); box-shadow: inset 0 0 0 1px var(--accent-line); }
+.brand-name { display: block; font-size: 1rem; font-weight: 650; letter-spacing: -.01em; }
+.brand-sub { display: block; font-size: .75rem; color: var(--muted); }
+
+h1 { margin: 0 0 6px; font-size: 1.1875rem; font-weight: 600; letter-spacing: -.01em; }
+.lead { margin: 0 0 24px; color: var(--text-2); text-wrap: pretty; }
+
+.err {
+  display: flex; gap: 8px; align-items: flex-start; margin: 0 0 18px; padding: 10px 12px;
+  border: 1px solid var(--danger-line); border-radius: 10px; background: var(--danger-soft); color: var(--danger-text);
+}
+.err svg { flex: none; width: 16px; height: 16px; margin-top: 2px; }
+
+label { display: block; margin-bottom: 6px; font-size: .8125rem; font-weight: 600; color: var(--muted); }
+.field { position: relative; }
+input {
+  width: 100%; height: 44px; padding: 0 48px 0 14px;
+  font: .875rem var(--font-mono); letter-spacing: .02em; color: var(--text);
+  border: 1px solid var(--line-strong); border-radius: 10px; background: var(--sunken);
+  transition: border-color .15s, box-shadow .15s, background-color .15s;
+}
+input::placeholder { font-family: var(--font-ui); letter-spacing: 0; color: var(--muted); opacity: 1; }
+input:focus { outline: none; border-color: var(--accent); background: var(--panel); box-shadow: 0 0 0 3px var(--accent-soft); }
+.eye {
+  position: absolute; top: 4px; right: 4px; width: 36px; height: 36px; display: grid; place-items: center;
+  border: 0; border-radius: 8px; background: transparent; color: var(--muted); cursor: pointer;
+}
+.eye svg { width: 16px; height: 16px; }
+.eye .off { display: none; }
+.eye[aria-pressed="true"] .on { display: none; }
+.eye[aria-pressed="true"] .off { display: block; }
+
+.primary {
+  width: 100%; height: 44px; margin-top: 16px; display: flex; align-items: center; justify-content: center; gap: 8px;
+  font: 600 .875rem var(--font-ui); color: var(--on-accent);
+  border: 0; border-radius: 10px; background: var(--accent); cursor: pointer;
+  transition: background-color .15s, transform .1s;
+}
+.primary:active { transform: translateY(1px); }
+.primary[aria-busy="true"] { opacity: .75; cursor: progress; }
+.primary svg { width: 16px; height: 16px; }
+
+.help { margin-top: 28px; padding-top: 22px; border-top: 1px solid var(--glass-border); }
+.help h2 { margin: 0 0 4px; font-size: .875rem; font-weight: 600; }
+.help p { margin: 0; color: var(--text-2); font-size: .8125rem; }
+.cmd {
+  display: flex; align-items: center; gap: 8px; margin: 10px 0; padding: 4px 4px 4px 12px;
+  border: 1px solid var(--line); border-radius: 10px; background: var(--sunken);
+}
+.cmd code { flex: 1; min-width: 0; overflow-x: auto; white-space: nowrap; font: .8125rem/32px var(--font-mono); color: var(--text); }
+.cmd code::before { content: "$ "; color: var(--muted); }
+.copy {
+  flex: none; height: 32px; padding: 0 10px; display: inline-flex; align-items: center; gap: 6px;
+  font: 600 .75rem var(--font-ui); color: var(--accent-text);
+  border: 1px solid var(--line-strong); border-radius: 8px; background: var(--panel); cursor: pointer;
+}
+.copy svg { width: 14px; height: 14px; }
+.copy.done { color: var(--ok-text); }
+
+.foot { display: flex; align-items: center; gap: 10px; font-size: .75rem; color: var(--muted); }
+.lang { border: 0; padding: 4px 8px; border-radius: 6px; background: transparent; color: var(--muted); font: inherit; cursor: pointer; }
+
+@media (hover: hover) {
+  .eye:hover { background: var(--hover); color: var(--text); }
+  .primary:hover { background: var(--accent-hover); }
+  .copy:hover { background: var(--hover); }
+  .lang:hover { background: var(--hover); color: var(--text); }
+}
+:is(button, input):focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+input:focus-visible { outline: none; }
+@media (pointer: coarse) { input { font-size: 1rem; } }
+@media (max-width: 420px) {
+  .card { padding: 24px 20px; border-radius: 16px; }
+  /* the command gets the room: the copy button keeps its icon, its word stays for screen readers */
+  .copy { width: 32px; padding: 0; justify-content: center; }
+  .copy span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+}
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+@media (forced-colors: active) { .card, .cmd, input { border: 1px solid CanvasText; } }
+</style>
+</head>
+<body>
+<main class="card">
+  <div class="brand">
+    <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true"><rect x="9" y="3" width="14" height="26" rx="3.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="M13.5 25h5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="16" cy="14" r="3" fill="var(--accent)"/></svg>
+    <div><span class="brand-name">iphone-control</span><span class="brand-sub" data-t="sub">{{sub}}</span></div>
+  </div>
+
+  <h1 data-t="title">{{title}}</h1>
+  <p class="lead" data-t="lead">{{lead}}</p>
+
+  {{error}}
+  <form method="post" action="/login" id="form">
+    <label for="token" data-t="label">{{label}}</label>
+    <div class="field">
+      <input id="token" name="token" type="password" autocomplete="current-password" spellcheck="false" autocapitalize="off" autofocus required placeholder="{{placeholder}}" data-tp="placeholder">
+      <button type="button" class="eye" id="eye" aria-pressed="false" aria-label="{{show}}" data-ta="show" hidden>
+        <svg class="on" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M1.5 8S4 3.5 8 3.5 14.5 8 14.5 8 12 12.5 8 12.5 1.5 8 1.5 8Z"/><circle cx="8" cy="8" r="2"/></svg>
+        <svg class="off" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="M2 2l12 12M6.6 6.6a2 2 0 0 0 2.8 2.8M4.2 4.7C2.5 5.9 1.5 8 1.5 8S4 12.5 8 12.5c1.3 0 2.4-.4 3.3-1M7 3.6c.3 0 .7-.1 1-.1 4 0 6.5 4.5 6.5 4.5s-.5 1-1.5 2.1"/></svg>
+      </button>
+    </div>
+    <button type="submit" class="primary" id="submit"><span data-t="submit">{{submit}}</span><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 8h10M9 4l4 4-4 4"/></svg></button>
+  </form>
+
+  <section class="help" aria-labelledby="help-title">
+    <h2 id="help-title" data-t="help_title">{{help_title}}</h2>
+    <p data-t="help_run">{{help_run}}</p>
+    <div class="cmd">
+      <code id="cmd">iphone-control viewer token</code>
+      <button type="button" class="copy" id="copy" hidden>
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="5" y="5" width="8.5" height="8.5" rx="1.5"/><path d="M3 10.5V3.5A1 1 0 0 1 4 2.5h7"/></svg>
+        <span data-t="copy">{{copy}}</span>
+      </button>
+    </div>
+    <p data-t="help_after">{{help_after}}</p>
+  </section>
+</main>
+<footer class="foot">
+  <span data-t="remember">{{remember}}</span>
+  <button type="button" class="lang" id="lang" data-t="other_lang" hidden>{{other_lang}}</button>
+</footer>
+<script>
+(() => {
+  // the words in both languages; the page came in the viewer's, and follows the control page's choice (ictl.lang)
+  const T = {{strings}};
+  const root = document.documentElement;
+  const $ = id => document.getElementById(id);
+  let lang = root.dataset.lang;
+  const t = key => T[key]?.[lang === 'en' ? 1 : 0] ?? '';
+  function apply() {
+    root.lang = lang === 'en' ? 'en' : 'zh-CN';
+    for (const el of document.querySelectorAll('[data-t]')) el.textContent = t(el.dataset.t);
+    for (const el of document.querySelectorAll('[data-tp]')) el.placeholder = t(el.dataset.tp);
+    const eye = $('eye');
+    eye.setAttribute('aria-label', t(eye.getAttribute('aria-pressed') === 'true' ? 'hide' : 'show'));
+  }
+  try {
+    const saved = localStorage.getItem('ictl.lang');
+    if ((saved === 'en' || saved === 'zh') && saved !== lang) { lang = saved; apply(); }
+  } catch {}
+
+  const eye = $('eye'), input = $('token');
+  eye.hidden = false;
+  eye.addEventListener('click', () => {
+    const show = input.type === 'password';
+    input.type = show ? 'text' : 'password';
+    eye.setAttribute('aria-pressed', String(show));
+    eye.setAttribute('aria-label', t(show ? 'hide' : 'show'));
+    input.focus();
+  });
+
+  $('form').addEventListener('submit', () => {
+    const b = $('submit');
+    b.setAttribute('aria-busy', 'true');
+    b.querySelector('[data-t]').textContent = t('busy');
+    setTimeout(() => { b.disabled = true; });
+  });
+
+  const copy = $('copy');
+  copy.hidden = false;
+  copy.addEventListener('click', async () => {
+    const text = $('cmd').textContent;
+    let ok = false;
+    try { await navigator.clipboard.writeText(text); ok = true; } catch {
+      // no clipboard API (plain HTTP from another machine): select it, ⌘C / Ctrl-C copies it
+      const r = document.createRange(); r.selectNodeContents($('cmd'));
+      const s = getSelection(); s.removeAllRanges(); s.addRange(r);
+      try { ok = document.execCommand('copy'); } catch {}
+    }
+    if (!ok) return;
+    const label = copy.querySelector('[data-t]');
+    copy.classList.add('done'); label.textContent = t('copied');
+    setTimeout(() => { copy.classList.remove('done'); label.textContent = t('copy'); }, 1600);
+  });
+
+  const toggle = $('lang');
+  toggle.hidden = false;
+  toggle.addEventListener('click', () => {
+    lang = lang === 'en' ? 'zh' : 'en';
+    try { localStorage.setItem('ictl.lang', lang); } catch {}
+    apply();
+  });
+})();
+</script>
+</body>
+</html>

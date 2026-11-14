@@ -29,9 +29,9 @@ iphone-control viewer token show alex --new                  # replace it
 iphone-control viewer token remove living-room-tv            # browsers that used it are out at once
 ```
 
-- A **read-only token** can watch the picture, the device's state, apps, elements, and tasks with their steps; taps, typing, starting, pausing or confirming tasks, switching devices and `/mcp` are refused. The page shows "Read-only" in its header and hides the text field and buttons.
+- A **read-only token** can watch the picture, the device's state, apps, elements, and tasks with their steps; taps, typing, starting, pausing or confirming tasks, switching devices and `/mcp` are refused, and a locked phone isn't unlocked for it (reading the elements says it is locked). The page shows "Read-only" in its header and hides the text field and buttons.
 - The task log records which token controlled a task, e.g. `viewer:alex`.
-- Adding, replacing and removing tokens **takes effect at once**, without restarting the viewer; a browser that used a removed or replaced token is back at the login page on its next request.
+- Adding, replacing and removing tokens **takes effect at once**, without restarting the viewer; a browser that used a removed or replaced token is back at the login page on its next request, and the picture, task events, `/mcp` streams and task leases opened with it end within 5 s.
 - The last token that may operate can't be removed; replace it with `show <name> --new`.
 
 ## The local network and HTTPS
@@ -110,7 +110,7 @@ The command gets the task's token, `IPHONE_CONTROL_URL` and `IPHONE_CONTROL_MCP_
 
 When frp, nginx or cloudflared forwards the viewer to the internet:
 
-- The login still applies; a token is 256 random bits, and after 20 wrong tokens in a minute none are checked for the rest of it.
+- The login still applies; a token is 256 random bits, and after 20 wrong tokens in a minute wrong ones get 429 for the rest of it (a right token still gets in, so someone trying tokens can't lock you out).
 - Use HTTPS (a real certificate on the proxy), or the token and cookie cross the internet in the clear.
 - Something like Tailscale, which only lets your own devices in, is much safer than exposing the port to the internet.
 

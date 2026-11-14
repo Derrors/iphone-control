@@ -8,7 +8,10 @@
 | `wda/` | 签好的 WebDriverAgent | 自动重签 |
 | `ddi/` | 开发者镜像缓存 | 自动重新下载 |
 | `secrets/passcodes/` | 各设备的锁屏密码（仅开启自动解锁时） | 要重新 `passcode set` |
-| `state.json` | 签好的 WDA 包信息（Team ID、Bundle ID、描述文件到期时间）、选定的设备、最近一台设备的屏幕尺寸、上次重签结果 | 守护进程按「WDA 还没签名」启动：要重新 `sign` 或 `setup`，选过设备的要重新 `select` |
+| `viewer-tokens.json` | 控制台的登录令牌（像密码一样保管，别放进会同步到别处的备份） | 控制台第一次启动时生成新的 `owner`；之前的令牌、登录过的浏览器和 MCP 客户端都要换新的 |
+| `viewer-tls/` | 控制台局域网 HTTPS 用的自签证书和私钥（同样要保密） | 重新生成，证书指纹变了：浏览器会再提示一次，`--ca` 要换新证书 |
+| `tasks/` | 最近 50 个 AI 任务的记录 | 控制台上看不到以前的任务，不影响使用 |
+| `state.json` | 签好的 WDA 包信息（Team ID、Bundle ID、描述文件到期时间）、选定的设备、每台设备的屏幕尺寸、上次重签结果 | 守护进程按「WDA 还没签名」启动：要重新 `sign` 或 `setup`，选过设备的要重新 `select` |
 | `logs/` | 日志、自动解锁的停用标记 `UNLOCK-DISABLED` | 日志没了不要紧。但停用标记没了就撤销了这层保护：之前输错过的话，可能再用同一个错误密码输一遍 |
 
 位置：`~/.local/share/iphone-control`（权限 0700），Linux 和 macOS 一样，不管是一行命令、Homebrew、deb 还是从源码装的。配对记录不在这里，由系统的 usbmuxd 保存：Linux 上在 `/var/lib/lockdown`，macOS 上在 `/var/db/lockdown`（和 Finder 共用）。设置在 `~/.config/iphone-control/env`，里面有通知密钥，同样别外传。

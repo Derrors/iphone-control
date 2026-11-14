@@ -6,6 +6,13 @@ All notable changes to this project are documented here. The format is based on 
 
 ## [Unreleased]
 
+## [0.2.4] - 2026-11-14
+
+### Upgrade notes
+
+- The control page (`iphone-control viewer`) and its `/mcp` now need a login, on this machine too. After upgrading, run `iphone-control viewer token` and open the link it prints; a browser stays logged in for 30 days. MCP clients connected to `/mcp` over HTTP need `Authorization: Bearer <token>` (`viewer token` prints the `claude mcp add` line). The CLI, `iphone-control mcp` over stdio and `task run` are unaffected.
+- With `--lan` (`IPHONE_CONTROL_VIEWER_LAN=1`) the page is HTTPS on the local network: open `https://<address>:<port>/` and check the certificate's fingerprint the first time (`iphone-control service status`).
+
 ### Added
 
 - `iphone-control mcp --url https://<that machine>:8200` bridges stdio to another machine's viewer `/mcp`, so an MCP client that only starts a command can control the phone connected there. With a task's token only that is sent, otherwise the login from `IPHONE_CONTROL_VIEWER_TOKEN`; a command under `task run --url` has `IPHONE_CONTROL_URL` set, so a plain `iphone-control mcp` in it bridges by itself.
@@ -271,7 +278,8 @@ First public release.
 - Docker image (single binary plus Debian's usbmuxd, not privileged) with a generated third-party license list, published to `ghcr.io/derrors/iphone-control` for linux/amd64 and linux/arm64.
 - Running without Docker, from source or from the prebuilt Linux binaries (x86_64, aarch64): as a regular user with the system usbmuxd, XDG data and socket paths, the unsigned WebDriverAgent downloaded and checksum-verified before the first signing, `mcp-config` printing a direct command, and a systemd user service.
 
-[Unreleased]: https://github.com/Derrors/iphone-control/compare/v0.2.3...HEAD
+[Unreleased]: https://github.com/Derrors/iphone-control/compare/v0.2.4...HEAD
+[0.2.4]: https://github.com/Derrors/iphone-control/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/Derrors/iphone-control/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/Derrors/iphone-control/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/Derrors/iphone-control/compare/v0.2.0...v0.2.1

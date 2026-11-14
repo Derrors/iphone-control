@@ -3,17 +3,17 @@
 use super::*;
 
 impl Daemon {
-    pub(crate) async fn list_apps(&self, g: &mut Inner, include_system: bool) -> Result<Vec<AppInfo>, String> {
+    pub(crate) async fn list_apps(&self, g: &mut Inner, include_system: bool) -> crate::error::Result<Vec<AppInfo>> {
         if let Some(a) = g.dev.apps.get(&include_system) {
             return Ok(a.clone());
         }
         let device = g.device.clone().ok_or(ictl_l10n::tr!("手机未连接", "Phone not connected"))?;
-        let a = device.list_apps(include_system).await.map_err(|e| e.to_string())?;
+        let a = device.list_apps(include_system).await?;
         g.dev.apps.insert(include_system, a.clone());
         Ok(a)
     }
 
-    pub(crate) async fn resolve_app(&self, g: &mut Inner, app: &str) -> Result<String, String> {
+    pub(crate) async fn resolve_app(&self, g: &mut Inner, app: &str) -> crate::error::Result<String> {
         if apps::looks_like_bundle_id(app) {
             return Ok(app.to_owned());
         }
@@ -27,10 +27,11 @@ impl Daemon {
                 "找不到名为 \"{app}\" 的 App,用 iphone_list_apps 查看",
                 "No app named \"{app}\"; see iphone_list_apps"
             )
+            .into()
         })
     }
 
-    pub(super) async fn resolve_cached(&self, g: &mut Inner, app: &str) -> Result<Option<String>, String> {
+    pub(super) async fn resolve_cached(&self, g: &mut Inner, app: &str) -> crate::error::Result<Option<String>> {
         // 先只查用户 App；列系统 App 要好几秒，只在找不到时才去取
         let user = self.list_apps(g, false).await?;
         if let Some(b) = user.iter().find(|a| a.name == app) {
@@ -40,11 +41,11 @@ impl Daemon {
         Ok(apps::resolve(app, [&user[..], &system[..]]))
     }
 
-    pub(crate) async fn launch_app(&self, g: &mut Inner, app: &str) -> Result<(String, bool), String> {
+    pub(crate) async fn launch_app(&self, g: &mut Inner, app: &str) -> crate::error::Result<(String, bool)> {
         let bid = self.resolve_app(g, app).await?;
         self.ensure_unlocked(g).await?;
         let w = self.require_wda(g)?;
-        let r = w.launch_app(&bid).await.map_err(|e| e.to_string())?;
+        let r = w.launch_app(&bid).await?;
         let blocked = matches!(r, Launch::Blocked(_));
         let text = match r {
             Launch::Foreground => ictl_l10n::trf!("已启动 {bid}", "Launched {bid}"),
@@ -63,16 +64,16 @@ impl Daemon {
         Ok((text, blocked))
     }
 
-    pub(crate) async fn terminate_app(&self, g: &mut Inner, app: &str) -> Result<String, String> {
+    pub(crate) async fn terminate_app(&self, g: &mut Inner, app: &str) -> crate::error::Result<String> {
         let bid = self.resolve_app(g, app).await?;
         self.ensure_unlocked(g).await?;
-        self.require_wda(g)?.terminate_app(&bid).await.map_err(|e| e.to_string())?;
+        self.require_wda(g)?.terminate_app(&bid).await?;
         Ok(ictl_l10n::trf!("已结束 {bid}", "Terminated {bid}"))
     }
 
-    pub(crate) async fn open_url(&self, g: &mut Inner, url: &str) -> Result<(String, bool), String> {
+    pub(crate) async fn open_url(&self, g: &mut Inner, url: &str) -> crate::error::Result<(String, bool)> {
         self.ensure_unlocked(g).await?;
-        let (r, app) = self.require_wda(g)?.open_url(url).await.map_err(|e| e.to_string())?;
+        let (r, app) = self.require_wda(g)?.open_url(url).await?;
         let blocked = matches!(r, Launch::Blocked(_));
         let text = match r {
             Launch::Foreground => ictl_l10n::trf!("已打开 {url}(前台 {app})", "Opened {url} (foreground {app})"),

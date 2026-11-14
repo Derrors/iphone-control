@@ -48,7 +48,7 @@ const LOCK_WAIT: Duration = Duration::from_secs(3);
 
 impl Daemon {
     /// 配置了密码就在锁屏时自动解锁；没配置而手机锁着则报错（与 toolkit 一致）
-    pub(crate) async fn ensure_unlocked(&self, g: &mut Inner) -> Result<(), String> {
+    pub(crate) async fn ensure_unlocked(&self, g: &mut Inner) -> crate::error::Result<()> {
         let cfg = self.unlock_cfg(g.device.as_ref().map(|d| d.udid.as_str()));
         if let Some(left) = g.dev.last_lock.and_then(|t| LOCK_SETTLE.checked_sub(t.elapsed())) {
             tokio::time::sleep(left).await;
@@ -58,18 +58,18 @@ impl Daemon {
             Ok(_) => Ok(()),
             Err(e @ (UnlockError::WrongPasscode | UnlockError::Uncertain(_))) => {
                 self.notify(g, Event::UnlockDisabled);
-                Err(ictl_l10n::trf!("{e},已推送通知", "{e}, notification sent"))
+                Err(ictl_l10n::trf!("{e},已推送通知", "{e}, notification sent").into())
             }
             Err(UnlockError::NoPasscode) if self.cfg.legacy_passcode_file().is_file() => {
                 Err(ictl_l10n::tr!("手机已锁屏,需要人工解锁:旧版本保存的锁屏密码没记是哪台设备的,同时接着几台时不会用它;\
 在这台设备连着时运行 iphone-control passcode set 重新设置", "The phone is locked and has to be unlocked by hand: the passcode saved by an older version has no device, and it isn't used while several devices are connected; run iphone-control passcode set while this device is connected to set it again")
                     .into())
             }
-            Err(e) => Err(e.to_string()),
+            Err(e) => Err(e.into()),
         }
     }
 
-    async fn screen(&self, g: &mut Inner) -> Result<ScreenSize, String> {
+    async fn screen(&self, g: &mut Inner) -> crate::error::Result<ScreenSize> {
         if let Some(w) = self.wda(g)
             && let Ok(s) = w.screen_size().await
         {
@@ -84,7 +84,7 @@ impl Daemon {
 
     /// 每次 HID 触摸前重新截图核对横竖，不依赖上次截图（转屏、回主屏、解锁都可能改变方向）。
     /// 截图只给宽高，不能分辨横屏左右；短暂掉线时借用近期实测方向，过期或不匹配就不触摸。
-    async fn hid_touch_rotation(&self, g: &mut Inner) -> Result<Rotation, String> {
+    async fn hid_touch_rotation(&self, g: &mut Inner) -> crate::error::Result<Rotation> {
         self.sample_display(g, false).await;
         let png = self.hid_screenshot(g).await.map_err(|e| {
             ictl_l10n::trf!(
@@ -95,27 +95,27 @@ impl Daemon {
         let (w, h) = imaging::png_size(&png)
             .ok_or(ictl_l10n::tr!("无法读取截图尺寸，没有发送触摸", "Can't read the screenshot size, no touch sent"))?;
         let known = g.dev.last_rotation.map(|(at, r)| (at.elapsed(), r));
-        hid_rotation(w, h, known)
+        Ok(hid_rotation(w, h, known)?)
     }
 
     /// 经隧道截图（WDA 不可用时）。失败就丢掉隧道，下次重建
-    async fn hid_screenshot(&self, g: &mut Inner) -> Result<Vec<u8>, String> {
+    async fn hid_screenshot(&self, g: &mut Inner) -> crate::error::Result<Vec<u8>> {
         let device = g.device.clone().ok_or(ictl_l10n::tr!("手机未连接", "Phone not connected"))?;
-        let t = self.ensure_tunnel(g, &device).await.map_err(|e| e.to_string())?;
+        let t = self.ensure_tunnel(g, &device).await?;
         match t.screenshot_png().await {
             Ok(p) => Ok(p),
             Err(e) => {
                 drop_tunnel(g).await;
-                Err(e.to_string())
+                Err(e.into())
             }
         }
     }
 
     /// HID 会话（WDA 不可用时的后备路线）。开不起来就丢掉隧道，下次重建
-    pub(crate) async fn hid<'a>(&self, g: &'a mut Inner) -> Result<&'a mut HidSession, String> {
+    pub(crate) async fn hid<'a>(&self, g: &'a mut Inner) -> crate::error::Result<&'a mut HidSession> {
         // 低版本建隧道只会报 service not found：直接说清楚
         if !hid_supported(g.info.as_ref()) {
-            return Err(wda_down(&g.state, g.info.as_ref()));
+            return Err(wda_down(&g.state, g.info.as_ref()).into());
         }
         let screen = self.screen(g).await?;
         let device = g.device.clone().ok_or(ictl_l10n::tr!("手机未连接", "Phone not connected"))?;
@@ -127,13 +127,13 @@ impl Daemon {
             .map_err(|e| ictl_l10n::trf!("HID 后备路线不可用：{e}", "HID fallback unavailable: {e}"))?;
         if let Err(e) = t.hid(screen).await {
             drop_tunnel(g).await;
-            return Err(ictl_l10n::trf!("HID 后备路线不可用：{e}", "HID fallback unavailable: {e}"));
+            return Err(ictl_l10n::trf!("HID 后备路线不可用：{e}", "HID fallback unavailable: {e}").into());
         }
         // 第二次调用直接返回已开好的会话（这样写是为了绕开借用检查对条件返回的限制）
-        g.tunnel.as_mut().expect("刚建好").hid(screen).await.map_err(|e| e.to_string())
+        Ok(g.tunnel.as_mut().expect("刚建好").hid(screen).await?)
     }
 
-    async fn hid_do<F>(&self, g: &mut Inner, f: F) -> Result<(), String>
+    async fn hid_do<F>(&self, g: &mut Inner, f: F) -> crate::error::Result<()>
     where
         F: for<'h> FnOnce(
             &'h mut HidSession,
@@ -145,10 +145,10 @@ impl Daemon {
         match r {
             Ok(()) => Ok(()),
             // 参数问题（例如不能输入的字符），连接没坏，不用重建
-            Err(e @ DeviceError::InvalidInput(_)) => Err(e.to_string()),
+            Err(e @ DeviceError::InvalidInput(_)) => Err(e.into()),
             Err(e) => {
                 drop_tunnel(g).await;
-                Err(ictl_l10n::trf!("HID 命令失败: {e}", "HID command failed: {e}"))
+                Err(ictl_l10n::trf!("HID 命令失败: {e}", "HID command failed: {e}").into())
             }
         }
     }
@@ -258,7 +258,7 @@ impl Daemon {
         &self,
         g: &mut Inner,
         region: Option<(f64, f64, f64, f64)>,
-    ) -> Result<Response, String> {
+    ) -> crate::error::Result<Response> {
         self.ensure_unlocked(g).await?;
         let wda_png = match self.wda(g) {
             Some(w) => w.screenshot_png().await.ok(),
@@ -272,7 +272,7 @@ impl Daemon {
             Some(p) => (p, "WDA"),
             None => {
                 if !hid_supported(g.info.as_ref()) {
-                    return Err(wda_down(&g.state, g.info.as_ref()));
+                    return Err(wda_down(&g.state, g.info.as_ref()).into());
                 }
                 (
                     self.hid_screenshot(g)
@@ -321,12 +321,13 @@ pub(crate) fn hid_rotation(w: u32, h: u32, known: Option<(Duration, Rotation)>) 
 }
 
 /// 判断画面动没动用的缩略图。解码是 CPU 活，放到阻塞线程
-async fn thumbnail(png: Vec<u8>) -> Result<Vec<u8>, String> {
+async fn thumbnail(png: Vec<u8>) -> crate::error::Result<Vec<u8>> {
     // 阻塞线程上没有请求的语言，带过去（解码失败的报错会返回给调用方）
     let lang = ictl_l10n::lang();
     tokio::task::spawn_blocking(move || ictl_l10n::with_lang(lang, || imaging::thumbnail(&png)))
         .await
         .map_err(|e| ictl_l10n::trf!("图像处理任务异常：{e}", "Image processing task failed: {e}"))?
+        .map_err(Into::into)
 }
 
 fn needs_wda() -> &'static str {

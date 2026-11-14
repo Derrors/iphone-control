@@ -159,7 +159,7 @@ impl Daemon {
                 tokio::task::spawn_local(async move {
                     if let Err(e) = d.resign_now(false).await {
                         let mut g = d.inner.lock().await;
-                        d.notify(&mut g, Event::ResignFailed(e));
+                        d.notify(&mut g, Event::ResignFailed(e.to_string()));
                     }
                 });
             }
@@ -647,7 +647,7 @@ impl Daemon {
         }
         if let Err(e) = self.resign_now(true).await {
             let mut g = self.inner.lock().await;
-            self.notify(&mut g, Event::ResignFailed(e));
+            self.notify(&mut g, Event::ResignFailed(e.to_string()));
         }
     }
 
@@ -747,8 +747,8 @@ impl Daemon {
     }
 
     /// 检查描述文件并按需重签（`force` 立即重签）。分三段：持锁取参数 → 不持锁签名、安装（几十秒）→ 持锁写结果
-    pub(crate) async fn resign_now(self: &Arc<Self>, force: bool) -> Result<String, String> {
-        let _lease = crate::maintenance::shared().map_err(|e| e.to_string())?;
+    pub(crate) async fn resign_now(self: &Arc<Self>, force: bool) -> crate::error::Result<String> {
+        let _lease = crate::maintenance::shared()?;
         let (device, name) = {
             let mut g = self.inner.lock().await;
             let g = &mut *g;
@@ -882,7 +882,7 @@ impl Daemon {
                 g.persisted.record_resign(now_secs(), Some(e.clone()));
                 g.persisted.save(&self.cfg.state_file());
                 self.log.log(&ictl_l10n::log_trf!("重签失败：{e}", "Re-signing failed: {e}"));
-                Err(e)
+                Err(e.into())
             }
         };
         self.publish(g);

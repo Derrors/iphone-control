@@ -162,7 +162,7 @@ impl Daemon {
     async fn screen_feed(
         self: &Arc<Self>,
         expect_udid: Option<&str>,
-    ) -> Result<(ictl_device::ScreenFeed, Viewer), String> {
+    ) -> crate::error::Result<(ictl_device::ScreenFeed, Viewer)> {
         let mut g = self.inner.lock().await;
         let g = &mut *g;
         let udid =

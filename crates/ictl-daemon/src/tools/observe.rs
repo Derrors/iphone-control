@@ -4,14 +4,14 @@ use super::*;
 
 impl Daemon {
     /// 当前界面的元素树。缓存不超过 `max_age` 就直接用（0 = 总是重读）；重读的结果写回缓存
-    pub(super) async fn tree(&self, g: &mut Inner, max_age: Duration) -> Result<Tree, String> {
+    pub(super) async fn tree(&self, g: &mut Inner, max_age: Duration) -> crate::error::Result<Tree> {
         if !max_age.is_zero()
             && let Some((t, tree)) = &g.elements_cache
             && t.elapsed() <= max_age
         {
             return Ok(tree.clone());
         }
-        let tree = self.require_wda(g)?.tree().await.map_err(|e| e.to_string())?;
+        let tree = self.require_wda(g)?.tree().await?;
         g.elements_cache = Some((Instant::now(), tree.clone()));
         Ok(tree)
     }
@@ -23,11 +23,11 @@ impl Daemon {
         limit: usize,
         max_age: Duration,
         keep_locked: bool,
-    ) -> Result<(String, Vec<ElementData>), String> {
+    ) -> crate::error::Result<(String, Vec<ElementData>)> {
         if keep_locked {
             // only looking (a read-only viewer): the passcode isn't typed for it
             if let Some(w) = self.wda(g)
-                && w.locked().await.map_err(|e| e.to_string())?
+                && w.locked().await?
             {
                 return Err(ictl_l10n::tr!(
                     "手机锁着：只看不操作时不会替你解锁",
@@ -62,7 +62,7 @@ impl Daemon {
     ///   截图约 0.2 秒一张，两帧之间再隔一点，避免两帧落在同一段静止的过渡里
     ///
     /// 屏幕上有弹窗时在结果里提醒（读树时顺带看，不多花时间）
-    pub(crate) async fn settle(&self, g: &mut Inner, max: Duration) -> Result<String, String> {
+    pub(crate) async fn settle(&self, g: &mut Inner, max: Duration) -> crate::error::Result<String> {
         let t0 = Instant::now();
         // 刚滑完读到的树：只作比较的起点，是不是真稳定还要看下一次读到的
         let seed = g.swiped_tree.take().filter(|(at, _)| at.elapsed() < SWIPED_TREE_FRESH).map(|(_, t)| t);
@@ -70,7 +70,7 @@ impl Daemon {
             tokio::time::sleep(max.min(Duration::from_millis(500))).await;
             return Ok(ictl_l10n::tr!("WDA 不可用,等了 0.5 秒", "WDA unavailable, waited 0.5 s").into());
         };
-        w.begin_polling().await.map_err(|e| e.to_string())?;
+        w.begin_polling().await?;
         let r = poll_stable(w, t0, max, seed).await;
         w.end_polling().await;
         let (msg, settled, tree) = match r? {
@@ -91,12 +91,17 @@ impl Daemon {
         Ok(msg + &note)
     }
 
-    pub(super) async fn settle_visually(&self, g: &mut Inner, t0: Instant, max: Duration) -> Result<String, String> {
+    pub(super) async fn settle_visually(
+        &self,
+        g: &mut Inner,
+        t0: Instant,
+        max: Duration,
+    ) -> crate::error::Result<String> {
         let deadline = t0 + max;
         let w = self.require_wda(g)?;
         let mut prev: Option<Vec<u8>> = None;
         loop {
-            let png = w.screenshot_png().await.map_err(|e| e.to_string())?;
+            let png = w.screenshot_png().await?;
             let cur = thumbnail(png).await?;
             if let Some(p) = &prev {
                 let m = imaging::thumb_motion(p, &cur);
@@ -153,9 +158,9 @@ impl Daemon {
     /// 不带 then 的操作做完后调：弹窗挡着时点击、滑动都会落在弹窗上，WDA 却照样报成功。
     /// 前台是 App 时只多一次约 0.13 秒的查询；在主屏上再多约 0.4 秒
     /// A system alert in front: the note for the agent, and the alert's own text
-    pub(crate) async fn alert_check(&self, g: &mut Inner) -> Result<(String, Option<String>), String> {
+    pub(crate) async fn alert_check(&self, g: &mut Inner) -> crate::error::Result<(String, Option<String>)> {
         let Some(w) = self.wda(g) else { return Ok((String::new(), None)) };
-        if w.active_app().await.map_err(|e| e.to_string())? != SPRINGBOARD {
+        if w.active_app().await? != SPRINGBOARD {
             return Ok((String::new(), None));
         }
         Ok(match w.alert_text().await {
@@ -165,12 +170,12 @@ impl Daemon {
     }
 
     /// 等包含 `text` 的元素出现
-    pub(crate) async fn wait_for(&self, g: &mut Inner, text: &str, timeout: Duration) -> Result<String, String> {
+    pub(crate) async fn wait_for(&self, g: &mut Inner, text: &str, timeout: Duration) -> crate::error::Result<String> {
         self.ensure_unlocked(g).await?;
         let t0 = Instant::now();
         let w = self.require_wda(g)?;
         // 轮询时不等界面空闲：页面还在加载、播放动画时每次读树也只要约 0.2 秒
-        w.begin_polling().await.map_err(|e| e.to_string())?;
+        w.begin_polling().await?;
         let r = async {
             loop {
                 let els = w.elements().await.map_err(|e| e.to_string())?;
@@ -186,7 +191,7 @@ impl Daemon {
         }
         .await;
         w.end_polling().await;
-        r
+        Ok(r?)
     }
 }
 
@@ -204,10 +209,10 @@ pub(super) async fn poll_stable(
     t0: Instant,
     max: Duration,
     seed: Option<Tree>,
-) -> Result<Polled, String> {
+) -> crate::error::Result<Polled> {
     let first = match seed {
         Some(t) => t,
-        None => w.tree().await.map_err(|e| e.to_string())?,
+        None => w.tree().await?,
     };
     if first.elements.len() < VISUAL_SETTLE_BELOW {
         return Ok(Polled::FewElements(first));
@@ -232,7 +237,7 @@ pub(super) async fn poll_stable(
         }
         // 一次读树本身约 0.2 秒，两次之间不用再多等
         tokio::time::sleep(Duration::from_millis(30)).await;
-        let cur = w.tree().await.map_err(|e| e.to_string())?;
+        let cur = w.tree().await?;
         let same = cur.close_to(&prev, STILL_TOLERANCE);
         prev = cur;
         if same && !prev.loading {

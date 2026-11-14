@@ -10,7 +10,7 @@ impl Daemon {
         g: &mut Inner,
         view: Option<&str>,
         start: bool,
-    ) -> Result<Option<Rotation>, String> {
+    ) -> crate::error::Result<Option<Rotation>> {
         let changed = || {
             ictl_l10n::tr!(
                 "画面已变化或尺寸尚未确认，请在新画面上重试",
@@ -21,7 +21,7 @@ impl Daemon {
         if let Some(id) = view
             && g.dev.display.as_ref().is_none_or(|v| v.id != id)
         {
-            return Err(changed());
+            return Err(changed().into());
         }
         // Move and Up use the finger's orientation from Down. A known display change
         // has already invalidated the token and released that finger in update_display.
@@ -32,12 +32,12 @@ impl Daemon {
         let Some(id) = view else { return Ok(None) };
         let (rotation, _) = self.sample_display(g, true).await;
         if g.dev.display.as_ref().is_none_or(|v| v.id != id) {
-            return Err(changed());
+            return Err(changed().into());
         }
         Ok(rotation)
     }
 
-    pub(crate) async fn tap(&self, g: &mut Inner, x: f64, y: f64, view: Option<&str>) -> Result<String, String> {
+    pub(crate) async fn tap(&self, g: &mut Inner, x: f64, y: f64, view: Option<&str>) -> crate::error::Result<String> {
         self.prepare_coordinates(g, view, true).await?;
         let pos = format!("({},{})", fmt_g(x), fmt_g(y));
         if let Some(w) = self.wda(g) {
@@ -45,11 +45,11 @@ impl Daemon {
             match w.tap(x, y).await {
                 Ok(()) => return Ok(ictl_l10n::trf!("已点击 {pos}", "Tapped {pos}")),
                 Err(WdaError::Unavailable(_)) if view.is_none() => {}
-                Err(e) => return Err(e.to_string()),
+                Err(e) => return Err(e.into()),
             }
         }
         if view.is_some() {
-            return Err(wda_down(&g.state, g.info.as_ref()));
+            return Err(wda_down(&g.state, g.info.as_ref()).into());
         }
         let rot = self.hid_touch_rotation(g).await?;
         self.hid_do(g, move |h| {
@@ -118,7 +118,10 @@ impl Daemon {
                 Ok(h) => h,
                 Err(message) => {
                     g.dev.touch_rotation = None;
-                    return Err(Response::Error { message, retry_as_gesture: phase == TouchPhase::Down });
+                    return Err(Response::Error {
+                        message: message.into(),
+                        retry_as_gesture: phase == TouchPhase::Down,
+                    });
                 }
             },
         };
@@ -140,7 +143,7 @@ impl Daemon {
         text: &str,
         index: usize,
         max_age: Duration,
-    ) -> Result<(String, bool), String> {
+    ) -> crate::error::Result<(String, bool)> {
         self.ensure_unlocked(g).await?;
         let tree = self.tree(g, max_age).await?;
         let matches = elements::find(&tree.elements, text);
@@ -192,7 +195,7 @@ impl Daemon {
                 ));
             }
         };
-        self.require_wda(g)?.tap(x, y).await.map_err(|e| e.to_string())?;
+        self.require_wda(g)?.tap(x, y).await?;
         let note = if matches.len() > 1 {
             ictl_l10n::trf!("(共匹配 {} 个,点的是第 {index} 个)", " ({} matches, tapped number {index})", matches.len())
         } else {
@@ -208,9 +211,9 @@ impl Daemon {
         y: f64,
         seconds: f64,
         view: Option<&str>,
-    ) -> Result<String, String> {
+    ) -> crate::error::Result<String> {
         self.prepare_coordinates(g, view, true).await?;
-        self.require_wda(g)?.touch_and_hold(x, y, seconds).await.map_err(|e| e.to_string())?;
+        self.require_wda(g)?.touch_and_hold(x, y, seconds).await?;
         Ok(ictl_l10n::trf!("已长按 ({},{}) {} 秒", "Long-pressed ({},{}) for {} s", fmt_g(x), fmt_g(y), fmt_g(seconds)))
     }
 
@@ -221,7 +224,7 @@ impl Daemon {
         to: (f64, f64),
         seconds: f64,
         view: Option<&str>,
-    ) -> Result<String, String> {
+    ) -> crate::error::Result<String> {
         self.prepare_coordinates(g, view, true).await?;
         let desc = format!("({},{}) → ({},{})", fmt_g(from.0), fmt_g(from.1), fmt_g(to.0), fmt_g(to.1));
         if let Some(w) = self.wda(g) {
@@ -235,11 +238,11 @@ impl Daemon {
                     return Ok(ictl_l10n::trf!("已滑动 {desc}{note}", "Swiped {desc}{note}"));
                 }
                 Err(WdaError::Unavailable(_)) if view.is_none() => {}
-                Err(e) => return Err(e.to_string()),
+                Err(e) => return Err(e.into()),
             }
         }
         if view.is_some() {
-            return Err(wda_down(&g.state, g.info.as_ref()));
+            return Err(wda_down(&g.state, g.info.as_ref()).into());
         }
         let rot = self.hid_touch_rotation(g).await?;
         self.hid_do(g, move |h| {
@@ -252,7 +255,7 @@ impl Daemon {
         Ok(ictl_l10n::trf!("已滑动 {desc}(经 HID)", "Swiped {desc} (via HID)"))
     }
 
-    pub(crate) async fn type_text(&self, g: &mut Inner, text: &str, submit: bool) -> Result<String, String> {
+    pub(crate) async fn type_text(&self, g: &mut Inner, text: &str, submit: bool) -> crate::error::Result<String> {
         self.ensure_unlocked(g).await?;
         let n = text.chars().count();
         if let Some(w) = self.wda(g) {
@@ -282,7 +285,7 @@ impl Daemon {
                                 "输入了 {n} 个字符,但输入框里现在是「{now}」,和要输入的「{text}」对不上(App 可能吞掉了部分字符){};截图确认后再处理",
                                 "Typed {n} characters, but the field now contains “{now}”, which doesn't match “{text}” (the app may have swallowed some characters){}; check with a screenshot before going on",
                                 if submit { ictl_l10n::tr!(",没有按回车", ", Return not pressed") } else { "" }
-                            ));
+                            ).into());
                         }
                     };
                     if submit {
@@ -300,7 +303,7 @@ impl Daemon {
                     ));
                 }
                 Err(WdaError::Unavailable(_)) => {}
-                Err(e) => return Err(e.to_string()),
+                Err(e) => return Err(e.into()),
             }
         }
         let payload = if submit { format!("{text}\n") } else { text.to_owned() };
@@ -309,7 +312,8 @@ impl Daemon {
             return Err(ictl_l10n::trf!(
                 "WDA 不可用,HID 只能输入美式键盘上的英文和符号,不能输入 {c:?}",
                 "WDA unavailable; HID can only type English letters and symbols of a US keyboard, not {c:?}"
-            ));
+            )
+            .into());
         }
         self.hid_do(g, move |h| Box::pin(async move { h.type_ascii(&payload).await })).await?;
         Ok(ictl_l10n::trf!("已输入 {n} 个字符(经 HID)", "Typed {n} characters (via HID)"))
@@ -353,8 +357,9 @@ pub(super) async fn wait_scrolled(w: &mut WdaClient<DeviceTransport>, vertical: 
     }
 }
 
-/// How a missed `iphone_tap_element` result starts: the Chinese prefixes are fixed because older MCP servers
-/// recognise them; new ones read [`crate::protocol::Outcome`] instead
+/// How a missed `iphone_tap_element` result starts: the Chinese prefixes are fixed because MCP servers before 0.1.5
+/// recognise them; new ones read [`crate::protocol::Outcome`] instead. Goes in 0.3.0
+/// ([`crate::protocol::TEXT_FALLBACK_UNTIL`])
 pub(super) fn tap_missed_prefixes() -> [&'static str; 3] {
     if ictl_l10n::is_en() { ["Not found", "Only matched", "Covered"] } else { TAP_MISSED }
 }

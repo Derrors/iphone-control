@@ -36,9 +36,28 @@ mod tests {
             assert!(started.elapsed() < Duration::from_secs(5), "still running");
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
-        // the group is gone too: no process with that group id is left
-        let r = unsafe { libc::kill(-(leader.id() as libc::pid_t), 0) };
-        assert!(r != 0, "a process of the group is still there");
+        // the group is gone too: no live process with that group id is left. The child, orphaned when its shell
+        // went, may stay a zombie until whatever adopted it reaps it (in a CI container that can take a while), so
+        // zombies don't count
+        let pgid = leader.id() as libc::pid_t;
+        let started = std::time::Instant::now();
+        while group_alive(pgid) {
+            assert!(started.elapsed() < Duration::from_secs(5), "a process of the group is still running");
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    }
+
+    /// A process of group `pgid` still runs (on Linux, a zombie isn't counted; elsewhere any process is)
+    fn group_alive(pgid: libc::pid_t) -> bool {
+        let Ok(dir) = std::fs::read_dir("/proc") else { return unsafe { libc::kill(-pgid, 0) } == 0 };
+        dir.flatten().filter_map(|e| std::fs::read_to_string(e.path().join("stat")).ok()).any(|stat| {
+            // `pid (comm) state ppid pgrp …`: comm may hold spaces, so read after its closing parenthesis
+            let rest = stat.rsplit_once(')').map_or("", |(_, r)| r);
+            let mut f = rest.split_whitespace();
+            let state = f.next();
+            let pgrp = f.nth(1).and_then(|p| p.parse::<libc::pid_t>().ok());
+            pgrp == Some(pgid) && state != Some("Z")
+        })
     }
 
     use std::time::Duration;

@@ -40,7 +40,7 @@ impl DeviceState {
     }
 }
 
-/// WDA 启动失败退避：60s 起翻倍，上限 300s；等自动化密码时固定 60s；手机重新连上时重置
+/// WDA 启动失败退避：60s 起翻倍，上限 300s；等自动化密码时固定 [`PIN_RETRY`]；手机重新连上时重置
 #[derive(Debug, Clone)]
 pub struct Backoff {
     next_at: Option<Instant>,
@@ -49,7 +49,8 @@ pub struct Backoff {
 
 pub const BACKOFF_START: Duration = Duration::from_secs(60);
 pub const BACKOFF_MAX: Duration = Duration::from_secs(300);
-pub const PIN_RETRY: Duration = Duration::from_secs(60);
+/// Short: the prompt only comes up while WDA is being launched (see `supervise::PIN_ATTEMPT`)
+pub const PIN_RETRY: Duration = Duration::from_secs(5);
 /// 手机锁着、建不了隧道时多久再试（不用等 60 秒那么久：用户解锁后很快就能起来）
 pub const UNLOCK_RETRY: Duration = Duration::from_secs(20);
 
@@ -151,16 +152,17 @@ mod tests {
         assert_eq!(b.current_delay(), BACKOFF_START);
     }
 
-    /// 回归用例 #8：等自动化密码时固定 60 秒重试，不指数退避
+    /// 回归用例 #8：等自动化密码时固定间隔（[`PIN_RETRY`]，很短）重试，不指数退避
     #[test]
-    fn pin_wait_retries_every_minute() {
+    fn pin_wait_retries_soon_without_backing_off() {
         let t = Instant::now();
         let mut b = Backoff::default();
         b.failed(t);
         b.failed(t);
         b.waiting_for_pin(t);
-        assert!(!b.ready(t + Duration::from_secs(59)));
-        assert!(b.ready(t + Duration::from_secs(60)));
+        assert!(!b.ready(t + PIN_RETRY - Duration::from_millis(1)));
+        assert!(b.ready(t + PIN_RETRY));
+        assert!(PIN_RETRY <= Duration::from_secs(10), "the prompt only shows while WDA is being launched");
         assert_eq!(b.current_delay(), BACKOFF_START);
     }
 

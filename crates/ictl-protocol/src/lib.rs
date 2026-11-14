@@ -434,6 +434,42 @@ impl ScreenMsg {
 /// The byte a [`Request::ScreenStream`] client writes to ask for a keyframe
 pub const SCREEN_KEYFRAME: u8 = b'K';
 
+/// Next to the control socket while the daemon is stopping, and left there when it has stopped (the next one removes
+/// it when it is up): a client that can't connect just then waits for the daemon to be back ([`connect`])
+pub fn stopping_marker(socket: &std::path::Path) -> std::path::PathBuf {
+    socket.with_extension("stopping")
+}
+
+/// A daemon that stopped this recently is taken to be restarting
+const RESTART_RECENT: std::time::Duration = std::time::Duration::from_secs(20);
+/// How long a client waits for a restarting daemon
+const RESTART_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Connects to the daemon. While it restarts (`systemctl restart`, an update) the socket is briefly gone or refuses:
+/// then this waits for it, up to [`RESTART_WAIT`]. Nothing was sent yet, so trying again does nothing twice. A daemon
+/// that isn't running (stopped a while ago, or never started) is reported at once
+pub async fn connect(socket: &std::path::Path) -> std::io::Result<tokio::net::UnixStream> {
+    let started = std::time::Instant::now();
+    loop {
+        match tokio::net::UnixStream::connect(socket).await {
+            Err(e)
+                if matches!(e.kind(), std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused)
+                    && started.elapsed() < RESTART_WAIT
+                    && restarting(socket) =>
+            {
+                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            }
+            r => return r,
+        }
+    }
+}
+
+fn restarting(socket: &std::path::Path) -> bool {
+    std::fs::metadata(stopping_marker(socket))
+        .and_then(|m| m.modified())
+        .is_ok_and(|t| t.elapsed().is_ok_and(|e| e < RESTART_RECENT))
+}
+
 /// Opens a [`Request::ScreenStream`]: `Ok(Ok(..))` with the reading half (buffered: it may already hold the first
 /// messages) and the writing half, `Ok(Err(why))` when the daemon can't stream, `Err` when it can't be reached
 pub async fn open_screen_stream(
@@ -443,7 +479,7 @@ pub async fn open_screen_stream(
     Result<(tokio::io::BufReader<tokio::net::unix::OwnedReadHalf>, tokio::net::unix::OwnedWriteHalf), String>,
 > {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-    let stream = tokio::net::UnixStream::connect(socket).await?;
+    let stream = connect(socket).await?;
     let (r, mut w) = stream.into_split();
     let mut v = serde_json::to_value(Request::ScreenStream)?;
     if let Some(o) = v.as_object_mut() {
@@ -590,7 +626,7 @@ async fn exchange_on(
 ) -> std::io::Result<Response> {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
     let exchange = async {
-        let stream = tokio::net::UnixStream::connect(socket).await?;
+        let stream = connect(socket).await?;
         let (r, mut w) = stream.into_split();
         let mut v = serde_json::to_value(req)?;
         if let Some(o) = v.as_object_mut() {
@@ -660,7 +696,7 @@ impl TaskStream {
 
 async fn open_stream(socket: &std::path::Path, req: &Request) -> std::io::Result<(Response, TaskStream)> {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-    let stream = tokio::net::UnixStream::connect(socket).await?;
+    let stream = connect(socket).await?;
     let (r, mut w) = stream.into_split();
     let mut v = serde_json::to_value(req)?;
     if let Some(o) = v.as_object_mut() {
@@ -723,6 +759,35 @@ pub async fn task_list(socket: &std::path::Path) -> Result<Vec<TaskInfo>, String
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A daemon that is restarting (it left the marker just now) is waited for; one that isn't running is reported
+    /// at once
+    #[tokio::test]
+    async fn clients_wait_for_a_restarting_daemon_only() {
+        let dir = std::env::temp_dir().join(format!("ictl-connect-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let socket = dir.join("ctl.sock");
+        let t = std::time::Instant::now();
+        assert_eq!(connect(&socket).await.unwrap_err().kind(), std::io::ErrorKind::NotFound);
+        assert!(t.elapsed() < std::time::Duration::from_millis(100), "not running: at once");
+
+        std::fs::write(stopping_marker(&socket), b"").unwrap();
+        let up = {
+            let socket = socket.clone();
+            tokio::spawn(async move {
+                tokio::time::sleep(std::time::Duration::from_millis(700)).await;
+                let l = tokio::net::UnixListener::bind(&socket).unwrap();
+                let _ = std::fs::remove_file(stopping_marker(&socket));
+                l.accept().await.unwrap()
+            })
+        };
+        let t = std::time::Instant::now();
+        connect(&socket).await.expect("connects once it is back");
+        assert!(t.elapsed() >= std::time::Duration::from_millis(600));
+        up.await.unwrap();
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     fn requests_round_trip_as_tagged_json() {

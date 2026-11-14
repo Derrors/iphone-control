@@ -91,7 +91,7 @@
         │ 结果由下一轮巡检收
         ├─ 成功 ──────────────────────────────▶ 健康检查通过后 Ready
         ├─ 隧道报 PasswordProtected（锁屏/BFU）─▶ NeedsUnlock（BFU 必须人工，定期重试，状态不来回变）
-        ├─「Enable UI Automation」超时 ─────────▶ NeedsAutomationPin（推送通知，60 秒重试，不指数退避）
+        ├─「Enable UI Automation」超时 ─────────▶ NeedsAutomationPin（推送通知，每次只等 25 秒、5 秒后再启动，不指数退避）
         └─ 镜像或 WDA 其它失败 ─────────────────▶ WdaStarting { last_error }，按退避重试
 ```
 
@@ -102,7 +102,7 @@
 - **HID 会话**：归 `Tunnel` 所有（`Tunnel::hid` / `close_hid` / `close`），持有屏幕媒体流。关闭时必须先停媒体流再断隧道，否则手机一直挂着「配对的电脑」会话（灵动岛图标常驻、不自动锁屏）。空闲 30 秒关闭，重开约 0.5 秒。
 - **开发者镜像**：每次启动 WDA 前都先 `installed_ddi()` 查询（toolkit 实测已挂载时约 1 秒），未挂载才走 `install_ddi()`（个性化 + TSS）。手机重启后镜像可能会掉，所以这一步不能省。默认缓存（`ddi/`）连续 3 次**挂载**失败才清掉重新下载，隧道建不起来不计入。设了 `ICTL_DDI_DIR` 时不下载、也不删里面的文件，缺文件时报错说明缺哪个。
 - **WDA 就绪判定**：必须同时满足"本进程持有的 XCTest 会话存活"和 `/status` 返回 ready。toolkit 踩过：host 侧 runner 退出后，手机上残留的 WDA 还会响应几十秒再自杀，单看 `/status` 会误判。实验开关 `ICTL_WDA_DETACHED=1` 下 WDA 在后台启动、本进程不持有 XCTest 会话，就绪只看 `/status`，守护进程重启后接上原来的进程（`state.json` 的 `detached_wda`），见 [WDA 依赖调研](dev/wda-dependency-research.md#8-不挂-xctest-会话启动-wda)。
-- **自动化密码框**：手机重启后首次启用 UI 自动化会弹「为 XCTest 输入 iPhone 密码」，没人输就报 `Timed out while enabling automation mode`。识别到这个错误：进入 `NeedsAutomationPin`、只推送一次通知、保持 60 秒重试；恢复后再推送一次。
+- **自动化密码框**：手机重启后首次启用 UI 自动化会弹「为 XCTest 输入 iPhone 密码」，没人输就报 `Timed out while enabling automation mode`。识别到这个错误：进入 `NeedsAutomationPin`、只推送一次通知；之后每次启动只等 25 秒，没弹出密码框就 5 秒后再启动一次（密码框只在启动时出现、每次约 45 秒，且不是每次启动都出现；弹出来的那次会一直等到密码框消失），这样手机上大部分时间都有框可输。恢复后再推送一次。
 - **退避**：其它 WDA 启动失败按 60s → 120s → 240s → 300s 退避，上限 5 分钟；手机重新连上、WDA 就绪、重签完成时重置。
 
 ## 4. 模块划分

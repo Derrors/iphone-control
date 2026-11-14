@@ -6,10 +6,16 @@ All notable changes to this project are documented here. The format is based on 
 
 ## [Unreleased]
 
+## [0.2.5] - 2026-11-14
+
+### Upgrade notes
+
+- `--url` (`mcp --url`, `task … --url`, `IPHONE_CONTROL_URL`) no longer takes `http://` for another machine, so the login token isn't sent in the clear: use `https://<address>:<port>` (with `--ca` for the self-signed certificate). `http://127.0.0.1` on this machine works as before.
+- A read-only token no longer has the phone unlocked for it: while the phone is locked, its element list says the phone is locked.
+
 ### Changed
 
 - The control page's login page looks like the control page: its colours, light or dark as chosen there (or as the system), the same frosted card. The token field can show what was pasted, the `viewer token` command has a copy button, a wrong token is shown as an alert, and the page follows the language chosen on the control page, with a switch of its own.
-
 - The daemon is ready about 10 s sooner after it restarts or restarts WDA (1.4 s instead of 11 s on an iPhone): the outcome of starting WDA is taken as soon as it is there, not at the next check.
 - Waiting for the "Enable UI Automation" passcode, WDA is launched again every half minute instead of every three minutes. The prompt only comes up while WDA is being launched (for about 45 s, and not on every launch), so it is now on the phone most of the time instead of a quarter of it.
 - A stuck WDA is noticed after one unanswered request and a 5 s check, so a tool call waits about 35 s for the restart instead of 90 s.
@@ -301,7 +307,8 @@ First public release.
 - Docker image (single binary plus Debian's usbmuxd, not privileged) with a generated third-party license list, published to `ghcr.io/derrors/iphone-control` for linux/amd64 and linux/arm64.
 - Running without Docker, from source or from the prebuilt Linux binaries (x86_64, aarch64): as a regular user with the system usbmuxd, XDG data and socket paths, the unsigned WebDriverAgent downloaded and checksum-verified before the first signing, `mcp-config` printing a direct command, and a systemd user service.
 
-[Unreleased]: https://github.com/Derrors/iphone-control/compare/v0.2.4...HEAD
+[Unreleased]: https://github.com/Derrors/iphone-control/compare/v0.2.5...HEAD
+[0.2.5]: https://github.com/Derrors/iphone-control/compare/v0.2.4...v0.2.5
 [0.2.4]: https://github.com/Derrors/iphone-control/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/Derrors/iphone-control/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/Derrors/iphone-control/compare/v0.2.1...v0.2.2

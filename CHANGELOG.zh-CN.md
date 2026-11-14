@@ -6,10 +6,16 @@
 
 ## [Unreleased]
 
+## [0.2.5] - 2026-11-14
+
+### 升级注意事项
+
+- `--url`（`mcp --url`、`task … --url`、`IPHONE_CONTROL_URL`）指向另一台机器时不再接受 `http://`，免得登录令牌明文传出去：请改用 `https://<地址>:<端口>`（自签证书加 `--ca`）。本机的 `http://127.0.0.1` 照旧。
+- 只读令牌不会再让手机自动解锁：手机锁着时，它读元素会提示手机已锁屏。
+
 ### 变更
 
 - 控制台的登录页换成了和控制台一致的样子：同样的配色和磨砂卡片，明暗跟着控制台里的选择（没选过就跟系统）。令牌框可以显示粘贴的内容，`viewer token` 命令带复制按钮，令牌不对时用醒目的提示条；语言跟着控制台里选的走，页面上也能切换。
-
 - 守护进程重启、或重启 WDA 后就绪快了约 10 秒（iPhone 上从 11 秒降到 1.4 秒）：WDA 启动的结果一出来就收，不再等下一轮巡检。
 - 等「Enable UI Automation」密码时，每半分钟重新启动一次 WDA，原来是约 3 分钟一次。密码框只在启动 WDA 时出现（约 45 秒，且不是每次都出现），现在手机上大部分时间都有框可输，原来只有约四分之一的时间。
 - WDA 卡死后，一个请求没应答、再用 5 秒确认一次就判定卡死，工具调用等重启约 35 秒，原来要 90 秒。
@@ -299,7 +305,8 @@
 - `setup`、`doctor`、`status`、`mcp-config`、`wda-bridge`、`notify-test` 命令。
 - Docker 镜像（非 privileged，linux/amd64、linux/arm64）；也可不用 Docker，从源码或预编译二进制以普通用户运行，附 systemd 用户服务。
 
-[Unreleased]: https://github.com/Derrors/iphone-control/compare/v0.2.4...HEAD
+[Unreleased]: https://github.com/Derrors/iphone-control/compare/v0.2.5...HEAD
+[0.2.5]: https://github.com/Derrors/iphone-control/compare/v0.2.4...v0.2.5
 [0.2.4]: https://github.com/Derrors/iphone-control/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/Derrors/iphone-control/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/Derrors/iphone-control/compare/v0.2.1...v0.2.2

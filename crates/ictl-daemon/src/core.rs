@@ -966,8 +966,8 @@ impl Daemon {
             Request::Screenshot { region } => {
                 return self.screenshot(g, region).await.unwrap_or_else(Response::error);
             }
-            Request::ListElements { filter, limit, max_age_ms } => {
-                self.list_elements(g, &filter, limit, Duration::from_millis(max_age_ms)).await
+            Request::ListElements { filter, limit, max_age_ms, keep_locked } => {
+                self.list_elements(g, &filter, limit, Duration::from_millis(max_age_ms), keep_locked).await
             }
             Request::Tap { x, y } => self.tap(g, x, y, view).await,
             Request::TapElement { text, index, max_age_ms } => {

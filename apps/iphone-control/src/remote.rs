@@ -37,16 +37,28 @@ impl Remote {
     /// `url`: the viewer's address; `ca`: a certificate to trust besides the system's (the viewer's self-signed one)
     pub fn new(url: &str, ca: Option<&Path>, login: Option<String>) -> anyhow::Result<Self> {
         let base = url.trim().trim_end_matches('/').trim_end_matches("/mcp").to_owned();
-        if !base.starts_with("http://") && !base.starts_with("https://") {
+        let parsed = reqwest::Url::parse(&base).ok().filter(|u| matches!(u.scheme(), "http" | "https") && u.has_host());
+        let Some(parsed) = parsed else {
             bail!(ictl_l10n::trf!(
                 "--url 要是控制台的地址，比如 https://192.168.1.5:8200：{url}",
                 "--url takes the viewer's address, such as https://192.168.1.5:8200: {url}"
             ));
+        };
+        // the login token and the task's token go with every request: in the clear only to this machine
+        if parsed.scheme() == "http" && !loopback(&parsed) {
+            bail!(ictl_l10n::trf!(
+                "另一台机器的控制台要用 https://（令牌不能明文发出去）：{url}",
+                "Another machine's viewer takes https:// (tokens aren't sent in the clear): {url}"
+            ));
         }
         // reqwest is built without a crypto provider of its own (main installs ring; so does this, for tests)
         let _ = rustls::crypto::ring::default_provider().install_default();
-        // the viewer is on this network: never through a proxy from the environment
-        let mut b = reqwest::Client::builder().no_proxy().connect_timeout(Duration::from_secs(10));
+        // the viewer is on this network: never through a proxy from the environment. Redirects aren't followed: the
+        // tokens would go along to wherever it points
+        let mut b = reqwest::Client::builder()
+            .no_proxy()
+            .redirect(reqwest::redirect::Policy::none())
+            .connect_timeout(Duration::from_secs(10));
         if let Some(ca) = ca {
             let pem = std::fs::read(ca).with_context(|| ca.display().to_string())?;
             let cert = reqwest::Certificate::from_pem(&pem).with_context(|| ca.display().to_string())?;
@@ -169,9 +181,22 @@ impl Remote {
     }
 }
 
+/// `localhost`, `127.0.0.0/8` or `[::1]`
+fn loopback(url: &reqwest::Url) -> bool {
+    let host = url.host_str().unwrap_or_default().trim_start_matches('[').trim_end_matches(']');
+    host.eq_ignore_ascii_case("localhost") || host.parse::<std::net::IpAddr>().is_ok_and(|a| a.is_loopback())
+}
+
 /// What the viewer said when it refused
 pub async fn failure(r: reqwest::Response) -> String {
     let status = r.status();
+    if status.is_redirection() {
+        let to = r.headers().get(reqwest::header::LOCATION).and_then(|v| v.to_str().ok()).unwrap_or_default();
+        return ictl_l10n::trf!(
+            "控制台要求换个地址（HTTP {status} → {to}）：把 --url 改成这个地址再试",
+            "The viewer points elsewhere (HTTP {status} → {to}): use that address as --url and try again"
+        );
+    }
     let text = r.text().await.unwrap_or_default();
     let message = serde_json::from_str::<Value>(&text).ok().and_then(|v| v["message"].as_str().map(str::to_owned));
     let why = message.unwrap_or_else(|| text.trim().chars().take(200).collect());
@@ -283,5 +308,11 @@ mod tests {
         let env = r.env();
         assert!(env.contains(&(MCP_URL_ENV, "https://nas.local:8202/mcp".into())));
         assert!(Remote::new("nas.local:8202", None, None).is_err());
+        // tokens in the clear only to this machine
+        assert!(Remote::new("http://192.168.1.5:8202", None, None).is_err());
+        assert!(Remote::new("http://nas.local:8202", None, None).is_err());
+        for local in ["http://127.0.0.1:8202", "http://localhost:8202", "http://[::1]:8202"] {
+            assert!(Remote::new(local, None, None).is_ok(), "{local}");
+        }
     }
 }

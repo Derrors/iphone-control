@@ -298,8 +298,22 @@ impl Daemon {
         filter: &str,
         limit: usize,
         max_age: Duration,
+        keep_locked: bool,
     ) -> Result<String, String> {
-        self.ensure_unlocked(g).await?;
+        if keep_locked {
+            // only looking (a read-only viewer): the passcode isn't typed for it
+            if let Some(w) = self.wda(g)
+                && w.locked().await.map_err(|e| e.to_string())?
+            {
+                return Err(ictl_l10n::tr!(
+                    "手机锁着：只看不操作时不会替你解锁",
+                    "The phone is locked: it isn't unlocked for someone who only watches"
+                )
+                .into());
+            }
+        } else {
+            self.ensure_unlocked(g).await?;
+        }
         let els = self.tree(g, max_age).await?.elements;
         let shown: Vec<&elements::Element> =
             if filter.is_empty() { els.iter().collect() } else { elements::filter(&els, filter) };

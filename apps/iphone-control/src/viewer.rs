@@ -426,6 +426,42 @@ async fn handle(mut client: Conn, ctx: &Ctx, head: Vec<u8>, req: Head, mut body:
         );
         return json_reply(&mut client, 403, &json!({"ok": false, "message": m})).await;
     }
+    let routed = route(client, ctx, head, req, body, &pass);
+    match (&ctx.auth, &pass.who) {
+        // a stream (the picture, a task's events, `/mcp`, a task's lease) ends when its token is removed or replaced
+        (Some(a), Some(who)) => tokio::select! {
+            r = routed => r,
+            () = revoked(a, who) => {
+                tracing::info!("viewer: the token “{}” is gone, so its connection was closed", who.name);
+                Ok(())
+            }
+        },
+        _ => routed.await,
+    }
+}
+
+/// How often an open connection's token is looked for ([`revoked`])
+const TOKEN_RECHECK: Duration = Duration::from_secs(5);
+
+/// Returns once `who`'s token is no longer there
+async fn revoked(a: &auth::Auth, who: &auth::Who) {
+    loop {
+        tokio::time::sleep(TOKEN_RECHECK).await;
+        if !a.knows(who) {
+            return;
+        }
+    }
+}
+
+/// A logged-in request, by its method and path
+async fn route(
+    mut client: Conn,
+    ctx: &Ctx,
+    head: Vec<u8>,
+    req: Head,
+    mut body: Vec<u8>,
+    pass: &Pass,
+) -> anyhow::Result<()> {
     let path = req.path.as_str();
     match (req.method.as_str(), path) {
         ("GET", "/") => reply(&mut client, 200, "text/html; charset=utf-8", ctx.page.as_bytes()).await,
@@ -467,8 +503,8 @@ async fn handle(mut client: Conn, ctx: &Ctx, head: Vec<u8>, req: Head, mut body:
                 "status" => status(ctx).await,
                 "devices" => devices(ctx).await,
                 "apps" => apps(ctx, req.query("system").is_some_and(|v| v == "1")).await,
-                "elements" => elements(ctx, &req.query("filter").unwrap_or_default()).await,
-                "alert" => alert(ctx).await,
+                "elements" => elements(ctx, &req.query("filter").unwrap_or_default(), pass.watches()).await,
+                "alert" => alert(ctx, pass.watches()).await,
                 "agent/backends" => Ok(json!({"backends": agent::backends()})),
                 // every task the daemon knows, also those started elsewhere (`iphone-control task run`)
                 "agent/tasks" => protocol::task_list(&ctx.socket).await.map(|t| json!({"tasks": t})),
@@ -936,6 +972,11 @@ impl Pass {
 
     /// A read-only token may look (any `GET` but `/mcp`, and report how much of a video it read); an agent only works
     /// for its task
+    /// A read-only token: may look, but nothing is done on the phone for it (not even unlocking it)
+    fn watches(&self) -> bool {
+        self.who.as_ref().is_some_and(|w| w.role == auth::Role::View)
+    }
+
     fn may(&self, req: &Head) -> bool {
         match &self.who {
             Some(w) if w.role == auth::Role::View => {
@@ -994,18 +1035,16 @@ async fn login_gate(
         v => v,
     };
     // an agent on another machine: its task's token instead of a login, only for that task (docs/task-control.md 7.6)
-    if v != Verdict::Limited
-        && TASK_PATHS.contains(&req.path.as_str())
+    // (checked even after too many wrong tokens: a running task isn't cut off by someone sending wrong ones)
+    if TASK_PATHS.contains(&req.path.as_str())
         && let Some(t) = &req.task_token
     {
-        if a.limited() {
-            v = Verdict::Limited;
-        } else if protocol::task_check(&ctx.socket, t).await.is_ok() {
+        if protocol::task_check(&ctx.socket, t).await.is_ok() {
             return Ok(Some(Pass { who: None, agent: true }));
-        } else {
-            // a wrong task token counts like a wrong login
-            a.failed();
-            v = Verdict::Wrong;
+        }
+        // a wrong task token counts like a wrong login (once, when no login token was sent with it)
+        if v == Verdict::Missing {
+            v = a.failed();
         }
     }
     let status = if v == Verdict::Limited { 429 } else { 401 };
@@ -1396,8 +1435,9 @@ async fn apps(ctx: &Ctx, system: bool) -> Result<Value, String> {
 }
 
 /// `{ elements: [{ type, label, x, y, width, height }] }`, `x`/`y` the top-left corner in points
-async fn elements(ctx: &Ctx, filter: &str) -> Result<Value, String> {
-    let req = Request::ListElements { filter: filter.to_owned(), limit: ELEMENT_LIMIT, max_age_ms: 0 };
+/// `keep_locked`: a read-only visitor, for whom a locked phone isn't unlocked
+async fn elements(ctx: &Ctx, filter: &str, keep_locked: bool) -> Result<Value, String> {
+    let req = Request::ListElements { filter: filter.to_owned(), limit: ELEMENT_LIMIT, max_age_ms: 0, keep_locked };
     let text = text_of(&ctx.socket, req, true).await?;
     Ok(json!({"elements": text.lines().filter_map(parse_element).collect::<Vec<_>>()}))
 }
@@ -1409,10 +1449,10 @@ async fn elements(ctx: &Ctx, filter: &str) -> Result<Value, String> {
 /// while WDA's screenshot had it. The page asks while it shows that video and puts the alert next to the picture.
 /// `AlertCheck` is two quick WDA calls (the foreground app; the alert's text only when SpringBoard is in front); the
 /// element tree is only read when there is an alert
-async fn alert(ctx: &Ctx) -> Result<Value, String> {
+async fn alert(ctx: &Ctx, keep_locked: bool) -> Result<Value, String> {
     let check = text_of(&ctx.socket, Request::AlertCheck, true).await?;
     let Some(text) = alert_text(&check) else { return Ok(json!({"alert": null})) };
-    let req = Request::ListElements { filter: String::new(), limit: ELEMENT_LIMIT, max_age_ms: 0 };
+    let req = Request::ListElements { filter: String::new(), limit: ELEMENT_LIMIT, max_age_ms: 0, keep_locked };
     // without its buttons the page still says there is an alert
     let els: Vec<Value> = text_of(&ctx.socket, req, true)
         .await

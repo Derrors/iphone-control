@@ -71,6 +71,9 @@ pub enum Request {
         /// 用于「等界面稳定」之后紧接着列元素：Settle 刚读过
         #[serde(default)]
         max_age_ms: u64,
+        /// 手机锁着时不自动解锁，直接报错（控制台的只读令牌：只能看，不能让守护进程输入锁屏密码）
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        keep_locked: bool,
     },
     Tap {
         x: f64,

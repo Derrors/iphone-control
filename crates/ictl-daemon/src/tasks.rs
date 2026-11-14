@@ -1317,7 +1317,7 @@ mod tests {
         assert!(message(admit(&ts, &tap(), Some(&t.token)).await).contains("重新看"));
         assert!(admit(&ts, &tap(), Some(&t.token)).await.is_err(), "until it has looked, not just once");
         assert!(admit(&ts, &Request::Status, Some(&t.token)).await.is_ok(), "status isn't acting");
-        let look = Request::ListElements { filter: String::new(), limit: 10, max_age_ms: 0 };
+        let look = Request::ListElements { filter: String::new(), limit: 10, max_age_ms: 0, keep_locked: false };
         assert!(admit(&ts, &look, Some(&t.token)).await.is_ok());
         assert!(admit(&ts, &tap(), Some(&t.token)).await.is_err(), "a look let through isn't a look that worked");
         t.observed();

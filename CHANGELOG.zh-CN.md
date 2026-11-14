@@ -6,6 +6,13 @@
 
 ## [Unreleased]
 
+## [0.2.4] - 2026-11-14
+
+### 升级注意事项
+
+- 控制台（`iphone-control viewer`）和它的 `/mcp` 现在要登录，本机也一样。升级后运行 `iphone-control viewer token`，点开它打印的链接；浏览器登录一次记住 30 天。经 HTTP 接入 `/mcp` 的 MCP 客户端要带 `Authorization: Bearer <令牌>`（`viewer token` 会打印 `claude mcp add` 命令）。命令行、stdio 方式的 `iphone-control mcp` 和 `task run` 不受影响。
+- 开了 `--lan`（`IPHONE_CONTROL_VIEWER_LAN=1`）时，局域网里用 HTTPS：打开 `https://<地址>:<端口>/`，第一次核对证书指纹（`iphone-control service status` 显示）。
+
 ### 新增
 
 - `iphone-control mcp --url https://<那台机器>:8200`：把 stdio 转到另一台机器控制台的 `/mcp`，只能填命令的 MCP 客户端也能操作接在那台机器上的手机。有任务口令就只带它，否则用 `IPHONE_CONTROL_VIEWER_TOKEN` 登录；`task run --url` 启动的命令已经设好 `IPHONE_CONTROL_URL`，里面照常配置的 `iphone-control mcp` 自动转接。
@@ -269,7 +276,8 @@
 - `setup`、`doctor`、`status`、`mcp-config`、`wda-bridge`、`notify-test` 命令。
 - Docker 镜像（非 privileged，linux/amd64、linux/arm64）；也可不用 Docker，从源码或预编译二进制以普通用户运行，附 systemd 用户服务。
 
-[Unreleased]: https://github.com/Derrors/iphone-control/compare/v0.2.3...HEAD
+[Unreleased]: https://github.com/Derrors/iphone-control/compare/v0.2.4...HEAD
+[0.2.4]: https://github.com/Derrors/iphone-control/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/Derrors/iphone-control/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/Derrors/iphone-control/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/Derrors/iphone-control/compare/v0.2.0...v0.2.1

@@ -1956,7 +1956,7 @@ dependencies = [
 
 [[package]]
 name = "ictl-daemon"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
@@ -1980,7 +1980,7 @@ dependencies = [
 
 [[package]]
 name = "ictl-device"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "ictl-l10n",
  "ictl-webinspector",
@@ -1996,14 +1996,14 @@ dependencies = [
 
 [[package]]
 name = "ictl-l10n"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "tokio",
 ]
 
 [[package]]
 name = "ictl-mcp"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "anyhow",
  "http",
@@ -2016,7 +2016,7 @@ dependencies = [
 
 [[package]]
 name = "ictl-protocol"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "ictl-l10n",
  "libc",
@@ -2027,7 +2027,7 @@ dependencies = [
 
 [[package]]
 name = "ictl-sign"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "ictl-l10n",
  "plist",
@@ -2043,7 +2043,7 @@ dependencies = [
 
 [[package]]
 name = "ictl-unlock"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "ictl-l10n",
  "ictl-wda",
@@ -2056,7 +2056,7 @@ dependencies = [
 
 [[package]]
 name = "ictl-wda"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "base64 0.23.1",
  "ictl-device",
@@ -2072,7 +2072,7 @@ dependencies = [
 
 [[package]]
 name = "ictl-webinspector"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "idevice",
  "plist",
@@ -2282,7 +2282,7 @@ dependencies = [
 
 [[package]]
 name = "iphone-control"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "anyhow",
  "bytes",

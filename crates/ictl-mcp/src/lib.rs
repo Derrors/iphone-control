@@ -635,9 +635,12 @@ pub fn to_request(name: &str, args: &Map<String, Value>) -> Result<Request, Stri
             };
             Request::Screenshot { region }
         }
-        "iphone_list_elements" => {
-            Request::ListElements { filter: a.s_or("filter", "")?, limit: a.u_or("limit", 150)?, max_age_ms: 0 }
-        }
+        "iphone_list_elements" => Request::ListElements {
+            filter: a.s_or("filter", "")?,
+            limit: a.u_or("limit", 150)?,
+            max_age_ms: 0,
+            keep_locked: false,
+        },
         "iphone_tap" => Request::Tap { x: a.f("x")?, y: a.f("y")? },
         "iphone_tap_element" => Request::TapElement { text: a.s("text")?, index: a.u_or("index", 0)?, max_age_ms: 0 },
         "iphone_long_press" => Request::LongPress { x: a.f("x")?, y: a.f("y")?, seconds: a.f_or("seconds", 1.0)? },
@@ -1066,7 +1069,14 @@ impl McpServer {
         match then {
             Then::Elements(filter) => {
                 // Settle 刚读过元素树，直接用它
-                match self.call(&Request::ListElements { filter, limit: THEN_LIMIT, max_age_ms: THEN_SETTLE_MS }).await
+                match self
+                    .call(&Request::ListElements {
+                        filter,
+                        limit: THEN_LIMIT,
+                        max_age_ms: THEN_SETTLE_MS,
+                        keep_locked: false,
+                    })
+                    .await
                 {
                     Response::Text { text: t, .. } => {
                         text +=
@@ -1261,7 +1271,7 @@ mod tests {
     fn defaults_match_toolkit() {
         assert_eq!(
             to_request("iphone_list_elements", &Map::new()).unwrap(),
-            Request::ListElements { filter: String::new(), limit: 150, max_age_ms: 0 }
+            Request::ListElements { filter: String::new(), limit: 150, max_age_ms: 0, keep_locked: false }
         );
         assert_eq!(
             to_request("iphone_swipe", &args(json!({"from_x": 1, "from_y": 2, "to_x": 3, "to_y": 4}))).unwrap(),
@@ -1401,7 +1411,7 @@ mod tests {
         );
         assert_eq!(
             to_request("iphone_list_elements", &args(json!({"limit": null}))).unwrap(),
-            Request::ListElements { filter: String::new(), limit: 150, max_age_ms: 0 }
+            Request::ListElements { filter: String::new(), limit: 150, max_age_ms: 0, keep_locked: false }
         );
     }
 

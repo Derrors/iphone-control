@@ -16,8 +16,9 @@
 //! and ends when the token is replaced or removed. Programs send `Authorization: Bearer <token>`.
 //!
 //! Wrong tokens are counted for the whole page, not per address (behind a proxy every address is `127.0.0.1`): after
-//! [`MAX_FAILURES`] in a minute, tokens aren't checked until the minute is over. A token is 256 random bits, so
-//! this only makes guessing slower still; a session that is already logged in isn't affected.
+//! [`MAX_FAILURES`] in a minute, a wrong one is answered with 429 until the minute is over. A right token always gets
+//! in: a token is 256 random bits, so nobody guesses one, and refusing right tokens too would let anyone who can reach
+//! the page lock out every program (`mcp --url`, remote tasks) by sending wrong ones.
 
 use std::collections::VecDeque;
 use std::io;
@@ -34,7 +35,7 @@ pub const TOKENS_FILE: &str = "viewer-tokens.json";
 const OLD_TOKEN_FILE: &str = "viewer-token";
 /// The first token's name
 pub const OWNER: &str = "owner";
-/// Wrong tokens in [`WINDOW`] before tokens are refused until it is over
+/// Wrong tokens in [`WINDOW`] before wrong ones are answered with 429 until it is over
 const MAX_FAILURES: usize = 20;
 const WINDOW: Duration = Duration::from_secs(60);
 /// How long a browser stays logged in
@@ -204,14 +205,24 @@ fn write_private(file: &Path, data: &[u8]) -> io::Result<()> {
 }
 
 /// Who a request is logged in as
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct Who {
     pub name: String,
     pub role: Role,
     /// With `Authorization: Bearer` (a program), not a session cookie (a browser): no `Origin` needed, since a web
     /// page can't make a browser send it
     pub bearer: bool,
+    /// The token's session value: tells whether this very token is still there ([`Auth::knows`])
+    session: String,
 }
+
+impl PartialEq for Who {
+    fn eq(&self, other: &Self) -> bool {
+        (&self.name, self.role, self.bearer) == (&other.name, other.role, other.bearer)
+    }
+}
+
+impl Eq for Who {}
 
 /// What a request shows of the login
 #[derive(Debug, PartialEq, Eq)]
@@ -244,7 +255,7 @@ impl Known {
     }
 
     fn who(&self, bearer: bool) -> Who {
-        Who { name: self.name.clone(), role: self.role, bearer }
+        Who { name: self.name.clone(), role: self.role, bearer, session: self.session.clone() }
     }
 }
 
@@ -295,6 +306,12 @@ impl Auth {
         t
     }
 
+    /// Whether the token `who` logged in with is still there (not removed or replaced since): a stream it opened
+    /// ends when it isn't
+    pub fn knows(&self, who: &Who) -> bool {
+        self.tokens().known.iter().any(|k| same(&who.session, &k.session))
+    }
+
     /// The request's session cookie or `Authorization: Bearer` token
     pub fn check(&self, head: &[u8]) -> Verdict {
         let text = String::from_utf8_lossy(head);
@@ -322,21 +339,15 @@ impl Auth {
         }
     }
 
-    /// A token someone typed or sent: right, wrong (counted), or not checked now
+    /// A token someone typed or sent: right, or wrong (counted; [`Verdict::Limited`] after too many)
     pub fn try_token(&self, presented: &str) -> Verdict {
-        if self.limited() {
-            return Verdict::Limited;
-        }
         // every token is compared, so the time doesn't tell how many there are before the right one
         let tokens = self.tokens();
         let found =
             tokens.known.iter().fold(None, |found, k| if same(presented.trim(), &k.token) { Some(k) } else { found });
         match found {
             Some(k) => Verdict::Ok(k.who(true)),
-            None => {
-                self.failed();
-                Verdict::Wrong
-            }
+            None => self.failed(),
         }
     }
 
@@ -350,9 +361,16 @@ impl Auth {
         f.len() >= MAX_FAILURES
     }
 
-    /// A wrong token (or task token, see `viewer::login_gate`) was sent
-    pub fn failed(&self) {
-        self.failures.lock().unwrap_or_else(|p| p.into_inner()).push_back(Instant::now());
+    /// A wrong token (or task token, see `viewer::login_gate`) was sent: [`Verdict::Wrong`], or
+    /// [`Verdict::Limited`] once there were too many
+    pub fn failed(&self) -> Verdict {
+        let limited = self.limited();
+        let mut f = self.failures.lock().unwrap_or_else(|p| p.into_inner());
+        // counted up to the limit only: a flood doesn't keep it going after the minute
+        if !limited {
+            f.push_back(Instant::now());
+        }
+        if limited { Verdict::Limited } else { Verdict::Wrong }
     }
 
     /// `Set-Cookie` for a browser that logged in with the token named `name`; `secure` over HTTPS (the browser then
@@ -460,7 +478,7 @@ mod tests {
     }
 
     fn who(name: &str, role: Role, bearer: bool) -> Verdict {
-        Verdict::Ok(Who { name: name.into(), role, bearer })
+        Verdict::Ok(Who { name: name.into(), role, bearer, session: String::new() })
     }
 
     #[test]
@@ -533,34 +551,46 @@ mod tests {
         let auth = Auth::load(tmp.path(), 8202).unwrap();
         let owner = get(tmp.path(), OWNER).unwrap();
         let session = auth.set_cookie(OWNER, false).split(';').next().unwrap().to_owned();
-        assert!(matches!(auth.try_token(&owner.token), Verdict::Ok(_)));
+        let Verdict::Ok(was) = auth.try_token(&owner.token) else { panic!("the owner's token") };
+        assert!(auth.knows(&was));
         // a file's time is often only accurate to the second
         std::thread::sleep(Duration::from_millis(1100));
         let tv = add(tmp.path(), "tv", Role::View).unwrap();
-        assert_eq!(auth.try_token(&tv.token), who("tv", Role::View, true));
+        let Verdict::Ok(watching) = auth.try_token(&tv.token) else { panic!("tv's token") };
+        assert_eq!(watching, Who { name: "tv".into(), role: Role::View, bearer: true, session: String::new() });
         std::thread::sleep(Duration::from_millis(1100));
         let renewed = renew(tmp.path(), OWNER).unwrap();
         assert_eq!(auth.try_token(&owner.token), Verdict::Wrong, "the old token");
         assert_eq!(auth.check(&head(&[&format!("Cookie: {session}")])), Verdict::Missing, "and its sessions");
-        assert!(matches!(auth.try_token(&renewed.token), Verdict::Ok(_)));
+        assert!(!auth.knows(&was), "what it opened ends: the token was replaced");
+        let Verdict::Ok(now) = auth.try_token(&renewed.token) else { panic!("the new token") };
+        assert!(auth.knows(&now) && auth.knows(&watching));
+        std::thread::sleep(Duration::from_millis(1100));
+        remove(tmp.path(), "tv").unwrap();
+        assert!(!auth.knows(&watching), "and when it was removed");
     }
 
     #[test]
-    fn wrong_tokens_are_limited_for_everyone() {
+    fn wrong_tokens_are_limited_but_right_ones_get_in() {
         let auth = Auth::fixed(vec![entry(OWNER, Role::Operate, 'a')], 8202);
         let session = auth.set_cookie(OWNER, false).split(';').next().unwrap().to_owned();
         for _ in 0..MAX_FAILURES {
             assert_eq!(auth.try_token("guess"), Verdict::Wrong);
         }
         assert_eq!(auth.try_token("guess"), Verdict::Limited);
-        assert_eq!(auth.try_token(&"a".repeat(64)), Verdict::Limited, "not even checked for a minute");
+        // sending wrong tokens doesn't lock out those who have the right one
+        assert!(matches!(auth.try_token(&"a".repeat(64)), Verdict::Ok(_)), "a right token gets in");
         assert!(
             matches!(auth.check(&head(&[&format!("Cookie: {session}")])), Verdict::Ok(_)),
             "logged-in browsers go on"
         );
+        for _ in 0..100 {
+            auth.try_token("guess");
+        }
+        assert_eq!(auth.failures.lock().unwrap().len(), MAX_FAILURES, "a flood isn't counted past the limit");
         // the minute is over
         auth.failures.lock().unwrap().iter_mut().for_each(|t| *t -= WINDOW + Duration::from_secs(1));
-        assert!(matches!(auth.try_token(&"a".repeat(64)), Verdict::Ok(_)));
+        assert_eq!(auth.try_token("guess"), Verdict::Wrong);
     }
 
     #[test]

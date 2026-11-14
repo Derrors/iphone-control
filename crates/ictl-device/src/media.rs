@@ -66,16 +66,18 @@ pub struct ScreenFrame {
 }
 
 /// 屏幕媒体流的画面：订阅（[`Self::subscribe`]）拿到之后的每一帧，要关键帧用 [`Self::request_keyframe`]。
-/// 克隆便宜；HID 会话关掉（媒体流停止）后订阅者收到 `Closed`
+/// 克隆便宜；HID 会话关掉（媒体流停止）后订阅者收到 `Closed`。所以这里只留弱引用：持有 feed 的订阅者
+/// 要是握着发送端，通道就永远不关，媒体流换掉后它一直等不到帧
 #[derive(Clone)]
 pub struct ScreenFeed {
-    frames: broadcast::Sender<ScreenFrame>,
+    frames: broadcast::WeakSender<ScreenFrame>,
     keyframe: mpsc::UnboundedSender<()>,
 }
 
 impl ScreenFeed {
-    pub fn subscribe(&self) -> broadcast::Receiver<ScreenFrame> {
-        self.frames.subscribe()
+    /// `None`: the media stream has stopped
+    pub fn subscribe(&self) -> Option<broadcast::Receiver<ScreenFrame>> {
+        self.frames.upgrade().map(|f| f.subscribe())
     }
 
     /// 请手机尽快发一个关键帧（新订阅者、跟不上丢了帧时）
@@ -366,7 +368,7 @@ pub(crate) async fn start(
 
     let (frames, _) = broadcast::channel(FEED_CAPACITY);
     let (keyframe, keyframe_rx) = mpsc::unbounded_channel();
-    let feed = ScreenFeed { frames: frames.clone(), keyframe };
+    let feed = ScreenFeed { frames: frames.downgrade(), keyframe };
     Ok(ScreenMediaStream { client, receive: receive(audio_udp, video_udp, ssrc, frames, keyframe_rx), feed })
 }
 
@@ -554,5 +556,18 @@ mod tests {
             assert!(idevice::core_device::MediaNegotiationBlob::from_negotiator_offer(&z).is_ok(), "{}", data.len());
         }
         assert_eq!(zlib_stored(b"a"), [0x78, 0x01, 1, 1, 0, 0xfe, 0xff, b'a', 0, 0x62, 0, 0x62]);
+    }
+
+    /// Someone holding the feed doesn't keep the channel open: once the media stream stops (its receive task holds
+    /// the only sender), subscribers hear `Closed` and new ones get none
+    #[tokio::test]
+    async fn subscribers_hear_when_the_stream_stops() {
+        let (frames, _) = broadcast::channel::<ScreenFrame>(4);
+        let (keyframe, _rx) = mpsc::unbounded_channel();
+        let feed = ScreenFeed { frames: frames.downgrade(), keyframe };
+        let mut sub = feed.subscribe().expect("running");
+        drop(frames);
+        assert!(matches!(sub.recv().await, Err(broadcast::error::RecvError::Closed)));
+        assert!(feed.subscribe().is_none());
     }
 }

@@ -99,7 +99,8 @@ impl Daemon {
             return;
         }
         let _viewer = viewer;
-        let mut frames = feed.subscribe();
+        // stopped already (the HID session closed meanwhile): the viewer reconnects
+        let Some(mut frames) = feed.subscribe() else { return };
         feed.request_keyframe();
         // nothing decodes before a keyframe (and the config message it brings)
         let mut need_key = true;

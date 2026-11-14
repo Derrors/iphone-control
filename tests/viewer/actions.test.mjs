@@ -126,3 +126,79 @@ test('hovering keeps the HID session warm at most every 20 seconds', () => {
   context.S.liveTouch = false; now += 20000; touchWarm();
   assert.equal(sent.length, 2, 'no warm-up without live touch');
 });
+
+test('WDA guidance follows the selected device independently of its video', () => {
+  const notice = {}, message = {}, install = {};
+  const elements = { '#wda-start-notice': notice, '#wda-start-message': message, '#wda-install': install };
+  const S = { udid: 'PHONE', stream: 'ok', daemon: { state: 'WdaStarting', device: { udid: 'phone' }, signed_in: true,
+    wda_start_notice: { kind: 'trust_developer', message: 'Trust the developer' } } };
+  const { renderWdaNotice } = handlers(['renderWdaNotice'], { S, $: id => elements[id], tr: String });
+  renderWdaNotice();
+  assert.equal(notice.hidden, false);
+  assert.equal(message.textContent, 'Trust the developer');
+  assert.equal(install.hidden, true, 'a trust error should not offer to re-sign');
+  S.daemon.wda_start_notice = { kind: 'launch_refused', message: 'Check developer trust and signing' };
+  renderWdaNotice();
+  assert.equal(install.hidden, false, 'signed-in users can re-sign after a refused launch');
+  assert.equal(install.textContent, '重新签名并安装 WDA');
+  S.daemon.signed_in = false;
+  renderWdaNotice();
+  assert.equal(install.hidden, true);
+  S.daemon.signed_in = true;
+  S.signing = true;
+  renderWdaNotice();
+  assert.equal(install.disabled, true);
+  assert.equal(install.textContent, '正在签名安装…');
+  S.signing = false;
+  S.daemon.wda_start_notice = { kind: 'install_wda', message: 'Install WDA' };
+  renderWdaNotice();
+  assert.equal(install.hidden, false);
+  assert.equal(install.textContent, '签名并安装 WDA');
+  assert.equal(install.disabled, false);
+  S.udid = 'other';
+  renderWdaNotice();
+  assert.equal(notice.hidden, true);
+  S.udid = 'phone';
+  S.daemon = { state: 'WdaStarting', device: { udid: 'phone' } }; // older daemon or an ordinary start
+  renderWdaNotice();
+  assert.equal(notice.hidden, true);
+  S.daemon = { state: 'Ready', device: { udid: 'phone' }, wda_start_notice: null };
+  renderWdaNotice();
+  assert.equal(notice.hidden, true);
+});
+
+test('every WDA startup error keeps re-signing available alongside the video', () => {
+  const notice = {}, message = {}, install = {};
+  const elements = { '#wda-start-notice': notice, '#wda-start-message': message, '#wda-install': install };
+  const S = { udid: 'phone', stream: 'ok', daemon: { state: 'WdaStarting', device: { udid: 'phone', name: 'iPhone' }, signed_in: true } };
+  const { renderWdaNotice } = handlers(['renderWdaNotice'], { S, $: id => elements[id], tr: String });
+  for (const last_error of ['WDA startup timed out', 'Invalid signing certificate', 'unexpected response']) {
+    for (const hint of [null, { kind: 'trust_developer', message: 'Trust the developer' }]) {
+      Object.assign(S.daemon, { last_error, wda_start_notice: hint });
+      renderWdaNotice();
+      assert.equal(notice.hidden, false, last_error);
+      assert.equal(message.textContent, hint?.message || 'iPhone：WebDriverAgent 启动失败，会自动重试');
+      assert.equal(install.hidden, false, last_error);
+      assert.equal(install.textContent, '重新签名并安装 WDA');
+      assert.equal(S.daemon.last_error, last_error, 'keep the original diagnostic for the status panel');
+    }
+  }
+  S.daemon.signed_in = false;
+  renderWdaNotice();
+  assert.equal(install.hidden, true);
+  S.daemon.signed_in = true;
+  S.readOnly = true;
+  renderWdaNotice();
+  assert.equal(notice.hidden, false, 'read-only viewers still need the guidance');
+  assert.equal(install.hidden, true);
+  S.readOnly = false;
+  S.udid = 'another-phone';
+  renderWdaNotice();
+  assert.equal(notice.hidden, true, 'never show another device\'s error or sign action');
+  assert.equal(install.hidden, true);
+  S.udid = 'phone';
+  S.daemon.state = 'Ready';
+  renderWdaNotice();
+  assert.equal(notice.hidden, true, 'even a stale error must disappear when WDA is ready');
+  assert.equal(install.hidden, true);
+});

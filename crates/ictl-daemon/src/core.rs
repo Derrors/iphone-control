@@ -297,6 +297,8 @@ pub struct Snapshot {
 /// ([`Daemon::forget_device`]), so a new field can't be left holding the previous device's value
 #[derive(Default)]
 pub(crate) struct PerDevice {
+    /// A fresh installation or explicit trust error on this device, until WDA actually becomes ready.
+    pub awaiting_developer_trust: bool,
     pub display: Option<DisplayGeometry>,
     /// Last complete measurement; passive partial samples never extend this window.
     pub display_verified_at: Option<Instant>,
@@ -650,6 +652,10 @@ impl Daemon {
     pub(crate) async fn forget_device(&self, g: &mut Inner) {
         self.drop_session(g).await;
         g.dev = PerDevice::default();
+        if let DeviceState::WdaStarting { last_error, hint } = &mut g.state {
+            *last_error = None;
+            *hint = None;
+        }
     }
 
     /// WDA 可用就返回客户端（本进程 runner 存活）
@@ -1395,7 +1401,7 @@ pub(crate) mod tests {
     #[test]
     fn wda_down_mentions_hid_fallback_only_from_ios_27() {
         let info = |v: &str| DeviceInfo { product_version: v.into(), ..Default::default() };
-        let st = DeviceState::WdaStarting { last_error: None };
+        let st = DeviceState::WdaStarting { last_error: None, hint: None };
         assert!(wda_down(&st, Some(&info("27.0.1"))).contains("可照常用"));
         assert!(wda_down(&st, None).contains("可照常用"));
         let old = wda_down(&st, Some(&info("26.6.1")));

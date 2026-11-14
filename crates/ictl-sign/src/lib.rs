@@ -454,6 +454,7 @@ mod tests {
             expires: SystemTime::now(),
             devices: vec![],
             get_task_allow: true,
+            team_ids: vec![],
             application_identifier: String::new(),
             certificates: certs,
         };

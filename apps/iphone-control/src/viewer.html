@@ -201,6 +201,8 @@ code, .mono { font-family: var(--font-mono); }
 
 /* ================= 外壳：浮在浅底上的三栏 ================= */
 .shell { display: grid; grid-template-columns: var(--w-agent) minmax(0, 1fr) var(--w-dev); grid-template-rows: minmax(0, 1fr); gap: var(--gutter); padding: var(--gutter); height: 100dvh; }
+.shell:has(> .wda-start-notice:not([hidden])) { grid-template-rows: auto minmax(0, 1fr); }
+.wda-start-notice { grid-column: 1 / -1; margin: 0; padding: var(--sp-2) var(--sp-3); border-radius: var(--r-md); background: var(--warn-soft); color: var(--warn-text); font-size: var(--fs-sm); overflow-wrap: anywhere; }
 .mbar { display: none; }
 .pane { display: grid; grid-template-rows: var(--head-h) minmax(0, 1fr) auto; min-height: 0; min-width: 0; }
 .pane-agent, .pane-dev { position: relative; border-radius: var(--r-2xl); }
@@ -790,6 +792,8 @@ button.nav-device:disabled { cursor: default; }
 }
 @media (max-width: 1023.98px) {
   .shell { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); gap: 0; padding: 0; }
+  .shell:has(> .wda-start-notice:not([hidden])) { grid-template-rows: auto auto minmax(0, 1fr); }
+  .shell:has(> .wda-start-notice:not([hidden])) > .pane { grid-row: 3; }
   .mbar { display: flex; align-items: center; gap: var(--sp-3); padding: var(--sp-2) var(--sp-4); border-width: 0 0 1px; flex-wrap: wrap; }
   .mbar .seg { flex: 0 1 300px; margin-left: auto; }
   .pane-agent, .pane-stage, .pane-dev { grid-row: 2; grid-column: 1; }
@@ -869,6 +873,11 @@ button.nav-device:disabled { cursor: default; }
       <button type="button" role="tab" id="vt-device" aria-selected="false" aria-controls="pane-dev" data-action="view" data-view="device">设备</button>
     </div>
   </header>
+
+  <p class="wda-start-notice" id="wda-start-notice" role="status" hidden>
+    <span id="wda-start-message"></span>
+    <button type="button" class="btn btn-sm" id="wda-install" data-action="sign" hidden>签名并安装 WDA</button>
+  </p>
 
   <!-- 左：AI 助手 -->
   <aside class="pane pane-agent glass" id="pane-agent" aria-label="AI 助手">
@@ -2016,6 +2025,7 @@ function applyInfo(v) {
     highlight(null); marks.replaceChildren(); hoverDot = null;
     if (changed) {
       S.daemon = null; S.dstatus = null; S.apps = []; S.appsState = 'idle'; appNames.map = null; appNames.loading = false;
+      renderWdaNotice();
       T.warm = 0; V.noDevice = false;
     }
   }
@@ -2050,8 +2060,10 @@ function stageNote() {
         : `${esc(name)} ${esc(tr('上还没装 WebDriverAgent，需要先登录 Apple ID：在终端运行'))} <code>iphone-control setup --reconfigure</code>${esc(tr('，选「Apple ID」。'))}`;
     case 'WdaStarting':
       // 启动失败过就把原因摆出来（守护进程会自动重试），不要一直说「通常 10–60 秒」
-      // 启动失败常见的一种是签名证书变了（给另一台设备重签时换了证书），重签这台就好；登录了 Apple ID 就给个按钮
-      if (d.last_error) return `${esc(name)}${esc(tr('：WebDriverAgent 启动失败，会自动重试'))}<br><span class="stage-err">${esc(d.last_error)}</span>${d.signed_in ? `<br>${signButton(tr('重新签名并安装 WDA'))}` : ''}`;
+      if (d.last_error) {
+        const failed = esc(name) + esc(tr('：WebDriverAgent 启动失败，会自动重试'));
+        return d.wda_start_notice ? failed : `${failed}<br><span class="stage-err">${esc(d.last_error)}</span>`;
+      }
       return `${esc(tr('正在'))} ${esc(name)} ${esc(tr('上启动 WebDriverAgent，通常 10–60 秒…'))}`;
     case 'NeedsUnlock': return esc(tr('设备重启后还没解锁过，在设备上手动解锁一次，画面就会出来。'));
     case 'NeedsAutomationPin': return esc(tr('设备重启后首次启用 UI 自动化，请在设备上输入锁屏密码。'));
@@ -2442,6 +2454,23 @@ const STARTING_HINT = {
   NeedsAutomationPin: tr('设备重启后首次启用 UI 自动化，请在设备上输入锁屏密码。')
 };
 let statusTimerId = 0, statusSequence = 0;
+function renderWdaNotice() {
+  const notice = $('#wda-start-notice'), d = S.daemon;
+  const sameDevice = S.udid && d?.device?.udid?.toLowerCase() === S.udid.toLowerCase();
+  const starting = sameDevice && d.state === 'WdaStarting';
+  const hint = starting ? d.wda_start_notice : null;
+  const failed = starting && d.last_error;
+  const message = $('#wda-start-message'), install = $('#wda-install');
+  const name = d?.device?.name || S.deviceName || tr('设备');
+  const text = hint?.message || (failed ? name + tr('：WebDriverAgent 启动失败，会自动重试') : '');
+  if (message.textContent !== text) message.textContent = text;
+  // Certificate errors do not always say "unexpected response"; any failed start may need re-signing.
+  const resign = hint?.kind === 'launch_refused' || (!!failed && hint?.kind !== 'install_wda');
+  install.hidden = S.readOnly || !d?.signed_in || (!resign && hint?.kind !== 'install_wda');
+  install.textContent = tr(S.signing ? '正在签名安装…' : resign ? '重新签名并安装 WDA' : '签名并安装 WDA');
+  install.disabled = !!S.signing;
+  notice.hidden = !text;
+}
 function refreshStatusSoon() { clearTimeout(statusTimerId); statusTimerId = setTimeout(loadDeviceState, 600); }
 async function loadDeviceState() {
   if (S.mode === 'demo') {
@@ -2459,12 +2488,13 @@ async function loadDeviceState() {
     if (l.status === 'fulfilled') { S.devices = l.value.devices || []; S.devicesFixed = !!l.value.fixed; S.devicesErr = ''; } else { S.devices = []; S.devicesErr = String(l.reason.message); }
   }
   $('#pane-dev').dataset.noDevice = String(S.mode === 'live' && !S.udid);
+  renderWdaNotice();
   renderDevices(); renderChips(); renderFeed(); if (S.devTab === 'status') renderStatusPanel();
 }
 /* 新设备上还没装 WDA：用已登录的 Apple ID 签名并安装，大约 1–2 分钟 */
 async function signWda() {
   if (S.signing) return;
-  S.signing = true; renderFeed(); if (S.devTab === 'status') renderStatusPanel();
+  S.signing = true; renderWdaNotice(); renderFeed(); if (S.devTab === 'status') renderStatusPanel();
   show(tr('正在签名并安装 WebDriverAgent，大约 1–2 分钟，保持手机解锁…'));
   try { await act('/api/sign', {}); } finally { S.signing = false; await loadDeviceState(); }
 }

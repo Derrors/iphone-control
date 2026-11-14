@@ -6,8 +6,8 @@ use std::time::{Duration, Instant, UNIX_EPOCH};
 use ictl_device::{Device, DeviceError, LogStream, Rotation, ScreenSize, Tunnel, UsbDevice};
 use ictl_wda::{WdaClient, WdaError, WdaRunner, http::DeviceTransport};
 
-use crate::core::{Daemon, DetachedWda, DeviceProfile, Inner, close_hid};
-use crate::machine::DeviceState;
+use crate::core::{Daemon, DetachedWda, DeviceProfile, Inner, PerDevice, close_hid};
+use crate::machine::{DeviceState, WdaStartHint};
 use crate::notify::Event;
 
 /// Three 10-second supervisor intervals. A missing background sample within this
@@ -76,6 +76,31 @@ pub(crate) enum StartOutcome {
     /// 实验开关：手机拒绝后台启动 WDA（多半是证书被吊销或还没信任开发者）。和 XCTest 会话启动时的
     /// `unexpected response` 一样处理：查证书，有问题就自动重签
     Refused(String),
+}
+
+impl PerDevice {
+    fn starting_wda(&self) -> DeviceState {
+        DeviceState::WdaStarting {
+            last_error: None,
+            hint: self.awaiting_developer_trust.then_some(WdaStartHint::TrustDeveloper),
+        }
+    }
+
+    fn wda_failed(&mut self, error: String, refused: bool, missing: bool) -> DeviceState {
+        let explicit_trust = ictl_wda::runner::developer_trust_required(&error);
+        let hint = if missing {
+            self.awaiting_developer_trust = false;
+            Some(WdaStartHint::InstallWda)
+        } else if explicit_trust || (refused && self.awaiting_developer_trust) {
+            self.awaiting_developer_trust = true;
+            Some(WdaStartHint::TrustDeveloper)
+        } else if refused {
+            Some(WdaStartHint::LaunchRefused)
+        } else {
+            None
+        };
+        DeviceState::WdaStarting { last_error: Some(error), hint }
+    }
 }
 
 /// `work`, then a supervision round right away ([`Daemon::wake`])
@@ -326,6 +351,7 @@ impl Daemon {
             return;
         }
         if ready {
+            g.dev.awaiting_developer_trust = false;
             g.wda_misses.reset();
             self.sample_display(g, false).await;
             if g.state != DeviceState::Ready {
@@ -408,7 +434,7 @@ impl Daemon {
         // 正在等密码、等解锁时保持这个状态，免得每次重试都在两个状态间来回切、刷日志
         let waiting_pin = g.state == DeviceState::NeedsAutomationPin;
         if !matches!(g.state, DeviceState::NeedsAutomationPin | DeviceState::NeedsUnlock) {
-            self.set_state(g, DeviceState::WdaStarting { last_error: None });
+            self.set_state(g, g.dev.starting_wda());
         }
         let start_timeout = if waiting_pin { PIN_ATTEMPT } else { WDA_START_TIMEOUT };
         let detached = self.cfg.wda_detached;
@@ -467,10 +493,7 @@ impl Daemon {
             let prepared = match prepared {
                 Ok(p) => p,
                 Err(e @ DeviceError::LaunchRefused(_)) => {
-                    return StartOutcome::Refused(ictl_l10n::trf!(
-                        "后台启动 WDA 失败：{e}（第一次在这台设备上装 WDA 的：到 设置 → 通用 → VPN 与设备管理 里信任你的 Apple ID 开发者；已经信任过的，多半是签名证书被吊销了：运行 iphone-control sign 重签这台）",
-                        "Launching WDA in the background failed: {e} (first WDA install on this device: trust your Apple ID developer under Settings → General → VPN & Device Management; already trusted: the signing certificate was most likely revoked, run iphone-control sign to re-sign this device)"
-                    ));
+                    return StartOutcome::Refused(e.to_string());
                 }
                 Err(e) => {
                     return StartOutcome::Wda(WdaError::StartFailed(ictl_l10n::trf!(
@@ -553,6 +576,7 @@ impl Daemon {
                     g,
                     DeviceState::WdaStarting {
                         last_error: Some(ictl_l10n::trf!("开发者镜像：{e}", "Developer disk image: {e}")),
+                        hint: None,
                     },
                 );
             }
@@ -574,13 +598,15 @@ impl Daemon {
                     g.persisted.save(&self.cfg.state_file());
                 }
                 // StartFailed 自己就以「WDA 启动失败：」开头，日志和状态里再加一遍就重复了
+                let missing = matches!(e, WdaError::NotInstalled(_));
                 let e = match e {
                     WdaError::StartFailed(m) | WdaError::NotReadyInTime(m) => m,
                     e => e.to_string(),
                 };
                 self.log.log(&ictl_l10n::log_trf!("WDA 启动失败：{e}", "WDA failed to start: {e}"));
                 let refused = refused_in_background || ictl_wda::runner::launch_refused(&e);
-                self.set_state(g, DeviceState::WdaStarting { last_error: Some(e) });
+                let state = g.dev.wda_failed(e, refused, missing);
+                self.set_state(g, state);
                 if refused {
                     self.maybe_heal_certificate(g);
                 }
@@ -590,7 +616,7 @@ impl Daemon {
 
     /// 设备拒绝启动 WDA（只报 unexpected response）时，看是不是证书的问题，是就自动重签这台（见 `ictl_sign` 的模块说明）：
     /// 设备上的 WDA 不是本机的证书签的（别的机器、旧的数据目录签的，签它的证书多半被吊销了），或本机的证书已不在团队里
-    /// （别处新建证书时把它吊销了）。都不是就多半是还没信任开发者，留给用户（状态里有提示）。
+    /// （别处新建证书时把它吊销了）。没有证书问题的证据时保留启动诊断。
     /// 同一台 [`CERT_HEAL_EVERY`] 内只自动重签一次
     fn maybe_heal_certificate(self: &Arc<Self>, g: &mut Inner) {
         let Some(udid) = g.device.as_ref().map(|d| d.udid.clone()) else { return };
@@ -620,7 +646,7 @@ impl Daemon {
                     "本机的签名证书已不在 Apple ID 的团队里（别处新建证书时把它吊销了）",
                     "this machine's signing certificate is no longer in the Apple ID's team (it was revoked when a certificate was created elsewhere)"
                 ),
-                // 证书没问题（或查不了）：多半是还没信任开发者
+                // 没查出证书问题，保留设备的启动错误供诊断
                 _ => return,
             }
         };
@@ -641,6 +667,7 @@ impl Daemon {
                         "{why}。正在自动重签这台设备，约 1–2 分钟，保持设备解锁",
                         "{why}. Re-signing this device automatically, about 1–2 minutes; keep it unlocked"
                     )),
+                    hint: None,
                 },
             );
             self.publish(&g);
@@ -802,7 +829,7 @@ impl Daemon {
             ));
         }
         // plume_core 的签名 future 不是 Send（持有 &mut dyn FnMut 和非 Send 的私钥），放到阻塞线程里 block_on
-        let r: Result<ictl_sign::Signed, String> = tokio::task::spawn_blocking(move || {
+        let r = tokio::task::spawn_blocking(move || {
             tokio::runtime::Handle::current()
                 .block_on(tokio::time::timeout(RESIGN_TIMEOUT, async move {
                     if fetch {
@@ -813,6 +840,13 @@ impl Daemon {
                     std::fs::create_dir_all(&wda_dir).map_err(|e| e.to_string())?;
                     let tmp = wda_dir.join("WDA-signing.ipa");
                     let signed = session.sign_ipa(&unsigned, &tmp, &device.udid).await.map_err(|e| e.to_string())?;
+                    // Read the target device before installing the new profile. An unavailable profile list
+                    // leaves the first-install hint unknown and must not block a working installation.
+                    let first_for_team =
+                        match tokio::time::timeout(Duration::from_secs(2), device.installed_profiles()).await {
+                            Ok(Ok(profiles)) => first_install_for_team(&profiles, &signed.team_id),
+                            _ => false,
+                        };
                     device.install(&tmp).await.map_err(|e| {
                         ictl_l10n::trf!(
                             "安装到手机失败(手机锁屏?)：{e}",
@@ -820,7 +854,7 @@ impl Daemon {
                         )
                     })?;
                     std::fs::rename(&tmp, &signed_path).map_err(|e| e.to_string())?;
-                    Ok(signed)
+                    Ok((signed, first_for_team))
                 }))
                 .unwrap_or_else(|_| {
                     Err(ictl_l10n::trf!(
@@ -837,7 +871,12 @@ impl Daemon {
         let g = &mut *g;
         g.resigning = false;
         let r = match r {
-            Ok(s) => {
+            Ok((s, first_for_team)) => {
+                let same_device = g.device.as_ref().is_some_and(|d| d.udid == signed_udid);
+                let trust_pending = first_for_team
+                    || (same_device
+                        && g.dev.awaiting_developer_trust
+                        && g.persisted.team_id.as_deref() == Some(s.team_id.as_str()));
                 if s.new_certificate {
                     self.log.log(if s.revoked_certificate {
                         ictl_l10n::log_tr!(
@@ -861,10 +900,12 @@ impl Daemon {
                 g.persisted.record_resign(now_secs(), None);
                 g.persisted.save(&self.cfg.state_file());
                 // 新包装上后旧的 runner 会失效，下一轮巡检重新拉起。签名期间切到了别的设备就不动它的会话
-                if g.device.as_ref().is_some_and(|d| d.udid == signed_udid) {
+                if same_device {
                     self.drop_session(g).await;
                     self.refresh_device_profile(g).await;
                     g.backoff.reset();
+                    g.dev.awaiting_developer_trust = trust_pending;
+                    self.set_state(g, g.dev.starting_wda());
                 }
                 g.dedup.clear("resign");
                 let expires = crate::eventlog::format_utc(exp);
@@ -873,10 +914,7 @@ impl Daemon {
                     "重签完成,新描述文件到期 {expires} UTC",
                     "Re-signing done, the new provisioning profile expires {expires} UTC"
                 ));
-                Ok(ictl_l10n::trf!(
-                    "重签完成,新描述文件到期 {expires} UTC",
-                    "Re-signing done, the new provisioning profile expires {expires} UTC"
-                ))
+                Ok(installed_message(&expires, trust_pending))
             }
             Err(e) => {
                 g.persisted.record_resign(now_secs(), Some(e.clone()));
@@ -888,6 +926,25 @@ impl Daemon {
         self.publish(g);
         r
     }
+}
+
+fn first_install_for_team(profiles: &[Vec<u8>], team: &str) -> bool {
+    profiles.iter().all(|raw| {
+        let Some(profile) = ictl_sign::Profile::parse(raw) else { return false };
+        !profile.get_task_allow || (!profile.team_ids.is_empty() && profile.team_ids.iter().all(|id| id != team))
+    })
+}
+
+fn installed_message(expires: &str, trust_pending: bool) -> String {
+    let mut text = ictl_l10n::trf!(
+        "重签完成,新描述文件到期 {expires} UTC",
+        "Re-signing done, the new provisioning profile expires {expires} UTC"
+    );
+    if trust_pending {
+        text.push('\n');
+        text.push_str(WdaStartHint::TrustDeveloper.message());
+    }
+    text
 }
 
 fn now_secs() -> u64 {
@@ -943,6 +1000,77 @@ async fn open_log(device: &Device) -> Option<LogStream> {
             );
             None
         }
+    }
+}
+
+#[cfg(test)]
+mod install_tests {
+    use super::*;
+
+    fn profile(team: &str) -> Vec<u8> {
+        format!(
+            r#"<?xml version="1.0"?><plist version="1.0"><dict>
+            <key>ExpirationDate</key><date>2030-01-01T00:00:00Z</date>
+            <key>TeamIdentifier</key><array><string>{team}</string></array>
+            <key>Entitlements</key><dict><key>application-identifier</key><string>LEGACY.other-app</string>
+            <key>get-task-allow</key><true/></dict></dict></plist>"#
+        )
+        .into_bytes()
+    }
+
+    #[test]
+    fn trust_guidance_requires_install_or_explicit_device_evidence() {
+        use WdaStartHint::{LaunchRefused, TrustDeveloper};
+        let mut device = PerDevice::default();
+        let start = device.starting_wda();
+        assert_eq!(start.wda_start_hint(), None);
+        let refused = device.wda_failed("unexpected response".into(), true, false);
+        assert_eq!(refused.wda_start_hint(), Some(LaunchRefused));
+        assert_eq!(device.starting_wda(), start);
+        let explicit = device.wda_failed("Needs Explicit User Trust".into(), false, false);
+        assert_eq!(explicit.wda_start_hint(), Some(TrustDeveloper));
+        let installed = DeviceState::WdaStarting { last_error: None, hint: Some(TrustDeveloper) };
+        assert_eq!(device.starting_wda(), installed);
+        assert_eq!(device.wda_failed("unexpected response".into(), true, false).wda_start_hint(), Some(TrustDeveloper));
+        assert_eq!(device.wda_failed("image download failed".into(), false, false).wda_start_hint(), None);
+        assert_eq!(device.starting_wda(), installed);
+        assert_eq!(
+            device.wda_failed("WDA missing".into(), false, true).wda_start_hint(),
+            Some(WdaStartHint::InstallWda)
+        );
+        assert_eq!(device.starting_wda(), start);
+        assert_eq!(DeviceState::NeedsTrust.wda_start_hint(), None); // USB pairing
+        assert_eq!(DeviceState::Ready.wda_start_hint(), None);
+    }
+
+    #[test]
+    fn install_guidance_uses_profiles_on_the_target_device() {
+        assert!(first_install_for_team(&[], "TEAM"));
+        assert!(first_install_for_team(&[profile("OTHER")], "TEAM"));
+        assert!(!first_install_for_team(&[profile("TEAM")], "TEAM"));
+        assert!(!first_install_for_team(&[b"unknown profile".to_vec()], "TEAM"));
+        let hint = WdaStartHint::TrustDeveloper.message();
+        assert!(installed_message("2030-01-01", true).ends_with(hint));
+        assert!(!installed_message("2030-01-01", false).contains(hint));
+    }
+
+    #[tokio::test]
+    async fn busy_sign_and_device_switch_do_not_issue_install_instructions() {
+        let (daemon, dir) = crate::core::tests::test_daemon("wda-trust");
+        {
+            let mut g = daemon.inner.lock().await;
+            g.resigning = true;
+            g.dev.awaiting_developer_trust = true;
+            g.state = DeviceState::WdaStarting { last_error: None, hint: Some(WdaStartHint::TrustDeveloper) };
+            daemon.forget_device(&mut g).await;
+            assert_eq!(g.state.wda_start_hint(), None);
+            assert!(!g.dev.awaiting_developer_trust);
+        }
+        for force in [true, false] {
+            let busy = daemon.resign_now(force).await.unwrap();
+            assert!(!busy.contains(WdaStartHint::TrustDeveloper.message()));
+        }
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }
 

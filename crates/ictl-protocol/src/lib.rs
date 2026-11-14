@@ -1,6 +1,8 @@
 //! 守护进程控制接口：Unix socket（0600，默认位置见 [`default_socket`]），每行一个 JSON。
 //! MCP 进程和 CLI 都通过它访问设备；本机不开 TCP 端口。
 
+pub mod env;
+
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
@@ -608,7 +610,7 @@ pub const TASK: &str = "task";
 /// Request key with the step (from [`Request::TaskStep`]) a request belongs to; see [`as_task`]
 pub const TASK_STEP: &str = "task_step";
 /// The environment variable that hands a task's token to `iphone-control mcp` (and anything else using this crate)
-pub const TASK_TOKEN_ENV: &str = "IPHONE_CONTROL_TASK_TOKEN";
+pub const TASK_TOKEN_ENV: &str = env::TASK_TOKEN;
 /// The HTTP header that does the same for MCP over HTTP (the viewer's `/mcp`), per request
 pub const TASK_TOKEN_HEADER: &str = "iphone-control-task-token";
 

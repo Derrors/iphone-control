@@ -310,7 +310,7 @@ async fn run_command(
     let spawned = tokio::process::Command::new(&command[0])
         .args(&command[1..])
         .env(protocol::TASK_TOKEN_ENV, &opened.token)
-        .env("IPHONE_CONTROL_TASK_ID", &opened.id)
+        .env(ictl_daemon::protocol::env::TASK_ID, &opened.id)
         .envs(backend.env())
         // the login stays with whoever runs `task run`: the agent only works for its task (it can't approve its own
         // confirmations with a login)

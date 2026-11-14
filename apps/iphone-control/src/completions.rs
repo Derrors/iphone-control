@@ -181,7 +181,7 @@ mod tests {
                 let mut cmd = super::super::Cli::command();
                 let help = cmd.find_subcommand_mut("completions").unwrap().render_long_help().to_string();
                 assert!(help.contains(expected));
-                assert!(help.contains("IPHONE_CONTROL_LANG"));
+                assert!(help.contains(ictl_daemon::protocol::env::LANG));
             });
         }
     }

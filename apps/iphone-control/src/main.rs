@@ -35,10 +35,10 @@ mod viewer;
 #[command(name = "iphone-control", version, about = ictl_l10n::tr!("在 Linux 或 macOS 上控制 iPhone，并提供 MCP 工具", "Control an iPhone from Linux or macOS, with MCP tools"))]
 struct Cli {
     #[arg(help = ictl_l10n::tr!("数据根目录（账号、描述文件、日志等）。默认：root 是 /var/lib/iphone-control，普通用户是 ~/.local/share/iphone-control", "Data directory (account, provisioning profiles, logs, ...). Default: /var/lib/iphone-control for root, ~/.local/share/iphone-control for a regular user"))]
-    #[arg(long, env = "ICTL_DATA_DIR", default_value_os_t = protocol::default_data_dir())]
+    #[arg(long, env = ictl_daemon::protocol::env::DATA_DIR, default_value_os_t = protocol::default_data_dir())]
     data_dir: PathBuf,
     #[arg(help = ictl_l10n::tr!("守护进程控制接口。默认：root 是 /run/iphone-control/ctl.sock，普通用户是 $XDG_RUNTIME_DIR/iphone-control/ctl.sock", "Daemon control socket. Default: /run/iphone-control/ctl.sock for root, $XDG_RUNTIME_DIR/iphone-control/ctl.sock for a regular user"))]
-    #[arg(long, env = "ICTL_SOCKET", default_value_os_t = protocol::default_socket())]
+    #[arg(long, env = ictl_daemon::protocol::env::SOCKET, default_value_os_t = protocol::default_socket())]
     socket: PathBuf,
     /// 不给就是首次运行引导（设置好以后显示状态）
     #[command(subcommand)]
@@ -64,9 +64,9 @@ enum Command {
     Daemon,
     #[command(about = ictl_l10n::tr!("MCP stdio 服务（由 agent 拉起）。--url（或 IPHONE_CONTROL_URL）时转接另一台机器的控制台 /mcp：给只能填命令的 MCP 客户端用", "MCP stdio server (started by the agent). With --url (or IPHONE_CONTROL_URL), a bridge to another machine's viewer /mcp, for MCP clients that only start a command"))]
     Mcp {
-        #[arg(long, value_name = "URL", env = "IPHONE_CONTROL_URL", help = ictl_l10n::tr!("手机接在另一台机器上：那台机器的控制台地址。有任务口令（IPHONE_CONTROL_TASK_TOKEN）就只带它，否则用 IPHONE_CONTROL_VIEWER_TOKEN 登录；task run --url 启动的命令会自动设好", "The phone is on another machine: that machine's viewer. With a task's token (IPHONE_CONTROL_TASK_TOKEN) only that is sent, otherwise the login from IPHONE_CONTROL_VIEWER_TOKEN; a command under task run --url has it set already"))]
+        #[arg(long, value_name = "URL", env = ictl_daemon::protocol::env::URL, help = ictl_l10n::tr!("手机接在另一台机器上：那台机器的控制台地址。有任务口令（IPHONE_CONTROL_TASK_TOKEN）就只带它，否则用 IPHONE_CONTROL_VIEWER_TOKEN 登录；task run --url 启动的命令会自动设好", "The phone is on another machine: that machine's viewer. With a task's token (IPHONE_CONTROL_TASK_TOKEN) only that is sent, otherwise the login from IPHONE_CONTROL_VIEWER_TOKEN; a command under task run --url has it set already"))]
         url: Option<String>,
-        #[arg(long, value_name = "PEM", env = "IPHONE_CONTROL_CA", help = ictl_l10n::tr!("--url 是本机生成的自签证书时，信任这张证书", "With --url and a self-signed certificate: trust it"))]
+        #[arg(long, value_name = "PEM", env = ictl_daemon::protocol::env::CA, help = ictl_l10n::tr!("--url 是本机生成的自签证书时，信任这张证书", "With --url and a self-signed certificate: trust it"))]
         ca: Option<PathBuf>,
     },
     #[command(about = ictl_l10n::tr!("打印把 MCP 注册到 Claude Code 的命令", "Print the command that registers the MCP server with Claude Code"))]
@@ -119,29 +119,29 @@ enum Command {
     },
     #[command(about = ictl_l10n::tr!("浏览器里的控制台：实时画面上直接操作手机、看设备状态，把任务交给本机的 Claude Code 或 Codex 执行。默认只开在 127.0.0.1（--lan 也对局域网开放，走 HTTPS），要用令牌登录（iphone-control viewer token），操作都经守护进程（不开控制台时不监听任何端口）", "Control page in a browser: act on the live screen, see the device's state, and hand tasks to a local Claude Code or Codex. Serves 127.0.0.1 by default (--lan opens it to the local network too, over HTTPS), behind a login token (iphone-control viewer token); every action goes through the daemon (without the viewer no port is opened)"))]
     Viewer {
-        #[arg(long, env = "IPHONE_CONTROL_VIEWER_PORT", default_value_t = 8200)]
+        #[arg(long, env = ictl_daemon::protocol::env::VIEWER_PORT, default_value_t = 8200)]
         port: u16,
         // from the settings file as 1/0, yes/no, on/off or true/false (a plain flag's parser only takes true/false)
-        #[arg(long, env = "IPHONE_CONTROL_VIEWER_LAN", value_parser = clap::builder::BoolishValueParser::new(), help = ictl_l10n::tr!("也对局域网开放（同一个端口，局域网里用 HTTPS，要令牌登录：iphone-control viewer token），只接受局域网地址来的连接", "Also open to the local network (same port, HTTPS there, login with the token: iphone-control viewer token); only connections from local-network addresses"))]
+        #[arg(long, env = ictl_daemon::protocol::env::VIEWER_LAN, value_parser = clap::builder::BoolishValueParser::new(), help = ictl_l10n::tr!("也对局域网开放（同一个端口，局域网里用 HTTPS，要令牌登录：iphone-control viewer token），只接受局域网地址来的连接", "Also open to the local network (same port, HTTPS there, login with the token: iphone-control viewer token); only connections from local-network addresses"))]
         lan: bool,
-        #[arg(long = "lan-host", value_name = "HOST", env = "IPHONE_CONTROL_VIEWER_LAN_HOSTS", value_delimiter = ',', help = ictl_l10n::tr!("--lan 时还认可的主机名（可写多次）；本机主机名、<主机名>.local 和各网卡 IP 已自动认可", "With --lan, another host name the page answers to (repeatable); this machine's name, <name>.local and its addresses are already accepted"))]
+        #[arg(long = "lan-host", value_name = "HOST", env = ictl_daemon::protocol::env::VIEWER_LAN_HOSTS, value_delimiter = ',', help = ictl_l10n::tr!("--lan 时还认可的主机名（可写多次）；本机主机名、<主机名>.local 和各网卡 IP 已自动认可", "With --lan, another host name the page answers to (repeatable); this machine's name, <name>.local and its addresses are already accepted"))]
         lan_hosts: Vec<String>,
-        #[arg(long, value_enum, env = "IPHONE_CONTROL_VIEWER_TLS", default_value = "auto", help = ictl_l10n::tr!("HTTPS（同一个端口，本机仍可用 http://127.0.0.1）：auto 在 --lan 或给了证书时开启；on、off", "HTTPS (same port; http://127.0.0.1 still works on this machine): auto turns it on with --lan or a certificate; on, off"))]
+        #[arg(long, value_enum, env = ictl_daemon::protocol::env::VIEWER_TLS, default_value = "auto", help = ictl_l10n::tr!("HTTPS（同一个端口，本机仍可用 http://127.0.0.1）：auto 在 --lan 或给了证书时开启；on、off", "HTTPS (same port; http://127.0.0.1 still works on this machine): auto turns it on with --lan or a certificate; on, off"))]
         tls: viewer::tls::Mode,
-        #[arg(long = "tls-cert", value_name = "PEM", env = "IPHONE_CONTROL_VIEWER_TLS_CERT", requires = "tls_key", help = ictl_l10n::tr!("自己的证书（PEM，可带证书链），比如 mkcert 或 tailscale cert 生成的；不给就用本机生成的自签证书", "Your own certificate (PEM, chain allowed), such as one from mkcert or tailscale cert; without it a self-signed one made on this machine"))]
+        #[arg(long = "tls-cert", value_name = "PEM", env = ictl_daemon::protocol::env::VIEWER_TLS_CERT, requires = "tls_key", help = ictl_l10n::tr!("自己的证书（PEM，可带证书链），比如 mkcert 或 tailscale cert 生成的；不给就用本机生成的自签证书", "Your own certificate (PEM, chain allowed), such as one from mkcert or tailscale cert; without it a self-signed one made on this machine"))]
         tls_cert: Option<PathBuf>,
-        #[arg(long = "tls-key", value_name = "PEM", env = "IPHONE_CONTROL_VIEWER_TLS_KEY", requires = "tls_cert", help = ictl_l10n::tr!("--tls-cert 的私钥（PEM）", "The private key of --tls-cert (PEM)"))]
+        #[arg(long = "tls-key", value_name = "PEM", env = ictl_daemon::protocol::env::VIEWER_TLS_KEY, requires = "tls_cert", help = ictl_l10n::tr!("--tls-cert 的私钥（PEM）", "The private key of --tls-cert (PEM)"))]
         tls_key: Option<PathBuf>,
-        #[arg(long, env = "IPHONE_CONTROL_VIEWER_MCP", value_name = "on|off", default_value = "on", action = clap::ArgAction::Set, value_parser = clap::builder::BoolishValueParser::new(), help = ictl_l10n::tr!("同一个端口上的 MCP（HTTP）：/mcp，本机和（--lan 时）局域网的客户端用 URL 接入；off 关掉", "MCP over HTTP on the same port: /mcp, for clients on this machine and (with --lan) the local network that connect by URL; off turns it off"))]
+        #[arg(long, env = ictl_daemon::protocol::env::VIEWER_MCP, value_name = "on|off", default_value = "on", action = clap::ArgAction::Set, value_parser = clap::builder::BoolishValueParser::new(), help = ictl_l10n::tr!("同一个端口上的 MCP（HTTP）：/mcp，本机和（--lan 时）局域网的客户端用 URL 接入；off 关掉", "MCP over HTTP on the same port: /mcp, for clients on this machine and (with --lan) the local network that connect by URL; off turns it off"))]
         mcp: bool,
         #[command(subcommand)]
         action: Option<ViewerAction>,
     },
     #[command(about = ictl_l10n::tr!("AI 任务：在任务里运行外部 agent（task run），查看、暂停、接管、停止、确认任务", "AI tasks: run an external agent in a task (task run); list, pause, take over, stop and confirm tasks"))]
     Task {
-        #[arg(long, global = true, value_name = "URL", env = "IPHONE_CONTROL_URL", help = ictl_l10n::tr!("手机接在另一台机器上：那台机器的控制台地址，比如 https://192.168.1.5:8200；登录令牌放在 IPHONE_CONTROL_VIEWER_TOKEN 里（task finish 用任务口令）", "The phone is on another machine: that machine's viewer, such as https://192.168.1.5:8200; the login token goes in IPHONE_CONTROL_VIEWER_TOKEN (task finish uses the task's token)"))]
+        #[arg(long, global = true, value_name = "URL", env = ictl_daemon::protocol::env::URL, help = ictl_l10n::tr!("手机接在另一台机器上：那台机器的控制台地址，比如 https://192.168.1.5:8200；登录令牌放在 IPHONE_CONTROL_VIEWER_TOKEN 里（task finish 用任务口令）", "The phone is on another machine: that machine's viewer, such as https://192.168.1.5:8200; the login token goes in IPHONE_CONTROL_VIEWER_TOKEN (task finish uses the task's token)"))]
         url: Option<String>,
-        #[arg(long, global = true, value_name = "PEM", env = "IPHONE_CONTROL_CA", help = ictl_l10n::tr!("--url 是本机生成的自签证书时，信任这张证书（那台机器上的 viewer-tls/cert.pem）", "With --url and a self-signed certificate made there: trust it (viewer-tls/cert.pem on that machine)"))]
+        #[arg(long, global = true, value_name = "PEM", env = ictl_daemon::protocol::env::CA, help = ictl_l10n::tr!("--url 是本机生成的自签证书时，信任这张证书（那台机器上的 viewer-tls/cert.pem）", "With --url and a self-signed certificate made there: trust it (viewer-tls/cert.pem on that machine)"))]
         ca: Option<PathBuf>,
         #[command(subcommand)]
         action: task::TaskAction,
@@ -311,8 +311,9 @@ async fn run() -> anyhow::Result<()> {
     }
     let quiet = matches!(cli.command, Some(Command::Mcp { .. }));
     // ICTL_LOG 留空（配置文件里常见的 `ICTL_LOG=`）当作没设；原来空值会生成一个什么都不放行的过滤器
-    let filter =
-        env_nonempty("ICTL_LOG").and_then(|v| tracing_subscriber::EnvFilter::try_new(v).ok()).unwrap_or_else(|| {
+    let filter = env_nonempty(ictl_daemon::protocol::env::LOG)
+        .and_then(|v| tracing_subscriber::EnvFilter::try_new(v).ok())
+        .unwrap_or_else(|| {
             tracing_subscriber::EnvFilter::new(if quiet { "warn" } else { "info,idevice=warn,apple_codesign=warn" })
         });
     tracing_subscriber::fmt()
@@ -373,7 +374,7 @@ async fn run() -> anyhow::Result<()> {
         }
         Command::Task { url, ca, action } => task::run(&cli.socket, url, ca, action).await,
         #[cfg(feature = "debug-cmds")]
-        Command::Debug(args) => debug::run(env_nonempty("IPHONE_UDID").as_deref(), args).await,
+        Command::Debug(args) => debug::run(env_nonempty(ictl_daemon::protocol::env::UDID).as_deref(), args).await,
         Command::NotifyTest { event } => notify_test(&cli.socket, &cli.data_dir, event.as_deref()).await,
     }
 }
@@ -669,10 +670,12 @@ fn viewer_service_cmd(action: ViewerServiceAction) -> anyhow::Result<()> {
     match action {
         ViewerServiceAction::Install => {
             let s = service::viewer_install()?;
-            let port = env_nonempty("IPHONE_CONTROL_VIEWER_PORT").and_then(|p| p.parse::<u16>().ok()).unwrap_or(8200);
+            let port = env_nonempty(ictl_daemon::protocol::env::VIEWER_PORT)
+                .and_then(|p| p.parse::<u16>().ok())
+                .unwrap_or(8200);
             println!("{}", ictl_l10n::trf!("已安装并启动：{}", "Installed and started: {}", s.describe()));
             println!("{}", ictl_l10n::trf!("控制台：http://127.0.0.1:{port}/", "Viewer: http://127.0.0.1:{port}/"));
-            let lan = env_nonempty("IPHONE_CONTROL_VIEWER_LAN")
+            let lan = env_nonempty(ictl_daemon::protocol::env::VIEWER_LAN)
                 .is_some_and(|v| !matches!(v.as_str(), "0" | "false" | "no" | "off"));
             println!(
                 "{}",
@@ -1343,16 +1346,16 @@ mod tests {
             _ => panic!("not mcp"),
         };
         // SAFETY: only this test sets this variable
-        unsafe { std::env::remove_var("IPHONE_CONTROL_URL") };
+        unsafe { std::env::remove_var(ictl_daemon::protocol::env::URL) };
         assert_eq!(task(&["i", "task", "pause", "abc"]), None);
         assert_eq!(mcp(&["i", "mcp"]), None, "the local stdio server, as before");
         assert_eq!(task(&["i", "task", "--url", "https://a:1", "pause", "abc"]).as_deref(), Some("https://a:1"));
         assert_eq!(task(&["i", "task", "approve", "abc", "--url", "https://a:1"]).as_deref(), Some("https://a:1"));
         assert_eq!(mcp(&["i", "mcp", "--url", "https://a:1"]).as_deref(), Some("https://a:1"));
-        unsafe { std::env::set_var("IPHONE_CONTROL_URL", "https://b:2") };
+        unsafe { std::env::set_var(ictl_daemon::protocol::env::URL, "https://b:2") };
         assert_eq!(task(&["i", "task", "finish", "done"]).as_deref(), Some("https://b:2"));
         assert_eq!(mcp(&["i", "mcp"]).as_deref(), Some("https://b:2"));
-        unsafe { std::env::remove_var("IPHONE_CONTROL_URL") };
+        unsafe { std::env::remove_var(ictl_daemon::protocol::env::URL) };
     }
 
     #[test]
@@ -1369,11 +1372,11 @@ mod tests {
             // SAFETY: only this test sets these variables
             unsafe {
                 match lan {
-                    Some(v) => std::env::set_var("IPHONE_CONTROL_VIEWER_LAN", v),
-                    None => std::env::remove_var("IPHONE_CONTROL_VIEWER_LAN"),
+                    Some(v) => std::env::set_var(ictl_daemon::protocol::env::VIEWER_LAN, v),
+                    None => std::env::remove_var(ictl_daemon::protocol::env::VIEWER_LAN),
                 }
-                std::env::set_var("IPHONE_CONTROL_VIEWER_PORT", "8202");
-                std::env::set_var("IPHONE_CONTROL_VIEWER_LAN_HOSTS", "nas.example,nas2");
+                std::env::set_var(ictl_daemon::protocol::env::VIEWER_PORT, "8202");
+                std::env::set_var(ictl_daemon::protocol::env::VIEWER_LAN_HOSTS, "nas.example,nas2");
             }
             match super::Cli::try_parse_from(["iphone-control", "viewer"]).map(|c| c.command) {
                 Ok(Some(super::Command::Viewer { port, lan, lan_hosts, action: None, .. })) => (port, lan, lan_hosts),
@@ -1388,8 +1391,8 @@ mod tests {
         }
         assert_eq!(parse(None), (8202, false, vec!["nas.example".to_owned(), "nas2".to_owned()]));
         unsafe {
-            std::env::remove_var("IPHONE_CONTROL_VIEWER_PORT");
-            std::env::remove_var("IPHONE_CONTROL_VIEWER_LAN_HOSTS");
+            std::env::remove_var(ictl_daemon::protocol::env::VIEWER_PORT);
+            std::env::remove_var(ictl_daemon::protocol::env::VIEWER_LAN_HOSTS);
         }
     }
     use ictl_l10n::{Lang, with_lang};

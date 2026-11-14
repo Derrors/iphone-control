@@ -133,7 +133,7 @@ pub const DEV_TOOLS: [&str; 6] = [
 /// `IPHONE_CONTROL_DEV_TOOLS=1` (or true/yes/on) adds the developer tools; off by default, so agents that don't
 /// need them don't pay for their descriptions
 pub fn dev_tools_enabled() -> bool {
-    std::env::var("IPHONE_CONTROL_DEV_TOOLS")
+    std::env::var(ictl_protocol::env::DEV_TOOLS)
         .is_ok_and(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
 }
 

@@ -1152,7 +1152,7 @@ mod measure {
     #[tokio::test]
     #[ignore]
     async fn measure_recording() {
-        let dir = std::env::var("ICTL_RECORDING").expect("ICTL_RECORDING=<dir of <ms>.jpg>");
+        let dir = std::env::var(ictl_daemon::protocol::env::RECORDING).expect("ICTL_RECORDING=<dir of <ms>.jpg>");
         let mut files: Vec<(u64, std::path::PathBuf)> = std::fs::read_dir(&dir)
             .unwrap()
             .flatten()
@@ -1178,7 +1178,7 @@ mod measure {
             span as f64 / 1000.0,
             jpeg_bytes as f64 / 1024.0 / (span as f64 / 1000.0)
         );
-        let qps: Vec<u8> = std::env::var("ICTL_QPS")
+        let qps: Vec<u8> = std::env::var(ictl_daemon::protocol::env::QPS)
             .unwrap_or_else(|_| "20".into())
             .split(',')
             .filter_map(|q| q.trim().parse().ok())

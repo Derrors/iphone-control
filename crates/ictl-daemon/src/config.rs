@@ -46,14 +46,14 @@ impl NotifyConfig {
 
 /// 读环境变量，去掉首尾空白，空值当作没设（配置文件里常留着 `KEY=`）
 pub fn env(k: &str) -> Option<String> {
-    std::env::var(k).ok().map(|v| v.trim().to_owned()).filter(|v| !v.is_empty())
+    crate::protocol::env::get(k)
 }
 
 /// Where to look for ffmpeg (the viewer's H.264 picture; on macOS only the fallback for the native VideoToolbox
 /// encoder), in order: `ICTL_FFMPEG`, else `ffmpeg` on `PATH` and, on macOS, Homebrew's places (a launchd service
 /// doesn't have them on its `PATH`)
 pub fn ffmpeg_paths() -> Vec<PathBuf> {
-    if let Some(p) = env("ICTL_FFMPEG") {
+    if let Some(p) = env(crate::protocol::env::FFMPEG) {
         return vec![PathBuf::from(p)];
     }
     let mut v = vec![PathBuf::from("ffmpeg")];
@@ -73,32 +73,37 @@ fn env_num<T: std::str::FromStr>(k: &str, default: T) -> T {
 
 impl Config {
     pub fn from_env(data_dir: &Path) -> Self {
-        let screen_fallback =
-            match (env("SCREEN_W").and_then(|v| v.parse().ok()), env("SCREEN_H").and_then(|v| v.parse().ok())) {
-                (Some(width), Some(height)) => Some(ScreenSize { width, height }),
-                _ => None,
-            };
+        let screen_fallback = match (
+            env(crate::protocol::env::SCREEN_W).and_then(|v| v.parse().ok()),
+            env(crate::protocol::env::SCREEN_H).and_then(|v| v.parse().ok()),
+        ) {
+            (Some(width), Some(height)) => Some(ScreenSize { width, height }),
+            _ => None,
+        };
         Self {
             data_dir: data_dir.to_owned(),
             // 实际值由命令行给（--socket / ICTL_SOCKET，见 apps/iphone-control）
             socket: crate::protocol::default_socket(),
-            udid: env("IPHONE_UDID"),
-            wda_unsigned: env("ICTL_WDA_UNSIGNED").map(PathBuf::from).unwrap_or_else(|| wda_unsigned_cache(data_dir)),
-            ddi_url: env("ICTL_DDI_URL").unwrap_or_else(|| ictl_device::ddi::DEFAULT_BASE_URL.into()),
-            ddi_dir: env("ICTL_DDI_DIR").map(PathBuf::from),
-            anisette_url: env("ICTL_ANISETTE_URL"),
+            udid: env(crate::protocol::env::UDID),
+            wda_unsigned: env(crate::protocol::env::WDA_UNSIGNED)
+                .map(PathBuf::from)
+                .unwrap_or_else(|| wda_unsigned_cache(data_dir)),
+            ddi_url: env(crate::protocol::env::DDI_URL).unwrap_or_else(|| ictl_device::ddi::DEFAULT_BASE_URL.into()),
+            ddi_dir: env(crate::protocol::env::DDI_DIR).map(PathBuf::from),
+            anisette_url: env(crate::protocol::env::ANISETTE_URL),
             screen_fallback,
-            resign_min: Duration::from_secs(env_num("RESIGN_MIN_DAYS", 2u64) * 86400),
-            resign_check: Duration::from_secs(env_num("RESIGN_CHECK_HOURS", 6u64) * 3600),
+            resign_min: Duration::from_secs(env_num(crate::protocol::env::RESIGN_MIN_DAYS, 2u64) * 86400),
+            resign_check: Duration::from_secs(env_num(crate::protocol::env::RESIGN_CHECK_HOURS, 6u64) * 3600),
             session_check: Duration::from_secs(24 * 3600),
-            offline_alert: Duration::from_secs(env_num("OFFLINE_ALERT_MIN", 10u64) * 60),
+            offline_alert: Duration::from_secs(env_num(crate::protocol::env::OFFLINE_ALERT_MIN, 10u64) * 60),
             notify: NotifyConfig {
-                tg_bot_token: env("TG_BOT_TOKEN"),
-                tg_chat_id: env("TG_CHAT_ID"),
-                bark_server: env("BARK_SERVER").unwrap_or_else(|| "https://api.day.app".into()),
-                bark_key: env("BARK_KEY"),
+                tg_bot_token: env(crate::protocol::env::TG_BOT_TOKEN),
+                tg_chat_id: env(crate::protocol::env::TG_CHAT_ID),
+                bark_server: env(crate::protocol::env::BARK_SERVER).unwrap_or_else(|| "https://api.day.app".into()),
+                bark_key: env(crate::protocol::env::BARK_KEY),
             },
-            wda_detached: env("ICTL_WDA_DETACHED").is_some_and(|v| matches!(v.as_str(), "1" | "true" | "yes")),
+            wda_detached: env(crate::protocol::env::WDA_DETACHED)
+                .is_some_and(|v| matches!(v.as_str(), "1" | "true" | "yes")),
         }
     }
 

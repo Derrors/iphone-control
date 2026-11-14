@@ -1079,10 +1079,8 @@ async fn logged_in(client: &mut Conn, a: &auth::Auth, name: &str, secure: bool) 
 /// The login page, saying why the last try failed
 async fn login_page(client: &mut Conn, v: auth::Verdict) -> anyhow::Result<()> {
     let (status, why) = match v {
-        auth::Verdict::Wrong => (401, Some(ictl_l10n::tr!("令牌不对", "That isn't the token"))),
-        auth::Verdict::Limited => {
-            (429, Some(ictl_l10n::tr!("错误次数太多，一分钟后再试", "Too many wrong tokens; try again in a minute")))
-        }
+        auth::Verdict::Wrong => (401, Some(auth::LoginError::Wrong)),
+        auth::Verdict::Limited => (429, Some(auth::LoginError::Limited)),
         _ => (401, None),
     };
     reply(client, status, "text/html; charset=utf-8", auth::login_page(why).as_bytes()).await

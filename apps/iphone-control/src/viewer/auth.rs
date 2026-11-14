@@ -394,56 +394,76 @@ fn same(a: &str, b: &str) -> bool {
     a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
-/// The login page, in the viewer's language. `error`: why the last try didn't work
-pub fn login_page(error: Option<&str>) -> String {
-    let (lang, title, lead, label, button, hint) = match ictl_l10n::lang() {
-        ictl_l10n::Lang::En => (
-            "en",
-            "Log in · iphone-control",
-            "This control page needs its token.",
-            "Token",
-            "Log in",
-            "Run <code>iphone-control viewer token</code> on the machine the phone is connected to: it shows a token and a link that logs in.",
-        ),
-        ictl_l10n::Lang::Zh => (
-            "zh-CN",
-            "登录 · iphone-control",
-            "打开控制台要先输入令牌。",
-            "令牌",
-            "登录",
-            "在接着手机的那台机器上运行 <code>iphone-control viewer token</code>，会显示令牌和一个点开就能登录的链接。",
-        ),
-    };
-    let error = error.map(|e| format!("<p class=\"err\" role=\"alert\">{}</p>", html_escape(e))).unwrap_or_default();
-    format!(
-        r#"<!doctype html>
-<html lang="{lang}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>{title}</title>
-<style>
-:root {{ color-scheme: light dark; font-family: system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; }}
-body {{ margin: 0; min-height: 100vh; display: grid; place-items: center; background: Canvas; color: CanvasText; }}
-main {{ width: min(360px, calc(100vw - 48px)); }}
-h1 {{ font-size: 20px; margin: 0 0 6px; }}
-p {{ margin: 0 0 18px; opacity: .75; line-height: 1.5; font-size: 14px; }}
-label {{ display: block; font-size: 13px; margin-bottom: 6px; }}
-input {{ box-sizing: border-box; width: 100%; padding: 10px 12px; font: inherit; font-family: ui-monospace, monospace; border: 1px solid color-mix(in srgb, CanvasText 25%, transparent); border-radius: 8px; background: Field; color: FieldText; }}
-button {{ margin-top: 14px; width: 100%; padding: 10px; font: inherit; font-weight: 600; border: 0; border-radius: 8px; background: #2563eb; color: #fff; cursor: pointer; }}
-.err {{ color: #dc2626; opacity: 1; }}
-.hint {{ margin-top: 18px; font-size: 13px; }}
-code {{ font-size: 12px; padding: 1px 4px; border-radius: 4px; background: color-mix(in srgb, CanvasText 10%, transparent); }}
-</style></head>
-<body><main>
-<h1>iphone-control</h1>
-<p>{lead}</p>
-{error}<form method="post" action="/login">
-<label for="token">{label}</label>
-<input id="token" name="token" type="password" autocomplete="current-password" autofocus required>
-<button type="submit">{button}</button>
-</form>
-<p class="hint">{hint}</p>
-</main></body></html>
-"#
-    )
+/// The login page ([`login_page`]); its words are filled in from [`LOGIN_TEXT`]
+const LOGIN_PAGE: &str = include_str!("login.html");
+
+/// The login page's words: key, Chinese, English. The page is sent in the viewer's language and switches to the
+/// other when the browser chose it on the control page (`ictl.lang`), so it carries both
+const LOGIN_TEXT: &[(&str, &str, &str)] = &[
+    ("page_title", "登录 · iphone-control", "Log in · iphone-control"),
+    ("sub", "控制台", "Control page"),
+    ("title", "登录控制台", "Log in to the control page"),
+    ("lead", "输入令牌后，就能看画面、操作手机。", "Enter the token to watch and control the phone."),
+    ("label", "令牌", "Token"),
+    ("placeholder", "粘贴令牌", "Paste the token"),
+    ("show", "显示令牌", "Show the token"),
+    ("hide", "隐藏令牌", "Hide the token"),
+    ("submit", "登录", "Log in"),
+    ("busy", "正在登录…", "Logging in…"),
+    ("help_title", "还没有令牌？", "No token yet?"),
+    ("help_run", "在接着手机的那台机器上运行：", "On the machine the phone is connected to, run:"),
+    (
+        "help_after",
+        "它会显示令牌，还有一个点开就能直接登录的链接。",
+        "It shows the token, and a link that logs you in directly.",
+    ),
+    ("copy", "复制", "Copy"),
+    ("copied", "已复制", "Copied"),
+    ("remember", "登录后这个浏览器会记住 30 天", "This browser stays logged in for 30 days"),
+    ("other_lang", "English", "中文"),
+    ("err_wrong", "令牌不对：检查一下有没有复制完整。", "That isn't the token: check that it was copied in full."),
+    ("err_limited", "错误次数太多，一分钟后再试。", "Too many wrong tokens: try again in a minute."),
+];
+
+/// Why the login page is shown again
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LoginError {
+    /// The token sent isn't one of them
+    Wrong,
+    /// Too many wrong tokens just now ([`Verdict::Limited`])
+    Limited,
+}
+
+/// The login page, in the viewer's language ([`LOGIN_TEXT`])
+pub fn login_page(error: Option<LoginError>) -> String {
+    let en = matches!(ictl_l10n::lang(), ictl_l10n::Lang::En);
+    let text = |zh: &str, e: &str| html_escape(if en { e } else { zh });
+    let error = error.map_or_else(String::new, |e| {
+        let key = match e {
+            LoginError::Wrong => "err_wrong",
+            LoginError::Limited => "err_limited",
+        };
+        let (_, zh, e) = LOGIN_TEXT.iter().find(|(k, ..)| *k == key).expect("in LOGIN_TEXT");
+        format!(
+            "<p class=\"err\" role=\"alert\"><svg viewBox=\"0 0 16 16\" fill=\"none\" stroke=\"currentColor\" \
+             stroke-width=\"1.5\" stroke-linecap=\"round\" aria-hidden=\"true\"><circle cx=\"8\" cy=\"8\" r=\"6.5\"/>\
+             <path d=\"M8 4.75v3.75M8 11h.01\"/></svg><span data-t=\"{key}\">{}</span></p>",
+            text(zh, e)
+        )
+    });
+    let both: serde_json::Map<String, serde_json::Value> =
+        LOGIN_TEXT.iter().map(|(k, zh, e)| ((*k).to_owned(), serde_json::json!([zh, e]))).collect();
+    // inside <script>: no "</" that could end it
+    let strings = serde_json::Value::Object(both).to_string().replace("</", "<\\/");
+    let mut page = LOGIN_PAGE
+        .replace("{{error}}", &error)
+        .replace("{{strings}}", &strings)
+        .replace("{{lang}}", if en { "en" } else { "zh" })
+        .replace("{{html_lang}}", if en { "en" } else { "zh-CN" });
+    for (key, zh, e) in LOGIN_TEXT {
+        page = page.replace(&format!("{{{{{key}}}}}"), &text(zh, e));
+    }
+    page
 }
 
 fn html_escape(s: &str) -> String {
@@ -597,7 +617,18 @@ mod tests {
     fn the_login_form_and_page() {
         assert_eq!(form_token(b"token=abc%2Bd+e&x=1").as_deref(), Some("abc+d e"));
         assert_eq!(form_token(b"x=1"), None);
-        let page = login_page(Some("<b>wrong</b>"));
-        assert!(page.contains("&lt;b&gt;wrong&lt;/b&gt;") && page.contains("action=\"/login\""));
+        let page = login_page(Some(LoginError::Wrong));
+        assert!(page.contains("action=\"/login\"") && page.contains("role=\"alert\""));
+        assert!(!page.contains("{{"), "every placeholder is filled in");
+        assert!(!login_page(None).contains("role=\"alert\""));
+        // both languages ride along for the page to switch to the browser's choice
+        for (key, zh, en) in LOGIN_TEXT {
+            assert!(page.contains(&format!("\"{key}\":")), "{key}");
+            assert!(!zh.contains('<') && !en.contains('<'), "{key}: plain text, set with textContent");
+        }
+        let keys: Vec<&str> = LOGIN_TEXT.iter().map(|(k, ..)| *k).collect();
+        for used in LOGIN_PAGE.split("data-t=\"").skip(1).filter_map(|s| s.split('"').next()) {
+            assert!(keys.contains(&used), "the page uses {used}, which LOGIN_TEXT doesn't have");
+        }
     }
 }

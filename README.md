@@ -134,7 +134,7 @@ Tool texts, results, CLI output and logs are in Simplified Chinese by default; s
 | `setup [--reconfigure]` | Run the setup guide again; `--reconfigure` redoes one part (language, proxy, service, Apple ID, phone, auto-unlock, notifications, MCP registration) |
 | `service install\|uninstall\|start\|stop\|restart\|status` | The background service (launchd on macOS, systemd user unit on Linux) |
 | `daemon` | The long-running daemon; the service runs it, or start it by hand |
-| `mcp` | The MCP server; your AI client starts it |
+| `mcp [--url <viewer>]` | The MCP server; your AI client starts it. With `--url` it bridges to another machine's viewer |
 | `status` | Daemon state, time left on the signing profile, recent log |
 | `doctor` | Layer-by-layer health check with a fix for each failure |
 | `login` | Sign in to the Apple ID again when the session expires |
@@ -148,6 +148,10 @@ Tool texts, results, CLI output and logs are in Simplified Chinese by default; s
 | `wda-bridge [--port]` | Expose WebDriverAgent on 127.0.0.1 for other tools; stop it when done |
 | `viewer [--port] [--lan]` | Control page on 127.0.0.1:8200, behind a login (`viewer token` shows the token and a link; read-only tokens too): live screen you can tap, swipe and type on, device panel, and AI tasks run by a local Claude Code or Codex. `--lan` opens it to the local network (HTTPS), and MCP over HTTP is on the same port (`/mcp`) |
 | `task run [--url <viewer>] -- <command>` | AI tasks for other agent platforms; with `--url` the phone is on another machine. `task list`, `pause`, `approve`… follow and control tasks |
+| `viewer token [add <name> [--read-only]\|list\|show <name>\|remove <name>]` | The viewer's login tokens: show the owner's, or add named and read-only ones |
+| `service viewer install\|uninstall\|start\|stop\|restart` | Run the viewer as a background service of its own |
+| `update check\|apply\|policy` | Check for, install, or set the policy for updates |
+| `completions <shell>` | Bash, Zsh or Fish completion script |
 
 All commands and options: [CLI reference](https://derrors.github.io/iphone-control/en/guide/cli).
 

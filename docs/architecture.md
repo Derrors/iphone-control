@@ -36,7 +36,9 @@
 | 进程 | 生命周期 | 职责 |
 |---|---|---|
 | `iphone-control daemon` | 常驻，作为用户服务运行（macOS 是 launchd，Linux 是 systemd 用户服务；由 `install.sh`、`iphone-control service install`、`brew services` 或 .deb 的 unit 装好），也可以在终端里前台运行 | 唯一和设备通信的进程。维护设备状态机，对外提供本地控制接口 |
-| `iphone-control mcp` | 每个 agent 会话一个 | MCP stdio 服务，把工具调用翻译成对守护进程的请求 |
+| `iphone-control mcp` | 每个 agent 会话一个 | MCP stdio 服务，把工具调用翻译成对守护进程的请求；`--url` 时改为把 stdio 转接到另一台机器控制台的 `/mcp`（`mcp_bridge.rs`） |
+| `iphone-control viewer` | 显式开启，可作为单独的后台服务（`service viewer install`） | 浏览器里的控制台和同一个端口上的 HTTP MCP（`/mcp`）；要令牌登录，`--lan` 时对局域网开放、走 HTTPS（`viewer/`：`auth.rs` 登录、`lan.rs` 地址检查、`tls.rs` 按首字节分 TLS 和明文、`mcp.rs` 接 rmcp、`peer.rs` 查本机调用方进程） |
+| `iphone-control task run` | 一个外部 AI 任务一个 | 开任务、持有租约、在任务里运行命令（`task.rs`）；`--url` 时经另一台机器的控制台（`remote.rs`） |
 | `usbmuxd` | 系统的服务：Linux 上是发行版的包（.deb 依赖它，udev 在插上手机时启动），macOS 自带；守护进程不启动也不重启它 | Linux 上是系统包，GPL-3.0，独立进程运行，不链接 |
 | `iphone-control`（不带命令）、`setup`、`service`、`doctor`、`sign` 等 | 一次性 | 首次运行引导（`guide.rs`）、后台服务管理（`service.rs`）和运维命令，通过控制接口或直接调用库。启动时先把 `~/.config/iphone-control/env` 读进环境（`envfile.rs`，已有的环境变量优先） |
 
@@ -113,18 +115,18 @@
 | `ictl-wda` | `WdaRunner`（XCUITestService 启动/停止）、`WdaClient`（会话、点击、W3C actions、keys、source、screenshot、appium settings、锁屏核对）、经 usbmuxd 直连设备 8100 端口的 HTTP 传输（区分连不上和请求超时）、元素树解析（纯函数，可单测） | `idevice`（`xctest`）、`quick-xml` |
 | `ictl-webinspector` | Web Inspector 服务（`com.apple.webinspector`，经 lockdown）的客户端：列出可检查的网页和 WebView、在页面里执行 JavaScript（`Target` 域和旧版直接收命令两种都支持，Promise 用 `Runtime.awaitPromise` 等待）。纯协议，消息解析可单测 | `idevice`、`plist` |
 | `ictl-l10n` | 界面文字的语言：取当前语言，`tr!` / `trf!` / `log_tr!` / `log_trf!` 宏（每条文字在代码里原地写成中英一对，见 D12） | 无 |
-| `ictl-protocol` | 控制接口的 `Request`/`Response` 类型和客户端 `call(socket, req, timeout)` | `serde`、`tokio` |
+| `ictl-protocol` | 控制接口的 `Request`/`Response` 类型和客户端 `call(socket, req, timeout)`、任务的流式请求；默认的数据目录、socket 路径和 root 判断 | `serde`、`serde_json`、`tokio`、`libc`、`ictl-l10n` |
 | `ictl-sign` | Apple ID 登录（含双重认证交互）、会话持久化、注册设备、App ID、描述文件、签名 `.app`/`.ipa`（**包括 `.xctest`**；bundle 逻辑改写自 plume_utils）、签后自检 | vendored 的 `plume_core`/`plume_store`（MPL-2.0/MIT；经 plume_core 用 vendored 的 `omnisette` 和打过补丁的 `apple-codesign`） |
 | `ictl-unlock` | 锁屏密码键盘定位、逐位输入并核对密码栏、从第 2 位起先写停用标记 | `ictl-wda` |
 | `ictl-daemon` | `core`（共享状态、请求分发、快照）、`supervise`（巡检、后台启动 WDA、重签、会话检查）、`tools`（工具的实现、HID 后备）、`devtools`（日志采集、崩溃报告、安装、卸载）、`web`（Web Inspector 工具，保留一条连接复用）、`devices`（列出、选择设备）、`doctor`；通知（Bark/Telegram）、截图缩放/裁剪、控制接口服务端 | 以上全部、`tokio`、`reqwest`、`image` |
-| `ictl-mcp` | MCP stdio 服务，`iphone_*` 工具 17 个，开启开发者工具后 23 个：toolkit 的 13 个 + `iphone_wait_for`、`iphone_batch`、`iphone_list_devices`、`iphone_select_device`，以及 6 个可选的开发者工具（D13）；操作类工具可带 `then` 顺带返回操作后的界面；经控制接口调用守护进程 | `ictl-protocol`、`ictl-l10n`、`rmcp`（`server`、`transport-io`） |
-| `apps/iphone-control` | CLI 入口：不带命令时是首次运行引导或状态（`guide.rs`）、`daemon`、`mcp`、`mcp-config`、`status`、`doctor`、`setup [--reconfigure]`、`service`（`service.rs`：launchd / systemd 用户服务）、`login`、`sign`、`resign`、`passcode`、`unlock-reset`、`devices`、`select`、`wda-bridge`、`viewer`（`viewer.rs`：本机控制台网页，实时画面、设备面板；`video/`：画面的 H.264 编码（外部 ffmpeg）和 MJPEG 去重；`agent.rs`：页面上的 AI 任务，`viewer.html` 是页面）、`notify-test`；隐藏的 `debug <ddi\|hid\|screenshot\|soak\|wda\|e2e>` 真机诊断（原第 0 步 spike，不经守护进程；feature `debug-cmds`，默认不编译） | `clap` |
+| `ictl-mcp` | MCP stdio 服务，`iphone_*` 工具 17 个，开启开发者工具后 23 个：toolkit 的 13 个 + `iphone_wait_for`、`iphone_batch`、`iphone_list_devices`、`iphone_select_device`，以及 6 个可选的开发者工具（D13）；操作类工具可带 `then` 顺带返回操作后的界面；任务里另有 `iphone_confirm`；经控制接口调用守护进程。同一套工具也给控制台的 `/mcp` 用（`http_service`，Streamable HTTP） | `ictl-protocol`、`ictl-l10n`、`rmcp`（`server`、`transport-io`、`transport-streamable-http-server`）、`http` |
+| `apps/iphone-control` | CLI 入口：不带命令时是首次运行引导或状态（`guide.rs`）、`daemon`、`mcp`、`mcp-config`、`status`、`doctor`、`setup [--reconfigure]`、`service`（`service.rs`：launchd / systemd 用户服务）、`login`、`sign`、`resign`、`passcode`、`unlock-reset`、`devices`、`select`、`wda-bridge`、`viewer`（`viewer.rs`：本机控制台网页，实时画面、设备面板；`video/`：画面的 H.264 编码（外部 ffmpeg）和 MJPEG 去重；`agent.rs`：页面上的 AI 任务，`viewer.html` 是页面）、`viewer token …`（命名令牌、只读令牌）、`task …`（`task.rs`、`remote.rs`）、`mcp --url`（`mcp_bridge.rs`）、`update …`（`update.rs`、`update/`：签名清单、事务式替换）、`completions`、`notify-test`；隐藏的 `debug <ddi\|hid\|screenshot\|soak\|wda\|e2e>` 真机诊断（原第 0 步 spike，不经守护进程；feature `debug-cmds`，默认不编译） | `clap` |
 
 依赖方向：`apps` → `ictl-daemon` / `ictl-mcp`，还直接依赖 `ictl-device`、`ictl-sign`；`ictl-daemon` → `ictl-unlock` → `ictl-wda` → `ictl-device`；`ictl-daemon` 还直接依赖 `ictl-webinspector`、`ictl-sign` 和 `ictl-protocol`。`ictl-device` 也依赖 `ictl-webinspector`（打开连接）。`ictl-mcp` 只依赖 `ictl-protocol` 和 `ictl-l10n`，不依赖守护进程和设备层。`ictl-l10n` 不依赖其他 crate，除 `ictl-webinspector` 外都用它。`apps` 的 `debug`（feature `debug-cmds`）直接调用 `ictl-device`、`ictl-wda`。
 
 ## 5. 截图与坐标
 
-- 坐标单位统一用**点（pt）**，与 WDA 一致，随界面方向变化；屏幕点尺寸从 WDA `/wda/screen` 读取。WDA 就绪时把竖放尺寸和设备 UDID 记到 `state.json`（只记最近一台）。WDA 不可用时：记录是这台的就用记录，否则用设置里的 `SCREEN_W`/`SCREEN_H`（不分设备），都没有就报错（不写死 430×932）。
+- 坐标单位统一用**点（pt）**，与 WDA 一致，随界面方向变化；屏幕点尺寸从 WDA `/wda/screen` 读取。WDA 就绪时把竖放尺寸按设备 UDID 记到 `state.json`（每台设备各一份）。WDA 不可用时：记录是这台的就用记录，否则用设置里的 `SCREEN_W`/`SCREEN_H`（不分设备），都没有就报错（不写死 430×932）。
 - HID 坐标是 0～65535 归一化：先按界面方向转回竖放（`Rotation::to_portrait`），再换算 `x / w * 65535`。每次 HID 触摸前重新截图核对横竖；横屏要有 30 秒内且匹配的 WDA 旋转角，否则拒绝触摸。
 - 截图优先走 WDA（toolkit 实测约 0.4 秒）；WDA 不可用时走 CoreDevice `screencaptureservice`（不需要签名）。
 - 区域放大：从原始像素截图裁剪，长边 < 600 放大到 600，> 1200 缩到 1200，返回倍数和坐标换算式（三位有效数字）。
@@ -141,7 +143,10 @@
 | `wda/` | 当前签好的包 `WDA-signed.ipa`，和未签名包 `WDA-unsigned.ipa`：第一次签名前下载 Appium 官方的未签名真机包（`WebDriverAgentRunner-Runner.zip` v16.15.3，校验 sha256）重新打包（`crates/ictl-daemon/src/wda_pkg.rs`）；计划改为本项目 macOS CI 编译。描述文件只嵌在签好的包里，到期时间记在 `state.json` | 默认 | 否（在本机下载） |
 | `secrets/passcodes/<UDID>` | 各设备的锁屏密码（仅启用自动解锁时）；旧版本的 `secrets/passcode` 在只接着一台时归到那台名下 | 0600 | 否 |
 | `logs/` | 事件日志 `daemon.log`（超过 5 MB 轮转成 `.1`）；自动解锁停用标记 `UNLOCK-DISABLED`（与 toolkit 一致，便于人工发现；全局，不分设备） | 默认 | 否 |
-| `state.json` | 最近一次签名的 Team ID、WDA Bundle ID、描述文件到期时间；选定的设备；最近一台就绪设备的竖放屏幕尺寸和 UDID；上次重签结果 | 默认 | 否 |
+| `state.json` | 最近一次签名的 Team ID、WDA Bundle ID、描述文件到期时间；选定的设备；每台设备的竖放屏幕尺寸（按 UDID）；上次重签结果 | 默认 | 否 |
+| `viewer-tokens.json` | 控制台的登录令牌（名字、权限、令牌） | 0600 | 否 |
+| `viewer-tls/` | 控制台局域网 HTTPS 的自签证书和私钥 | 0700 | 否 |
+| `tasks/` | 最近 50 个 AI 任务的事件记录，每个任务一个 `<id>.jsonl` | 默认 | 否 |
 
 守护进程的配置全部来自环境变量（`crates/ictl-daemon/src/config.rs`），都有默认值。设置文件 `~/.config/iphone-control/env`（`KEY=value`，0600，模板 `packaging/env.example`）由首次运行引导和 `setup --reconfigure` 写（`envfile.rs`：改一项就地替换，注释和其他项保留）；后台服务（launchd、systemd、`brew services`）把它读进守护进程的环境，其他命令启动时也读一遍，已有的环境变量优先。通知渠道的密钥也在这个文件里；其余秘密只放数据目录里的文件。
 
@@ -150,5 +155,5 @@
 - 守护进程每 `RESIGN_CHECK_HOURS`（默认 6 小时）检查一次：描述文件剩余 < `RESIGN_MIN_DAYS`（默认 2 天）才重签；另外**每天验证一次 Apple ID 会话**（toolkit 的教训：只在要重签时才发现登录过期，只剩 2 天处理）。两者都在后台跑，不持设备锁。只检查正在控制的那台；手机重新连上或切换设备后 1 分钟内也查一次。
 - 重签流程：`plume_core` 取新描述文件 → `ictl-sign` 签名（含 `.xctest`）→ `installation_proxy` 安装 → 下一轮巡检重启 WDA。安装成功后才替换旧文件。整个重签有总时限，超时按失败处理并推送通知。没装过当前 Apple ID 签的 WDA 的设备不自动重签（注册设备占 Apple ID 的名额，交给用户决定）。
 - **签名证书**：每个账号目录有自己的私钥（`account/keys/<团队>/key.pem`）和对应的开发证书；免费团队同时最多两张，新建时满了 plume 会吊销一张，不挑是谁的，用它签的 App 在所有设备上都起不来，描述文件却仍有效。所以：读设备上的 WDA 描述文件时顺带离线判断里面有没有本机公钥的证书（`foreign_wda`）；每天的会话检查顺带联网查本机证书还在不在团队里（`own_cert`）。设备拒绝启动 WDA（只报 `unexpected response`）时，两者任一有问题就自动重签这台，同一台 6 小时内最多一次；都没问题就多半是还没信任开发者，留给用户。签名新建或吊销证书时写日志、推送。`doctor` 显示这两项。
-- 通知事件：重签失败、Apple ID 会话失效、需要输入自动化密码、WDA 恢复、自动解锁失败已停用、手机离线超过 10 分钟、恢复在线、签名证书换了。通知文字不带设备名。去重：重签失败、会话失效 20 小时内不重复；等密码、离线、自动解锁停用推一次，直到恢复或 `unlock-reset`；只有等密码和离线有恢复推送；签名证书换了每次都推。去重记录只在内存里，守护进程重启后清空。
+- 通知事件：重签失败、Apple ID 会话失效、需要输入自动化密码、WDA 恢复、自动解锁失败已停用、手机离线超过 10 分钟、恢复在线、签名证书换了。通知标题带上是哪台设备（设备名和型号，离线时用离线前记下的）。去重：重签失败、会话失效 20 小时内不重复；等密码、离线、自动解锁停用推一次，直到恢复或 `unlock-reset`；只有等密码和离线有恢复推送；签名证书换了每次都推。去重记录只在内存里，守护进程重启后清空。
 - 守护进程整个挂掉时发不了通知，这部分仍需宿主机侧的监控，本项目还没有提供。后台服务（`iphone-control service install` 装的 launchd 或 systemd 服务）只负责崩溃后重启，同样不报警。

@@ -8,7 +8,10 @@
 | `wda/` | Signed WebDriverAgent | Re-signed automatically |
 | `ddi/` | Developer Disk Image cache | Downloaded again |
 | `secrets/passcodes/` | Per-device passcodes (only with auto-unlock) | Run `passcode set` again |
-| `state.json` | Signed WDA details (Team ID, bundle id, profile expiry), selected device, screen size of the most recent device, last signing result | The daemon starts as if WDA isn't signed: run `sign` or `setup` again, and `select` again if you had selected a device |
+| `viewer-tokens.json` | The viewer's login tokens (keep them like passwords, out of backups that sync elsewhere) | The viewer makes a new `owner` on its next start; browsers and MCP clients that logged in need the new one |
+| `viewer-tls/` | The self-signed certificate and key for the viewer's HTTPS on the local network (secret too) | Made again with a new fingerprint: browsers warn once more, and `--ca` needs the new certificate |
+| `tasks/` | The last 50 AI tasks | The page no longer shows earlier tasks; nothing else |
+| `state.json` | Signed WDA details (Team ID, bundle id, profile expiry), selected device, each device's screen size, last signing result | The daemon starts as if WDA isn't signed: run `sign` or `setup` again, and `select` again if you had selected a device |
 | `logs/` | Logs, auto-unlock's stop marker `UNLOCK-DISABLED` | The logs don't matter. Losing the marker removes a safeguard: after a wrong passcode, the same one could be entered again |
 
 Location: `~/.local/share/iphone-control` (mode 0700), on Linux and macOS alike, whether installed with the one command, Homebrew, the .deb or from source. Pairing records aren't in it; the system usbmuxd keeps them, in `/var/lib/lockdown` on Linux and `/var/db/lockdown` on macOS (shared with Finder). Settings are in `~/.config/iphone-control/env`, which holds notification secrets: don't share it either.

@@ -33,7 +33,9 @@ iphone-control service restart
 | `IPHONE_CONTROL_VIEWER_TLS` | `auto` | The viewer's HTTPS, like `--tls`: `auto` turns it on when open to the network or given a certificate; `on`, `off`. `http://127.0.0.1` on this machine always works |
 | `IPHONE_CONTROL_VIEWER_TLS_CERT`, `IPHONE_CONTROL_VIEWER_TLS_KEY` | empty | The viewer's own certificate and key (PEM), like `--tls-cert`, `--tls-key`; without them a self-signed one made on this machine |
 | `IPHONE_CONTROL_VIEWER_MCP` | `on` | MCP over HTTP on the viewer's port (`/mcp`), like `--mcp`; `off` turns it off |
-| `IPHONE_CONTROL_VIEWER_TOKEN` | empty | Only on another machine: the token `task run --url` logs in to that machine's viewer with (shown there by `iphone-control viewer token`). It isn't passed to the command `task run` starts |
+| `IPHONE_CONTROL_VIEWER_TOKEN` | empty | Only on another machine: the token `mcp --url` and `task … --url` (`run`, `list`, `pause` and every other subcommand) log in to that machine's viewer with (shown there by `iphone-control viewer token`). It isn't passed to the command `task run` starts |
+| `IPHONE_CONTROL_URL` | empty | Like `--url`: another machine's viewer (`mcp`, `task`). `task run --url` sets it for its command; to another machine only `https://` is taken |
+| `IPHONE_CONTROL_CA` | empty | Like `--ca`: trust this certificate (the other machine's self-signed `viewer-tls/cert.pem`) |
 | `IPHONE_UDID` | automatic | Pin the device to control. Unset: the controlled device is kept until it disconnects, and you can switch with the `select` command or the `iphone_select_device` tool. When set, switching is refused |
 | `RESIGN_MIN_DAYS` | `2` | Re-sign when fewer days than this remain |
 | `RESIGN_CHECK_HOURS` | `6` | How often to check; it is also checked within a minute after the phone reconnects or you switch devices |

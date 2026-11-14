@@ -114,7 +114,7 @@ enum Command {
         #[arg(long, default_value_t = 8100)]
         port: u16,
     },
-    #[command(about = ictl_l10n::tr!("浏览器里的控制台：实时画面上直接操作手机、看设备状态，把任务交给本机的 Claude Code 或 Codex 执行。只开在 127.0.0.1，操作都经守护进程（默认不监听任何端口）", "Control page in a browser: act on the live screen, see the device's state, and hand tasks to a local Claude Code or Codex. Serves 127.0.0.1 only, every action goes through the daemon (by default no port is opened)"))]
+    #[command(about = ictl_l10n::tr!("浏览器里的控制台：实时画面上直接操作手机、看设备状态，把任务交给本机的 Claude Code 或 Codex 执行。默认只开在 127.0.0.1（--lan 也对局域网开放，走 HTTPS），要用令牌登录（iphone-control viewer token），操作都经守护进程（不开控制台时不监听任何端口）", "Control page in a browser: act on the live screen, see the device's state, and hand tasks to a local Claude Code or Codex. Serves 127.0.0.1 by default (--lan opens it to the local network too, over HTTPS), behind a login token (iphone-control viewer token); every action goes through the daemon (without the viewer no port is opened)"))]
     Viewer {
         #[arg(long, env = "IPHONE_CONTROL_VIEWER_PORT", default_value_t = 8200)]
         port: u16,

@@ -126,6 +126,21 @@ pub struct Task {
     changed: Notify,
 }
 
+/// [`Tasks::still`]: whether an admitted request may go on once it holds its lock
+pub enum Still {
+    Admitted,
+    /// The task's request waits for it to run again (then is checked again)
+    Wait(Arc<Task>),
+    Refused(Response),
+}
+
+fn look_first() -> Response {
+    refuse(ictl_l10n::tr!(
+        "用户刚才操作过手机，界面可能已经变了：先用 iphone_screenshot 或 iphone_list_elements 重新看一遍，再决定下一步",
+        "The user acted on the phone, so the screen may have changed: look again with iphone_screenshot or iphone_list_elements before the next step"
+    ))
+}
+
 /// How [`Tasks::admit`] lets a request through
 pub enum Admission {
     /// No task is involved
@@ -157,7 +172,7 @@ fn ended_message() -> &'static str {
 }
 
 /// Requests that show the agent the screen: after one, it may act again ([`TaskState::recheck`])
-fn observes(req: &Request) -> bool {
+pub(crate) fn observes(req: &Request) -> bool {
     matches!(req, Request::Screenshot { .. } | Request::ListElements { .. } | Request::WaitFor { .. })
 }
 
@@ -402,8 +417,13 @@ impl Task {
         );
     }
 
+    /// The agent saw the screen (an observation that succeeded): it may act again ([`TaskState::recheck`])
+    pub fn observed(&self) {
+        self.lock().recheck = false;
+    }
+
     /// Holds until the task runs; `Err` when it ended or the caller went away
-    async fn wait_running(&self, gone: &mut Option<oneshot::Receiver<()>>) -> Result<bool, Response> {
+    pub(crate) async fn wait_running(&self, gone: &mut Option<oneshot::Receiver<()>>) -> Result<bool, Response> {
         let mut waited = false;
         loop {
             let notified = self.changed.notified();
@@ -499,12 +519,20 @@ impl Task {
         self.emit(&mut st, "step", d);
     }
 
-    /// Shows a confirmation on the page and holds until the user answers, the task ends or the caller goes away
+    /// Shows a confirmation on the page and holds until the user answers, the task ends or the caller goes away.
+    /// Asks only while the task runs, like a step: a pause or takeover holds the question (it doesn't replace the
+    /// user's pause), and so does another question (one at a time, each answered on its own)
     async fn ask_user(&self, action: &str, detail: &str, gone: &mut Option<oneshot::Receiver<()>>) -> Asked {
-        let (mut rx, id) = {
+        let (mut rx, id) = loop {
+            if self.wait_running(gone).await.is_err() {
+                return if self.lock().status.active() { Asked::Gone } else { Asked::Ended };
+            }
             let mut st = self.lock();
-            if !st.status.active() {
-                return Asked::Ended;
+            match st.status {
+                Status::Running => {}
+                Status::Ended(_) => return Asked::Ended,
+                // paused, taken over or asked again between the wake-up and the lock: wait again
+                _ => continue,
             }
             let args = json!({"action": action, "detail": detail});
             let id = self.begin_step(&mut st, "iphone_confirm", &args, None, "waiting");
@@ -512,14 +540,15 @@ impl Task {
             let (tx, rx) = oneshot::channel();
             st.confirm = Some((id, tx));
             self.set_status(&mut st, Status::Waiting);
-            (rx, id)
+            break (rx, id);
         };
+        // a sender dropped without an answer isn't the user saying no: nothing to carry out either way
         let answer = match gone {
             Some(g) => tokio::select! {
-                a = &mut rx => Some(a.unwrap_or(false)),
+                a = &mut rx => a.ok(),
                 _ = g => None,
             },
-            None => Some(rx.await.unwrap_or(false)),
+            None => rx.await.ok(),
         };
         let mut st = self.lock();
         st.last = None;
@@ -543,7 +572,7 @@ impl Task {
             ),
         };
         self.emit(&mut st, "step", json!({"id": id, "status": status, "result": result}));
-        if !ended {
+        if !ended && st.status == Status::Waiting {
             self.set_status(&mut st, Status::Running);
         }
         asked
@@ -698,20 +727,29 @@ impl Tasks {
         let mut list = Vec::new();
         if let Some(dir) = &dir {
             let _ = std::fs::create_dir_all(dir);
-            let mut files: Vec<(u64, PathBuf)> = std::fs::read_dir(dir)
-                .into_iter()
-                .flatten()
-                .flatten()
-                .map(|e| e.path())
-                .filter(|p| p.extension().is_some_and(|x| x == "jsonl"))
-                .filter_map(|p| Some((first_started(&p)?, p)))
-                .collect();
+            let mut files: Vec<(u64, PathBuf)> = Vec::new();
+            for p in std::fs::read_dir(dir).into_iter().flatten().flatten().map(|e| e.path()) {
+                if !p.extension().is_some_and(|x| x == "jsonl") {
+                    continue;
+                }
+                match first_started(&p) {
+                    Some(t) => files.push((t, p)),
+                    // its first line was cut short (a power cut while it was written): no task to show, and left
+                    // alone it would never count towards the limit, so never go
+                    None => drop_unreadable(&p),
+                }
+            }
             files.sort();
             let extra = files.len().saturating_sub(KEEP);
             for (_, p) in files.drain(..extra) {
                 let _ = std::fs::remove_file(p);
             }
-            list.extend(files.into_iter().filter_map(|(_, p)| restore(&p)).map(Arc::new));
+            for (_, p) in files {
+                match restore(&p) {
+                    Some(t) => list.push(Arc::new(t)),
+                    None => drop_unreadable(&p),
+                }
+            }
         }
         Self { dir, list: Mutex::new(list) }
     }
@@ -845,22 +883,38 @@ impl Tasks {
                 )));
             }
             let waited = task.wait_running(gone).await?;
-            {
-                let mut st = task.lock();
-                if acts(req) && st.recheck {
-                    return Err(refuse(ictl_l10n::tr!(
-                        "用户刚才操作过手机，界面可能已经变了：先用 iphone_screenshot 或 iphone_list_elements 重新看一遍，再决定下一步",
-                        "The user acted on the phone, so the screen may have changed: look again with iphone_screenshot or iphone_list_elements before the next step"
-                    )));
-                }
-                if observes(req) {
-                    st.recheck = false;
-                }
+            if acts(req) && task.lock().recheck {
+                return Err(look_first());
             }
             *expect_udid = Some(task.udid.clone());
             return Ok((Admission::Actor(task), waited));
         }
-        let Some(task) = self.active() else { return Ok((Admission::Free, false)) };
+        self.admit_other(req).map(|a| (a, false))
+    }
+
+    /// [`Self::admit`] again once the request holds its lock (it may have queued for it a while): the task may have
+    /// been paused or taken over, or handed back, meanwhile. A request of the task waits for it to run again
+    pub fn still(&self, admission: &Admission, req: &Request) -> Still {
+        match admission {
+            Admission::Actor(task) => {
+                let st = task.lock();
+                match st.status {
+                    Status::Running if acts(req) && st.recheck => Still::Refused(look_first()),
+                    Status::Running => Still::Admitted,
+                    Status::Ended(_) => Still::Refused(refuse(ended_message())),
+                    _ => Still::Wait(task.clone()),
+                }
+            }
+            Admission::Free | Admission::Supervisor(_) => match self.admit_other(req) {
+                Ok(_) => Still::Admitted,
+                Err(r) => Still::Refused(r),
+            },
+        }
+    }
+
+    /// [`Self::admit`] for a request without a task's token
+    fn admit_other(&self, req: &Request) -> Result<Admission, Response> {
+        let Some(task) = self.active() else { return Ok(Admission::Free) };
         if matches!(req, Request::SelectDevice { .. }) {
             return Err(refuse(&ictl_l10n::trf!(
                 "任务「{}」进行中，不能切换设备；先停止它",
@@ -869,14 +923,14 @@ impl Tasks {
             )));
         }
         if !acts(req) || matches!(req, Request::Touch { phase: TouchPhase::Up, .. }) {
-            return Ok((Admission::Free, false));
+            return Ok(Admission::Free);
         }
         let mut st = task.lock();
         if st.status == Status::Takeover {
             // the agent looks again before its next action
             st.recheck = true;
             drop(st);
-            return Ok((Admission::Supervisor(task), false));
+            return Ok(Admission::Supervisor(task));
         }
         Err(refuse(&ictl_l10n::trf!(
             "AI 任务「{}」正在操作这台设备（{}）。要自己操作，先接管或停止这个任务",
@@ -1012,6 +1066,18 @@ fn append(file: &Path, e: &TaskEvent) {
     if let Err(err) = r {
         tracing::warn!("{}", ictl_l10n::log_trf!("写任务日志失败：{err}", "Writing the task log failed: {err}"));
     }
+}
+
+fn drop_unreadable(file: &Path) {
+    tracing::warn!(
+        "{}",
+        ictl_l10n::log_trf!(
+            "任务日志读不出来，删掉：{}",
+            "A task log can't be read, so it was removed: {}",
+            file.display()
+        )
+    );
+    let _ = std::fs::remove_file(file);
 }
 
 fn read_events(file: &Path) -> Vec<TaskEvent> {
@@ -1253,7 +1319,32 @@ mod tests {
         assert!(admit(&ts, &Request::Status, Some(&t.token)).await.is_ok(), "status isn't acting");
         let look = Request::ListElements { filter: String::new(), limit: 10, max_age_ms: 0 };
         assert!(admit(&ts, &look, Some(&t.token)).await.is_ok());
+        assert!(admit(&ts, &tap(), Some(&t.token)).await.is_err(), "a look let through isn't a look that worked");
+        t.observed();
         assert!(admit(&ts, &tap(), Some(&t.token)).await.is_ok());
+    }
+
+    /// A request let through before the user paused, took over or handed back is checked again once it holds its lock
+    #[tokio::test]
+    async fn an_admitted_request_is_checked_again_once_it_has_its_lock() {
+        let ts = tasks();
+        let t = open(&ts);
+        let (agent, _) = admit(&ts, &tap(), Some(&t.token)).await.unwrap();
+        assert!(matches!(ts.still(&agent, &tap()), Still::Admitted));
+        t.control("pause", None, false, None).unwrap();
+        assert!(matches!(ts.still(&agent, &tap()), Still::Wait(_)), "waits for the task to run again");
+        t.control("takeover", None, false, None).unwrap();
+        assert!(matches!(ts.still(&agent, &tap()), Still::Wait(_)));
+        let (user, _) = admit(&ts, &tap(), None).await.unwrap();
+        assert!(matches!(user, Admission::Supervisor(_)));
+        t.control("handback", None, false, None).unwrap();
+        assert!(matches!(ts.still(&user, &tap()), Still::Refused(_)), "the user's tap after handing back");
+        assert!(matches!(ts.still(&agent, &tap()), Still::Refused(_)), "the agent looks first");
+        let shot = Request::Screenshot { region: None };
+        assert!(matches!(ts.still(&agent, &shot), Still::Admitted));
+        t.end(End::Cancelled, "");
+        assert!(matches!(ts.still(&agent, &shot), Still::Refused(_)));
+        assert!(matches!(ts.still(&user, &tap()), Still::Admitted), "no task any more");
     }
 
     /// The agent may not answer its own questions or resume itself; it may give up
@@ -1359,6 +1450,54 @@ mod tests {
         assert_eq!(t.info().state, "running");
         t.finish(true, "done");
         assert_eq!(t.info().state, "rejected");
+    }
+
+    fn ask(ts: &Arc<Tasks>, t: &Task) -> tokio::task::JoinHandle<Response> {
+        let (ts, token) = (ts.clone(), t.token.clone());
+        tokio::spawn(async move {
+            let req = Request::TaskConfirm { action: "发送消息".into(), detail: "给妈妈".into() };
+            ts.handle(&req, Some(&token), None, &mut None).await.unwrap()
+        })
+    }
+
+    /// A question doesn't replace the user's pause or takeover: it waits until the task runs again
+    #[tokio::test]
+    async fn a_question_waits_while_the_user_paused_or_took_over() {
+        let ts = Arc::new(tasks());
+        let t = open(&ts);
+        t.control("pause", None, false, None).unwrap();
+        let asked = ask(&ts, &t);
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        assert_eq!(t.info().state, "paused");
+        t.control("takeover", None, false, None).unwrap();
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        assert_eq!(t.info().state, "takeover");
+        assert!(admit(&ts, &tap(), None).await.is_ok(), "the user still acts while taken over");
+        t.control("handback", None, false, None).unwrap();
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        assert_eq!(t.info().state, "waiting");
+        t.control("confirm", None, true, None).unwrap();
+        assert!(matches!(asked.await.unwrap(), Response::Text { .. }));
+        assert_eq!(t.info().state, "running");
+    }
+
+    /// Two questions at once are asked one after the other, each answered on its own
+    #[tokio::test]
+    async fn two_questions_at_once_are_asked_in_turn() {
+        let ts = Arc::new(tasks());
+        let t = open(&ts);
+        let (a, b) = (ask(&ts, &t), ask(&ts, &t));
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        assert_eq!(t.info().state, "waiting");
+        t.control("confirm", None, true, None).unwrap();
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        assert_eq!(t.info().state, "waiting", "the second question, now");
+        t.control("confirm", None, true, None).unwrap();
+        assert!(matches!(a.await.unwrap(), Response::Text { .. }));
+        assert!(matches!(b.await.unwrap(), Response::Text { .. }));
+        assert_eq!(t.info().state, "running");
+        t.finish(true, "done");
+        assert_eq!(t.info().state, "completed", "nobody said no");
     }
 
     #[tokio::test]
@@ -1573,6 +1712,27 @@ mod tests {
         }
         assert_eq!(ts.infos().len(), KEEP);
         assert_eq!(std::fs::read_dir(&dir).unwrap().count(), KEEP);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// A log cut short (power cut) is removed instead of lying there forever, outside the limit
+    #[test]
+    fn unreadable_logs_are_removed() {
+        let dir = std::env::temp_dir().join(format!("ictl-tasks-bad-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("cut.jsonl"), "{\"t\": 1, \"event\": \"ta").unwrap();
+        std::fs::write(dir.join("empty.jsonl"), "").unwrap();
+        std::fs::write(dir.join("notes.txt"), "not a log").unwrap();
+        let ts = Tasks::load(Some(dir.clone()));
+        open(&ts).end(End::Completed, "");
+        drop(ts);
+        let ts = Tasks::load(Some(dir.clone()));
+        assert_eq!(ts.infos().len(), 1);
+        let mut left: Vec<_> = std::fs::read_dir(&dir).unwrap().flatten().map(|e| e.file_name()).collect();
+        left.sort();
+        assert_eq!(left.len(), 2, "{left:?}");
+        assert!(left.iter().any(|n| n == "notes.txt"), "only task logs are touched");
         std::fs::remove_dir_all(dir).unwrap();
     }
 }

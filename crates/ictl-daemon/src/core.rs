@@ -753,12 +753,46 @@ impl Daemon {
             _ => None,
         };
         let t0 = Instant::now();
+        let looks = crate::tasks::observes(&req);
         // boxed: the request's state machine is large, and a connection's task shouldn't carry it on the stack
-        let resp = Box::pin(self.handle_admitted(req, queued_at, ctx)).await;
+        let resp = Box::pin(self.handle_admitted(req, queued_at, ctx, &admission)).await;
         if let Some((t, step)) = auto {
             self.tasks.auto_step_done(&t, step, &resp, t0.elapsed().as_millis() as u64);
         }
+        // the agent has seen the screen only once its look succeeded
+        if let crate::tasks::Admission::Actor(t) = &admission
+            && looks
+            && !matches!(resp, Response::Error { .. })
+        {
+            t.observed();
+        }
         resp
+    }
+
+    /// A request's lock, once the tasks still let it through ([`crate::tasks::Tasks::still`]): it may have queued
+    /// behind other requests while the user paused, took over or handed back. A task's request waits for the task to
+    /// run again, without the lock
+    async fn lock_admitted<'a, T>(
+        &self,
+        lock: &'a Mutex<T>,
+        req: &Request,
+        admission: &crate::tasks::Admission,
+        queued_at: &mut Instant,
+        gone: &mut Option<tokio::sync::oneshot::Receiver<()>>,
+    ) -> Result<tokio::sync::MutexGuard<'a, T>, Response> {
+        use crate::tasks::Still;
+        loop {
+            let g = acquire(lock, gone).await?;
+            match self.tasks.still(admission, req) {
+                Still::Admitted => return Ok(g),
+                Still::Refused(r) => return Err(r),
+                Still::Wait(t) => {
+                    drop(g);
+                    t.wait_running(gone).await?;
+                    *queued_at = Instant::now();
+                }
+            }
+        }
     }
 
     /// What an action of a scoped task touches, then [`crate::tasks::Task::check_scope`]. The device lock is only held
@@ -815,7 +849,13 @@ impl Daemon {
     }
 
     /// [`Self::handle`] once the tasks let the request through
-    async fn handle_admitted(self: &Arc<Self>, req: Request, queued_at: Instant, mut ctx: CallCtx) -> Response {
+    async fn handle_admitted(
+        self: &Arc<Self>,
+        req: Request,
+        mut queued_at: Instant,
+        mut ctx: CallCtx,
+        admission: &crate::tasks::Admission,
+    ) -> Response {
         let text = |r: Result<String, String>| {
             r.map(|t| Response::text_with(t, crate::protocol::Outcome::default())).unwrap_or_else(Response::error)
         };
@@ -834,7 +874,8 @@ impl Daemon {
             }
             // Web Inspector talks to the page, not to WDA: its own lock, the device lock only to look up the device
             Lane::Web => {
-                let mut slot = match acquire(&self.web, &mut ctx.gone).await {
+                let mut slot = match self.lock_admitted(&self.web, &req, admission, &mut queued_at, &mut ctx.gone).await
+                {
                     Ok(s) => s,
                     Err(r) => return r,
                 };
@@ -858,6 +899,18 @@ impl Daemon {
                 if ctx.gone.as_mut().is_some_and(|g| g.try_recv().is_ok()) {
                     return cancelled();
                 }
+                loop {
+                    match self.tasks.still(admission, &req) {
+                        crate::tasks::Still::Admitted => break,
+                        crate::tasks::Still::Refused(r) => return r,
+                        crate::tasks::Still::Wait(t) => {
+                            if let Err(r) = t.wait_running(&mut ctx.gone).await {
+                                return r;
+                            }
+                            queued_at = Instant::now();
+                        }
+                    }
+                }
                 let device = self.inner.lock().await.device.clone();
                 if let Err(r) = admit(&req, queued_at, &ctx, device.as_ref().map(|d| d.udid.as_str())) {
                     return r;
@@ -875,7 +928,8 @@ impl Daemon {
             Lane::Device => {}
         }
 
-        let mut g = match acquire(&self.inner, &mut ctx.gone).await {
+        // still let through now that it holds the lock: the task may have been paused or taken over meanwhile
+        let mut g = match self.lock_admitted(&self.inner, &req, admission, &mut queued_at, &mut ctx.gone).await {
             Ok(g) => g,
             Err(r) => return r,
         };

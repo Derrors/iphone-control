@@ -7,8 +7,10 @@
 //!   keyframes, which is how WebCodecs takes HEVC without one;
 //! - the picture is the phone's portrait framebuffer padded to multiples of 16 (1320×2868 arrives as 1328×2896): the
 //!   page cuts the padding off and turns it by the `rotation` the daemon sends ([`ScreenMsg::Info`], type 3);
-//! - falling behind can't be met by encoding fewer frames: frames other than keyframes are dropped until a keyframe,
-//!   which is asked for (one is 15–50 KB and arrives about 20 ms later).
+//! - falling behind can't be met by encoding fewer frames. Frames first wait while the page is behind ([`Hold`]: up to
+//!   [`HOLD`]; over Wi-Fi a report is now and then a few hundred ms late though the link keeps up) and go together
+//!   once it caught up; past that they are dropped until a keyframe, which is asked for (one is 15–50 KB and arrives
+//!   about 20 ms later, but asking is limited to every [`ASK_EVERY`], so the picture stopped for 0.5 to 1 s).
 //!
 //! Browsers that can't decode HEVC (most without hardware decoding: Firefox, Chrome on most Linux) get the H.264
 //! picture or MJPEG instead; the page decides (`isConfigSupported`).
@@ -24,6 +26,10 @@ use super::{AbortOnDrop, Acks, Flow, QUEUE, STREAM_IDLE, message, send_video};
 
 /// Asking for keyframes at most this often while dropping frames
 const ASK_EVERY: Duration = Duration::from_millis(500);
+/// How long frames wait for a page that is behind before they are dropped until a keyframe
+const HOLD: Duration = Duration::from_millis(400);
+/// … and how much of them
+const HOLD_BYTES: usize = 1024 * 1024;
 /// Largest message accepted from the daemon (a keyframe is well under 1 MB)
 const MAX_MESSAGE: usize = 16 * 1024 * 1024;
 
@@ -75,7 +81,9 @@ pub async fn serve(
     // dropping frames until a keyframe (the page fell behind, or its queue was full)
     let mut need_key = false;
     let mut asked: Option<Instant> = None;
+    let mut held = Hold::default();
     loop {
+        let wait_until = held.deadline().map(tokio::time::Instant::from_std);
         tokio::select! {
             _ = out_tx.closed() => return,
             m = msgs.recv() => {
@@ -103,8 +111,8 @@ pub async fn serve(
                     }
                     Some(k @ (ScreenMsg::Key | ScreenMsg::Delta)) => {
                         let key = k == ScreenMsg::Key;
-                        if !key && (need_key || flow.behind(now)) {
-                            need_key = true;
+                        // frames were dropped: only a keyframe continues the picture
+                        if need_key && !key {
                             if asked.is_none_or(|t| t.elapsed() >= ASK_EVERY) {
                                 asked = Some(now);
                                 if daemon_w.write_all(&[SCREEN_KEYFRAME]).await.is_err() {
@@ -113,22 +121,30 @@ pub async fn serve(
                             }
                             continue;
                         }
-                        // a keyframe while the page is still behind waits for the next one
-                        if key && flow.behind(now) {
-                            need_key = true;
+                        let m = message(if key { 1 } else { 2 }, &body);
+                        // the page is behind (or frames already wait): this one waits too, a while
+                        if flow.behind(now) || !held.is_empty() {
+                            held.push(m, key, now);
+                            if held.expired(now) {
+                                held.clear();
+                                need_key = true;
+                                if asked.is_none_or(|t| t.elapsed() >= ASK_EVERY) {
+                                    asked = Some(now);
+                                    if daemon_w.write_all(&[SCREEN_KEYFRAME]).await.is_err() {
+                                        return;
+                                    }
+                                }
+                            }
                             continue;
                         }
-                        let m = message(if key { 1 } else { 2 }, &body);
-                        let len = m.len();
-                        match out_tx.try_send(m) {
-                            Ok(()) => {
-                                flow.sent(len, now);
+                        match send(&out_tx, &mut flow, m, now) {
+                            Sent::Yes => {
                                 if key {
                                     need_key = false;
                                 }
                             }
-                            Err(mpsc::error::TrySendError::Full(_)) => need_key = true,
-                            Err(mpsc::error::TrySendError::Closed(_)) => return,
+                            Sent::Full => need_key = true,
+                            Sent::Closed => return,
                         }
                     }
                     None => {}
@@ -140,6 +156,23 @@ pub async fn serve(
                 }
                 let bytes = *acked.borrow_and_update();
                 flow.ack(bytes, Instant::now());
+                // caught up while frames waited: they go now, in order
+                if !held.is_empty() && !flow.behind(Instant::now()) {
+                    for (m, key) in held.take() {
+                        match send(&out_tx, &mut flow, m, Instant::now()) {
+                            Sent::Yes => {
+                                if key {
+                                    need_key = false;
+                                }
+                            }
+                            Sent::Full => {
+                                need_key = true;
+                                break;
+                            }
+                            Sent::Closed => return,
+                        }
+                    }
+                }
                 // caught up after dropping frames: a keyframe now rather than at the next request
                 if need_key && !flow.behind(Instant::now()) && asked.is_none_or(|t| t.elapsed() >= ASK_EVERY) {
                     asked = Some(Instant::now());
@@ -148,6 +181,105 @@ pub async fn serve(
                     }
                 }
             }
+            // frames waited as long as they may and the page is still behind: drop them, a keyframe instead
+            () = async { tokio::time::sleep_until(wait_until.unwrap_or_else(tokio::time::Instant::now)).await }, if wait_until.is_some() => {
+                held.clear();
+                need_key = true;
+                if asked.is_none_or(|t| t.elapsed() >= ASK_EVERY) {
+                    asked = Some(Instant::now());
+                    if daemon_w.write_all(&[SCREEN_KEYFRAME]).await.is_err() {
+                        return;
+                    }
+                }
+            }
         }
+    }
+}
+
+enum Sent {
+    Yes,
+    Full,
+    Closed,
+}
+
+fn send(out: &mpsc::Sender<Vec<u8>>, flow: &mut Flow, m: Vec<u8>, now: Instant) -> Sent {
+    let len = m.len();
+    match out.try_send(m) {
+        Ok(()) => {
+            flow.sent(len, now);
+            Sent::Yes
+        }
+        Err(mpsc::error::TrySendError::Full(_)) => Sent::Full,
+        Err(mpsc::error::TrySendError::Closed(_)) => Sent::Closed,
+    }
+}
+
+/// Frames waiting for a page that is a little behind ([`HOLD`]): a keyframe makes those before it needless
+#[derive(Default)]
+struct Hold {
+    frames: Vec<(Vec<u8>, bool)>,
+    bytes: usize,
+    since: Option<Instant>,
+}
+
+impl Hold {
+    fn is_empty(&self) -> bool {
+        self.frames.is_empty()
+    }
+
+    fn push(&mut self, m: Vec<u8>, key: bool, now: Instant) {
+        if key {
+            self.clear();
+        }
+        self.since.get_or_insert(now);
+        self.bytes += m.len();
+        self.frames.push((m, key));
+    }
+
+    fn clear(&mut self) {
+        self.frames.clear();
+        self.bytes = 0;
+        self.since = None;
+    }
+
+    /// Waited too long, or too much waits
+    fn expired(&self, now: Instant) -> bool {
+        self.since.is_some_and(|t| now.saturating_duration_since(t) >= HOLD) || self.bytes > HOLD_BYTES
+    }
+
+    /// When the waiting frames are given up
+    fn deadline(&self) -> Option<Instant> {
+        self.since.map(|t| t + HOLD)
+    }
+
+    fn take(&mut self) -> Vec<(Vec<u8>, bool)> {
+        let f = std::mem::take(&mut self.frames);
+        self.clear();
+        f
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Frames wait up to [`HOLD`] (or [`HOLD_BYTES`]); a keyframe replaces whatever waited before it
+    #[test]
+    fn frames_wait_a_while_for_a_late_page() {
+        let t0 = Instant::now();
+        let mut h = Hold::default();
+        assert!(h.deadline().is_none());
+        h.push(vec![2; 100], false, t0);
+        h.push(vec![2; 100], false, t0 + Duration::from_millis(40));
+        assert!(!h.expired(t0 + Duration::from_millis(390)));
+        assert!(h.expired(t0 + HOLD));
+        assert_eq!(h.deadline(), Some(t0 + HOLD));
+        h.push(vec![1; 50], true, t0 + Duration::from_millis(100));
+        assert_eq!(h.frames.len(), 1, "the keyframe alone");
+        assert_eq!(h.deadline(), Some(t0 + Duration::from_millis(100) + HOLD), "and it waits from now");
+        assert_eq!(h.take().len(), 1);
+        assert!(h.is_empty() && h.bytes == 0);
+        h.push(vec![2; HOLD_BYTES + 1], false, t0);
+        assert!(h.expired(t0), "too much waiting");
     }
 }

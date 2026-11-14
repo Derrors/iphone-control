@@ -6,6 +6,10 @@ All notable changes to this project are documented here. The format is based on 
 
 ## [Unreleased]
 
+### Fixed
+
+- The phone's own picture (HEVC) on the control page no longer stops for half a second to a second now and then over Wi-Fi. A report from the page that came a few hundred milliseconds late made the picture skip to the next keyframe; frames now wait up to 400 ms for such a page, the allowance follows how much the link's round trip varies, and the page has two reports on the way at most instead of one. Under emulated Wi-Fi delays the longest stop went from 1.1 s to 0.1 s.
+
 ## [0.2.5] - 2026-11-14
 
 ### Upgrade notes

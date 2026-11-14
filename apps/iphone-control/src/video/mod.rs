@@ -16,8 +16,8 @@
 //! frames far faster than a slow link delivers them, so how full the queue here is says nothing; with a 30 KB/s
 //! reader the picture was 40 s late. The page therefore reports how many bytes it has read (`POST /api/video/ack`,
 //! every 100 ms while frames arrive, [`Acks`]). While the page is behind ([`Flow::behind`]: the oldest frame it
-//! hasn't confirmed is older than the usual round trip plus [`SLACK`], or more is on the way than the link delivers
-//! in that time), no new picture goes to the encoder; once the page has caught up, only the newest one does. Every encoded frame is still sent, so the chain of frames stays whole and no keyframe is needed (one would
+//! hasn't confirmed is older than the usual round trip plus [`SLACK`] and the link's usual variation, or more is on
+//! the way than the link delivers in that time), no new picture goes to the encoder; once the page has caught up, only the newest one does. Every encoded frame is still sent, so the chain of frames stays whole and no keyframe is needed (one would
 //! take seconds on such a link): the frame rate drops to what the link carries and the picture stays about that
 //! close to live. A page that never reports (an older one) only gets the queue check below.
 //!
@@ -60,6 +60,11 @@ const RESTART_EVERY: Duration = Duration::from_secs(1);
 const TRIES: usize = 3;
 /// How much later than usual the page may confirm a frame before frames are skipped
 const SLACK: Duration = Duration::from_millis(300);
+/// On top of [`SLACK`], how much the round trip is seen to vary (its 90th percentile over [`BASE_WINDOW`] less its
+/// shortest), at most this much. Over Wi-Fi each report is a new connection and TLS handshake, about three round
+/// trips, and a round trip that is 2 ms at best was 30 to 80 ms at times: reports 400 ms late now and then, which
+/// made the picture skip to the next keyframe again and again although the link kept up
+const MAX_JITTER: Duration = Duration::from_millis(700);
 /// The usual round trip is the shortest seen over this long
 const BASE_WINDOW: Duration = Duration::from_secs(10);
 /// The link's speed is the fastest delivery seen over this long
@@ -156,6 +161,16 @@ impl Flow {
         }
     }
 
+    /// How late a confirmation may be: the usual round trip (the shortest seen) plus [`SLACK`], plus how much the
+    /// round trip varies on this link (up to [`MAX_JITTER`])
+    fn allowance(&self) -> Duration {
+        let mut d: Vec<Duration> = self.trips.iter().map(|(_, d)| *d).collect();
+        d.sort();
+        let Some(&min) = d.first() else { return SLACK };
+        let p90 = d[(d.len() * 9 / 10).min(d.len() - 1)];
+        min + SLACK + p90.saturating_sub(min).min(MAX_JITTER)
+    }
+
     /// The page is behind: its oldest unconfirmed message is older than a usual round trip plus [`SLACK`], or more
     /// is on the way than the link delivers in that time (without this, the pictures arriving in the first [`SLACK`]
     /// after catching up would all go out at once). The rate is what was delivered, which on a fast link is only
@@ -166,7 +181,7 @@ impl Flow {
         if !self.reports || self.heard.is_some_and(|t| now.saturating_duration_since(t) > REPORTS_STALE) {
             return false;
         }
-        let allowed = self.trips.iter().map(|(_, d)| *d).min().unwrap_or_default() + SLACK;
+        let allowed = self.allowance();
         if now.saturating_duration_since(*oldest) > allowed {
             return true;
         }
@@ -539,10 +554,38 @@ mod tests {
         assert!(f.behind(ms(1360)));
         f.ack(400, ms(1400));
         assert!(!f.behind(ms(1400)));
-        // reports stop coming (one got lost): no waiting for them forever
+        // reports stop coming (one got lost): no waiting for them forever. That one took 400 ms, so this link's round
+        // trip varies by 350 ms, on top of the 50 + 300
         f.sent(100, ms(1500));
-        assert!(f.behind(ms(2000)));
+        assert!(!f.behind(ms(2150)));
+        assert!(f.behind(ms(2250)));
         assert!(!f.behind(ms(4500)), "nothing heard for over 3 s");
+    }
+
+    /// Over Wi-Fi the reports come 100 ms after the frames as a rule and now and then 450 ms: such a late one isn't
+    /// falling behind. One that stops coming still is, a little later (at most [`MAX_JITTER`] later)
+    #[test]
+    fn a_link_that_varies_gets_its_variation_on_top() {
+        let t0 = Instant::now();
+        let ms = |n| t0 + Duration::from_millis(n);
+        let mut f = Flow::default();
+        // 50 frames, each confirmed 100 ms later, every 10th 450 ms later
+        let mut t = 0;
+        for i in 0..50u64 {
+            f.sent(1000, ms(t));
+            f.ack((i + 1) * 1000, ms(t + if i % 10 == 9 { 450 } else { 100 }));
+            t += 500;
+        }
+        f.sent(1000, ms(t));
+        assert!(!f.behind(ms(t + 450)), "as late as this link's slow reports");
+        assert!(f.behind(ms(t + 800)), "later than that: behind");
+        // a link that varied wildly: the allowance stops growing
+        let mut g = Flow::default();
+        for i in 0..20u64 {
+            g.sent(1000, ms(i * 3000));
+            g.ack((i + 1) * 1000, ms(i * 3000 + if i % 2 == 0 { 50 } else { 2500 }));
+        }
+        assert_eq!(g.allowance(), Duration::from_millis(50) + SLACK + MAX_JITTER);
     }
 
     /// On a link that delivers 20 KB/s, a second 20 KB frame waits for the first: 300 ms of that link is 6 KB. On a

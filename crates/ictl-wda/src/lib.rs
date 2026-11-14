@@ -30,6 +30,9 @@ pub enum WdaError {
     NotInstalled(String),
     #[error("{}", ictl_l10n::trf!("WDA 启动失败：{0}", "WDA failed to start: {0}", .0))]
     StartFailed(String),
+    /// 到时限还没就绪，也没看到在等「Enable UI Automation」密码（[`WdaRunner::start`]、[`WdaRunner::attach`]）
+    #[error("{}", ictl_l10n::trf!("WDA 启动失败：{0}", "WDA failed to start: {0}", .0))]
+    NotReadyInTime(String),
     #[error("{kind}: {message}")]
     Remote { kind: String, message: String },
 }

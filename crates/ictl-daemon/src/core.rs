@@ -380,6 +380,9 @@ pub struct Daemon {
     pub(crate) heartbeat: crate::watchdog::Heartbeat,
     /// AI tasks: who may act on the phone while one runs (see [`crate::tasks`])
     pub(crate) tasks: crate::tasks::Tasks,
+    /// A supervision round is due now, not at the next [`TICK`]: starting WDA finished, so its outcome is taken
+    /// (ready seconds sooner after a restart or a hang)
+    pub(crate) wake: Arc<tokio::sync::Notify>,
 }
 
 /// 停掉 HID 会话（屏幕媒体流），隧道保留。媒体流不停的话手机一直以为「配对的电脑」在看屏幕：
@@ -505,6 +508,7 @@ impl Daemon {
             web: Mutex::new(None),
             heartbeat: Heartbeat::new(),
             tasks,
+            wake: Arc::default(),
         })
     }
 

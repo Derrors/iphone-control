@@ -181,7 +181,16 @@ impl<T: Transport> WdaClient<T> {
         let r = self.send(method, path, body, timeout).await;
         match &r {
             Err(e) if e.no_answer() => {
-                self.unanswered.fetch_add(1, Ordering::Relaxed);
+                let n = self.unanswered.fetch_add(1, Ordering::Relaxed) + 1;
+                // a long request went unanswered: one quick question tells a stuck WDA from a slow request, instead of
+                // waiting the full time twice more (a tool call took 90 s before the daemon could restart it)
+                if n < STALL_LIMIT && timeout > XCTEST_PROBE_TIMEOUT {
+                    match self.send("GET", "/wda/activeAppInfo", None, XCTEST_PROBE_TIMEOUT).await {
+                        Err(p) if p.no_answer() => self.unanswered.store(STALL_LIMIT, Ordering::Relaxed),
+                        // it answers: slow, not stuck (still counted, until something is answered)
+                        _ => {}
+                    }
+                }
             }
             _ => self.unanswered.store(0, Ordering::Relaxed),
         }
@@ -1030,7 +1039,8 @@ mod tests {
     }
 
     /// 经 XCTest 的请求（工具调用和探测一样算）连续 3 次没有应答就判定卡死：之后不再发，直接报不可用；
-    /// `/status` 不经 XCTest，既不算数也不受影响；中间有一次应答（哪怕是错误）就从头数
+    /// `/status` 不经 XCTest，既不算数也不受影响；中间有一次应答（哪怕是错误）就从头数。
+    /// 长请求没应答时马上问一次前台 App（5 秒）：它也没应答就立刻判定卡死，它应答了只是慢
     #[tokio::test]
     async fn three_unanswered_requests_mean_stalled() {
         type Reply = std::io::Result<(u16, Vec<u8>)>;
@@ -1054,11 +1064,16 @@ mod tests {
         let ok = |b: &str| Ok((200, b.as_bytes().to_vec()));
         let t = Scripted {
             replies: Mutex::new(VecDeque::from([
+                // a long request unanswered, the quick question after it answered: slow, not stuck
                 timeout(),
+                ok(r#"{"value":{}}"#),
                 timeout(),
+                ok(r#"{"value":{}}"#),
                 ok(r#"{"value":{"error":"unknown error","message":"busy"}}"#),
+                // the probe itself is short: no question after it
                 timeout(),
                 ok(r#"{"value":{"ready":true}}"#),
+                // a long request and the quick question both unanswered: stuck at once
                 timeout(),
                 timeout(),
                 ok(r#"{"value":{"ready":true}}"#),
@@ -1076,10 +1091,10 @@ mod tests {
         // /status 应答了也不清零
         assert!(c.ready().await.unwrap());
         assert_eq!(c.unanswered(), 1);
-        assert!(c.wda_reports_locked().await.is_err());
         assert!(!c.stalled());
-        assert!(c.active_app().await.is_err());
-        assert!(c.stalled());
+        assert!(c.wda_reports_locked().await.is_err());
+        assert!(c.stalled(), "the quick question went unanswered too");
+        assert!(t.replies.lock().unwrap().len() == 1, "every scripted reply but /status was used");
         // 卡死后经 XCTest 的请求不再发出，直接报不可用（调用方可以退到 HID）；/status 照常
         let sent = t.sent.lock().unwrap().len();
         assert!(matches!(c.screenshot_png().await, Err(WdaError::Unavailable(_))));

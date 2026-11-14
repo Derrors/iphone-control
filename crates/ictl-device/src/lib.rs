@@ -41,7 +41,7 @@ use idevice::{
 
 pub use apps::AppInfo;
 pub use hid::{Button, HidSession};
-pub use media::{ScreenFeed, ScreenFrame, hevc_codec};
+pub use media::{FULL_BITRATE, LOW_BANDWIDTH_BITRATE, ScreenFeed, ScreenFrame, hevc_codec};
 
 /// A running log stream from the phone; see [`Device::log_stream`]
 pub struct LogStream(oslog::OsLogStream);
@@ -599,11 +599,12 @@ impl Tunnel {
         .await
     }
 
-    /// HID 会话；没有就开一个：先启动显示媒体流（HID 的授权闸门），再连 universalhidservice 和 indigo
-    pub async fn hid(&mut self, screen: ScreenSize) -> Result<&mut HidSession> {
+    /// HID 会话；没有就开一个：先启动显示媒体流（HID 的授权闸门，码率上限 `max_bitrate`，见 media.rs），再连
+    /// universalhidservice 和 indigo。已经开着就照旧用，不管它的码率上限
+    pub async fn hid(&mut self, screen: ScreenSize, max_bitrate: u32) -> Result<&mut HidSession> {
         if self.hid.is_none() {
             // 各步自带时限（见 HidSession::open）：不能在这里整体取消，否则起来一半的媒体流没人停
-            let h = HidSession::open(&mut self.adapter, &mut self.handshake, screen).await?;
+            let h = HidSession::open(&mut self.adapter, &mut self.handshake, screen, max_bitrate).await?;
             self.hid = Some(h);
         }
         let h = self.hid.as_mut().expect("刚建好");

@@ -537,6 +537,7 @@ fn restarting(socket: &std::path::Path) -> bool {
 pub async fn open_screen_stream(
     socket: &std::path::Path,
     expect_udid: Option<&str>,
+    low_bandwidth: bool,
 ) -> std::io::Result<
     Result<(tokio::io::BufReader<tokio::net::unix::OwnedReadHalf>, tokio::net::unix::OwnedWriteHalf), String>,
 > {
@@ -548,6 +549,9 @@ pub async fn open_screen_stream(
         o.insert(LANG.into(), ictl_l10n::lang().code().into());
         if let Some(u) = expect_udid {
             o.insert(EXPECT_UDID.into(), u.into());
+        }
+        if low_bandwidth {
+            o.insert(LOW_BANDWIDTH.into(), true.into());
         }
     }
     let mut line = v.to_string();
@@ -661,6 +665,9 @@ pub const BACKGROUND: &str = "background";
 /// see anyway. Pressing Home skips the alert lookup that comes first (0.8 s of a 1.3 s press on the home screen) and
 /// looks only when the press didn't get to the home screen
 pub const WATCHED: &str = "watched";
+/// Request key of a [`Request::ScreenStream`]: the page is in low-bandwidth mode, so the phone's video is capped at a
+/// lower bitrate while it watches (for every page watching that phone: there is one stream). Older daemons ignore it
+pub const LOW_BANDWIDTH: &str = "low_bandwidth";
 
 /// 发一个请求、读一个响应（客户端用）。`timeout` 为 None 时一直等（例如 `sign` 要等签名装完）。
 /// 返回之前被丢掉（超时、调用方取消）时连接随之关闭，守护进程会放弃还在排队的这个请求

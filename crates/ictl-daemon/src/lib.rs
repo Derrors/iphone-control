@@ -161,7 +161,7 @@ async fn serve_conn(daemon: Arc<Daemon>, stream: tokio::net::UnixStream) {
                 // stops the daemon, which ends the stream; the viewer reconnects to the new one
                 (Ok((protocol::Request::ScreenStream, _, ctx, lang)), Ok(lease)) => {
                     drop(lease);
-                    ictl_l10n::scope(lang, daemon.screen_stream(reader, w, ctx.expect_udid)).await;
+                    ictl_l10n::scope(lang, daemon.screen_stream(reader, w, ctx.expect_udid, ctx.low_bandwidth)).await;
                     return;
                 }
                 // also streams; an opened task's connection is its lease, so it isn't held against updates either
@@ -214,7 +214,7 @@ async fn serve_conn(daemon: Arc<Daemon>, stream: tokio::net::UnixStream) {
 /// No language (an older client) means Chinese, which is what those clients expect and parse
 fn parse_request(line: &[u8]) -> serde_json::Result<(protocol::Request, bool, core::CallCtx, ictl_l10n::Lang)> {
     let mut v: serde_json::Value = serde_json::from_slice(line)?;
-    let (cancel, udid, view, lang, task, task_step, background, watched) = match v.as_object_mut() {
+    let (cancel, udid, view, lang, task, task_step, background, watched, low_bandwidth) = match v.as_object_mut() {
         Some(o) => (
             o.remove(protocol::CANCEL_ON_CLOSE).is_some_and(|c| c == true),
             o.remove(protocol::EXPECT_UDID).and_then(|u| u.as_str().map(str::to_owned)),
@@ -224,8 +224,9 @@ fn parse_request(line: &[u8]) -> serde_json::Result<(protocol::Request, bool, co
             o.remove(protocol::TASK_STEP).and_then(|s| s.as_u64()),
             o.remove(protocol::BACKGROUND).is_some_and(|b| b == true),
             o.remove(protocol::WATCHED).is_some_and(|b| b == true),
+            o.remove(protocol::LOW_BANDWIDTH).is_some_and(|b| b == true),
         ),
-        None => (false, None, None, None, None, None, false, false),
+        None => (false, None, None, None, None, None, false, false, false),
     };
     Ok((
         serde_json::from_value(v)?,
@@ -239,6 +240,7 @@ fn parse_request(line: &[u8]) -> serde_json::Result<(protocol::Request, bool, co
             peer: None,
             background,
             watched,
+            low_bandwidth,
         },
         lang.unwrap_or(ictl_l10n::Lang::Zh),
     ))
@@ -423,7 +425,10 @@ mod tests {
         assert!(!ctx.watched && !ctx.background);
         let (req, _, ctx, _) = parse_request(br#"{"op":"press_button","button":"home","watched":true}"#).unwrap();
         assert_eq!(req, protocol::Request::PressButton { button: "home".into() });
-        assert!(ctx.watched && !ctx.background);
+        assert!(ctx.watched && !ctx.background && !ctx.low_bandwidth);
+        let (req, _, ctx, _) = parse_request(br#"{"op":"screen_stream","low_bandwidth":true}"#).unwrap();
+        assert_eq!(req, protocol::Request::ScreenStream);
+        assert!(ctx.low_bandwidth);
         assert_eq!(lang, Lang::Zh);
         let (_, _, _, lang) = parse_request(br#"{"op":"status","lang":"klingon"}"#).unwrap();
         assert_eq!(lang, Lang::Zh);

@@ -77,7 +77,7 @@ iphone-control doctor    # 逐层检查，每项失败都给出修复办法
 
 ## 控制台画面卡、流量大
 
-看画面下方写的编码方式。iOS 27 及以上、浏览器能解 HEVC 时是「HEVC iPhone」，约每秒 60 帧；浏览器解不了时换 Mac 上的 Chrome 或 Safari。是 MJPEG 的话，装上 ffmpeg 再重启 `iphone-control viewer`，画面改用 H.264，流量约为原来的 1/15；启动时终端里会写用的是哪个编码器，`doctor` 会检查 ffmpeg 和显卡能不能用。已经是 H.264、链路又很慢时，画面帧率会下降，但不会越来越滞后；还嫌慢，可以把 `IPHONE_CONTROL_VIEWER_QP` 调大一些（比如 `24`）。见[控制台的画面](../guide/cli#viewer-picture)。
+看画面下方写的编码方式。iOS 27 及以上、浏览器能解 HEVC 时是「HEVC iPhone」，约每秒 60 帧；浏览器解不了时换 Mac 上的 Chrome 或 Safari。是 MJPEG 的话，装上 ffmpeg 再重启 `iphone-control viewer`，画面改用 H.264，流量约为原来的 1/15；启动时终端里会写用的是哪个编码器，`doctor` 会检查 ffmpeg 和显卡能不能用。链路很慢时，画面帧率会下降，但不会越来越滞后；可以在控制台「设置」里打开「弱网模式」，流量约减一半（HEVC 和 H.264 都有效），H.264 还可以把 `IPHONE_CONTROL_VIEWER_QP` 调大一些（比如 `24`）。见[控制台的画面](../guide/cli#viewer-picture)。
 
 ## 控制台开着时 WDA 每隔几分钟重启一次
 

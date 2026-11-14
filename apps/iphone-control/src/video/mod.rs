@@ -40,7 +40,7 @@ use serde_json::json;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::sync::{mpsc, watch};
 
-pub use ffmpeg::Encoders;
+pub use ffmpeg::{Encoders, LOW_BANDWIDTH_QP};
 use flv::Packet;
 
 /// `IPHONE_CONTROL_VIEWER_CODEC` allows the phone's own screen video ([`device`]): `auto` (the default) or `device`
@@ -217,6 +217,7 @@ fn config_message(avcc: &[u8], size: (u32, u32), encoder: &str, stream: &str) ->
 /// Sends the picture of `src` (WDA's MJPEG response) to `client` until either ends. The HTTP head is already sent
 pub async fn serve(
     enc: Arc<Encoders>,
+    qp: u8,
     acks: Arc<Acks>,
     src: impl AsyncRead + Unpin + Send + 'static,
     client: impl AsyncRead + AsyncWrite + Unpin + Send + 'static,
@@ -287,7 +288,7 @@ pub async fn serve(
                 let Some(size) = mjpeg::jpeg_size(&j) else { continue };
                 // a new size (the screen turned): a new session, whose first frame is a keyframe of that size
                 if session.as_ref().is_none_or(|s| s.size != size) {
-                    let Some(s) = start(&enc, size) else { return };
+                    let Some(s) = start(&enc, size, qp) else { return };
                     session = Some(s);
                     produced = false;
                 }
@@ -339,7 +340,7 @@ pub async fn serve(
                 }
                 let Some(j) = &last else { continue };
                 let Some(size) = mjpeg::jpeg_size(j) else { continue };
-                let Some(s) = start(&enc, size) else { return };
+                let Some(s) = start(&enc, size, qp) else { return };
                 s.push(j.clone());
                 session = Some(s);
                 produced = false;
@@ -360,7 +361,7 @@ pub async fn serve(
                 if need_key && out_tx.capacity() == QUEUE && restarted.elapsed() >= RESTART_EVERY {
                     let (Some(j), Some(old)) = (&last, &session) else { continue };
                     let size = old.size;
-                    let Some(s) = start(&enc, size) else { return };
+                    let Some(s) = start(&enc, size, qp) else { return };
                     s.push(j.clone());
                     session = Some(s);
                     produced = false;
@@ -378,8 +379,8 @@ enum Ev {
     Tick,
 }
 
-fn start(enc: &Encoders, size: (u32, u32)) -> Option<ffmpeg::Session> {
-    enc.start(size.0, size.1).map_err(|e| tracing::debug!("{e}")).ok()
+fn start(enc: &Encoders, size: (u32, u32), qp: u8) -> Option<ffmpeg::Session> {
+    enc.start(size.0, size.1, qp).map_err(|e| tracing::debug!("{e}")).ok()
 }
 
 /// The MJPEG picture (`GET /stream`, when there is no H.264): the phone's frames with repeated ones dropped (WDA
@@ -670,7 +671,7 @@ mod tests {
         let mut page = tokio::net::TcpStream::connect(l.local_addr().unwrap()).await.unwrap();
         let (server_side, _) = l.accept().await.unwrap();
         let acks = Arc::new(Acks::default());
-        let _server = AbortOnDrop(tokio::spawn(serve(enc, acks.clone(), src, server_side)));
+        let _server = AbortOnDrop(tokio::spawn(serve(enc.clone(), enc.qp(), acks.clone(), src, server_side)));
         const RATE: f64 = 20.0 * 1024.0;
         let (mut buf, mut total, mut frames_in) = (Vec::new(), 0u64, 0);
         let (mut stream, mut last_frame, mut reported) = (None::<String>, None::<Instant>, Instant::now());

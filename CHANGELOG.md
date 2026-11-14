@@ -6,12 +6,17 @@ All notable changes to this project are documented here. The format is based on 
 
 ## [Unreleased]
 
+### Added
+
+- Low-bandwidth mode for the control page's picture: a switch in Settings, for use over the internet or a weak signal. The phone's own video (HEVC) is asked for with a 2 Mbit/s cap instead of 6, about half the traffic at the same frame rate (on an iPhone's home screen 214 KB/s instead of 459–483 while swiping); a still screen looks the same, moving content gets a little blocky. There is one such stream per phone, so while any page watching it has the mode on, all of them get it, and the stream starts again (the picture stops for about half a second) when the first such page comes and when the last one goes. The H.264 picture changes only for that page (qp 26: 689 KB/s instead of 1350).
+
 ### Changed
 
 - The control page's requests share a connection instead of opening one each (`Connection: keep-alive`). Over Wi-Fi a new connection and its TLS handshake cost two more round trips, for every tap, every check and each of the ten reports a second on the picture. With a 40 ms round trip a request from the page went from about 220 ms to 47 ms, and about 40 s on the page opened 19 connections instead of 763. A connection is kept only for a logged-in request, closes after 15 s of nothing, and isn't kept when fewer than 8 of the 32 places are free; streams (the picture, task events, `/mcp`) still have their own.
 
 ### Fixed
 
+- A control page watching the phone's own video got no more frames, and wasn't closed, when the phone's media stream was stopped and started again (the daemon's side of each page held the stream's channel open); it now hears that the stream ended and reconnects.
 - Home on the control page is pressed at once: about 0.5 s instead of 1 s on an iPhone's home screen. The daemon first looked for a system alert that would stop Home working (0.8 s on the home screen), which the person at the page sees anyway; the page's requests now say someone is watching (`watched`), and for them the daemon looks only when the press didn't get to the home screen. Agents (MCP, CLI) are checked first as before.
 - Taps and Home presses on the control page no longer wait behind its background checks. While it shows the phone's own picture the page asks every few seconds whether a system alert is up, which on the home screen keeps WDA busy for about 0.8 s, and its status check takes the phone too: an action that came meanwhile waited for them. These checks now give way: they don't start within 4 s (the status: 1 s) of an action, nor while one waits, and one that runs is dropped when an action comes. With the page checking, a finger's press went from 775 ms to 25 ms at the 90th percentile, a Home press from 1.8 s to 1.3 s.
 - The phone's own picture (HEVC) on the control page no longer stops for half a second to a second now and then over Wi-Fi. A report from the page that came a few hundred milliseconds late made the picture skip to the next keyframe; frames now wait up to 400 ms for such a page, the allowance follows how much the link's round trip varies, and the page has two reports on the way at most instead of one. Under emulated Wi-Fi delays the longest stop went from 1.1 s to 0.1 s.

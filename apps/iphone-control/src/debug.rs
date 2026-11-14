@@ -166,7 +166,7 @@ async fn e2e_with_wda(
     // HID 路线：同样的点击和 Home，以 WDA 的前台 App 判断是否生效
     let screen = wda.screen_size().await?;
     let t = Instant::now();
-    let hid = tunnel.hid(screen).await?;
+    let hid = tunnel.hid(screen, ictl_device::FULL_BITRATE).await?;
     check(ictl_l10n::tr!("打开 HID 会话", "open HID session"), t, true, String::new())?;
     let r = async {
         let t = Instant::now();
@@ -225,7 +225,7 @@ pub async fn run(udid: Option<&str>, args: DebugArgs) -> anyhow::Result<()> {
         Check::Hid { x, y } => {
             let mut t = device.open_tunnel().await?;
             let r = async {
-                let hid = t.hid(screen).await?;
+                let hid = t.hid(screen, ictl_device::FULL_BITRATE).await?;
                 hid.tap(x, y).await?;
                 println!(
                     "{}",

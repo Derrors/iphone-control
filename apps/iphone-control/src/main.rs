@@ -1286,9 +1286,17 @@ const HEAD_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// 读到请求头结束；返回头部和跟着一起到的那部分请求体
 async fn read_head(client: &mut (impl tokio::io::AsyncRead + Unpin)) -> anyhow::Result<(Vec<u8>, Vec<u8>)> {
+    read_head_from(client, Vec::new()).await
+}
+
+/// [`read_head`] for the next request on a connection kept open: `data` is what already came of it
+async fn read_head_from(
+    client: &mut (impl tokio::io::AsyncRead + Unpin),
+    data: Vec<u8>,
+) -> anyhow::Result<(Vec<u8>, Vec<u8>)> {
     use tokio::io::AsyncReadExt;
     let read = async {
-        let mut data = Vec::new();
+        let mut data = data;
         let mut buf = [0u8; 4096];
         loop {
             if let Some(i) = data.windows(4).position(|w| w == b"\r\n\r\n") {

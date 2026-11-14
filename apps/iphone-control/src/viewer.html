@@ -1425,7 +1425,7 @@ const statusEl = $('#status'), promptEl = $('#prompt'), promptErr = $('#prompt-e
 const turnsEl = $('#turns'), stopDialog = $('#stop-dialog'), deviceEl = $('#device-value');
 /* 实时画面：H.264 画在 canvas 上（见「H.264 画面」），否则是 MJPEG 的 img */
 const cv = $('#live-v'), cvx = cv.getContext('2d');
-const V = { on: false, off: false, noDevice: false, device: false, crop: false, rot: null, frameRotation: null, codecName: '', ctrl: null, dec: null, got: false, label: '', ts: 0, bytes: 0, rate: null, stream: '', recv: 0, acked: 0, acking: false };
+const V = { on: false, off: false, noDevice: false, device: false, crop: false, rot: null, frameRotation: null, codecName: '', ctrl: null, dec: null, got: false, label: '', ts: 0, bytes: 0, rate: null, stream: '', recv: 0, acked: 0, acking: 0, reported: 0 };
 /* MJPEG 画面横屏时也画在 canvas 上转正（见 mjpegTurn） */
 const M = { on: false, raf: 0 };
 const onCanvas = () => V.on || M.on;
@@ -2322,7 +2322,7 @@ function connect() {
  * 这一页从没出过画面就失败（没有编码器、浏览器解不了）就改用 MJPEG，之后不再试 ---------- */
 function stopVideo() {
   if (V.ctrl) V.ctrl.abort();
-  V.ctrl = null; V.on = false; V.got = false; V.rate = null; V.stream = ''; V.recv = 0; V.acked = 0; V.acking = false;
+  V.ctrl = null; V.on = false; V.got = false; V.rate = null; V.stream = ''; V.recv = 0; V.acked = 0; V.acking = 0; V.reported = 0;
   V.device = false; V.crop = false; V.rot = null; V.frameRotation = null; V.bytes = 0; V.codecName = '';
   if (V.dec && V.dec.state !== 'closed') { try { V.dec.close(); } catch { /* 已经关了 */ } }
   V.dec = null;
@@ -2402,15 +2402,16 @@ async function startVideo(q, dev) {
 /* 每秒算一次 H.264 画面的流量，显示在画面下方 */
 setInterval(() => { if (V.on) { V.rate = V.bytes; V.bytes = 0; renderFeed(); } }, 1000);
 /* 告诉服务端读到了多少：链路慢、隧道里堆了数据时，它据此少编几帧，画面不会越来越滞后。
- * 服务端收到才算报过，丢了的下一轮再报（不然它会一直等这次回报） */
+ * 服务端收到才算报过，丢了的下一轮再报（不然它会一直等这次回报）。最多两个回报同时在路上：
+ * Wi-Fi 上一次回报偶尔要几百毫秒，下一个不必等它，先到的就先算 */
 setInterval(() => {
-  if (!V.on || !V.stream || V.recv === V.acked || V.acking) return;
+  if (!V.on || !V.stream || V.recv === V.acked || V.acking >= 2 || V.recv === V.reported) return;
   const stream = V.stream, bytes = V.recv;
-  V.acking = true;
+  V.acking = (V.acking || 0) + 1; V.reported = bytes;
   fetch('/api/video/ack', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ stream, bytes }) })
-    .then(r => { if (r.ok && V.stream === stream) V.acked = Math.max(V.acked, bytes); })
-    .catch(() => {})
-    .finally(() => { if (V.stream === stream) V.acking = false; });
+    .then(r => { if (r.ok && V.stream === stream) V.acked = Math.max(V.acked, bytes); else if (V.stream === stream) V.reported = V.acked; })
+    .catch(() => { if (V.stream === stream) V.reported = V.acked; })
+    .finally(() => { if (V.stream === stream) V.acking = Math.max(0, V.acking - 1); });
 }, 100);
 function renderFeed() {
   const dot = $('#feed-dot'), txt = $('#feed-text');

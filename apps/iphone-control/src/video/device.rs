@@ -18,7 +18,6 @@ use std::time::{Duration, Instant};
 
 use ictl_daemon::protocol::{SCREEN_KEYFRAME, ScreenMsg};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 
 use super::{AbortOnDrop, Acks, Flow, QUEUE, STREAM_IDLE, message, send_video};
@@ -45,7 +44,7 @@ pub async fn serve(
     mut src: tokio::io::BufReader<tokio::net::unix::OwnedReadHalf>,
     mut daemon_w: tokio::net::unix::OwnedWriteHalf,
     acks: Arc<Acks>,
-    client: TcpStream,
+    client: impl tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
 ) {
     let (ack_guard, mut acked) = acks.register();
     let mut flow = Flow::default();

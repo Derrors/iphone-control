@@ -58,6 +58,21 @@ Messages are in Simplified Chinese by default, and in English with `IPHONE_CONTR
 - **Taps do nothing:** a system alert may be covering the screen; the result says so (「屏幕上有系统弹窗…」). Dismiss it first.
 - **Typed text is incomplete:** `iphone_type_text` reads the field back and fixes it; if it still reports a mismatch, the app rewrites the field while typing — type shorter pieces.
 
+## The control page asks for a login, or says the token is wrong
+
+Every HTTP visit needs a login, on this machine too. On the machine with the phone run `iphone-control viewer token` and open the link it prints (or paste the token on the login page). Back at the login page after being logged in: the token was replaced or removed (`viewer token show <name> --new`, `remove`). After 20 wrong tokens in a minute none are checked for the rest of it (you are asked to try again later). A read-only token can watch but not act; the page says "Read-only". See [Viewer and Remote Use](../guide/remote).
+
+## The browser warns about the certificate on the local network
+
+With `--lan` the viewer uses a self-signed certificate made on that machine, so the browser warns the first time. In the warning's certificate details, check that the SHA-256 fingerprint matches what `iphone-control service status` (or the viewer at startup) shows, then go on. A new IP address for the machine makes a new certificate, to check again. To skip the warning, use a certificate of your own with `--tls-cert`/`--tls-key` (mkcert, `tailscale cert`).
+
+## Can't reach the viewer, `/mcp` or `task --url` from another machine
+
+- 401: no login token, or a wrong one. The CLI and `mcp --url` read `IPHONE_CONTROL_VIEWER_TOKEN`; MCP clients send `Authorization: Bearer <token>`; an agent with only its task's token gets 401 once the task ended.
+- A certificate error: a self-signed certificate has to be trusted. Give iphone-control commands `--ca cert.pem` (`IPHONE_CONTROL_CA`) and Node-based clients `NODE_EXTRA_CA_CERTS=cert.pem`; the certificate is `~/.local/share/iphone-control/viewer-tls/cert.pem` on the machine with the phone.
+- Refused or timing out: the viewer needs `--lan`, and only takes connections from local-network addresses (Tailscale's 100.64/10 included). If this computer uses a proxy, add that machine's address to `NO_PROXY`.
+- 403: a read-only token can't act, or `Host` isn't one of that machine's names or addresses (add one with `--lan-host`).
+
 ## No picture on the control page after switching devices
 
 The picture area says why: not connected; pairing or Developer Mode still needed (run `iphone-control setup --reconfigure` and pick *Phone*); WDA starting (usually 10–60 seconds); or it needs unlocking. When the new device has no WDA yet and an Apple ID is signed in, click *Sign and install WDA*; it takes about 1–2 minutes, keep the phone unlocked. Without an Apple ID, run `iphone-control setup --reconfigure` and pick *Apple ID*. Switching is refused while an AI task runs, and when `IPHONE_UDID` is set. See [Several devices](../guide/multi-device).

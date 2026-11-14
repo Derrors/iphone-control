@@ -47,8 +47,12 @@ pub struct Persisted {
     pub profile_expires: Option<u64>,
     /// 设备竖放时的屏幕尺寸（WDA 不可用时 HID 换算坐标用；旧版本可能存的是横屏尺寸，用的时候都先转成竖放）
     pub screen: Option<ScreenSize>,
-    /// `screen` 是哪台设备的；换了设备就不能拿来给 HID 换算坐标
+    /// `screen` 是哪台设备的；换了设备就不能拿来给 HID 换算坐标。也是上次就绪的那台（自动选设备时先接着用它）
     pub screen_udid: Option<String>,
+    /// Every device's screen size, by UDID: `screen` only holds the last one, so after switching devices and back
+    /// the HID fallback didn't know the first one's size until its WDA came up again ([`Self::screen_for`])
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub screens: std::collections::BTreeMap<String, ScreenSize>,
     /// 上次重签的结果，旧格式：拼好的中文整句。照旧写，旧版本（降级、旧 CLI）还读它；新版本显示时用
     /// [`Self::resign_result`]
     pub last_resign: Option<String>,
@@ -82,6 +86,33 @@ pub struct ResignRecord {
 }
 
 impl Persisted {
+    /// The recorded screen size of `udid` (`None`: no device): its own entry, else `screen` if it is this device's
+    /// (or from an older version that didn't say whose)
+    pub fn screen_for(&self, udid: Option<&str>) -> Option<ScreenSize> {
+        if let Some(u) = udid
+            && let Some(s) = self.screens.iter().find(|(k, _)| k.eq_ignore_ascii_case(u)).map(|(_, s)| *s)
+        {
+            return Some(s);
+        }
+        let same = match (&self.screen_udid, udid) {
+            (Some(s), Some(u)) => s.eq_ignore_ascii_case(u),
+            (Some(_), None) => false,
+            (None, _) => true,
+        };
+        self.screen.filter(|_| same)
+    }
+
+    /// Records `udid`'s screen size; whether anything changed (then save)
+    pub fn record_screen(&mut self, udid: &str, size: ScreenSize) -> bool {
+        let changed = self.screen != Some(size)
+            || self.screen_udid.as_deref() != Some(udid)
+            || self.screens.get(udid) != Some(&size);
+        self.screen = Some(size);
+        self.screen_udid = Some(udid.to_owned());
+        self.screens.insert(udid.to_owned(), size);
+        changed
+    }
+
     /// 记下这次重签的结果：新字段，加上旧版本认的中文整句
     pub fn record_resign(&mut self, at: u64, error: Option<String>) {
         let when = crate::eventlog::format_utc(at);
@@ -203,6 +234,8 @@ pub struct CallCtx {
     pub task: Option<String>,
     /// The task's step it belongs to ([`ictl_protocol::TASK_STEP`])
     pub task_step: Option<u64>,
+    /// The process that sent it (the socket's peer), when the system says
+    pub peer: Option<u32>,
 }
 
 /// Logical points measured on this connection. A different id invalidates queued coordinates.
@@ -317,6 +350,8 @@ pub(crate) struct Inner {
     /// 连续列不出设备的次数（usbmuxd 抖一下不立刻当成离线）
     pub list_errors: u32,
     pub offline_since: Option<Instant>,
+    /// The device that went offline, for the notification once it has been gone long enough (its details are gone)
+    pub offline_target: Option<crate::notify::Target>,
     /// HID 会话最近一次使用的时间；空闲超过 [`crate::supervise::HID_IDLE`] 就关掉（它持有屏幕媒体流）
     pub hid_used: Option<Instant>,
     /// Control pages watching the screen media stream (`screen.rs`): while there are any, the HID session (which owns
@@ -347,6 +382,9 @@ pub struct Daemon {
     pub(crate) heartbeat: crate::watchdog::Heartbeat,
     /// AI tasks: who may act on the phone while one runs (see [`crate::tasks`])
     pub(crate) tasks: crate::tasks::Tasks,
+    /// A supervision round is due now, not at the next [`TICK`]: starting WDA finished, so its outcome is taken
+    /// (ready seconds sooner after a restart or a hang)
+    pub(crate) wake: Arc<tokio::sync::Notify>,
 }
 
 /// 停掉 HID 会话（屏幕媒体流），隧道保留。媒体流不停的话手机一直以为「配对的电脑」在看屏幕：
@@ -433,6 +471,7 @@ impl Daemon {
             backoff: Backoff::default(),
             list_errors: 0,
             offline_since: Some(now),
+            offline_target: None,
             hid_used: None,
             screen_viewers: 0,
             elements_cache: None,
@@ -471,6 +510,7 @@ impl Daemon {
             web: Mutex::new(None),
             heartbeat: Heartbeat::new(),
             tasks,
+            wake: Arc::default(),
         })
     }
 
@@ -525,7 +565,12 @@ impl Daemon {
             return;
         }
         // 通知和事件日志按守护进程自己的语言：触发它的可能是另一种语言的请求（例如自动解锁失败）
-        let (title, body) = ictl_l10n::in_own_lang(|| e.title_body());
+        // the device it is about; one that went offline has lost its details, so the one kept then
+        let target = match (&e, &g.offline_target) {
+            (Event::DeviceOffline { .. }, Some(t)) => t.clone(),
+            _ => ictl_l10n::in_own_lang(|| notify::Target::of(g.info.as_ref())),
+        };
+        let (title, body) = ictl_l10n::in_own_lang(|| e.title_body(&target));
         self.log.log(&ictl_l10n::log_trf!("通知：{title}", "Notification: {title}"));
         let cfg = self.cfg.notify.clone();
         if cfg.any() {
@@ -689,7 +734,7 @@ impl Daemon {
         if let Err(e) = check_request(&req) {
             return Response::error(e);
         }
-        if let Some(r) = self.tasks.handle(&req, ctx.task.as_deref(), &mut ctx.gone).await {
+        if let Some(r) = self.tasks.handle(&req, ctx.task.as_deref(), ctx.peer, &mut ctx.gone).await {
             return r;
         }
         // while a task runs, only it acts on the phone (or the user, after taking over): see `crate::tasks`
@@ -718,12 +763,46 @@ impl Daemon {
             _ => None,
         };
         let t0 = Instant::now();
+        let looks = crate::tasks::observes(&req);
         // boxed: the request's state machine is large, and a connection's task shouldn't carry it on the stack
-        let resp = Box::pin(self.handle_admitted(req, queued_at, ctx)).await;
+        let resp = Box::pin(self.handle_admitted(req, queued_at, ctx, &admission)).await;
         if let Some((t, step)) = auto {
             self.tasks.auto_step_done(&t, step, &resp, t0.elapsed().as_millis() as u64);
         }
+        // the agent has seen the screen only once its look succeeded
+        if let crate::tasks::Admission::Actor(t) = &admission
+            && looks
+            && !matches!(resp, Response::Error { .. })
+        {
+            t.observed();
+        }
         resp
+    }
+
+    /// A request's lock, once the tasks still let it through ([`crate::tasks::Tasks::still`]): it may have queued
+    /// behind other requests while the user paused, took over or handed back. A task's request waits for the task to
+    /// run again, without the lock
+    async fn lock_admitted<'a, T>(
+        &self,
+        lock: &'a Mutex<T>,
+        req: &Request,
+        admission: &crate::tasks::Admission,
+        queued_at: &mut Instant,
+        gone: &mut Option<tokio::sync::oneshot::Receiver<()>>,
+    ) -> Result<tokio::sync::MutexGuard<'a, T>, Response> {
+        use crate::tasks::Still;
+        loop {
+            let g = acquire(lock, gone).await?;
+            match self.tasks.still(admission, req) {
+                Still::Admitted => return Ok(g),
+                Still::Refused(r) => return Err(r),
+                Still::Wait(t) => {
+                    drop(g);
+                    t.wait_running(gone).await?;
+                    *queued_at = Instant::now();
+                }
+            }
+        }
     }
 
     /// What an action of a scoped task touches, then [`crate::tasks::Task::check_scope`]. The device lock is only held
@@ -780,7 +859,13 @@ impl Daemon {
     }
 
     /// [`Self::handle`] once the tasks let the request through
-    async fn handle_admitted(self: &Arc<Self>, req: Request, queued_at: Instant, mut ctx: CallCtx) -> Response {
+    async fn handle_admitted(
+        self: &Arc<Self>,
+        req: Request,
+        mut queued_at: Instant,
+        mut ctx: CallCtx,
+        admission: &crate::tasks::Admission,
+    ) -> Response {
         let text = |r: Result<String, String>| {
             r.map(|t| Response::text_with(t, crate::protocol::Outcome::default())).unwrap_or_else(Response::error)
         };
@@ -799,7 +884,8 @@ impl Daemon {
             }
             // Web Inspector talks to the page, not to WDA: its own lock, the device lock only to look up the device
             Lane::Web => {
-                let mut slot = match acquire(&self.web, &mut ctx.gone).await {
+                let mut slot = match self.lock_admitted(&self.web, &req, admission, &mut queued_at, &mut ctx.gone).await
+                {
                     Ok(s) => s,
                     Err(r) => return r,
                 };
@@ -823,6 +909,18 @@ impl Daemon {
                 if ctx.gone.as_mut().is_some_and(|g| g.try_recv().is_ok()) {
                     return cancelled();
                 }
+                loop {
+                    match self.tasks.still(admission, &req) {
+                        crate::tasks::Still::Admitted => break,
+                        crate::tasks::Still::Refused(r) => return r,
+                        crate::tasks::Still::Wait(t) => {
+                            if let Err(r) = t.wait_running(&mut ctx.gone).await {
+                                return r;
+                            }
+                            queued_at = Instant::now();
+                        }
+                    }
+                }
                 let device = self.inner.lock().await.device.clone();
                 if let Err(r) = admit(&req, queued_at, &ctx, device.as_ref().map(|d| d.udid.as_str())) {
                     return r;
@@ -840,7 +938,8 @@ impl Daemon {
             Lane::Device => {}
         }
 
-        let mut g = match acquire(&self.inner, &mut ctx.gone).await {
+        // still let through now that it holds the lock: the task may have been paused or taken over meanwhile
+        let mut g = match self.lock_admitted(&self.inner, &req, admission, &mut queued_at, &mut ctx.gone).await {
             Ok(g) => g,
             Err(r) => return r,
         };
@@ -877,8 +976,8 @@ impl Daemon {
             Request::Screenshot { region } => {
                 return self.screenshot(g, region).await.unwrap_or_else(Response::error);
             }
-            Request::ListElements { filter, limit, max_age_ms } => {
-                self.list_elements(g, &filter, limit, Duration::from_millis(max_age_ms)).await
+            Request::ListElements { filter, limit, max_age_ms, keep_locked } => {
+                self.list_elements(g, &filter, limit, Duration::from_millis(max_age_ms), keep_locked).await
             }
             Request::Tap { x, y } => self.tap(g, x, y, view).await,
             Request::TapElement { text, index, max_age_ms } => {
@@ -936,6 +1035,8 @@ impl Daemon {
             | Request::TaskEvents { .. }
             | Request::TaskList
             | Request::TaskControl { .. }
+            | Request::TaskAgent
+            | Request::TaskCheck
             | Request::TaskStep { .. }
             | Request::TaskStepDone { .. }
             | Request::TaskConfirm { .. }
@@ -982,6 +1083,8 @@ fn lane(req: &Request) -> Lane {
         | Request::TaskEvents { .. }
         | Request::TaskList
         | Request::TaskControl { .. }
+        | Request::TaskAgent
+        | Request::TaskCheck
         | Request::TaskStep { .. }
         | Request::TaskStepDone { .. }
         | Request::TaskConfirm { .. }

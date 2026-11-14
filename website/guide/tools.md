@@ -76,4 +76,8 @@ MCP 服务提供 17 个工具，开启[开发者工具](#开发者工具-显式�
 - **屏幕尺寸**：WDA 不可用、又没有这台设备的尺寸记录时，点击和滑动报错。等 WDA 起来一次，或设 [`SCREEN_W`/`SCREEN_H`](./configuration#高级)。
 - **不会重做**：请求已经发给 WDA、连接才断开或响应不完整时，不退到 HID，因为动作可能已经做了，重做会点两次、输两遍。工具会报错，agent 要先截图确认再决定。
 
+## AI 任务里：`iphone_confirm`
+
+agent 在 [AI 任务](./remote#给-agent-平台用-ai-任务)里时（控制台交给它的任务，或 `task run` 启动的），工具列表里多一个 `iphone_confirm`：付款、删除、发消息、改账号或隐私设置之前，它用这个工具请你确认，等你在控制台上或用 `iphone-control task approve`/`reject` 回答；拒绝时它停下，不做这一步。任务限定了 App 时，到了别的 App 也会停下来问你。任务进行中，别的客户端只能看，操作手机会被拒绝。
+
 完整参数见仓库里的 [docs/tools.md](https://github.com/Derrors/iphone-control/blob/main/docs/tools.md)（英文）。

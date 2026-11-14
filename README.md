@@ -98,7 +98,7 @@ iphone-control
 
 The first time, it walks you through setup in the terminal, one step at a time: language, proxy, the background service, pairing, Developer Mode, Apple ID, signing and installing WebDriverAgent, the optional auto-unlock and notifications, and registering with Claude Code and Codex. Do what it asks on the phone. Steps already done are skipped; afterwards, `iphone-control` just shows the status.
 
-Then open a new Claude Code or Codex session and ask, for example, *“Open Clock, switch to the stopwatch and start it.”* Or run `iphone-control viewer` for the control page in the browser (http://127.0.0.1:8200), where you can act on the live screen and hand tasks to a local Claude Code or Codex.
+Then open a new Claude Code or Codex session and ask, for example, *“Open Clock, switch to the stopwatch and start it.”* Or run `iphone-control viewer` for the control page in the browser (http://127.0.0.1:8200; log in with the link `iphone-control viewer token` prints), where you can act on the live screen and hand tasks to a local Claude Code or Codex; it works from the local network and other machines too, see [Viewer and Remote Use](https://derrors.github.io/iphone-control/en/guide/remote).
 
 More: [step-by-step guide](https://derrors.github.io/iphone-control/en/guide/getting-started) · [build from source](https://derrors.github.io/iphone-control/en/deploy/source) · [macOS guide](https://derrors.github.io/iphone-control/en/deploy/macos) · [other MCP clients](https://derrors.github.io/iphone-control/en/guide/mcp-clients).
 
@@ -146,7 +146,8 @@ Tool texts, results, CLI output and logs are in Simplified Chinese by default; s
 | `notify-test [event]` | Send test notifications |
 | `mcp-config` | Print the command that registers the MCP server |
 | `wda-bridge [--port]` | Expose WebDriverAgent on 127.0.0.1 for other tools; stop it when done |
-| `viewer [--port]` | Control page on 127.0.0.1:8200: live screen you can tap, swipe and type on, device panel, and AI tasks run by a local Claude Code or Codex; stop it when done |
+| `viewer [--port] [--lan]` | Control page on 127.0.0.1:8200, behind a login (`viewer token` shows the token and a link; read-only tokens too): live screen you can tap, swipe and type on, device panel, and AI tasks run by a local Claude Code or Codex. `--lan` opens it to the local network (HTTPS), and MCP over HTTP is on the same port (`/mcp`) |
+| `task run [--url <viewer>] -- <command>` | AI tasks for other agent platforms; with `--url` the phone is on another machine. `task list`, `pause`, `approve`… follow and control tasks |
 
 All commands and options: [CLI reference](https://derrors.github.io/iphone-control/en/guide/cli).
 

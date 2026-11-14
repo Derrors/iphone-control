@@ -18,7 +18,7 @@
 | 命令 | 作用 |
 |---|---|
 | `daemon` | 常驻守护进程。一般由后台服务启动，也可以在终端里手动运行 |
-| `mcp` | MCP stdio 服务，由 AI 客户端拉起 |
+| `mcp [--url <控制台> [--ca <PEM>]]` | MCP stdio 服务，由 AI 客户端拉起。加 `--url`（或设了 `IPHONE_CONTROL_URL`）时转接另一台机器控制台的 `/mcp`：手机接在那台机器上、客户端又只能填命令时用。有任务口令（`IPHONE_CONTROL_TASK_TOKEN`）就只带它，否则用 `IPHONE_CONTROL_VIEWER_TOKEN` 登录；`task run --url` 启动的命令已经设好这些，照常配置 `iphone-control mcp` 就行 |
 | `mcp-config` | 打印把 MCP 注册到 Claude Code 的命令。程序路径用升级后不变的那个（Homebrew 用 `opt` 下的链接） |
 
 ## Shell 补全
@@ -75,7 +75,9 @@ Viewer 只监听本机回环地址。同机其他用户也能查看安装信息�
 | `service uninstall` | 停止并移除本程序装的服务，数据保留。Homebrew 或 deb 包带的服务不删，只停用或提示怎么停 |
 | `service start` / `stop` | 启动、停止 |
 | `service restart` | 重启，改过 `~/.config/iphone-control/env` 后用 |
-| `service status` | 装的是哪个服务、守护进程在不在运行 |
+| `service status` | 装的是哪个服务、守护进程在不在运行，控制台服务装了没有、在不在运行 |
+| `service viewer install` | 把控制台（`viewer`）也装成登录后自动启动的服务并启动。端口、是否对局域网开放读设置文件里的 `IPHONE_CONTROL_VIEWER_PORT`、`IPHONE_CONTROL_VIEWER_LAN`、`IPHONE_CONTROL_VIEWER_LAN_HOSTS`。会记下当前终端的 `PATH`，好让控制台找到 `claude` 和 `codex`；PATH 变了再装一次 |
+| `service viewer uninstall` / `start` / `stop` / `restart` | 移除、启动、停止控制台服务；改过上面几项设置后 `restart`。升级时它会先停下，升级完再启动（有 AI 任务在跑时自动升级会推迟） |
 
 这些命令认得一行命令安装、`iphone-control service install`、`brew services` 和 deb 包装的服务，哪个在就作用于哪个。
 
@@ -128,10 +130,12 @@ Viewer 只监听本机回环地址。同机其他用户也能查看安装信息�
 |---|---|
 | `notify-test [事件]` | 发测试通知：每类事件各一条，或只发一类（`resign`、`session`、`pin`、`pin-recovered`、`unlock`、`offline`、`online`） |
 | `wda-bridge [--port <端口>]` | 把 WDA 桥接到 `127.0.0.1`，端口默认 8100，给别的工具用。WDA 没有认证，本机任何用户都能连上，用完就停 |
-| `viewer [--port <端口>]` | 浏览器里的控制台，地址 `http://127.0.0.1:8200/`（默认端口），中英文（默认跟着 `IPHONE_CONTROL_LANG`，页面上可切换）。**画面：** 实时画面像触摸屏一样用：点一下是点击，拖动是滑动，按住是长按，滚动鼠标滚轮或触控板也能滚动页面，另有输入框和硬件键。iOS 27 起手指跟着鼠标实时移动（经 CoreDevice HID，最后一次触摸后 30 秒内手机保持亮屏）；更低的版本在松开后发整段手势。操作都和 MCP 调用一样经守护进程，和 agent 的操作排队，并先自动解锁。iOS 27 及以上画面直接用手机自己的视频；其余来自 WDA（WDA 没就绪时没有画面），是 H.264 或 MJPEG，见下面的[画面编码](#viewer-picture)。画面与设备实测的尺寸、方向一致时可以点按。转屏或换机后，请在新画面上重新操作。侧栏底部的「设置」可调整主题和字号，画面缩放用画面上方的加减号调整（双指捏合不缩放，免得拖动时误触）。**设备面板：** 状态和就绪检查、已安装的 App、屏幕上的元素。页面跟着守护进程控制的设备走，在页面上或别处切换设备，画面和面板都会跟过去，见[多台设备](./multi-device#control-page)。**AI 任务：** 写下任务，交给本机的 agent 执行（PATH 里有的 Claude Code 或 Codex，在页面上选）。开任务前可以用 Agent 旁边的 App 按钮限定范围，到了别的 App 每一步都先等你确认。可以暂停、接管后交还、停止；付款、删除、发消息之前它会在页面上请你确认。本机任何用户都能连上这个端口，用完就停 |
-| `task run [--title <标题>] [--app <App>…] -- <命令>` | 给别的 agent 平台用的 AI 任务：在当前控制的设备上开一个任务，再运行这条命令。命令启动的 `iphone-control mcp` 自动加入任务（经环境变量 `IPHONE_CONTROL_TASK_TOKEN`），控制台上能看到每一步，可以暂停、接管、停止，付款、发消息之前会等你确认。命令结束，任务就结束；任务在别处被停止，命令也会被停止；按 Ctrl-C 等于停止任务。任务进行中，其他客户端只能看，不能操作手机。`--app`（可写多次，App 名或 Bundle ID）把任务限定在这些 App 里：到了别的 App、或者要打开网页以外的链接，每一步都先等你确认 |
+| `viewer [--port <端口>] [--lan] [--lan-host <名字>…] [--tls auto\|on\|off] [--tls-cert <PEM> --tls-key <PEM>] [--mcp on\|off]` | 浏览器里的控制台，**要先登录**：所有经 HTTP 的访问（本机也一样，经 frp 等反向代理转发进来的访问看起来就是本机）都要令牌，`viewer token` 显示令牌和点开就能登录的链接；浏览器登录一次后记住 30 天，程序和 MCP 客户端用 `Authorization: Bearer <令牌>`。同一个端口的 `/mcp` 还提供 MCP over HTTP（见[接入 AI 客户端](./mcp-clients#通过-url-接入-http)，`--mcp off` 关掉），地址 `http://127.0.0.1:8200/`（默认端口）；加 `--lan` 时局域网里也能用 `https://<这台机器的 IP>:8200/` 打开（同一个端口；局域网来的 `http://` 会跳到 `https://`）。证书默认是本机生成的自签证书（存在数据目录的 `viewer-tls/`，一直沿用），浏览器第一次打开会提示不受信任：核对启动时或 `service status` 显示的 SHA-256 指纹一致后继续。用 `--tls-cert`/`--tls-key` 换成自己的证书（mkcert、`tailscale cert` 等）就没有这个提示。`--tls off` 时局域网里是 HTTP，画面退回 MJPEG（浏览器只在 localhost 或 HTTPS 上提供 WebCodecs）。中英文（默认跟着 `IPHONE_CONTROL_LANG`，页面上可切换）。**画面：** 实时画面像触摸屏一样用：点一下是点击，拖动是滑动，按住是长按，滚动鼠标滚轮或触控板也能滚动页面，另有输入框和硬件键。iOS 27 起手指跟着鼠标实时移动（经 CoreDevice HID，最后一次触摸后 30 秒内手机保持亮屏）；更低的版本在松开后发整段手势。操作都和 MCP 调用一样经守护进程，和 agent 的操作排队，并先自动解锁。iOS 27 及以上画面直接用手机自己的视频；其余来自 WDA（WDA 没就绪时没有画面），是 H.264 或 MJPEG，见下面的[画面编码](#viewer-picture)。画面与设备实测的尺寸、方向一致时可以点按。转屏或换机后，请在新画面上重新操作。侧栏底部的「设置」可调整主题和字号，画面缩放用画面上方的加减号调整（双指捏合不缩放，免得拖动时误触）。**设备面板：** 状态和就绪检查、已安装的 App、屏幕上的元素。页面跟着守护进程控制的设备走，在页面上或别处切换设备，画面和面板都会跟过去，见[多台设备](./multi-device#control-page)。**AI 任务：** 写下任务，交给本机的 agent 执行（PATH 里有的 Claude Code 或 Codex，在页面上选）。开任务前可以用 Agent 旁边的 App 按钮限定范围，到了别的 App 每一步都先等你确认。可以暂停、接管后交还、停止；付款、删除、发消息之前它会在页面上请你确认。令牌就是钥匙，别外传。详见[控制台与远程使用](./remote) |
+| `viewer token [--new]` | 显示控制台的 `owner` 登录令牌、本机和局域网的登录链接，以及接入 HTTP MCP 的命令；`--new` 换一个新的，用旧令牌登录的浏览器和 MCP 客户端都要用新的。令牌存在数据目录的 `viewer-tokens.json`（0600），改动马上生效，不用重启控制台 |
+| `viewer token add <名字> [--read-only]`、`list`、`show <名字> [--new]`、`remove <名字>` | 有名字的令牌，比如每人一个、每台设备一个；控制台的任务记录里记下是哪个令牌暂停、接管、确认的。`--read-only` 的令牌只能看画面、设备状态和任务，所有操作都被拒绝，页面上也不显示操作入口。`list` 不显示令牌本身；最后一个能操作的令牌不能删 |
+| `task run [--title <标题>] [--app <App>…] -- <命令>` | 给别的 agent 平台用的 AI 任务：在当前控制的设备上开一个任务，再运行这条命令。命令启动的 `iphone-control mcp` 自动加入任务（经环境变量 `IPHONE_CONTROL_TASK_TOKEN`），控制台上能看到每一步，可以暂停、接管、停止，付款、发消息之前会等你确认。命令结束，任务就结束；任务在别处被停止，命令也会被停止；按 Ctrl-C 等于停止任务。任务进行中，其他客户端只能看，不能操作手机。`--app`（可写多次，App 名或 Bundle ID）把任务限定在这些 App 里：到了别的 App、或者要打开网页以外的链接，每一步都先等你确认。**手机接在另一台机器上**时加 `--url https://<那台机器>:8200`（自签证书再加 `--ca cert.pem`），登录令牌放在环境变量 `IPHONE_CONTROL_VIEWER_TOKEN` 里：任务经那台机器的控制台开，命令拿到的是任务口令和 `IPHONE_CONTROL_MCP_URL`，它的 agent 用 HTTP 方式的 MCP 接入（见[接入 AI 客户端](./mcp-clients#通过-url-接入-http)）。登录令牌不会传给命令，所以 agent 不能暂停、确认自己的任务；命令里的 `task finish` 照样能用 |
 | `task list` / `task events <id>` | 最近的任务（`--json` 给程序读）；跟着一个任务的事件，每行一个 JSON |
-| `task pause\|resume\|takeover\|handback\|stop <id>`、`task approve\|reject <id>` | 在命令行里控制任务，和控制台上的按钮一样 |
+| `task pause\|resume\|takeover\|handback\|stop <id>`、`task approve\|reject <id>` | 在命令行里控制任务，和控制台上的按钮一样。只能由人来做：在任务里面（Agent 的环境或它启动的进程）执行会被拒绝，`stop` 除外。`task` 的所有子命令（`list`、`events` 也是）都可以加 `--url <控制台> [--ca <PEM>]`（或设 `IPHONE_CONTROL_URL`），经另一台机器的控制台操作那里的手机，登录令牌放在 `IPHONE_CONTROL_VIEWER_TOKEN`；`task run --url` 启动的命令没有登录令牌，所以 Agent 在里面执行这些也会被拒绝 |
 
 调试用的 `debug` 子命令默认不编译，见[贡献指南](https://github.com/Derrors/iphone-control/blob/main/CONTRIBUTING.md#testing-on-a-real-phone)。
 

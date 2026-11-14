@@ -27,6 +27,13 @@ iphone-control service restart
 | `IPHONE_CONTROL_DEV_TOOLS` | 关 | 设为 `1` 时 MCP 服务多出[开发者工具](./tools#开发者工具-显式开启)：日志、崩溃报告、安装和卸载 App、Web Inspector（在网页和 WebView 里执行 JavaScript）。风险见[安全与隐私](./security)。见表下说明 |
 | `IPHONE_CONTROL_VIEWER_CODEC` | `auto` | 控制台画面的编码：`auto` 在 iOS 27 及以上用手机自己的视频（HEVC），其余用 H.264（macOS 上直接用 VideoToolbox；Linux 上要装 ffmpeg），先试显卡编码；`device` 只用手机自己的视频，用不了时是 MJPEG；`mjpeg` 只用 MJPEG；也可以指定 `nvenc`、`vaapi`、`qsv`、`v4l2m2m`、`videotoolbox`、`x264`。`iphone-control viewer` 启动时会显示用的是哪个，见[命令行](./cli#viewer-picture) |
 | `IPHONE_CONTROL_VIEWER_QP` | `20` | H.264 的画质，1～51，越小越清晰、流量越大。`20` 正常使用看不出和原画的差别；`24` 约省三分之一流量，快速滚动时小字略糊 |
+| `IPHONE_CONTROL_VIEWER_PORT` | `8200` | 控制台的端口，同 `viewer --port`（控制台服务也读它） |
+| `IPHONE_CONTROL_VIEWER_LAN_HOSTS` | 空 | `--lan` 时还认可的主机名，逗号分隔，同 `--lan-host` |
+| `IPHONE_CONTROL_VIEWER_LAN` | 关 | 设为 `1` 时控制台也对局域网开放，同 `viewer --lan`，局域网里用 HTTPS。和本机一样要令牌登录（`iphone-control viewer token`） |
+| `IPHONE_CONTROL_VIEWER_TLS` | `auto` | 控制台的 HTTPS，同 `--tls`：`auto` 在对局域网开放或给了证书时开启，`on`、`off`。本机的 `http://127.0.0.1` 一直能用 |
+| `IPHONE_CONTROL_VIEWER_TLS_CERT`、`IPHONE_CONTROL_VIEWER_TLS_KEY` | 空 | 控制台用自己的证书和私钥（PEM），同 `--tls-cert`、`--tls-key`；不设就用本机生成的自签证书 |
+| `IPHONE_CONTROL_VIEWER_MCP` | `on` | 控制台同一个端口上的 MCP over HTTP（`/mcp`），同 `--mcp`；`off` 关掉 |
+| `IPHONE_CONTROL_VIEWER_TOKEN` | 空 | 只在另一台机器上用：`task run --url` 登录那台机器的控制台用的令牌（那台机器上 `iphone-control viewer token` 显示的）。不会传给 `task run` 启动的命令 |
 | `IPHONE_UDID` | 自动选 | 固定控制哪台设备。不设时自动选：正在控制的那台一直用到它断开；运行中可以用 `select` 命令或 `iphone_select_device` 工具切换。设了就不能切换 |
 | `RESIGN_MIN_DAYS` | `2` | 描述文件剩余不到几天时重签 |
 | `RESIGN_CHECK_HOURS` | `6` | 每隔几小时检查一次；手机重新连上或切换设备后 1 分钟内也查一次 |

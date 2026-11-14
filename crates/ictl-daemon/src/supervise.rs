@@ -16,6 +16,11 @@ const DISPLAY_SAMPLE_GRACE: Duration = Duration::from_secs(30);
 /// 正常 2～10 秒就绪。手机重启后未授权 automation 时，testmanagerd 握手每次卡 30 秒、要重试一两次，
 /// 60 秒常常等不到 runner 启动，也就认不出「需要输入密码」
 const WDA_START_TIMEOUT: Duration = Duration::from_secs(120);
+/// Waiting for the “Enable UI Automation” passcode: how long one launch waits for the prompt to come up. The prompt
+/// stays about 45 s and only some launches show it, so short attempts close together keep it on the phone most of
+/// the time (it was up for about 45 s in every 3 minutes, and the user had to catch it). A launch that shows it
+/// waits for the passcode as long as the prompt stays
+const PIN_ATTEMPT: Duration = Duration::from_secs(25);
 /// HID 会话空闲这么久就关掉。它持有屏幕媒体流，开着时 iOS 当作屏幕被远程查看：不会自动锁屏，
 /// 还会弹「viewed remotely」通知。重开约 0.5 秒
 pub(crate) const HID_IDLE: Duration = Duration::from_secs(30);
@@ -96,6 +101,13 @@ impl PerDevice {
         };
         DeviceState::WdaStarting { last_error: Some(error), hint }
     }
+}
+
+/// `work`, then a supervision round right away ([`Daemon::wake`])
+async fn then_wake<T>(wake: Arc<tokio::sync::Notify>, work: impl std::future::Future<Output = T>) -> T {
+    let r = work.await;
+    wake.notify_one();
+    r
 }
 
 impl Daemon {
@@ -209,12 +221,11 @@ impl Daemon {
             g.dev.last_rotation = Some((Instant::now(), r));
         }
         // Other clients use the last known size for HID even on WDA versions without /rotation.
-        if let (Some(size), Some(device)) = (size, &g.device)
-            && (g.persisted.screen != Some(size) || g.persisted.screen_udid.as_deref() != Some(&device.udid))
-        {
-            g.persisted.screen = Some(size);
-            g.persisted.screen_udid = Some(device.udid.clone());
-            g.persisted.save(&self.cfg.state_file());
+        if let (Some(size), Some(device)) = (size, &g.device) {
+            let udid = device.udid.clone();
+            if g.persisted.record_screen(&udid, size) {
+                g.persisted.save(&self.cfg.state_file());
+            }
         }
         let sample = size.zip(rotation);
         if sample.is_none()
@@ -248,6 +259,7 @@ impl Daemon {
         let now = Instant::now();
         if g.device.take().is_some() {
             self.log.log(ictl_l10n::log_tr!("手机离线", "Phone offline"));
+            g.offline_target = Some(ictl_l10n::in_own_lang(|| crate::notify::Target::of(g.info.as_ref())));
             // 名字、型号、iOS 版本是这台的：留着的话状态、提示文字会把它当成还在控制的设备
             g.info = None;
             self.forget_device(g).await;
@@ -420,22 +432,28 @@ impl Daemon {
     /// 最长约 2 分钟（等「Enable UI Automation」密码时），期间不持锁：工具调用照常走 HID 后备路线
     fn spawn_start(&self, g: &mut Inner, device: Device, bundle: String) {
         // 正在等密码、等解锁时保持这个状态，免得每次重试都在两个状态间来回切、刷日志
+        let waiting_pin = g.state == DeviceState::NeedsAutomationPin;
         if !matches!(g.state, DeviceState::NeedsAutomationPin | DeviceState::NeedsUnlock) {
             self.set_state(g, g.dev.starting_wda());
         }
+        let start_timeout = if waiting_pin { PIN_ATTEMPT } else { WDA_START_TIMEOUT };
         let detached = self.cfg.wda_detached;
-        self.log.log(if detached {
-            ictl_l10n::log_tr!(
-                "启动 WDA（实验：后台启动，不持有 XCTest 会话）",
-                "Starting WDA (experimental: launched in the background, no XCTest session)"
-            )
-        } else {
-            ictl_l10n::log_tr!("启动 WDA", "Starting WDA")
-        });
+        // while waiting for the passcode it is launched again every half minute: once in the event log is enough
+        if !waiting_pin {
+            self.log.log(if detached {
+                ictl_l10n::log_tr!(
+                    "启动 WDA（实验：后台启动，不持有 XCTest 会话）",
+                    "Starting WDA (experimental: launched in the background, no XCTest session)"
+                )
+            } else {
+                ictl_l10n::log_tr!("启动 WDA", "Starting WDA")
+            });
+        }
         let known = g.persisted.detached_wda.as_ref().filter(|d| d.udid == device.udid).map(|d| d.pid);
         let (cache, url, user_dir) = (self.cfg.ddi_cache(), self.cfg.ddi_url.clone(), self.cfg.ddi_dir.clone());
         let Ok(lease) = crate::maintenance::shared() else { return };
-        g.starting = Some(tokio::task::spawn_local(async move {
+        let wake = self.wake.clone();
+        g.starting = Some(tokio::task::spawn_local(then_wake(wake, async move {
             let _lease = lease;
             // 手机重启后开发者镜像可能掉了；已挂载时只是一次查询。错误带上「是不是挂载这一步」。
             // 镜像好了再在同一条隧道上处理后台 WDA（见 prepare_detached）
@@ -486,14 +504,16 @@ impl Daemon {
             };
             let started = match prepared {
                 Some(Detached::Adopted(_)) => WdaRunner::attach(device.provider(), ADOPT_TIMEOUT, None).await,
-                Some(Detached::Launched(_)) => WdaRunner::attach(device.provider(), WDA_START_TIMEOUT, log).await,
-                None => WdaRunner::start(device.provider(), &bundle, WDA_START_TIMEOUT).await,
+                Some(Detached::Launched(_)) => WdaRunner::attach(device.provider(), start_timeout, log).await,
+                None => WdaRunner::start(device.provider(), &bundle, start_timeout).await,
             };
             match started {
                 Ok((runner, client)) => StartOutcome::Ready { runner, client, mounted, detached: prepared },
+                // still waiting for the passcode; this launch just didn't bring the prompt up: try again soon
+                Err(WdaError::NotReadyInTime(_)) if waiting_pin => StartOutcome::Wda(WdaError::NeedsAutomationPin),
                 Err(e) => StartOutcome::Wda(e),
             }
-        }));
+        })));
     }
 
     /// 后台启动做完了就收结果
@@ -580,7 +600,7 @@ impl Daemon {
                 // StartFailed 自己就以「WDA 启动失败：」开头，日志和状态里再加一遍就重复了
                 let missing = matches!(e, WdaError::NotInstalled(_));
                 let e = match e {
-                    WdaError::StartFailed(m) => m,
+                    WdaError::StartFailed(m) | WdaError::NotReadyInTime(m) => m,
                     e => e.to_string(),
                 };
                 self.log.log(&ictl_l10n::log_trf!("WDA 启动失败：{e}", "WDA failed to start: {e}"));

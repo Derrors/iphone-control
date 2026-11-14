@@ -6,10 +6,31 @@ All notable changes to this project are documented here. The format is based on 
 
 ## [Unreleased]
 
+### Fixed
+
+- The CLI and Viewer show where to trust the developer after a first WDA install. If the device refuses to launch WDA, they also explain how to check trust and diagnose signing. The Viewer keeps guidance and a re-sign button visible alongside live video for any startup error, including timeouts; the button shows signing progress. The original error remains in the device status panel.
+
+## [0.2.4] - 2026-11-14
+
+### Upgrade notes
+
+- The control page (`iphone-control viewer`) and its `/mcp` now need a login, on this machine too. After upgrading, run `iphone-control viewer token` and open the link it prints; a browser stays logged in for 30 days. MCP clients connected to `/mcp` over HTTP need `Authorization: Bearer <token>` (`viewer token` prints the `claude mcp add` line). The CLI, `iphone-control mcp` over stdio and `task run` are unaffected.
+- With `--lan` (`IPHONE_CONTROL_VIEWER_LAN=1`) the page is HTTPS on the local network: open `https://<address>:<port>/` and check the certificate's fingerprint the first time (`iphone-control service status`).
+
 ### Added
 
+- `iphone-control mcp --url https://<that machine>:8200` bridges stdio to another machine's viewer `/mcp`, so an MCP client that only starts a command can control the phone connected there. With a task's token only that is sent, otherwise the login from `IPHONE_CONTROL_VIEWER_TOKEN`; a command under `task run --url` has `IPHONE_CONTROL_URL` set, so a plain `iphone-control mcp` in it bridges by itself.
+- Every `task` subcommand takes `--url` (or `IPHONE_CONTROL_URL`): `list`, `events`, `pause`, `resume`, `takeover`, `handback`, `stop`, `approve` and `reject` work through another machine's viewer, with the login token in `IPHONE_CONTROL_VIEWER_TOKEN`.
+- Named login tokens, read-only ones among them: `iphone-control viewer token add <name> [--read-only]`, `list`, `show <name> [--new]`, `remove <name>`. A read-only token can watch the picture, the device's state and tasks; every action (taps, typing, starting, pausing or confirming tasks, switching devices, `/mcp`) is refused, and the page hides them. The task log records which token controlled it (`viewer:<name>`). Tokens moved to `viewer-tokens.json` and the earlier one became `owner`, so nobody logs in again after upgrading; adding, replacing and removing tokens takes effect at once, without restarting the viewer.
+- Tasks opened from another machine: `iphone-control task run --url https://<that machine>:8200 -- <command>` (the login token in `IPHONE_CONTROL_VIEWER_TOKEN`), or `POST /api/agent/tasks/open` directly, whose event stream is the lease. The agent on the other machine gets only the task's token: `/mcp` takes the token of an active task (header `Iphone-Control-Task-Token`), so it can act on the phone for that task but can't reach pausing or confirming, and can't approve itself.
+- The viewer and its `/mcp` need a login, from this machine too (the viewer can't tell a local browser from a visit forwarded by frp, cloudflared or another reverse proxy). The token is made on the first start and kept in `viewer-token` in the data directory (0600); `iphone-control viewer token` shows it with links that log in here and on the local network and the command to connect to the HTTP MCP, and `--new` replaces it. A browser stays logged in for 30 days; programs and MCP clients send `Authorization: Bearer <token>`. After too many wrong tokens (20 in a minute) tokens aren't checked for a minute. The CLI, `iphone-control mcp` (stdio) and `task run` use the local Unix socket and are unaffected.
+- MCP over HTTP: `/mcp` (Streamable HTTP) on the viewer's port serves the same tools as `iphone-control mcp`, for clients that only take a URL and for agents on another computer on the local network (`--lan`, over HTTPS), e.g. `claude mcp add --transport http iphone http://127.0.0.1:8200/mcp`. A task's agent sends the task's token in the `Iphone-Control-Task-Token` header. No login, as for the viewer; `--mcp off` (`IPHONE_CONTROL_VIEWER_MCP=off`) turns it off.
+- The viewer opened to the local network (`--lan`) now speaks HTTPS, on the same port: opened from another machine the picture can be H.264 or the phone's own HEVC instead of MJPEG, and traffic is encrypted. It uses a self-signed certificate made on this machine (kept in `viewer-tls/` in the data directory and reused); the browser warns the first time, so check the SHA-256 fingerprint shown at startup or by `service status` and go on. `--tls-cert`/`--tls-key` (`IPHONE_CONTROL_VIEWER_TLS_CERT`/`_KEY`) use a certificate of your own. `http://` from the network is redirected to `https://`; `http://127.0.0.1` on this machine works as before. `--tls off` (`IPHONE_CONTROL_VIEWER_TLS=off`) goes back to HTTP. It isn't a login: anyone on the network who can reach the page can still control the phone.
+- `iphone-control service viewer install` runs the viewer as a background service of its own that starts at login (`uninstall`, `start`, `stop`, `restart` too). It reads its port and whether it is open to the local network from the settings file (`IPHONE_CONTROL_VIEWER_PORT`, new; `IPHONE_CONTROL_VIEWER_LAN`; `IPHONE_CONTROL_VIEWER_LAN_HOSTS`, new) and keeps the installing shell's `PATH` to find `claude` and `codex`. Updates stop it and start it again; an automatic update waits while an AI task runs.
+- An AI task's agent can no longer pause, resume, take over, hand back or confirm its own task, so only a person answers out-of-scope steps and `iphone_confirm`. Control requests carrying the task's token (`IPHONE_CONTROL_TASK_TOKEN`) are refused, and so are those from an agent the control page or `task run` started, or any process it starts, even without the token or through the page's API. On macOS, calls through the page's API can't be traced to a process yet. Stopping a task is always allowed. The task's log records who controlled it (the page, the command line, the task's opener).
 - Navigate setup menus with arrow keys, confirm with Enter, or cancel with Esc. Number selection remains available, and basic terminals keep the line-by-line prompts.
 - Generate Bash, Zsh and Fish completion scripts with `iphone-control completions <shell>`, without starting the daemon or accessing a device.
+- `iphone-control viewer --lan` (or `IPHONE_CONTROL_VIEWER_LAN=1`) also opens the control page to the local network, on the same port. There is no login yet: anyone on the network who can reach the machine can control the phone, so only use it on a trusted network. It only accepts connections from local-network addresses and only answers to this machine's own names; `--lan-host` adds another name. Opened at a network address the picture is MJPEG, since browsers only offer WebCodecs on localhost or HTTPS.
 - On the control page, a task can be limited to some apps before it starts (the App button next to the agent): in any other app each step waits for you, as with `task run --app`. The task card shows the scope, and running a task again keeps it.
 - AI tasks for any agent platform: `iphone-control task run -- <command>` runs a command in a task, and an `iphone-control mcp` it starts takes part (the control page shows its steps and can pause, take over, stop and confirm). `task list`, `task events`, `task pause`/`resume`/`takeover`/`handback`/`stop` and `task approve`/`reject` follow and steer tasks from the command line.
 - The control page picks up a task in progress: after a reload, and for tasks started elsewhere.
@@ -26,7 +47,11 @@ All notable changes to this project are documented here. The format is based on 
 
 ### Fixed
 
-- The CLI and Viewer show where to trust the developer after a first WDA install. If the device refuses to launch WDA, they also explain how to check trust and diagnose signing. The Viewer keeps the guidance visible alongside live video and offers signed-in users a re-sign button after a refused launch.
+- With several devices, every device's screen size is remembered: only the last one was, so after switching to another device and back, until WDA came up (say, stuck at the "Enable UI Automation" passcode prompt) the iOS 27 HID fallback didn't know the size, and screenshots, keys and taps failed with "the screen size is unknown".
+- Notification titles name the device: they always said "iPhone", also when an iPad needed its passcode, went offline or failed to re-sign, and with several devices you couldn't tell which. On an iPad the prompt is quoted as iOS shows it there ("Enter iPad passcode for XCTest"). `notify-test` samples use the controlled device.
+- Checking a new version during an update (running its `--version`) could fail now and then with "Text file busy": another thread started a process while the new program was still open for writing. It now waits a moment and tries again.
+- `task run`: a command that ended its task with `task finish` is no longer stopped on its way out with exit code 1. It now has 5 seconds to exit with its own code; if it is stopped after that, the exit code is 0 when the task completed.
+- Holding an arrow key in a setup menu keeps moving the selection without echoing key sequences into the menu.
 - AI task summaries on the control page are formatted: bold, lists, inline code and line breaks show as such instead of raw Markdown.
 - On iOS 27 and later, a system alert (a permission prompt such as "Allow Calendar to use your location?") that the live picture on the control page doesn't show is now drawn on the picture where it is, with its buttons; a button there taps it on the phone.
 - Locking no longer takes about 10 s every time on some iPhones (e.g. iPhone 15 Pro Max, iOS 27.0.1): pressing the power key via IOHID does nothing there, so the daemon remembers it per device and uses WDA's lock first (about 2 s).
@@ -257,7 +282,8 @@ First public release.
 - Docker image (single binary plus Debian's usbmuxd, not privileged) with a generated third-party license list, published to `ghcr.io/derrors/iphone-control` for linux/amd64 and linux/arm64.
 - Running without Docker, from source or from the prebuilt Linux binaries (x86_64, aarch64): as a regular user with the system usbmuxd, XDG data and socket paths, the unsigned WebDriverAgent downloaded and checksum-verified before the first signing, `mcp-config` printing a direct command, and a systemd user service.
 
-[Unreleased]: https://github.com/Derrors/iphone-control/compare/v0.2.3...HEAD
+[Unreleased]: https://github.com/Derrors/iphone-control/compare/v0.2.4...HEAD
+[0.2.4]: https://github.com/Derrors/iphone-control/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/Derrors/iphone-control/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/Derrors/iphone-control/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/Derrors/iphone-control/compare/v0.2.0...v0.2.1

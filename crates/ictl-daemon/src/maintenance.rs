@@ -147,6 +147,21 @@ mod tests {
         shared_in(&dir).unwrap();
         std::fs::remove_dir_all(dir).unwrap();
     }
+    /// A lock that is free again: another test spawning a process meanwhile (procs.rs) briefly holds a copy of the
+    /// dropped descriptor in the child until it execs, and the lock with it
+    fn once_free(dir: &Path, operation: libc::c_int) -> File {
+        for _ in 0..100 {
+            match lock(dir, operation) {
+                Ok(f) => return f,
+                Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(std::time::Duration::from_millis(20))
+                }
+                Err(e) => panic!("{e}"),
+            }
+        }
+        panic!("still locked after 2 s");
+    }
+
     #[test]
     fn readers_exclude_maintenance_and_resume_after_it() {
         let dir = std::env::temp_dir().join(format!("ictl-lease-{}", std::process::id()));
@@ -156,10 +171,10 @@ mod tests {
         drop(client);
         assert!(lock(&dir, libc::LOCK_EX).is_err());
         drop(signing);
-        let update = lock(&dir, libc::LOCK_EX).unwrap();
+        let update = once_free(&dir, libc::LOCK_EX);
         assert!(lock(&dir, libc::LOCK_SH).is_err());
         drop(update);
-        lock(&dir, libc::LOCK_SH).unwrap();
+        once_free(&dir, libc::LOCK_SH);
         std::fs::remove_dir_all(dir).unwrap();
     }
 }

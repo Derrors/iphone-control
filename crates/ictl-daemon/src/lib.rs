@@ -16,6 +16,7 @@ pub mod imaging;
 pub mod machine;
 pub mod maintenance;
 pub mod notify;
+pub mod procs;
 mod screen;
 mod supervise;
 pub mod tasks;
@@ -59,6 +60,8 @@ pub async fn run(cfg: Config) -> anyhow::Result<()> {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o600))?;
     }
+    // up again: clients that waited for the restart connect now ([`protocol::connect`])
+    let _ = std::fs::remove_file(protocol::stopping_marker(&socket));
     // 处理设备的 future 不必是 Send（plume_core / 泛型 async 的 Send 推断有限制），全部跑在一个 LocalSet 里
     let local = tokio::task::LocalSet::new();
     let r = local.run_until(serve(cfg, listener)).await;
@@ -77,7 +80,13 @@ async fn serve(cfg: Config, listener: tokio::net::UnixListener) -> anyhow::Resul
     // 每个连接一个任务；请求在任务里等设备锁，主循环本身从不阻塞，停止信号随时能处理
     let mut conns = JoinSet::new();
     let mut ticking: Option<JoinHandle<()>> = None;
+    // a round asked for (`Daemon::wake`) while one was still running: it starts once that one is done
+    let mut woken = false;
     loop {
+        if woken && ticking.as_ref().is_none_or(JoinHandle::is_finished) {
+            woken = false;
+            ticking = Some(tokio::task::spawn_local(daemon.clone().tick()));
+        }
         tokio::select! {
             biased;
             _ = term.recv() => break,
@@ -99,8 +108,16 @@ async fn serve(cfg: Config, listener: tokio::net::UnixListener) -> anyhow::Resul
                     ticking = Some(tokio::task::spawn_local(daemon.clone().tick()));
                 }
             }
+            () = daemon.wake.notified() => woken = true,
+            // waiting for the round that runs to end, before the one asked for
+            () = tokio::time::sleep(std::time::Duration::from_millis(200)), if woken => {}
         }
     }
+    // stopping: new clients are refused at once (instead of waiting in the queue for a reply that never comes), and
+    // told by the marker that this is a restart, so they try again shortly ([`protocol::connect`])
+    let _ = std::fs::write(protocol::stopping_marker(&daemon.cfg.socket), b"");
+    drop(listener);
+    let _ = std::fs::remove_file(&daemon.cfg.socket);
     // 先取消排队和执行中的请求、巡检（放掉设备锁），再停 HID 媒体流、runner、usbmuxd。
     // 自动解锁被打断时停用标记会留着（ictl-unlock），不会因此输错第二次
     conns.abort_all();
@@ -114,6 +131,8 @@ async fn serve(cfg: Config, listener: tokio::net::UnixListener) -> anyhow::Resul
 }
 
 async fn serve_conn(daemon: Arc<Daemon>, stream: tokio::net::UnixStream) {
+    // the process on the other end: a task's agent may not control its task (`tasks::Tasks::handle`)
+    let peer = stream.peer_cred().ok().and_then(|c| c.pid()).and_then(|p| u32::try_from(p).ok());
     let (r, mut w) = stream.into_split();
     let mut reader = BufReader::new(r);
     loop {
@@ -126,7 +145,10 @@ async fn serve_conn(daemon: Arc<Daemon>, stream: tokio::net::UnixStream) {
         let resp = if line.len() as u64 > MAX_REQUEST_LINE {
             protocol::Response::error(ictl_l10n::tr!("请求太长", "request too long"))
         } else {
-            let parsed = parse_request(&line);
+            let parsed = parse_request(&line).map(|(r, cancel, mut ctx, lang)| {
+                ctx.peer = peer;
+                (r, cancel, ctx, lang)
+            });
             // Status snapshots remain available throughout maintenance (including health probes).
             let needs_device = parsed.as_ref().is_ok_and(|(r, ..)| !matches!(r, protocol::Request::Daemon));
             let lease = needs_device.then(maintenance::shared).transpose();
@@ -147,7 +169,7 @@ async fn serve_conn(daemon: Arc<Daemon>, stream: tokio::net::UnixStream) {
                     Ok(lease),
                 ) => {
                     drop(lease);
-                    ictl_l10n::scope(lang, task_stream(&daemon, reader, w, req)).await;
+                    ictl_l10n::scope(lang, task_stream(&daemon, reader, w, req, peer)).await;
                     return;
                 }
                 (Ok((req, false, ctx, lang)), Ok(_lease)) => {
@@ -205,7 +227,7 @@ fn parse_request(line: &[u8]) -> serde_json::Result<(protocol::Request, bool, co
     Ok((
         serde_json::from_value(v)?,
         cancel,
-        core::CallCtx { gone: None, expect_udid: udid, expect_view: view, task, task_step },
+        core::CallCtx { gone: None, expect_udid: udid, expect_view: view, task, task_step, peer: None },
         lang.unwrap_or(ictl_l10n::Lang::Zh),
     ))
 }
@@ -217,6 +239,7 @@ async fn task_stream(
     mut reader: BufReader<tokio::net::unix::OwnedReadHalf>,
     mut w: tokio::net::unix::OwnedWriteHalf,
     req: protocol::Request,
+    peer: Option<u32>,
 ) {
     async fn send<T: serde::Serialize>(w: &mut tokio::net::unix::OwnedWriteHalf, v: &T) -> bool {
         let mut line = serde_json::to_string(v).unwrap_or_default();
@@ -226,7 +249,7 @@ async fn task_stream(
     let found = match req {
         protocol::Request::TaskOpen { title, owner, apps } => match daemon.resolve_scope(&apps).await {
             Err(m) => Err(m),
-            Ok(apps) => daemon.tasks.open(&title, &owner, daemon.controlled_udid().as_deref(), apps).map(|t| {
+            Ok(apps) => daemon.tasks.open(&title, &owner, daemon.controlled_udid().as_deref(), apps, peer).map(|t| {
                 daemon.log.log(&ictl_l10n::log_trf!(
                     "开始任务 {}（{owner}）：{title}",
                     "Task {} started ({owner}): {title}",

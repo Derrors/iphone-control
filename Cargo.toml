@@ -17,7 +17,7 @@ members = [
 exclude = ["vendor"]
 
 [workspace.package]
-version = "0.2.3"
+version = "0.2.4"
 edition = "2024"
 # rmcp 3.8 要求 1.88；Impactor/idevice 用 edition 2024
 rust-version = "1.88"
@@ -50,15 +50,24 @@ idevice = { version = "=0.1.68", default-features = false, features = [
     "syslog_relay",
     "crashreportcopymobile",
 ] }
-rmcp = { version = "=3.8.0", features = ["server", "transport-io"] }
+# transport-streamable-http-server：控制台的 /mcp（MCP over HTTP）
+rmcp = { version = "=3.8.0", features = ["server", "transport-io", "transport-streamable-http-server"] }
+http = "=1.5.0"
+http-body-util = "=0.1.5"
+bytes = "=1.12.1"
 tokio = { version = "=1.54.1", features = ["full"] }
 # rustls-no-provider：不编进 aws-lc-rs（C 代码，编译慢、体积大）；idevice/plume_core 用 ring，入口处显式装 ring 为默认 provider
 reqwest = { version = "=0.13.5", default-features = false, features = ["form", "rustls-no-provider"] }
 rustls = { version = "=0.23.46", default-features = false, features = ["ring"] }
+# 控制台的 HTTPS（viewer --lan）：两者已经在依赖树里（idevice、reqwest、plume_core），同样只用 ring
+tokio-rustls = { version = "=0.26.6", default-features = false, features = ["ring"] }
+rcgen = "=0.12.1"
 quick-xml = "=0.42.0"
 image = { version = "=0.25.10", default-features = false, features = ["png", "jpeg"] }
 clap = { version = "=4.6.7", features = ["derive", "env"] }
 clap_complete = "=4.6.11"
+console = "=0.15.11"
+termion = "=4.0.6"
 serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = "=1.0.154"
 thiserror = "=2.0.21"

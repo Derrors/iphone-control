@@ -24,6 +24,37 @@ pub enum Event {
     },
 }
 
+/// Which device a notification is about: its name for the title, and its kind for the words iOS itself shows
+/// (the passcode prompt says “iPad passcode” on an iPad)
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Target {
+    pub name: String,
+    pub kind: &'static str,
+}
+
+impl Target {
+    /// The device as the daemon knows it; without its details, the device in general
+    pub fn of(info: Option<&ictl_device::DeviceInfo>) -> Self {
+        let Some(i) = info else {
+            return Self { name: ictl_l10n::tr!("设备", "Device").into(), kind: "iPhone" };
+        };
+        let kind = if i.product_type.starts_with("iPad") {
+            "iPad"
+        } else if i.product_type.starts_with("iPod") {
+            "iPod"
+        } else {
+            "iPhone"
+        };
+        let name = i.name.trim();
+        Self { name: if name.is_empty() { kind.into() } else { name.into() }, kind }
+    }
+
+    /// For `notify-test`
+    pub fn sample() -> Self {
+        Self { name: "iPhone".into(), kind: "iPhone" }
+    }
+}
+
 impl Event {
     /// 去重用的键：同一类事件只推一次，直到被对应的恢复事件清掉或过了冷却时间
     fn key(&self) -> &'static str {
@@ -60,10 +91,12 @@ impl Event {
         self.key()
     }
 
-    pub fn title_body(&self) -> (String, String) {
+    /// `t`: the device it is about (titles name it; the passcode prompt is called what iOS calls it there)
+    pub fn title_body(&self, t: &Target) -> (String, String) {
+        let (name, kind) = (&t.name, t.kind);
         match self {
             Self::ResignFailed(why) => (
-                ictl_l10n::tr!("iPhone WDA 重签失败", "iPhone: re-signing WDA failed").into(),
+                ictl_l10n::trf!("{name} WDA 重签失败", "{name}: re-signing WDA failed"),
                 ictl_l10n::trf!("{why}\n描述文件过期后 WDA 将无法启动(截图/点击的 HID 路线不受影响)。\n排查: iphone-control doctor", "{why}\nOnce the provisioning profile expires WDA can't start (the HID path for screenshots/taps is not affected).\nTroubleshoot: iphone-control doctor"),
             ),
             Self::SessionExpired(why) => (
@@ -71,19 +104,19 @@ impl Event {
                 ictl_l10n::trf!("{why}\n下次重签前需要重新登录: iphone-control login", "{why}\nSign in again before the next re-sign: iphone-control login"),
             ),
             Self::NeedsAutomationPin => (
-                ictl_l10n::tr!("iPhone 需要输入锁屏密码", "iPhone needs the passcode").into(),
-                ictl_l10n::tr!("手机重启后要启用 UI 自动化:请解锁手机,在「为 XCTest 输入 iPhone 密码」弹窗里输入锁屏密码。弹窗没出现或已关闭的话,1 分钟内会重新弹出。", "After a reboot, UI automation has to be enabled: unlock the phone and enter the passcode in the “Enter iPhone passcode for XCTest” prompt. If the prompt didn't appear or was dismissed, it comes back within a minute.").into(),
+                ictl_l10n::trf!("{name} 需要输入锁屏密码", "{name} needs the passcode"),
+                ictl_l10n::trf!("设备重启后要启用 UI 自动化:请解锁 {kind},在「为 XCTest 输入 {kind} 密码」弹窗里输入锁屏密码。弹窗没出现或已关闭的话,1 分钟内会重新弹出。", "After a reboot, UI automation has to be enabled: unlock the {kind} and enter the passcode in the “Enter {kind} passcode for XCTest” prompt. If the prompt didn't appear or was dismissed, it comes back within a minute."),
             ),
-            Self::WdaRecovered => (ictl_l10n::tr!("iPhone WDA 已恢复", "iPhone WDA is back").into(), ictl_l10n::tr!("已输入密码,WDA 重新就绪,可以正常操作了。", "Passcode entered, WDA is ready again and everything works.").into()),
+            Self::WdaRecovered => (ictl_l10n::trf!("{name} WDA 已恢复", "{name}: WDA is back"), ictl_l10n::tr!("已输入密码,WDA 重新就绪,可以正常操作了。", "Passcode entered, WDA is ready again and everything works.").into()),
             Self::UnlockDisabled => (
-                ictl_l10n::tr!("iPhone 自动解锁失败,已停用", "iPhone auto-unlock failed and was disabled").into(),
+                ictl_l10n::trf!("{name} 自动解锁失败,已停用", "{name}: auto-unlock failed and was disabled"),
                 ictl_l10n::tr!("整串密码输完手机仍锁着(可能密码配置不对),或输入途中出错、无法确认密码是否已提交。为免累计输错,自动解锁已停用。\n请人工解锁手机、核对密码(iphone-control passcode set),再运行 iphone-control unlock-reset。", "The phone stayed locked after entering the whole passcode (the configured passcode may be wrong), or an error happened while entering it so it's unclear whether it was submitted. Auto-unlock is now disabled so wrong attempts don't pile up.\nUnlock the phone by hand, check the passcode (iphone-control passcode set), then run iphone-control unlock-reset.").into(),
             ),
             Self::DeviceOffline { minutes } => (
-                ictl_l10n::trf!("iPhone 已离线 {minutes} 分钟", "iPhone offline for {minutes} minutes"),
+                ictl_l10n::trf!("{name} 已离线 {minutes} 分钟", "{name} offline for {minutes} minutes"),
                 ictl_l10n::tr!("连不上手机:检查 USB 线、手机是否没电关机。重新连上后会自动恢复。", "Can't reach the phone: check the USB cable and whether the phone ran out of battery. It recovers automatically once reconnected.").into(),
             ),
-            Self::DeviceOnline { minutes } => (ictl_l10n::tr!("iPhone 已重新连上", "iPhone reconnected").into(), ictl_l10n::trf!("离线约 {minutes} 分钟,正在自动恢复。", "Offline for about {minutes} minutes, recovering automatically.")),
+            Self::DeviceOnline { minutes } => (ictl_l10n::trf!("{name} 已重新连上", "{name} reconnected"), ictl_l10n::trf!("离线约 {minutes} 分钟,正在自动恢复。", "Offline for about {minutes} minutes, recovering automatically.")),
             Self::CertificateChanged { revoked: true } => (
                 ictl_l10n::tr!("签名证书换了,旧证书已被吊销", "Signing certificate replaced, an old one was revoked").into(),
                 ictl_l10n::tr!("这次签名新建了证书;免费 Apple ID 最多两张,满了就吊销了一张旧的。用旧证书签的 WDA(可能在别的设备,或用同一个 Apple ID 的其他机器、其他侧载工具上)起不来了:这里控制的设备切过去时会自动重签,也可以运行 iphone-control sign。", "This signing created a new certificate; a free Apple ID holds at most two, so an old one was revoked. WDA signed with it (maybe on other devices, or on other machines or sideloading tools using the same Apple ID) won't start any more: devices controlled here are re-signed automatically when you switch to them, or run iphone-control sign.").into(),
@@ -227,7 +260,29 @@ mod tests {
 
     #[test]
     fn texts_match_toolkit() {
-        assert_eq!(Event::NeedsAutomationPin.title_body().0, "iPhone 需要输入锁屏密码");
-        assert_eq!(Event::DeviceOffline { minutes: 10 }.title_body().0, "iPhone 已离线 10 分钟");
+        let t = Target::sample();
+        assert_eq!(Event::NeedsAutomationPin.title_body(&t).0, "iPhone 需要输入锁屏密码");
+        assert_eq!(Event::DeviceOffline { minutes: 10 }.title_body(&t).0, "iPhone 已离线 10 分钟");
+    }
+
+    /// The device by its name, and iOS's own words for an iPad
+    #[test]
+    fn a_notification_names_its_device() {
+        let info = |name: &str, product_type: &str| ictl_device::DeviceInfo {
+            name: name.into(),
+            product_type: product_type.into(),
+            ..Default::default()
+        };
+        let ipad = Target::of(Some(&info("客厅的iPad", "iPad11,1")));
+        assert_eq!((ipad.name.as_str(), ipad.kind), ("客厅的iPad", "iPad"));
+        let (title, body) = ictl_l10n::with_lang(ictl_l10n::Lang::Zh, || Event::NeedsAutomationPin.title_body(&ipad));
+        assert_eq!(title, "客厅的iPad 需要输入锁屏密码");
+        assert!(body.contains("为 XCTest 输入 iPad 密码") && !body.contains("iPhone"), "{body}");
+        assert_eq!(Target::of(Some(&info("", "iPhone16,2"))).name, "iPhone", "no name: its kind");
+        let unknown = ictl_l10n::with_lang(ictl_l10n::Lang::En, || Target::of(None));
+        assert_eq!(unknown.name, "Device");
+        let (title, _) =
+            ictl_l10n::with_lang(ictl_l10n::Lang::En, || Event::DeviceOffline { minutes: 3 }.title_body(&ipad));
+        assert_eq!(title, "客厅的iPad offline for 3 minutes");
     }
 }

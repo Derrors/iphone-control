@@ -1,6 +1,6 @@
 # 必须覆盖的回归用例
 
-#1～#34 来自 toolkit 和本项目早期实际踩过的坑，#35～#45 是多设备和 HID 横屏，#46～#58 是实时画面、开发者工具和英文界面，#59～#63 是 iPhone 18 Pro Max（iOS 27.2.1）真机全量测试发现的问题，#64 起是 viewer 的 AI 任务和新页面。能单测的写单测，不能单测的进真机回归清单。**每个 PR 都必须保持这里的全部用例通过**：单测的由 `cargo test` 覆盖；改到的范围里测试方式是真机、无头 Chrome 或手动测量的，要重跑并在 PR 里列出编号，写明设备和 iOS 版本；修了清单里没有的问题，要加一行。完整要求见 [CONTRIBUTING.md 的 Required tests](../../CONTRIBUTING.md#required-tests)。
+#1～#34 来自 toolkit 和本项目早期实际踩过的坑，#35～#45 是多设备和 HID 横屏，#46～#58 是实时画面、开发者工具和英文界面，#59～#63 是 iPhone 18 Pro Max（iOS 27.2.1）真机全量测试发现的问题，#64 起是 viewer 的 AI 任务和新页面，#116～#122 是任务的控制权、控制台的局域网访问与登录、跨主机，#123 起是 0.2.4 发版前回归中发现的。能单测的写单测，不能单测的进真机回归清单。**每个 PR 都必须保持这里的全部用例通过**：单测的由 `cargo test` 覆盖；改到的范围里测试方式是真机、无头 Chrome 或手动测量的，要重跑并在 PR 里列出编号，写明设备和 iOS 版本；修了清单里没有的问题，要加一行。完整要求见 [CONTRIBUTING.md 的 Required tests](../../CONTRIBUTING.md#required-tests)。
 
 | # | 坑 | 正确行为 | 测试方式 |
 |---|---|---|---|
@@ -11,7 +11,7 @@
 | 5 | 锁屏上 `/wda/tap` 每次约 2.9 秒 | 解锁用 W3C 单手势（约 0.7 秒） | 真机计时 |
 | 6 | 同名「设置」有 5 个 `SBAppTags` 含 `hidden` 的后台服务 | 按名字解析 App 时跳过 hidden | 单测 |
 | 7 | 容器无 udev，手机重启/重插后 usbmuxd 看不到设备 | 不再适用：2026-11-10 起不发布 Docker，守护进程不再自管 usbmuxd，热插拔由系统的 usbmuxd 和 udev 处理（D5、D14） | — |
-| 8 | 手机重启后 XCTest 弹「Enable UI Automation」密码框 | 识别错误、只推送一次、60 秒重试、恢复后再推送 | 单测（错误识别）+ 真机 |
+| 8 | 手机重启后 XCTest 弹「Enable UI Automation」密码框 | 识别错误、只推送一次、每次等 25 秒、5 秒后重试、恢复后再推送 | 单测（错误识别）+ 真机 |
 | 9 | plumesign 不签 `.xctest`，WDA 报 XCTest 103 | `.xctest` 签名、无 entitlements | 单测（签完检查 `_CodeSignature`）+ 真机 |
 | 10 | `ios forward` 监听所有网卡，WDA 无认证，局域网可直接控制手机 | 默认不监听任何端口；bridge 只绑 127.0.0.1 | 集成测试（检查监听地址） |
 | 11 | 依赖大版本漂移（mcp 2.x 把 FastMCP 改名、idevice 0.1.x 每版破坏性变更） | 所有依赖锁定精确版本 + `Cargo.lock` 入库；升级单独提交 | CI |
@@ -117,6 +117,15 @@
 | 111 | 控制台上 AI 任务的总结直接显示 Markdown 原文（`**iOS 27.0.1**`、`- **设置**：…`），换行也被合并成一行 | 总结先整体转义，再按一小部分 Markdown 显示（粗体、斜体、行内代码、列表、标题、分隔线、换行、http(s) 链接），原始 HTML 一律当文字 | 页面测试（`tests/viewer/summary.test.mjs`）+ 真机（Claude Code、Codex 任务的总结） |
 | 112 | iOS 27 上控制台用手机自己的视频时，系统权限弹窗（「允许“日历”使用你的位置？」）在画面里只剩变暗的屏幕，看不到弹窗本身，接管的人不知道该点哪里；agent 的截图里有 | 画面是手机自己的视频时，页面问守护进程有没有系统弹窗（`AlertCheck`；在 App 里每 2 秒，主屏幕上查一次约 0.6 秒，没弹窗时放慢到 6 秒，刚触摸后 3 秒内不问），有就照 iOS 弹窗的样子把它画在画面里它所在的位置（文字、按钮）；按钮按坐标点（按名字点「允许」会点到「不允许」）；AI 任务进行中按钮要先接管 | 单测（`a_system_alert_with_its_own_buttons`）+ 页面测试（`tests/viewer/alert.test.mjs`）+ 真机（弹出权限请求时页面显示弹窗和按钮，点按钮生效） |
 | 113 | 在控制台画面上拖动、滑动时，触控板双指一碰就变成了缩放画面（双指捏合在浏览器里是按住 Ctrl 的滚轮） | 画面只用上方的加减号缩放；画面区域里的 Ctrl/⌘ + 滚轮、Safari 的 gesture 事件都拦下，既不缩放画面也不缩放整页；触屏上画面周围不允许双指缩放（`touch-action: pan-x pan-y`） | 页面测试（`tests/viewer/zoom.test.mjs`）+ 真机（在画面上双指捏合，缩放比例不变） |
-| 114 | 设置菜单不能用方向键，取消后可能留下终端输入模式 | 方向键和编号选择一致，Esc/Ctrl+C 不提交当前选择并恢复终端；基础终端保留逐行输入 | 菜单状态单测 + PTY 回归（不连接设备） |
+| 114 | 设置菜单不能用方向键，长按方向键时重画期间会打开回显，取消后可能留下终端输入模式 | 菜单从第一帧到退出都关闭输入回显；方向键和编号选择一致，Esc/Ctrl+C 恢复原模式；基础终端保留逐行输入 | 菜单状态单测 + PTY 回归（含长按 ↓、输入输出在不同终端、取消和外部信号） |
 | 115 | 生成 Shell 补全触发配置读取或设备维护锁，脚本与 CLI 定义不同步 | Bash/Zsh/Fish 从实际命令树生成，生成路径不读取设置、不连接设备、不申请维护锁 | 补全单测、CLI 子进程回归、Bash/Fish 候选断言及 Zsh 交互验证 |
-| 116 | WDA 首装后的开发者信任指引被实时画面隐藏，普通重试又被误判为需要信任 | 首次安装显示信任指引。重启或重插后收到笼统的启动拒绝也提示检查开发者信任，已信任则用 doctor 查签名，已登录用户可点重签。切换设备或就绪后收起，窄屏仍可看画面 | 单测 trust_guidance_requires_install_or_explicit_device_evidence、install_guidance_uses_profiles_on_the_target_device、startup_notice_uses_the_request_language_and_preserves_the_error；无头浏览器检查提示与画面尺寸 |
+| 116 | AI 任务的 Agent 用自己的 Bash 跑 `iphone-control task approve <id>`，就能批准它本该问人的越界确认和 `iphone_confirm`，或在用户暂停后自己继续 | 带任务口令、或来自开任务进程之下（Agent 及其子进程）的控制请求一律拒绝，停止除外；控制台接口在 Linux 上按调用进程同样拒绝 | 单测 `the_agent_cant_control_its_own_task`；真机 `tasks.py self` |
+| 117 | `task run` 下的命令自己 `task finish` 后正常退出，却被立刻发 SIGTERM，`task run` 退出码变成 1，平台当成失败 | 任务是命令自己结束的（completed/failed/rejected）就给它 5 秒退出，退出码用它自己的；在别处停止的照旧马上停 | 单测 `a_command_that_finished_its_task_is_given_time_to_exit`、`the_exit_code_is_the_command_s_or_the_task_s_result`；真机 `tasks.py run` |
+| 118 | `IPHONE_CONTROL_VIEWER_LAN=1`（文档写的值）让控制台启动就退出：`invalid value '1' for '--lan'` | 布尔设置接受 1/0、yes/no、on/off、true/false | 单测 `viewer_settings_from_the_environment` |
+| 119 | 从局域网地址（HTTP）打开控制台一直停在「正在连接」：不是安全上下文，没有 `crypto.randomUUID` | 页面不用只在安全上下文里才有的接口生成画面编号（`getRandomValues`） | 页面测试 `lan.test.mjs` |
+| 120 | 带请求体的请求被提前拒绝（没登录 401、403、413）时，控制台没读请求体就关连接，TCP 发 RST，客户端收不到回复（`connection reset by peer`，复用连接的程序约三次一次） | 回复后先关写方向，读完对方剩下的数据（最多 1 秒、1 MB）再关 | 单测 `every_request_needs_the_login`（256 KB 请求体仍收到 401）；真机 `tasks.py remote` 连跑 8 次 |
+| 121 | 任务事件流（SSE）的一块数据断在中文字符中间时，先整体转成文字会把这个字变成乱码 | 在字节里找事件边界，只转换完整的事件 | 单测 `remote::reads_server_sent_events` |
+| 122 | 升级时运行新程序的 `--version` 偶尔失败：`Text file busy`（同一进程的其他线程 fork 时，新程序还以写方式打开） | 遇到 `ETXTBSY` 等 50 毫秒重试，最多 20 次 | 单测 `the_candidate_runs_once_it_is_no_longer_open_for_writing`（修复前稳定复现） |
+| 123 | iPad（iPadOS 26）重启后要输入密码启用 UI 自动化时，通知写的是「iPhone 需要输入锁屏密码」；所有通知标题都写死「iPhone」，多台设备时看不出是哪一台 | 标题用设备名（没有名字时用型号类别），密码提示按设备类别写系统弹窗的说法；离线通知用离线前记下的名字 | 单测 `a_notification_names_its_device`；真机 `notify-test pin`（控制 iPad，经本地假 Bark 截到标题） |
+| 124 | 切到另一台设备再切回 iPhone（iOS 27）后，WDA 卡在「Enable UI Automation」密码框期间，HID 后备路线的截图、按键都报「WDA 不可用,也不知道屏幕尺寸」：state.json 只记最后一台的尺寸 | 每台设备的尺寸按 UDID 记下（`screens`），`screen`/`screen_udid` 照旧写给旧版本 | 单测 `every_device_keeps_its_screen_size`；真机：iPhone 和 iPad 来回切换后，iPhone 的 WDA 还没起来时截图、按 Home |
+| 125 | WDA 首装后的开发者信任指引被实时画面隐藏，普通重试又被误判为需要信任；超时等启动错误没有重签入口 | 首次安装显示信任指引。重启或重插后收到笼统的启动拒绝也提示检查信任，已信任则用 doctor 查签名。任何启动错误均为已登录且可操作的用户保留重签入口，签名时显示进度；原始错误在状态面板。切换设备或就绪后收起，窄屏仍可看画面 | 单测 trust_guidance_requires_install_or_explicit_device_evidence、install_guidance_uses_profiles_on_the_target_device、startup_notice_uses_the_request_language_and_preserves_the_error；页面测试 actions.test.mjs；无头浏览器检查提示与画面尺寸 |

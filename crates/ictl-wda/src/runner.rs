@@ -287,9 +287,14 @@ impl WdaRunner {
             }
             if tokio::time::Instant::now() >= deadline {
                 runner.stop();
-                return Err(failure(Some(
-                    ictl_l10n::tr!("WDA 在限定时间内没有就绪", "WDA didn't become ready in time").to_owned(),
-                )));
+                return Err(
+                    match failure(Some(
+                        ictl_l10n::tr!("WDA 在限定时间内没有就绪", "WDA didn't become ready in time").to_owned(),
+                    )) {
+                        WdaError::StartFailed(m) => WdaError::NotReadyInTime(m),
+                        e => e,
+                    },
+                );
             }
             tokio::time::sleep(Duration::from_millis(500)).await;
         }
@@ -341,7 +346,7 @@ impl WdaRunner {
                 if wait.is_some() {
                     return Err(WdaError::NeedsAutomationPin);
                 }
-                return Err(WdaError::StartFailed(if watching {
+                return Err(WdaError::NotReadyInTime(if watching {
                     ictl_l10n::trf!(
                         "后台启动的 WDA {} 秒内没有就绪",
                         "WDA launched in the background wasn't ready within {} s",

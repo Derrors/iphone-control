@@ -20,6 +20,8 @@ mod completions;
 mod debug;
 mod envfile;
 mod guide;
+mod mcp_bridge;
+mod remote;
 mod schedule;
 mod service;
 mod task;
@@ -58,8 +60,13 @@ enum Command {
     },
     #[command(about = ictl_l10n::tr!("常驻守护进程（安装时装成用户服务：macOS 是 launchd，Linux 是 systemd；也可以手动启动）", "The long-running daemon (installed as a user service: launchd on macOS, systemd on Linux; can also be started by hand)"))]
     Daemon,
-    #[command(about = ictl_l10n::tr!("MCP stdio 服务（由 agent 拉起）", "MCP stdio server (started by the agent)"))]
-    Mcp,
+    #[command(about = ictl_l10n::tr!("MCP stdio 服务（由 agent 拉起）。--url（或 IPHONE_CONTROL_URL）时转接另一台机器的控制台 /mcp：给只能填命令的 MCP 客户端用", "MCP stdio server (started by the agent). With --url (or IPHONE_CONTROL_URL), a bridge to another machine's viewer /mcp, for MCP clients that only start a command"))]
+    Mcp {
+        #[arg(long, value_name = "URL", env = "IPHONE_CONTROL_URL", help = ictl_l10n::tr!("手机接在另一台机器上：那台机器的控制台地址。有任务口令（IPHONE_CONTROL_TASK_TOKEN）就只带它，否则用 IPHONE_CONTROL_VIEWER_TOKEN 登录；task run --url 启动的命令会自动设好", "The phone is on another machine: that machine's viewer. With a task's token (IPHONE_CONTROL_TASK_TOKEN) only that is sent, otherwise the login from IPHONE_CONTROL_VIEWER_TOKEN; a command under task run --url has it set already"))]
+        url: Option<String>,
+        #[arg(long, value_name = "PEM", env = "IPHONE_CONTROL_CA", help = ictl_l10n::tr!("--url 是本机生成的自签证书时，信任这张证书", "With --url and a self-signed certificate: trust it"))]
+        ca: Option<PathBuf>,
+    },
     #[command(about = ictl_l10n::tr!("打印把 MCP 注册到 Claude Code 的命令", "Print the command that registers the MCP server with Claude Code"))]
     McpConfig,
     #[command(about = ictl_l10n::tr!("守护进程和设备状态、最近的日志", "Daemon and device state, recent log"))]
@@ -110,11 +117,30 @@ enum Command {
     },
     #[command(about = ictl_l10n::tr!("浏览器里的控制台：实时画面上直接操作手机、看设备状态，把任务交给本机的 Claude Code 或 Codex 执行。只开在 127.0.0.1，操作都经守护进程（默认不监听任何端口）", "Control page in a browser: act on the live screen, see the device's state, and hand tasks to a local Claude Code or Codex. Serves 127.0.0.1 only, every action goes through the daemon (by default no port is opened)"))]
     Viewer {
-        #[arg(long, default_value_t = 8200)]
+        #[arg(long, env = "IPHONE_CONTROL_VIEWER_PORT", default_value_t = 8200)]
         port: u16,
+        // from the settings file as 1/0, yes/no, on/off or true/false (a plain flag's parser only takes true/false)
+        #[arg(long, env = "IPHONE_CONTROL_VIEWER_LAN", value_parser = clap::builder::BoolishValueParser::new(), help = ictl_l10n::tr!("也对局域网开放（同一个端口，局域网里用 HTTPS，要令牌登录：iphone-control viewer token），只接受局域网地址来的连接", "Also open to the local network (same port, HTTPS there, login with the token: iphone-control viewer token); only connections from local-network addresses"))]
+        lan: bool,
+        #[arg(long = "lan-host", value_name = "HOST", env = "IPHONE_CONTROL_VIEWER_LAN_HOSTS", value_delimiter = ',', help = ictl_l10n::tr!("--lan 时还认可的主机名（可写多次）；本机主机名、<主机名>.local 和各网卡 IP 已自动认可", "With --lan, another host name the page answers to (repeatable); this machine's name, <name>.local and its addresses are already accepted"))]
+        lan_hosts: Vec<String>,
+        #[arg(long, value_enum, env = "IPHONE_CONTROL_VIEWER_TLS", default_value = "auto", help = ictl_l10n::tr!("HTTPS（同一个端口，本机仍可用 http://127.0.0.1）：auto 在 --lan 或给了证书时开启；on、off", "HTTPS (same port; http://127.0.0.1 still works on this machine): auto turns it on with --lan or a certificate; on, off"))]
+        tls: viewer::tls::Mode,
+        #[arg(long = "tls-cert", value_name = "PEM", env = "IPHONE_CONTROL_VIEWER_TLS_CERT", requires = "tls_key", help = ictl_l10n::tr!("自己的证书（PEM，可带证书链），比如 mkcert 或 tailscale cert 生成的；不给就用本机生成的自签证书", "Your own certificate (PEM, chain allowed), such as one from mkcert or tailscale cert; without it a self-signed one made on this machine"))]
+        tls_cert: Option<PathBuf>,
+        #[arg(long = "tls-key", value_name = "PEM", env = "IPHONE_CONTROL_VIEWER_TLS_KEY", requires = "tls_cert", help = ictl_l10n::tr!("--tls-cert 的私钥（PEM）", "The private key of --tls-cert (PEM)"))]
+        tls_key: Option<PathBuf>,
+        #[arg(long, env = "IPHONE_CONTROL_VIEWER_MCP", value_name = "on|off", default_value = "on", action = clap::ArgAction::Set, value_parser = clap::builder::BoolishValueParser::new(), help = ictl_l10n::tr!("同一个端口上的 MCP（HTTP）：/mcp，本机和（--lan 时）局域网的客户端用 URL 接入；off 关掉", "MCP over HTTP on the same port: /mcp, for clients on this machine and (with --lan) the local network that connect by URL; off turns it off"))]
+        mcp: bool,
+        #[command(subcommand)]
+        action: Option<ViewerAction>,
     },
     #[command(about = ictl_l10n::tr!("AI 任务：在任务里运行外部 agent（task run），查看、暂停、接管、停止、确认任务", "AI tasks: run an external agent in a task (task run); list, pause, take over, stop and confirm tasks"))]
     Task {
+        #[arg(long, global = true, value_name = "URL", env = "IPHONE_CONTROL_URL", help = ictl_l10n::tr!("手机接在另一台机器上：那台机器的控制台地址，比如 https://192.168.1.5:8200；登录令牌放在 IPHONE_CONTROL_VIEWER_TOKEN 里（task finish 用任务口令）", "The phone is on another machine: that machine's viewer, such as https://192.168.1.5:8200; the login token goes in IPHONE_CONTROL_VIEWER_TOKEN (task finish uses the task's token)"))]
+        url: Option<String>,
+        #[arg(long, global = true, value_name = "PEM", env = "IPHONE_CONTROL_CA", help = ictl_l10n::tr!("--url 是本机生成的自签证书时，信任这张证书（那台机器上的 viewer-tls/cert.pem）", "With --url and a self-signed certificate made there: trust it (viewer-tls/cert.pem on that machine)"))]
+        ca: Option<PathBuf>,
         #[command(subcommand)]
         action: task::TaskAction,
     },
@@ -164,6 +190,53 @@ enum ServiceAction {
     #[command(about = ictl_l10n::tr!("重启，改过 ~/.config/iphone-control/env 后用", "Restart, after editing ~/.config/iphone-control/env"))]
     Restart,
     Status,
+    #[command(about = ictl_l10n::tr!("控制台（viewer）的后台服务：install / uninstall / start / stop / restart。设置在 ~/.config/iphone-control/env 的 IPHONE_CONTROL_VIEWER_*", "The viewer's own service: install / uninstall / start / stop / restart. Settings: IPHONE_CONTROL_VIEWER_* in ~/.config/iphone-control/env"))]
+    Viewer {
+        #[command(subcommand)]
+        action: ViewerServiceAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum ViewerAction {
+    #[command(about = ictl_l10n::tr!("控制台的登录令牌。不带子命令：显示 owner 令牌、点开就能登录的链接和 HTTP MCP 的接入方式（--new 换一个新的）；add / list / show / remove 管理有名字的令牌，可以是只读的", "The viewer's login tokens. Alone: show the owner token, links that log in and how to connect to its HTTP MCP (--new replaces it); add / list / show / remove manage named tokens, which may be read-only"))]
+    Token {
+        #[command(subcommand)]
+        action: Option<TokenAction>,
+        #[arg(long, help = ictl_l10n::tr!("换一个新的 owner 令牌（用它登录的浏览器都要重新登录）", "Replace the owner token (browsers logged in with it log in again)"))]
+        new: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum TokenAction {
+    #[command(about = ictl_l10n::tr!("加一个有名字的令牌（比如每人一个、每台设备一个），显示它和登录链接；--read-only 只能看画面、设备状态和任务，不能操作", "Add a named token (one per person or device, say) and show it with links that log in; --read-only can watch the picture, the device's state and tasks but not act"))]
+    Add {
+        name: String,
+        #[arg(long)]
+        read_only: bool,
+    },
+    #[command(about = ictl_l10n::tr!("列出令牌的名字和权限（不显示令牌本身）", "List the tokens' names and roles (not the tokens)"))]
+    List,
+    #[command(about = ictl_l10n::tr!("显示一个令牌和它的登录链接；--new 换一个新的", "Show a token and links that log in with it; --new replaces it"))]
+    Show {
+        name: String,
+        #[arg(long)]
+        new: bool,
+    },
+    #[command(about = ictl_l10n::tr!("删掉一个令牌，用它登录的浏览器和程序马上进不来；最后一个能操作的令牌不能删", "Remove a token: browsers and programs logged in with it are out at once; the last token that may operate stays"))]
+    Remove { name: String },
+}
+
+#[derive(Subcommand)]
+enum ViewerServiceAction {
+    #[command(about = ictl_l10n::tr!("装成登录后自动启动的服务并启动；会记下当前终端的 PATH（找 claude、codex 用），PATH 变了再装一次", "Set up the service that starts at login and start it; it keeps this shell's PATH (to find claude and codex), so install again if that changes"))]
+    Install,
+    Uninstall,
+    Start,
+    Stop,
+    #[command(about = ictl_l10n::tr!("重启，改过 IPHONE_CONTROL_VIEWER_* 设置后用", "Restart, after changing the IPHONE_CONTROL_VIEWER_* settings"))]
+    Restart,
 }
 
 /// 锁屏密码按设备分开存：一台的密码不会输进另一台
@@ -211,7 +284,7 @@ fn prints_and_exits(command: Option<&Command>) -> bool {
                 | Command::NotifyTest { .. }
                 | Command::Update { action: Some(UpdateAction::Check { .. }), .. }
         )
-    ) || matches!(command, Some(Command::Task { action }) if task::prints_and_exits(action))
+    ) || matches!(command, Some(Command::Task { action, .. }) if task::prints_and_exits(action))
 }
 
 /// Rust starts every program with SIGPIPE ignored, so once the reader of stdout has gone (`iphone-control status |
@@ -234,7 +307,7 @@ async fn run() -> anyhow::Result<()> {
     if prints_and_exits(cli.command.as_ref()) {
         restore_sigpipe();
     }
-    let quiet = matches!(cli.command, Some(Command::Mcp));
+    let quiet = matches!(cli.command, Some(Command::Mcp { .. }));
     // ICTL_LOG 留空（配置文件里常见的 `ICTL_LOG=`）当作没设；原来空值会生成一个什么都不放行的过滤器
     let filter =
         env_nonempty("ICTL_LOG").and_then(|v| tracing_subscriber::EnvFilter::try_new(v).ok()).unwrap_or_else(|| {
@@ -268,7 +341,8 @@ async fn run() -> anyhow::Result<()> {
             cfg.socket = cli.socket;
             ictl_daemon::run(cfg).await
         }
-        Command::Mcp => ictl_mcp::serve_stdio(cli.socket).await,
+        Command::Mcp { url: Some(url), ca } => mcp_bridge::run(&url, ca.as_deref()).await,
+        Command::Mcp { url: None, .. } => ictl_mcp::serve_stdio(cli.socket).await,
         Command::McpConfig => {
             println!("{}", mcp_config(&cli.socket)?);
             Ok(())
@@ -276,7 +350,7 @@ async fn run() -> anyhow::Result<()> {
         Command::Status => status(&cli.socket).await,
         Command::Doctor => print_text(&cli.socket, Request::Doctor).await,
         Command::Setup { reconfigure } => guide::setup(&cli, reconfigure).await,
-        Command::Service { action } => service_cmd(&cli.socket, action).await,
+        Command::Service { action } => service_cmd(&cli.socket, &cli.data_dir, action).await,
         Command::Login { email } => login(&cli.data_dir, email).await,
         Command::Sign => print_text(&cli.socket, Request::Resign { force: true }).await,
         Command::Resign { force } => print_text(&cli.socket, Request::Resign { force }).await,
@@ -285,11 +359,20 @@ async fn run() -> anyhow::Result<()> {
         Command::Devices => print_text(&cli.socket, Request::ListDevices).await,
         Command::Select { device } => print_text(&cli.socket, Request::SelectDevice { device }).await,
         Command::WdaBridge { port } => wda_bridge(&cli.socket, port).await,
-        Command::Viewer { port } => viewer::run(&cli.socket, &cli.data_dir, port).await,
-        Command::Task { action } => task::run(&cli.socket, action).await,
+        Command::Viewer { port, lan, lan_hosts, tls, tls_cert, tls_key, mcp, action } => {
+            let tls = viewer::tls::Setting { mode: tls, cert: tls_cert, key: tls_key };
+            match action {
+                Some(ViewerAction::Token { action, new }) => {
+                    let at = ViewerAt { port, lan, lan_hosts: &lan_hosts, tls: &tls, mcp };
+                    viewer_token(&cli.data_dir, &at, action, new)
+                }
+                None => viewer::run(&cli.socket, &cli.data_dir, port, lan, &lan_hosts, &tls, mcp).await,
+            }
+        }
+        Command::Task { url, ca, action } => task::run(&cli.socket, url, ca, action).await,
         #[cfg(feature = "debug-cmds")]
         Command::Debug(args) => debug::run(env_nonempty("IPHONE_UDID").as_deref(), args).await,
-        Command::NotifyTest { event } => notify_test(&cli.data_dir, event.as_deref()).await,
+        Command::NotifyTest { event } => notify_test(&cli.socket, &cli.data_dir, event.as_deref()).await,
     }
 }
 
@@ -332,8 +415,8 @@ async fn update_command(action: UpdateAction, socket: &Path) -> anyhow::Result<(
     }
 }
 
-async fn notify_test(data_dir: &Path, only: Option<&str>) -> anyhow::Result<()> {
-    use ictl_daemon::notify::{Event, send};
+async fn notify_test(socket: &Path, data_dir: &Path, only: Option<&str>) -> anyhow::Result<()> {
+    use ictl_daemon::notify::{Event, Target, send};
     let cfg = ictl_daemon::Config::from_env(data_dir).notify;
     let channels =
         usize::from(cfg.bark_key.is_some()) + usize::from(cfg.tg_bot_token.is_some() && cfg.tg_chat_id.is_some());
@@ -353,9 +436,14 @@ async fn notify_test(data_dir: &Path, only: Option<&str>) -> anyhow::Result<()> 
         let names: Vec<&str> = Event::samples().iter().map(|e| e.sample_name()).collect();
         bail!("{}", ictl_l10n::trf!("没有这类事件，可选：{}", "No such event; choose from: {}", names.join(" / ")));
     }
+    // the device the daemon controls, as a real notification names it; without the daemon, a sample
+    let target = match tokio::time::timeout(Duration::from_secs(2), snapshot(socket)).await {
+        Ok(Ok(s)) if s.device.is_some() => Target::of(s.device.as_ref()),
+        _ => Target::sample(),
+    };
     let mut failed = 0;
     for e in &events {
-        let (title, body) = e.title_body();
+        let (title, body) = e.title_body(&target);
         let ok = send(&cfg, &ictl_l10n::trf!("[测试] {title}", "[test] {title}"), &body).await;
         println!(
             "{}",
@@ -388,7 +476,7 @@ fn mcp_config(socket: &Path) -> anyhow::Result<String> {
     Ok(mcp_command(&service::stable_exe()?, socket))
 }
 
-async fn service_cmd(socket: &Path, action: ServiceAction) -> anyhow::Result<()> {
+async fn service_cmd(socket: &Path, data_dir: &Path, action: ServiceAction) -> anyhow::Result<()> {
     let none = || {
         anyhow::anyhow!(
             "{}",
@@ -407,6 +495,7 @@ async fn service_cmd(socket: &Path, action: ServiceAction) -> anyhow::Result<()>
         ServiceAction::Start => service::start(&service::find().ok_or_else(none)?)?,
         ServiceAction::Stop => service::stop(&service::find().ok_or_else(none)?)?,
         ServiceAction::Restart => service::restart(&service::find().ok_or_else(none)?)?,
+        ServiceAction::Viewer { action } => viewer_service_cmd(action)?,
         ServiceAction::Status => {
             match service::find() {
                 Some(s) => println!("{}", ictl_l10n::trf!("后台服务  {}", "Service   {}", s.describe())),
@@ -418,6 +507,33 @@ async fn service_cmd(socket: &Path, action: ServiceAction) -> anyhow::Result<()>
                     )
                 ),
             }
+            match service::viewer_find() {
+                Some(s) => println!(
+                    "{}",
+                    if service::running(&s) {
+                        ictl_l10n::trf!("控制台    {}，在运行", "Viewer    {}, running", s.describe())
+                    } else {
+                        ictl_l10n::trf!("控制台    {}，没在运行", "Viewer    {}, not running", s.describe())
+                    }
+                ),
+                None => println!(
+                    "{}",
+                    ictl_l10n::tr!(
+                        "控制台    没装成服务（iphone-control service viewer install）",
+                        "Viewer    no service (iphone-control service viewer install)"
+                    )
+                ),
+            }
+            // to check against the browser's warning when the page is opened from another machine
+            if let Some(fp) = viewer::tls::made_fingerprint(data_dir) {
+                println!(
+                    "{}",
+                    ictl_l10n::trf!(
+                        "          本机生成的 HTTPS 证书 SHA-256 {fp}",
+                        "          HTTPS certificate made here, SHA-256 {fp}"
+                    )
+                );
+            }
             let up = snapshot(socket).await.is_ok();
             println!(
                 "{}",
@@ -428,6 +544,163 @@ async fn service_cmd(socket: &Path, action: ServiceAction) -> anyhow::Result<()>
                 }
             );
         }
+    }
+    Ok(())
+}
+
+/// `s` padded to `width` columns, CJK and other wide characters taking two
+fn pad(s: &str, width: usize) -> String {
+    let w: usize =
+        s.chars().map(|c| if ('\u{1100}'..='\u{ffdc}').contains(&c) && c > '\u{2e7f}' { 2 } else { 1 }).sum();
+    format!("{s}{}", " ".repeat(width.saturating_sub(w)))
+}
+
+/// Where the viewer listens, for links that log in
+struct ViewerAt<'a> {
+    port: u16,
+    lan: bool,
+    lan_hosts: &'a [String],
+    tls: &'a viewer::tls::Setting,
+    mcp: bool,
+}
+
+/// `viewer token …`: the viewer's login tokens. The viewer reads the file again when it changes
+fn viewer_token(data_dir: &Path, at: &ViewerAt, action: Option<TokenAction>, new: bool) -> anyhow::Result<()> {
+    use viewer::auth;
+    let entry = match action {
+        None if new => auth::renew(data_dir, auth::OWNER)?,
+        None => auth::get(data_dir, auth::OWNER)?,
+        Some(TokenAction::Show { name, new: true }) => auth::renew(data_dir, &name)?,
+        Some(TokenAction::Show { name, new: false }) => auth::get(data_dir, &name)?,
+        Some(TokenAction::Add { name, read_only }) => {
+            auth::add(data_dir, &name, if read_only { auth::Role::View } else { auth::Role::Operate })?
+        }
+        Some(TokenAction::List) => {
+            for e in auth::load(data_dir)? {
+                let role = match e.role {
+                    auth::Role::Operate => ictl_l10n::tr!("可操作", "operate"),
+                    auth::Role::View => ictl_l10n::tr!("只读", "read-only"),
+                };
+                let created = chrono::DateTime::from_timestamp(e.created as i64, 0)
+                    .map(|t| t.format("%Y-%m-%d").to_string())
+                    .unwrap_or_default();
+                println!("{} {} {created}", pad(&e.name, 24), pad(role, 10));
+            }
+            println!("{}", ictl_l10n::trf!("（存在 {}）", "(kept in {})", auth::tokens_file(data_dir).display()));
+            return Ok(());
+        }
+        Some(TokenAction::Remove { name }) => {
+            auth::remove(data_dir, &name)?;
+            println!(
+                "{}",
+                ictl_l10n::trf!(
+                    "已删掉 {name}：用它登录的浏览器和程序马上进不来了。",
+                    "Removed {name}: browsers and programs logged in with it are out now."
+                )
+            );
+            return Ok(());
+        }
+    };
+    let (token, port) = (&entry.token, at.port);
+    let role = match entry.role {
+        auth::Role::Operate => ictl_l10n::tr!("可操作", "may operate"),
+        auth::Role::View => ictl_l10n::tr!(
+            "只读：只能看画面、设备状态和任务",
+            "read-only: watches the picture, the device's state and tasks"
+        ),
+    };
+    println!("{}", ictl_l10n::trf!("令牌    {}（{role}）", "Token   {} ({role})", entry.name));
+    println!("        {token}");
+    println!(
+        "{}",
+        ictl_l10n::trf!(
+            "本机    http://127.0.0.1:{port}/?token={token}",
+            "Here    http://127.0.0.1:{port}/?token={token}"
+        )
+    );
+    let scheme = if at.tls.enabled(at.lan) { "https" } else { "http" };
+    if at.lan {
+        for a in viewer::lan_addresses(at.lan_hosts) {
+            println!(
+                "{}",
+                ictl_l10n::trf!(
+                    "局域网  {scheme}://{a}:{port}/?token={token}",
+                    "Network {scheme}://{a}:{port}/?token={token}"
+                )
+            );
+        }
+    }
+    if at.mcp && entry.role == auth::Role::Operate {
+        println!(
+            "MCP     claude mcp add --transport http iphone http://127.0.0.1:{port}/mcp --header \"Authorization: Bearer {token}\""
+        );
+    }
+    println!(
+        "{}",
+        ictl_l10n::tr!(
+            "链接里带着令牌：别发到聊天或公开的地方。打开一次后浏览器会记住登录（30 天），地址栏里的令牌会被去掉。",
+            "The links carry the token: don't paste them into chats or anywhere public. Opened once, the browser stays logged in (30 days) and the token leaves the address bar."
+        )
+    );
+    if new {
+        println!(
+            "{}",
+            ictl_l10n::tr!(
+                "已换成新令牌，马上生效：用旧令牌登录的浏览器和 MCP 客户端都要用新的。",
+                "The token was replaced, effective now: browsers and MCP clients that used the old one need the new one."
+            )
+        );
+    }
+    Ok(())
+}
+
+fn viewer_service_cmd(action: ViewerServiceAction) -> anyhow::Result<()> {
+    let none = || {
+        anyhow::anyhow!(
+            "{}",
+            ictl_l10n::tr!(
+                "没有装控制台服务：iphone-control service viewer install",
+                "No viewer service is set up: iphone-control service viewer install"
+            )
+        )
+    };
+    match action {
+        ViewerServiceAction::Install => {
+            let s = service::viewer_install()?;
+            let port = env_nonempty("IPHONE_CONTROL_VIEWER_PORT").and_then(|p| p.parse::<u16>().ok()).unwrap_or(8200);
+            println!("{}", ictl_l10n::trf!("已安装并启动：{}", "Installed and started: {}", s.describe()));
+            println!("{}", ictl_l10n::trf!("控制台：http://127.0.0.1:{port}/", "Viewer: http://127.0.0.1:{port}/"));
+            let lan = env_nonempty("IPHONE_CONTROL_VIEWER_LAN")
+                .is_some_and(|v| !matches!(v.as_str(), "0" | "false" | "no" | "off"));
+            println!(
+                "{}",
+                if lan {
+                    ictl_l10n::tr!(
+                        "已对局域网开放（IPHONE_CONTROL_VIEWER_LAN）。登录用的令牌：iphone-control viewer token。",
+                        "Open to the local network (IPHONE_CONTROL_VIEWER_LAN). The login token: iphone-control viewer token."
+                    )
+                } else {
+                    ictl_l10n::tr!(
+                        "只在本机。要对局域网开放：设置文件里设 IPHONE_CONTROL_VIEWER_LAN=1，再 iphone-control service viewer restart。",
+                        "Local only. To open it to the local network: IPHONE_CONTROL_VIEWER_LAN=1 in the settings file, then iphone-control service viewer restart."
+                    )
+                }
+            );
+            let found: Vec<&str> = agent::Backend::ALL.iter().filter(|b| b.find().is_some()).map(|b| b.id()).collect();
+            if found.is_empty() {
+                println!(
+                    "{}",
+                    ictl_l10n::tr!(
+                        "这个终端的 PATH 里没有 claude 或 codex，服务里的控制台也用不了 AI 任务；装好后在 PATH 里能找到它们的终端里再装一次。",
+                        "Neither claude nor codex is on this shell's PATH, so the service's viewer can't run AI tasks either; install again from a shell where they are."
+                    )
+                );
+            }
+        }
+        ViewerServiceAction::Uninstall => service::viewer_uninstall()?,
+        ViewerServiceAction::Start => service::start(&service::viewer_find().ok_or_else(none)?)?,
+        ViewerServiceAction::Stop => service::stop(&service::viewer_find().ok_or_else(none)?)?,
+        ViewerServiceAction::Restart => service::restart(&service::viewer_find().ok_or_else(none)?)?,
     }
     Ok(())
 }
@@ -1111,26 +1384,33 @@ const MAX_CONNECTIONS: usize = 32;
 const MAX_HEAD: usize = 16 * 1024;
 /// 客户端发请求头、请求体时单次读的等待上限：连上不发的连接不能一直占着名额
 const READ_TIMEOUT: Duration = Duration::from_secs(10);
+/// 整个请求头（以及 TLS 握手）的时限：每隔几秒发一个字节的连接也不能一直占着名额
+const HEAD_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// 读到请求头结束；返回头部和跟着一起到的那部分请求体
-async fn read_head(client: &mut tokio::net::TcpStream) -> anyhow::Result<(Vec<u8>, Vec<u8>)> {
+async fn read_head(client: &mut (impl tokio::io::AsyncRead + Unpin)) -> anyhow::Result<(Vec<u8>, Vec<u8>)> {
     use tokio::io::AsyncReadExt;
-    let mut data = Vec::new();
-    let mut buf = [0u8; 4096];
-    loop {
-        if let Some(i) = data.windows(4).position(|w| w == b"\r\n\r\n") {
-            let body = data.split_off(i + 4);
-            return Ok((data, body));
+    let read = async {
+        let mut data = Vec::new();
+        let mut buf = [0u8; 4096];
+        loop {
+            if let Some(i) = data.windows(4).position(|w| w == b"\r\n\r\n") {
+                let body = data.split_off(i + 4);
+                return Ok((data, body));
+            }
+            if data.len() > MAX_HEAD {
+                bail!("{}", ictl_l10n::tr!("请求头太长", "request headers too long"));
+            }
+            let n = tokio::time::timeout(READ_TIMEOUT, client.read(&mut buf)).await??;
+            if n == 0 {
+                bail!("{}", ictl_l10n::tr!("连接已关闭", "connection closed"));
+            }
+            data.extend_from_slice(&buf[..n]);
         }
-        if data.len() > MAX_HEAD {
-            bail!("{}", ictl_l10n::tr!("请求头太长", "request headers too long"));
-        }
-        let n = tokio::time::timeout(READ_TIMEOUT, client.read(&mut buf)).await??;
-        if n == 0 {
-            bail!("{}", ictl_l10n::tr!("连接已关闭", "connection closed"));
-        }
-        data.extend_from_slice(&buf[..n]);
-    }
+    };
+    tokio::time::timeout(HEAD_TIMEOUT, read)
+        .await
+        .map_err(|_| anyhow::anyhow!("{}", ictl_l10n::tr!("请求头没有按时发完", "request headers took too long")))?
 }
 
 /// HTTP 请求头里的 Host 是不是 localhost / 127.0.0.1 / [::1]（端口不限）
@@ -1152,6 +1432,72 @@ fn host_is_loopback(head: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{host_is_loopback, mcp_command};
+
+    /// The viewer's settings come from the settings file as environment variables (also for the viewer service):
+    /// `IPHONE_CONTROL_VIEWER_LAN=1` turns `--lan` on. A plain flag only took true/false, so the service didn't start
+    /// `--url` anywhere in `task …`, or from IPHONE_CONTROL_URL (which `task run --url` gives its command), and for
+    /// `mcp`
+    #[test]
+    fn the_remote_viewer_from_a_flag_or_the_environment() {
+        use clap::Parser;
+        let task = |args: &[&str]| match super::Cli::try_parse_from(args).unwrap().command {
+            Some(super::Command::Task { url, .. }) => url,
+            _ => panic!("not task"),
+        };
+        let mcp = |args: &[&str]| match super::Cli::try_parse_from(args).unwrap().command {
+            Some(super::Command::Mcp { url, .. }) => url,
+            _ => panic!("not mcp"),
+        };
+        // SAFETY: only this test sets this variable
+        unsafe { std::env::remove_var("IPHONE_CONTROL_URL") };
+        assert_eq!(task(&["i", "task", "pause", "abc"]), None);
+        assert_eq!(mcp(&["i", "mcp"]), None, "the local stdio server, as before");
+        assert_eq!(task(&["i", "task", "--url", "https://a:1", "pause", "abc"]).as_deref(), Some("https://a:1"));
+        assert_eq!(task(&["i", "task", "approve", "abc", "--url", "https://a:1"]).as_deref(), Some("https://a:1"));
+        assert_eq!(mcp(&["i", "mcp", "--url", "https://a:1"]).as_deref(), Some("https://a:1"));
+        unsafe { std::env::set_var("IPHONE_CONTROL_URL", "https://b:2") };
+        assert_eq!(task(&["i", "task", "finish", "done"]).as_deref(), Some("https://b:2"));
+        assert_eq!(mcp(&["i", "mcp"]).as_deref(), Some("https://b:2"));
+        unsafe { std::env::remove_var("IPHONE_CONTROL_URL") };
+    }
+
+    #[test]
+    fn token_names_line_up_in_columns() {
+        assert_eq!(super::pad("owner", 8), "owner   ");
+        assert_eq!(super::pad("客厅电视", 10), "客厅电视  ", "four wide characters are eight columns");
+        assert_eq!(super::pad("toolongname", 4), "toolongname");
+    }
+
+    #[test]
+    fn viewer_settings_from_the_environment() {
+        use clap::Parser;
+        let parse = |lan: Option<&str>| {
+            // SAFETY: only this test sets these variables
+            unsafe {
+                match lan {
+                    Some(v) => std::env::set_var("IPHONE_CONTROL_VIEWER_LAN", v),
+                    None => std::env::remove_var("IPHONE_CONTROL_VIEWER_LAN"),
+                }
+                std::env::set_var("IPHONE_CONTROL_VIEWER_PORT", "8202");
+                std::env::set_var("IPHONE_CONTROL_VIEWER_LAN_HOSTS", "nas.example,nas2");
+            }
+            match super::Cli::try_parse_from(["iphone-control", "viewer"]).map(|c| c.command) {
+                Ok(Some(super::Command::Viewer { port, lan, lan_hosts, action: None, .. })) => (port, lan, lan_hosts),
+                other => panic!("{lan:?}: {:?}", other.err()),
+            }
+        };
+        for v in ["1", "yes", "on", "true"] {
+            assert!(parse(Some(v)).1, "{v}");
+        }
+        for v in ["0", "no", "off", "false"] {
+            assert!(!parse(Some(v)).1, "{v}");
+        }
+        assert_eq!(parse(None), (8202, false, vec!["nas.example".to_owned(), "nas2".to_owned()]));
+        unsafe {
+            std::env::remove_var("IPHONE_CONTROL_VIEWER_PORT");
+            std::env::remove_var("IPHONE_CONTROL_VIEWER_LAN_HOSTS");
+        }
+    }
     use ictl_l10n::{Lang, with_lang};
     use std::path::Path;
 

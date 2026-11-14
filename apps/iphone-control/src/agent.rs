@@ -78,10 +78,44 @@ pub struct Agents {
     workdir: PathBuf,
 }
 
+/// The agent's working directory under `base`: this user's own (0700, not a link). The agent reads what is there
+/// (`CLAUDE.md`, `AGENTS.md`, `.claude/`), so in a shared directory such as `/tmp` a name made by someone else first
+/// isn't used: then one made just now, which nobody else can have
+fn private_dir(base: &Path) -> std::io::Result<PathBuf> {
+    use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
+    let uid = unsafe { libc::getuid() };
+    let make = |dir: &Path| std::fs::DirBuilder::new().mode(0o700).create(dir);
+    let dir = base.join(format!("iphone-control-agent-{uid}"));
+    match make(&dir) {
+        Ok(()) => return Ok(dir),
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(e) => return Err(e),
+    }
+    let m = std::fs::symlink_metadata(&dir)?;
+    if m.file_type().is_dir() && m.uid() == uid {
+        // made by an earlier version, with the default permissions
+        if m.mode() & 0o077 != 0 {
+            std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))?;
+        }
+        return Ok(dir);
+    }
+    tracing::warn!("{} isn't this user's own directory: the agent works in a new one", dir.display());
+    for i in 0.. {
+        let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.subsec_nanos());
+        let fresh = base.join(format!("iphone-control-agent-{uid}-{}-{nanos}-{i}", std::process::id()));
+        match make(&fresh) {
+            Ok(()) => return Ok(fresh),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists && i < 100 => {}
+            Err(e) => return Err(e),
+        }
+    }
+    unreachable!("returns from the loop")
+}
+
 impl Agents {
     pub fn new(socket: &Path) -> anyhow::Result<Arc<Self>> {
-        let workdir = std::env::temp_dir().join(format!("iphone-control-agent-{}", unsafe { libc::getuid() }));
-        std::fs::create_dir_all(&workdir)?;
+        let base = std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from).filter(|p| p.is_absolute());
+        let workdir = private_dir(&base.unwrap_or_else(std::env::temp_dir))?;
         Ok(Arc::new(Self { exe: std::env::current_exe()?, socket: socket.to_path_buf(), workdir }))
     }
 
@@ -129,13 +163,23 @@ impl Agents {
         Ok(id)
     }
 
-    /// pause / resume / takeover / handback / stop / confirm from the page
-    pub async fn control(&self, id: &str, action: &str, body: &Value) -> Result<(), String> {
+    /// pause / resume / takeover / handback / stop / confirm from the page. `by`: who, for the task's log;
+    /// `from`: the local process that called the page's API, when known (the daemon refuses the task's agent)
+    pub async fn control(
+        &self,
+        id: &str,
+        action: &str,
+        body: &Value,
+        by: String,
+        from: Option<u32>,
+    ) -> Result<(), String> {
         let req = Request::TaskControl {
             id: id.to_owned(),
             action: action.to_owned(),
             step: body["step"].as_u64(),
             approve: body["approve"].as_bool().unwrap_or(false),
+            by: Some(by),
+            for_pid: from,
         };
         match protocol::call(&self.socket, &req, Some(Duration::from_secs(10))).await {
             Ok(Response::Text { .. }) => Ok(()),
@@ -177,6 +221,9 @@ impl Agents {
             .env("MCP_TOOL_TIMEOUT", "86400000")
             .process_group(0)
             .kill_on_drop(true);
+        // the agent and what it starts may not control its task (answer its own confirmations, resume itself);
+        // said before it starts, so nothing it does comes first
+        self.as_task(token, Request::TaskAgent).await;
         let mut child = cmd.spawn()?;
         let pid = child.id();
         let stdout = child.stdout.take().ok_or_else(|| anyhow::anyhow!("no stdout"))?;
@@ -446,6 +493,29 @@ mod tests {
             assert!(!plain.contains("com.apple.Preferences"), "{backend:?}: no scope, nothing about one");
             assert!(limited.contains("com.apple.Preferences、com.apple.mobiletimer"), "{backend:?}");
         }
+    }
+
+    #[test]
+    fn the_agent_works_in_a_directory_of_its_own() {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        let base = std::env::temp_dir().join(format!("ictl-agent-dir-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        let mine = private_dir(&base).unwrap();
+        assert_eq!(std::fs::metadata(&mine).unwrap().mode() & 0o777, 0o700);
+        // an earlier version's, with the default permissions
+        std::fs::set_permissions(&mine, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(private_dir(&base).unwrap(), mine);
+        assert_eq!(std::fs::metadata(&mine).unwrap().mode() & 0o777, 0o700);
+        // the name taken by something that isn't a directory of ours (here: a link to one)
+        std::fs::remove_dir(&mine).unwrap();
+        let elsewhere = base.join("elsewhere");
+        std::fs::create_dir(&elsewhere).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, &mine).unwrap();
+        let fresh = private_dir(&base).unwrap();
+        assert!(fresh != mine && fresh.starts_with(&base) && !fresh.starts_with(&elsewhere));
+        assert!(std::fs::symlink_metadata(&fresh).unwrap().is_dir());
+        std::fs::remove_dir_all(base).unwrap();
     }
 
     #[test]

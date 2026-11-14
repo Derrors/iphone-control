@@ -6,10 +6,31 @@
 
 ## [Unreleased]
 
+### 修复
+
+- 首次安装 WDA 后，命令行和 Viewer 会显示信任开发者的设置路径。设备拒绝启动 WDA 时也会提示先检查信任，已信任则用 `iphone-control doctor` 检查签名。Viewer 在实时画面旁保留提示；启动超时等错误也提供重签按钮，签名时显示进度，原始错误保留在设备状态面板。
+
+## [0.2.4] - 2026-11-14
+
+### 升级注意事项
+
+- 控制台（`iphone-control viewer`）和它的 `/mcp` 现在要登录，本机也一样。升级后运行 `iphone-control viewer token`，点开它打印的链接；浏览器登录一次记住 30 天。经 HTTP 接入 `/mcp` 的 MCP 客户端要带 `Authorization: Bearer <令牌>`（`viewer token` 会打印 `claude mcp add` 命令）。命令行、stdio 方式的 `iphone-control mcp` 和 `task run` 不受影响。
+- 开了 `--lan`（`IPHONE_CONTROL_VIEWER_LAN=1`）时，局域网里用 HTTPS：打开 `https://<地址>:<端口>/`，第一次核对证书指纹（`iphone-control service status` 显示）。
+
 ### 新增
 
+- `iphone-control mcp --url https://<那台机器>:8200`：把 stdio 转到另一台机器控制台的 `/mcp`，只能填命令的 MCP 客户端也能操作接在那台机器上的手机。有任务口令就只带它，否则用 `IPHONE_CONTROL_VIEWER_TOKEN` 登录；`task run --url` 启动的命令已经设好 `IPHONE_CONTROL_URL`，里面照常配置的 `iphone-control mcp` 自动转接。
+- `task` 的所有子命令都能加 `--url`（或设 `IPHONE_CONTROL_URL`）：`list`、`events`、`pause`、`resume`、`takeover`、`handback`、`stop`、`approve`、`reject` 经另一台机器的控制台操作，登录令牌放在 `IPHONE_CONTROL_VIEWER_TOKEN`。
+- 有名字的登录令牌，可以是只读的：`iphone-control viewer token add <名字> [--read-only]`、`list`、`show <名字> [--new]`、`remove <名字>`。只读令牌能看画面、设备状态和任务，所有操作（点按、输入、开任务、暂停、确认、切换设备、`/mcp`）都被拒绝，页面上也不显示操作入口。任务记录里写下是哪个令牌做的控制（`viewer:<名字>`）。令牌改存在 `viewer-tokens.json`，原来的令牌成了 `owner`，升级后不用重新登录；增删、换令牌马上生效，不用重启控制台。
+- 从另一台机器开任务：`iphone-control task run --url https://<那台机器>:8200 -- <命令>`（登录令牌放在 `IPHONE_CONTROL_VIEWER_TOKEN`），或者直接调 `POST /api/agent/tasks/open`，返回的事件流就是租约。另一台机器上的 agent 只拿任务口令：`/mcp` 认进行中任务的口令（请求头 `Iphone-Control-Task-Token`），它能为这个任务操作手机，但碰不到暂停、确认这些控制接口，不能批准自己。
+- 控制台和它的 `/mcp` 要登录了，本机也一样（控制台分不清本机的浏览器和经 frp、cloudflared 等反向代理转发进来的访问）。令牌第一次启动时生成，存在数据目录的 `viewer-token`（0600）；`iphone-control viewer token` 显示令牌、本机和局域网的登录链接以及接入 HTTP MCP 的命令，`--new` 换一个新令牌。浏览器登录一次后记住 30 天；程序和 MCP 客户端用 `Authorization: Bearer <令牌>`。输错太多次（一分钟 20 次）会暂停校验一分钟。命令行、`iphone-control mcp`（stdio）和 `task run` 走本机的 Unix socket，不受影响。
+- MCP over HTTP：控制台同一个端口上的 `/mcp`（Streamable HTTP）提供和 `iphone-control mcp` 一样的工具，只能填 URL 的客户端、局域网里另一台电脑上的 agent（`--lan`，走 HTTPS）都能接入，例如 `claude mcp add --transport http iphone http://127.0.0.1:8200/mcp`。任务里的 agent 在请求头 `Iphone-Control-Task-Token` 里带上任务口令。和控制台一样没有登录，`--mcp off`（`IPHONE_CONTROL_VIEWER_MCP=off`）关掉。
+- 控制台对局域网开放（`--lan`）时改用 HTTPS，还是同一个端口：局域网里打开时画面也能用 H.264 或手机自己的 HEVC，不再退回 MJPEG，传输也加了密。默认用本机生成的自签证书（存在数据目录的 `viewer-tls/`，一直沿用），浏览器第一次打开会提示不受信任，核对启动时或 `service status` 显示的 SHA-256 指纹后继续；也可以用 `--tls-cert`/`--tls-key`（`IPHONE_CONTROL_VIEWER_TLS_CERT`/`_KEY`）换成自己的证书。局域网来的 `http://` 跳转到 `https://`，本机的 `http://127.0.0.1` 照旧。`--tls off`（`IPHONE_CONTROL_VIEWER_TLS=off`）恢复成 HTTP。这不是登录：局域网里能连上的人照样能操作手机。
+- `iphone-control service viewer install` 把控制台装成登录后自动启动的后台服务（还有 `uninstall`、`start`、`stop`、`restart`）。端口和是否对局域网开放读设置文件（新增 `IPHONE_CONTROL_VIEWER_PORT`；`IPHONE_CONTROL_VIEWER_LAN`；新增 `IPHONE_CONTROL_VIEWER_LAN_HOSTS`），并记下安装时终端的 `PATH` 以找到 `claude` 和 `codex`。升级时先停下它、升级完再启动；有 AI 任务在跑时自动升级会推迟。
+- AI 任务的 Agent 不能再自己暂停、继续、接管、交还或确认，越界确认和 `iphone_confirm` 只能由人回答。带任务口令（`IPHONE_CONTROL_TASK_TOKEN`）的控制请求会被拒绝；控制台和 `task run` 启动的 Agent，连同它再启动的进程，也会被拒绝，即使去掉了口令，或者调用控制台的接口。在 macOS 上，调用控制台接口的这条路还查不出是哪个进程。停止任务不受限制。任务记录里会写下谁做了控制（控制台、命令行、任务的发起方）。
 - 设置菜单支持方向键选择、Enter 确认和 Esc 取消，保留数字选择；基础终端继续使用逐行提示。
 - `iphone-control completions <shell>` 可生成 Bash、Zsh 和 Fish 补全脚本，不启动守护进程、不访问设备。
+- `iphone-control viewer --lan`（或 `IPHONE_CONTROL_VIEWER_LAN=1`）让控制台也对局域网开放，还是同一个端口。还没有登录：局域网里任何能连上这台机器的人都能操作手机，只在可信的网络里开。只接受局域网地址来的连接，只认本机自己的名字和地址；`--lan-host` 可以再加名字。从局域网地址打开时画面是 MJPEG，因为浏览器只在 localhost 或 HTTPS 上提供 WebCodecs。
 - 控制台上开任务前可以限定 App 范围（Agent 旁边的 App 按钮）：到了别的 App，每一步都先等你确认，和 `task run --app` 一样。任务卡片上显示范围，重新执行时沿用。
 - 任何 agent 平台都能用 AI 任务：`iphone-control task run -- <命令>` 在任务里运行命令，它启动的 `iphone-control mcp` 自动加入任务（控制台能看到每一步，可以暂停、接管、停止、确认）。`task list`、`task events`、`task pause`/`resume`/`takeover`/`handback`/`stop`、`task approve`/`reject` 在命令行里查看和控制任务。
 - 控制台会接上正在进行的任务：页面刷新后，以及在别处开的任务。
@@ -26,7 +47,11 @@
 
 ### 修复
 
-- 首次安装 WDA 后，命令行和 Viewer 会显示信任开发者的设置路径。设备拒绝启动 WDA 时也会提示先检查信任，已信任则用 `iphone-control doctor` 检查签名。Viewer 在实时画面旁保留提示，已登录用户可点按钮重新签名。
+- 接着多台设备时，每台的屏幕尺寸都记下来：之前只记最后一台，切到另一台再切回来后，WDA 起来之前（比如卡在「Enable UI Automation」密码框）iOS 27 的 HID 后备路线不知道这台的尺寸，截图、按键、点击都报「不知道屏幕尺寸」。
+- 通知标题写设备自己的名字：之前一律写「iPhone」，iPad 需要输入锁屏密码、离线、重签失败时也是，接着多台设备时看不出是哪一台。iPad 上的提示也改用系统弹窗的说法（「为 XCTest 输入 iPad 密码」）。`notify-test` 的样例用正在控制的设备。
+- 升级时检查新程序（运行它的 `--version`）偶尔会因为「Text file busy」失败：同一进程的其他线程恰好在新程序还以写方式打开时启动了子进程。现在遇到这种情况会稍等重试。
+- `task run`：命令自己用 `task finish` 结束任务后，不再在它正常退出时被立刻停掉、退出码变成 1。现在它有 5 秒自己退出，退出码就是它自己的；超时才停掉，这时任务完成则退出码为 0。
+- 在设置菜单中长按方向键时，选项会连续移动，按键序列不会回显到菜单里。
 - 控制台上 AI 任务的总结按格式显示：粗体、列表、行内代码和换行不再显示成 Markdown 原文。
 - iOS 27 及以上，控制台实时画面里看不到的系统弹窗（例如「允许“日历”使用你的位置？」这类权限请求）现在画在画面里它所在的位置，带着弹窗的按钮，点按钮就是点手机上的那个按钮。
 - 部分 iPhone（如 iPhone 15 Pro Max，iOS 27.0.1）上锁屏不再每次要 10 秒左右：经 IOHID 短按电源键在这些设备上不起作用，守护进程会按设备记住，之后先用 WDA 的锁屏（约 2 秒）。
@@ -255,7 +280,8 @@
 - `setup`、`doctor`、`status`、`mcp-config`、`wda-bridge`、`notify-test` 命令。
 - Docker 镜像（非 privileged，linux/amd64、linux/arm64）；也可不用 Docker，从源码或预编译二进制以普通用户运行，附 systemd 用户服务。
 
-[Unreleased]: https://github.com/Derrors/iphone-control/compare/v0.2.3...HEAD
+[Unreleased]: https://github.com/Derrors/iphone-control/compare/v0.2.4...HEAD
+[0.2.4]: https://github.com/Derrors/iphone-control/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/Derrors/iphone-control/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/Derrors/iphone-control/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/Derrors/iphone-control/compare/v0.2.0...v0.2.1

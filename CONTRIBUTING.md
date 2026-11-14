@@ -49,6 +49,16 @@ export MCP_CMD="$PWD/target/release/iphone-control mcp"   # your build; the daem
 
 `run.py` prints every result with its wall time, ends with a line counting calls and failures, saves screenshots to `./shots` and exits with 1 if any call failed. `MCP_CMD` defaults to `iphone-control mcp` on your `PATH`. To test your branch, run its daemon too (stop the installed service with `iphone-control service stop`, then start `target/release/iphone-control daemon` in another terminal; `service start` afterwards). What a pull request has to run on the device is in [Required tests](#required-tests).
 
+AI tasks (anything in `crates/ictl-daemon/src/tasks.rs`, `task`, the viewer's task API, the MCP server's task handling) have their own scenarios in `tests/device/tasks.py`, each check a PASS / FAIL line:
+
+```bash
+export ICTL_BIN="$PWD/target/release/iphone-control"         # your build (the daemon too)
+.venv/bin/python tests/device/tasks.py                       # every scenario but restart
+.venv/bin/python tests/device/tasks.py pause confirm         # only these
+```
+
+With `MCP_URL` (the viewer's `/mcp`) the agents connect over HTTP instead of stdio, and `ICTL_VIEWER_TOKEN` is the viewer's login token (`iphone-control viewer token`); `ICTL_VIEWER` (the viewer's address) adds the checks through its API, and the `remote` scenario, which plays a platform on another machine, needs all three. `MCP_CA` trusts the viewer's self-signed certificate for an `https://` address. The scenarios are harmless (Home, Settings, Clock, screenshots) and stop any task they leave behind.
+
 On macOS, the full checklist (setup, `debug` checks, coexistence with Finder, reconnect) is in [docs/dev/macos-verification.md](docs/dev/macos-verification.md).
 
 Notes:

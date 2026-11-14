@@ -71,6 +71,9 @@ pub enum Request {
         /// 用于「等界面稳定」之后紧接着列元素：Settle 刚读过
         #[serde(default)]
         max_age_ms: u64,
+        /// 手机锁着时不自动解锁，直接报错（控制台的只读令牌：只能看，不能让守护进程输入锁屏密码）
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        keep_locked: bool,
     },
     Tap {
         x: f64,
@@ -203,7 +206,9 @@ pub enum Request {
     },
     /// Recent tasks, newest last, as a JSON array of [`TaskInfo`]
     TaskList,
-    /// `pause` / `resume` / `takeover` / `handback` / `stop` / `confirm` (with `approve` and the waiting `step`)
+    /// `pause` / `resume` / `takeover` / `handback` / `stop` / `confirm` (with `approve` and the waiting `step`).
+    /// The user's: refused with a task's token, or from the task's agent ([`Request::TaskAgent`]), for everything but
+    /// `stop`
     TaskControl {
         id: String,
         action: String,
@@ -211,7 +216,21 @@ pub enum Request {
         step: Option<u64>,
         #[serde(default)]
         approve: bool,
+        /// Who asks, for the task's log: `viewer`, `cli`, `owner`…
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        by: Option<String>,
+        /// The process the request comes from when it is passed on (the page's API: the local client that called
+        /// it); checked like the connection's own process
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        for_pid: Option<u32>,
     },
+    /// From the process that opened the task, with its token, before it starts the agent: every process it starts
+    /// from now on (and the ones those start) is the task's agent, whose control requests are refused
+    /// ([`Request::TaskControl`])
+    TaskAgent,
+    /// With a task's token: the task's id while it is active, an error once it ended or for a token nobody knows.
+    /// The viewer lets an agent on another machine use `/mcp` by its task's token alone (docs/task-control.md 7.6)
+    TaskCheck,
     /// With the task's token ([`TASK`]): a tool call starts. Waits while the task isn't running, then records the
     /// step; the text is the step number. The calls the tool makes carry it ([`TASK_STEP`])
     TaskStep {
@@ -365,6 +384,8 @@ impl Request {
             | Self::TaskEvents { .. }
             | Self::TaskList
             | Self::TaskControl { .. }
+            | Self::TaskAgent
+            | Self::TaskCheck
             | Self::TaskStep { .. }
             | Self::TaskStepDone { .. }
             | Self::TaskConfirm { .. }
@@ -413,6 +434,42 @@ impl ScreenMsg {
 /// The byte a [`Request::ScreenStream`] client writes to ask for a keyframe
 pub const SCREEN_KEYFRAME: u8 = b'K';
 
+/// Next to the control socket while the daemon is stopping, and left there when it has stopped (the next one removes
+/// it when it is up): a client that can't connect just then waits for the daemon to be back ([`connect`])
+pub fn stopping_marker(socket: &std::path::Path) -> std::path::PathBuf {
+    socket.with_extension("stopping")
+}
+
+/// A daemon that stopped this recently is taken to be restarting
+const RESTART_RECENT: std::time::Duration = std::time::Duration::from_secs(20);
+/// How long a client waits for a restarting daemon
+const RESTART_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Connects to the daemon. While it restarts (`systemctl restart`, an update) the socket is briefly gone or refuses:
+/// then this waits for it, up to [`RESTART_WAIT`]. Nothing was sent yet, so trying again does nothing twice. A daemon
+/// that isn't running (stopped a while ago, or never started) is reported at once
+pub async fn connect(socket: &std::path::Path) -> std::io::Result<tokio::net::UnixStream> {
+    let started = std::time::Instant::now();
+    loop {
+        match tokio::net::UnixStream::connect(socket).await {
+            Err(e)
+                if matches!(e.kind(), std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused)
+                    && started.elapsed() < RESTART_WAIT
+                    && restarting(socket) =>
+            {
+                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            }
+            r => return r,
+        }
+    }
+}
+
+fn restarting(socket: &std::path::Path) -> bool {
+    std::fs::metadata(stopping_marker(socket))
+        .and_then(|m| m.modified())
+        .is_ok_and(|t| t.elapsed().is_ok_and(|e| e < RESTART_RECENT))
+}
+
 /// Opens a [`Request::ScreenStream`]: `Ok(Ok(..))` with the reading half (buffered: it may already hold the first
 /// messages) and the writing half, `Ok(Err(why))` when the daemon can't stream, `Err` when it can't be reached
 pub async fn open_screen_stream(
@@ -422,7 +479,7 @@ pub async fn open_screen_stream(
     Result<(tokio::io::BufReader<tokio::net::unix::OwnedReadHalf>, tokio::net::unix::OwnedWriteHalf), String>,
 > {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-    let stream = tokio::net::UnixStream::connect(socket).await?;
+    let stream = connect(socket).await?;
     let (r, mut w) = stream.into_split();
     let mut v = serde_json::to_value(Request::ScreenStream)?;
     if let Some(o) = v.as_object_mut() {
@@ -488,6 +545,8 @@ pub const TASK: &str = "task";
 pub const TASK_STEP: &str = "task_step";
 /// The environment variable that hands a task's token to `iphone-control mcp` (and anything else using this crate)
 pub const TASK_TOKEN_ENV: &str = "IPHONE_CONTROL_TASK_TOKEN";
+/// The HTTP header that does the same for MCP over HTTP (the viewer's `/mcp`), per request
+pub const TASK_TOKEN_HEADER: &str = "iphone-control-task-token";
 
 static PROCESS_TASK: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 
@@ -511,6 +570,11 @@ pub fn process_task() -> Option<&'static str> {
 pub async fn as_task<F: std::future::Future>(token: Option<String>, step: Option<u64>, f: F) -> F::Output {
     let token = token.or_else(|| current_task().0);
     CALL_TASK.scope((token, step), f).await
+}
+
+/// Whether the requests sent from here belong to a task ([`as_task`] or [`join_task`])
+pub fn in_task() -> bool {
+    current_task().0.is_some()
 }
 
 fn current_task() -> (Option<String>, Option<u64>) {
@@ -562,7 +626,7 @@ async fn exchange_on(
 ) -> std::io::Result<Response> {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
     let exchange = async {
-        let stream = tokio::net::UnixStream::connect(socket).await?;
+        let stream = connect(socket).await?;
         let (r, mut w) = stream.into_split();
         let mut v = serde_json::to_value(req)?;
         if let Some(o) = v.as_object_mut() {
@@ -632,7 +696,7 @@ impl TaskStream {
 
 async fn open_stream(socket: &std::path::Path, req: &Request) -> std::io::Result<(Response, TaskStream)> {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-    let stream = tokio::net::UnixStream::connect(socket).await?;
+    let stream = connect(socket).await?;
     let (r, mut w) = stream.into_split();
     let mut v = serde_json::to_value(req)?;
     if let Some(o) = v.as_object_mut() {
@@ -673,6 +737,16 @@ pub async fn task_events(socket: &std::path::Path, id: &str) -> Result<TaskStrea
     }
 }
 
+/// The id of the active task with `token` ([`Request::TaskCheck`]); `Err` is why not (ended, unknown, no daemon)
+pub async fn task_check(socket: &std::path::Path, token: &str) -> Result<String, String> {
+    let call = call(socket, &Request::TaskCheck, Some(std::time::Duration::from_secs(10)));
+    match as_task(Some(token.to_owned()), None, call).await.map_err(|e| e.to_string())? {
+        Response::Text { text, .. } => Ok(text),
+        Response::Error { message, .. } => Err(message),
+        Response::Image { caption, .. } => Err(caption),
+    }
+}
+
 /// Recent tasks ([`Request::TaskList`])
 pub async fn task_list(socket: &std::path::Path) -> Result<Vec<TaskInfo>, String> {
     match call(socket, &Request::TaskList, Some(std::time::Duration::from_secs(10))).await.map_err(|e| e.to_string())? {
@@ -685,6 +759,35 @@ pub async fn task_list(socket: &std::path::Path) -> Result<Vec<TaskInfo>, String
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A daemon that is restarting (it left the marker just now) is waited for; one that isn't running is reported
+    /// at once
+    #[tokio::test]
+    async fn clients_wait_for_a_restarting_daemon_only() {
+        let dir = std::env::temp_dir().join(format!("ictl-connect-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let socket = dir.join("ctl.sock");
+        let t = std::time::Instant::now();
+        assert_eq!(connect(&socket).await.unwrap_err().kind(), std::io::ErrorKind::NotFound);
+        assert!(t.elapsed() < std::time::Duration::from_millis(100), "not running: at once");
+
+        std::fs::write(stopping_marker(&socket), b"").unwrap();
+        let up = {
+            let socket = socket.clone();
+            tokio::spawn(async move {
+                tokio::time::sleep(std::time::Duration::from_millis(700)).await;
+                let l = tokio::net::UnixListener::bind(&socket).unwrap();
+                let _ = std::fs::remove_file(stopping_marker(&socket));
+                l.accept().await.unwrap()
+            })
+        };
+        let t = std::time::Instant::now();
+        connect(&socket).await.expect("connects once it is back");
+        assert!(t.elapsed() >= std::time::Duration::from_millis(600));
+        up.await.unwrap();
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     fn requests_round_trip_as_tagged_json() {

@@ -30,13 +30,27 @@ async fn viewer_and_cli_share_the_unbound_report() -> Result<()> {
     assert_eq!(report["availability"], "development");
     assert!(report["publisher"].is_null() && report["daemon_version"].is_null());
 
+    // every HTTP request needs the viewer's login: its token, from `viewer token`
+    let shown = cli().args(["viewer", "token"]).output().await?;
+    assert!(shown.status.success());
+    let shown = String::from_utf8_lossy(&shown.stdout);
+    let token = shown
+        .split(|c: char| !c.is_ascii_hexdigit())
+        .find(|w| w.len() == 64)
+        .context("a token in `viewer token`")?
+        .to_owned();
     let mut viewer = cli().args(["viewer", "--port", "0"]).stdout(Stdio::piped()).stderr(Stdio::null()).spawn()?;
     let mut messages = BufReader::new(viewer.stdout.take().unwrap()).lines();
     let line = tokio::time::timeout(Duration::from_secs(10), messages.next_line()).await??.context("viewer exited")?;
     let from = line.find("http://127.0.0.1:").context("viewer URL")?;
     let origin = line[from..].split_once("/ ").context("viewer port")?.0;
     let _ = rustls::crypto::ring::default_provider().install_default();
-    let client = reqwest::Client::builder().no_proxy().timeout(Duration::from_secs(5)).build()?;
+    let unauthenticated = reqwest::Client::builder().no_proxy().timeout(Duration::from_secs(5)).build()?;
+    assert_eq!(unauthenticated.get(format!("{origin}/api/updates")).send().await?.status(), 401);
+    let mut headers = reqwest::header::HeaderMap::new();
+    headers.insert(reqwest::header::AUTHORIZATION, format!("Bearer {token}").parse()?);
+    let client =
+        reqwest::Client::builder().no_proxy().timeout(Duration::from_secs(5)).default_headers(headers).build()?;
     let response = client.get(format!("{origin}/api/updates")).send().await?.error_for_status()?;
     let shown: Value = serde_json::from_slice(&response.bytes().await?)?;
     for (field, value) in report.as_object().unwrap() {

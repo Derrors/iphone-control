@@ -9,10 +9,13 @@ impl Daemon {
             && let Some((t, tree)) = &g.elements_cache
             && t.elapsed() <= max_age
         {
-            return Ok(tree.clone());
+            let tree = tree.clone();
+            g.dev.seen.saw_tree(&tree);
+            return Ok(tree);
         }
         let tree = self.require_wda(g)?.tree().await?;
         g.elements_cache = Some((Instant::now(), tree.clone()));
+        g.dev.seen.saw_tree(&tree);
         Ok(tree)
     }
 
@@ -86,7 +89,9 @@ impl Daemon {
             Polled::FewElements(first) => {
                 // 元素很少：改看画面
                 let note = alert_note(&first);
-                return Ok(self.settle_visually(g, t0, max).await? + &note);
+                let msg = self.settle_visually(g, t0, max).await?;
+                let change = self.change_note(g, None).await;
+                return Ok(msg + &change + &note);
             }
             Polled::Done { msg, settled, tree } => (msg, settled, tree),
         };
@@ -95,9 +100,30 @@ impl Daemon {
         // 加载中的页面中间是空的：只在这种时候多看一眼画面（约 0.5 秒），平常不多花时间
         let screen = self.screen(g).await?;
         let msg = if settled && middle_is_empty(&tree, screen.height) { msg + &self.motion_note(g).await } else { msg };
+        let change = self.change_note(g, Some(&tree)).await;
+        g.dev.seen.saw_tree(&tree);
         // 紧接着的 then=elements 直接用这棵树
         g.elements_cache = Some((Instant::now(), tree));
-        Ok(msg + &note)
+        Ok(msg + &change + &note)
+    }
+
+    /// 操作做完、界面稳定后，和操作前（[`PerDevice::before_action`](crate::core::PerDevice)）比有没有变化，
+    /// 接在 settle 结果后面的说明。`tree`：稳定时读到的元素树（看画面判断稳定时为 None，用记下的画面指纹）。
+    /// 操作前只截过图、没读过元素树时，补截一张图来比（约 0.3 秒）；操作前什么都没看过就不说
+    async fn change_note(&self, g: &mut Inner, tree: Option<&Tree>) -> String {
+        let Some(before) = g.dev.before_action.take() else { return String::new() };
+        let mut thumb = g.dev.seen.thumb.clone();
+        if before.tree.as_ref().zip(tree).is_none()
+            && before.thumb.is_some()
+            && thumb.is_none()
+            && let Some(w) = self.wda(g)
+            && let Ok(png) = w.screenshot_png().await
+            && let Ok(t) = thumbnail(png).await
+        {
+            g.dev.seen.saw_thumb(t.clone());
+            thumb = Some(t);
+        }
+        change_text(compare(&before, tree, thumb.as_deref()))
     }
 
     pub(super) async fn settle_visually(
@@ -107,11 +133,12 @@ impl Daemon {
         max: Duration,
     ) -> crate::error::Result<String> {
         let deadline = t0 + max;
-        let w = self.require_wda(g)?;
         let mut prev: Option<Vec<u8>> = None;
         loop {
-            let png = w.screenshot_png().await?;
+            let png = self.require_wda(g)?.screenshot_png().await?;
             let cur = thumbnail(png).await?;
+            // 最后一帧就是操作后的画面：和操作前比（[`Self::change_note`]），也是下一个操作的「操作前」
+            g.dev.seen.saw_thumb(cur.clone());
             if let Some(p) = &prev {
                 let m = imaging::thumb_motion(p, &cur);
                 if m.mean < VISUAL_STILL {
@@ -279,6 +306,70 @@ pub(super) fn no_elements_text(filter: &str, total: usize) -> String {
             "没有找到包含 \"{filter}\" 的元素(屏幕上另有 {total} 个带文字的元素,不带 filter 可全部列出)",
             "No element containing \"{filter}\" ({total} other elements with text on screen; leave out filter to list them all)"
         )
+    }
+}
+
+/// 有人读过的界面：元素树、画面指纹（截图时记下），从上一个操作做完以后算。
+/// 下一个操作开始时它就是「操作前的界面」（[`PerDevice::before_action`](crate::core::PerDevice)）
+#[derive(Debug, Clone, Default)]
+pub(crate) struct Seen {
+    at: Option<Instant>,
+    pub tree: Option<Tree>,
+    pub thumb: Option<Vec<u8>>,
+}
+
+/// 操作前看过的界面隔了这么久就不拿来比：中间画面可能自己变了（视频、轮播、来消息）
+const SEEN_FRESH: Duration = Duration::from_secs(120);
+
+impl Seen {
+    pub fn saw_tree(&mut self, tree: &Tree) {
+        self.at = Some(Instant::now());
+        self.tree = Some(tree.clone());
+    }
+
+    pub fn saw_thumb(&mut self, thumb: Vec<u8>) {
+        self.at = Some(Instant::now());
+        self.thumb = Some(thumb);
+    }
+
+    /// 拿走记下的界面；太旧或什么都没有时为 None
+    pub fn take_fresh(&mut self) -> Option<Seen> {
+        let s = std::mem::take(self);
+        s.at.is_some_and(|t| t.elapsed() < SEEN_FRESH).then_some(s)
+    }
+}
+
+/// 操作前后界面比较的结果
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Change {
+    Changed,
+    Same,
+    /// 没有能比的：操作前没读过树也没截过图，或者前后一个是树一个是画面
+    Unknown,
+}
+
+/// 先比元素树（文字、值、大小一样，位置差不超过 [`STILL_TOLERANCE`]），没有树再比画面指纹
+/// （整体和每一小块都几乎没变才算一样：只有一个开关翻过来时整体平均差很小）
+pub(super) fn compare(before: &Seen, tree: Option<&Tree>, thumb: Option<&[u8]>) -> Change {
+    if let (Some(a), Some(b)) = (&before.tree, tree) {
+        return if a.close_to(b, STILL_TOLERANCE) { Change::Same } else { Change::Changed };
+    }
+    if let (Some(a), Some(b)) = (&before.thumb, thumb) {
+        let m = imaging::thumb_motion(a, b);
+        return if m.mean < VISUAL_STILL && m.max_tile < LOCAL_MOTION { Change::Same } else { Change::Changed };
+    }
+    Change::Unknown
+}
+
+pub(super) fn change_text(c: Change) -> String {
+    match c {
+        Change::Changed => ictl_l10n::tr!(";和操作前相比界面有变化", "; the screen changed since before the action").into(),
+        Change::Same => ictl_l10n::tr!(
+            ";但界面和操作前一样:操作可能没生效(点在了空白处、被别的东西挡住,或 App 还没反应过来),先截图看清再决定,不要原样再做一遍",
+            "; but the screen is the same as before the action: it may not have taken effect (it hit an empty spot, something covered the target, or the app hasn't reacted yet); take a screenshot before deciding, rather than repeating the same action"
+        )
+        .into(),
+        Change::Unknown => String::new(),
     }
 }
 

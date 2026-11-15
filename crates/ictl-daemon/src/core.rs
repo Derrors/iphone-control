@@ -366,6 +366,11 @@ pub(crate) struct PerDevice {
     pub log_capture: Option<crate::devtools::Capture>,
     /// HID 粘贴前存下的剪贴板和粘贴的时间，等着写回（[`Daemon::restore_pasteboard`]）
     pub pending_paste: Option<(Instant, ictl_device::PendingRestore)>,
+    /// 上一个操作做完以后读过的界面（元素树、截图的指纹）
+    pub seen: crate::tools::Seen,
+    /// 最近一个操作开始前的界面：操作做完、界面稳定时和它比，告诉调用方界面变没变（`Daemon::settle`）。
+    /// 按名字点击会在点之前读树，用那棵树
+    pub before_action: Option<crate::tools::Seen>,
 }
 
 pub(crate) struct Inner {
@@ -1053,9 +1058,14 @@ impl Daemon {
             }
         } else {
             let acted = req.is_device_action();
+            if acted {
+                // 这个操作之前读过的界面就是「操作前」；操作期间读的（按名字点击先读树）也是操作前，操作完都不再算
+                g.dev.before_action = g.dev.seen.take_fresh();
+            }
             // boxed, like the request in `handle`: two of its large state machine on the stack overflowed a test thread
             let r = Box::pin(self.dispatch(g, req, view, ctx.watched)).await;
             if acted {
+                g.dev.seen = Default::default();
                 *self.last_action.lock().unwrap_or_else(|p| p.into_inner()) = Some(Instant::now());
             }
             r

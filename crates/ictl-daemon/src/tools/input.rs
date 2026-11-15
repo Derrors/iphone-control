@@ -153,6 +153,8 @@ impl Daemon {
     ) -> crate::error::Result<(String, bool)> {
         self.ensure_unlocked(g).await?;
         let tree = self.tree(g, max_age).await?;
+        // 点之前刚读的树就是操作前的界面（比操作开始前记下的更新）
+        g.dev.before_action = Some(std::mem::take(&mut g.dev.seen));
         let matches = elements::find(&tree.elements, text);
         if matches.is_empty() {
             let limited = self.snapshot_note(g);

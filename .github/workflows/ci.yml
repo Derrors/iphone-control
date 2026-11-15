@@ -73,6 +73,23 @@ jobs:
       # --all-features：默认不编的 debug-cmds（调试子命令）也要能编译
       - run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
       - run: cargo test --workspace --all-features --locked
+
+  # macOS 上的终端菜单 PTY 回归。不在规则集的必过检查里：它靠两个进程之间的时间差模拟按键，
+  # 忙的 macOS runner 上调度一卡就会误报（Linux 上同一个脚本在上面的 rust 里，仍是卡点）。
+  # 结果照样显示在 PR 上，失败时看日志判断是不是真问题
+  macos-terminal:
+    needs: [changes]
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.changes.outputs.code == 'true') }}
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@1.99.1
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: terminal
+      # 只要 iphone-control 和它的测试程序（pty_menu 在里面）
+      - run: cargo build -p iphone-control --all-features --locked
+      - run: cargo test -p iphone-control --all-features --locked --no-run
       - name: Terminal menus (PTY)
         run: python3 tests/terminal.py --binary target/debug/iphone-control --test-dir target/debug/deps
 

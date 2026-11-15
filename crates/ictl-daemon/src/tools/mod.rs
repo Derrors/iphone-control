@@ -3,6 +3,7 @@
 mod input;
 mod keys;
 mod launch;
+mod native;
 mod observe;
 
 use std::time::{Duration, Instant};
@@ -22,6 +23,7 @@ use crate::imaging::{self, fmt_g};
 use crate::notify::Event;
 use crate::protocol::{ALERT_BLOCKING, Response, TAP_MISSED, TouchPhase};
 use crate::protocol::{ElementData, StatusData};
+pub(crate) use native::AX_WAIT;
 pub(crate) use observe::Seen;
 use observe::*;
 
@@ -58,8 +60,13 @@ impl Daemon {
         if let Some(left) = g.dev.last_lock.and_then(|t| LOCK_SETTLE.checked_sub(t.elapsed())) {
             tokio::time::sleep(left).await;
         }
-        let Some(wda) = self.wda(g) else { return Ok(()) };
-        match ictl_unlock::ensure_unlocked(wda, &cfg).await {
+        let native = self.native(g);
+        let r = match self.wda(g) {
+            Some(wda) => ictl_unlock::ensure_unlocked(wda, &cfg).await,
+            None if native => Box::pin(self.native_unlock(g, &cfg)).await,
+            None => return Ok(()),
+        };
+        match r {
             Ok(_) => Ok(()),
             Err(e @ (UnlockError::WrongPasscode | UnlockError::Uncertain(_))) => {
                 self.notify(g, Event::UnlockDisabled);
@@ -74,11 +81,18 @@ impl Daemon {
         }
     }
 
-    async fn screen(&self, g: &mut Inner) -> crate::error::Result<ScreenSize> {
+    pub(crate) async fn screen(&self, g: &mut Inner) -> crate::error::Result<ScreenSize> {
         if let Some(w) = self.wda(g)
             && let Ok(s) = w.screen_size().await
         {
             return Ok(s);
+        }
+        // 原生控制每次读界面都记下尺寸（[`Self::ax_read`]）：按现在的方向给
+        if self.native(g)
+            && let Some(s) = g.persisted.screen_for(g.device.as_ref().map(|d| d.udid.as_str()))
+        {
+            let landscape = g.dev.last_rotation.is_some_and(|(_, r)| r.is_landscape());
+            return Ok(if landscape { ScreenSize { width: s.height, height: s.width } } else { s });
         }
         // 这台设备记下的尺寸（别的设备的不用；旧版本没记是哪台，照用）
         g.persisted
@@ -95,6 +109,13 @@ impl Daemon {
         if !hid_supported(g.info.as_ref()) {
             return Err(wda_down(&g.state, g.info.as_ref()).into());
         }
+        // 原生控制：SpringBoard 直接给出四个方向（lockdown 服务，不用截图）
+        if self.native(g)
+            && let Some(r) = self.native_rotation(g).await
+        {
+            g.dev.last_rotation = Some((Instant::now(), r));
+            return Ok(r);
+        }
         self.sample_display(g, false).await;
         let png = self.hid_screenshot(g).await.map_err(|e| {
             ictl_l10n::trf!(
@@ -108,11 +129,35 @@ impl Daemon {
         Ok(hid_rotation(w, h, known)?)
     }
 
+    /// A screenshot as PNG for comparing pictures: through WDA, or natively through the tunnel; otherwise WDA's
+    /// "unavailable"
+    async fn raw_png(&self, g: &mut Inner) -> crate::error::Result<Vec<u8>> {
+        if let Some(w) = self.wda(g) {
+            return Ok(w.screenshot_png().await?);
+        }
+        if self.native(g) {
+            return self.hid_screenshot(g).await;
+        }
+        Ok(self.require_wda(g)?.screenshot_png().await?)
+    }
+
+    /// A tap at a point: through WDA, or natively through HID
+    async fn tap_at(&self, g: &mut Inner, x: f64, y: f64) -> crate::error::Result<()> {
+        if let Some(w) = self.wda(g) {
+            return Ok(w.tap(x, y).await?);
+        }
+        if self.native(g) {
+            return Box::pin(self.native_tap(g, x, y)).await;
+        }
+        Ok(self.require_wda(g)?.tap(x, y).await?)
+    }
+
     /// 经隧道截图（WDA 不可用时）。失败就丢掉隧道，下次重建
     async fn hid_screenshot(&self, g: &mut Inner) -> crate::error::Result<Vec<u8>> {
         let device = g.device.clone().ok_or(ictl_l10n::tr!("手机未连接", "Phone not connected"))?;
         let t = self.ensure_tunnel(g, &device).await?;
-        match t.screenshot_png().await {
+        // boxed: the screenshot service's future is large (tens of KB), and every tool that may take one carries it
+        match Box::pin(t.screenshot_png()).await {
             Ok(p) => Ok(p),
             Err(e) => {
                 drop_tunnel(g).await;
@@ -145,12 +190,13 @@ impl Daemon {
             .ensure_tunnel(g, &device)
             .await
             .map_err(|e| ictl_l10n::trf!("HID 后备路线不可用：{e}", "HID fallback unavailable: {e}"))?;
-        if let Err(e) = t.hid(screen, max_bitrate).await {
+        // boxed, as the screenshot above: opening the session is a large future
+        if let Err(e) = Box::pin(t.hid(screen, max_bitrate)).await {
             drop_tunnel(g).await;
             return Err(ictl_l10n::trf!("HID 后备路线不可用：{e}", "HID fallback unavailable: {e}").into());
         }
         // 第二次调用直接返回已开好的会话（这样写是为了绕开借用检查对条件返回的限制）
-        Ok(g.tunnel.as_mut().expect("刚建好").hid(screen, max_bitrate).await?)
+        Ok(Box::pin(g.tunnel.as_mut().expect("刚建好").hid(screen, max_bitrate)).await?)
     }
 
     async fn hid_do<F>(&self, g: &mut Inner, f: F) -> crate::error::Result<()>
@@ -229,6 +275,14 @@ impl Daemon {
         }
         let unlock = self.unlock_cfg(g.device.as_ref().map(|d| d.udid.as_str()));
         let Some(w) = self.wda(g) else {
+            if self.native(g) {
+                if g.state == crate::machine::DeviceState::Ready {
+                    let (text, data) = Box::pin(self.native_status(g, &unlock)).await;
+                    return (format!("{text}\n{daemon_line}"), data);
+                }
+                let text = format!("{}\n{daemon_line}", wda_down(&g.state, g.info.as_ref()));
+                return (text, StatusData { native: true, ..Default::default() });
+            }
             let text = format!("{}\n{}\n{daemon_line}", wda_down(&g.state, g.info.as_ref()), needs_wda());
             return (text, StatusData::default());
         };
@@ -238,20 +292,7 @@ impl Daemon {
             let s = w.screen_size().await?;
             let check = w.check_lock(None, false).await?;
             let locked = check.locked;
-            let mut lock = if check.uncertain {
-                ictl_l10n::tr!("可能已锁屏(屏幕上是锁屏样式的界面,WDA 说没锁;配置了自动解锁时操作前会先尝试解锁)", "possibly locked (the screen looks like the lock screen though WDA says unlocked; with auto-unlock configured, actions try to unlock first)").to_owned()
-            } else if !locked {
-                ictl_l10n::tr!("未锁屏", "unlocked").to_owned()
-            } else if unlock.disabled_by_failure() {
-                ictl_l10n::tr!("已锁屏(自动解锁之前失败过已停用,需要人工解锁,核对密码后运行 iphone-control unlock-reset)", "locked (auto-unlock was disabled after an earlier failure; unlock by hand, check the passcode, then run iphone-control unlock-reset)").to_owned()
-            } else if unlock.enabled() {
-                ictl_l10n::tr!("已锁屏(操作时会自动解锁)", "locked (actions unlock automatically)").to_owned()
-            } else {
-                ictl_l10n::tr!("已锁屏(未配置自动解锁,需要人工解锁)", "locked (no auto-unlock configured; unlock by hand)").to_owned()
-            };
-            if !locked && unlock.disabled_by_failure() {
-                lock += ictl_l10n::tr!(";自动解锁已停用", "; auto-unlock disabled");
-            }
+            let lock = lock_text(locked, check.uncertain, &unlock);
             let data = StatusData {
                 wda_ready: ready,
                 locked: Some(locked || check.uncertain),
@@ -259,9 +300,12 @@ impl Daemon {
                 foreground: Some(app.clone()).filter(|a| !a.is_empty()),
                 width: Some(s.width),
                 height: Some(s.height),
+                native: false,
             };
             let ready = if ready { "True" } else { "False" };
-            let text = ictl_l10n::trf!("WDA 就绪: {ready}\n锁屏: {lock}\n前台 App: {app}\n屏幕: {}x{} 点", "WDA ready: {ready}\nLocked: {lock}\nForeground app: {app}\nScreen: {}x{} points",
+            let text = ictl_l10n::trf!(
+                "WDA 就绪: {ready}\n锁屏: {lock}\n前台 App: {app}\n屏幕: {}x{} 点",
+                "WDA ready: {ready}\nLocked: {lock}\nForeground app: {app}\nScreen: {}x{} points",
                 fmt_g(s.width),
                 fmt_g(s.height)
             );
@@ -347,6 +391,26 @@ async fn thumbnail(png: Vec<u8>) -> crate::error::Result<Vec<u8>> {
         .await
         .map_err(|e| ictl_l10n::trf!("图像处理任务异常：{e}", "Image processing task failed: {e}"))?
         .map_err(Into::into)
+}
+
+/// The status's lock line
+pub(super) fn lock_text(locked: bool, uncertain: bool, unlock: &ictl_unlock::UnlockConfig) -> String {
+    let mut lock = if uncertain {
+        ictl_l10n::tr!("可能已锁屏(屏幕上是锁屏样式的界面,WDA 说没锁;配置了自动解锁时操作前会先尝试解锁)", "possibly locked (the screen looks like the lock screen though WDA says unlocked; with auto-unlock configured, actions try to unlock first)").to_owned()
+    } else if !locked {
+        ictl_l10n::tr!("未锁屏", "unlocked").to_owned()
+    } else if unlock.disabled_by_failure() {
+        ictl_l10n::tr!("已锁屏(自动解锁之前失败过已停用,需要人工解锁,核对密码后运行 iphone-control unlock-reset)", "locked (auto-unlock was disabled after an earlier failure; unlock by hand, check the passcode, then run iphone-control unlock-reset)").to_owned()
+    } else if unlock.enabled() {
+        ictl_l10n::tr!("已锁屏(操作时会自动解锁)", "locked (actions unlock automatically)").to_owned()
+    } else {
+        ictl_l10n::tr!("已锁屏(未配置自动解锁,需要人工解锁)", "locked (no auto-unlock configured; unlock by hand)")
+            .to_owned()
+    };
+    if !locked && unlock.disabled_by_failure() {
+        lock += ictl_l10n::tr!(";自动解锁已停用", "; auto-unlock disabled");
+    }
+    lock
 }
 
 fn needs_wda() -> &'static str {

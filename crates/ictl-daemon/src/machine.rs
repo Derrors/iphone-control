@@ -21,6 +21,10 @@ pub enum DeviceState {
     },
     /// 手机重启后首次启用 UI 自动化，等用户在手机上输锁屏密码
     NeedsAutomationPin,
+    /// 原生控制（iOS 27 起不用 WDA）：正在挂开发者镜像、连无障碍服务，或失败了在退避
+    Preparing {
+        last_error: Option<String>,
+    },
     Ready,
 }
 
@@ -35,6 +39,8 @@ impl DeviceState {
             Self::WdaStarting { last_error: None } => ictl_l10n::tr!("正在启动 WDA", "Starting WDA").into(),
             Self::WdaStarting { last_error: Some(e) } => ictl_l10n::trf!("WDA 启动失败，稍后重试：{e}", "WDA failed to start, retrying later: {e}"),
             Self::NeedsAutomationPin => ictl_l10n::tr!("WDA 卡在手机上的「Enable UI Automation」密码框：请在手机上输入锁屏密码", "WDA is stuck at the “Enable UI Automation” passcode prompt on the phone: enter the passcode on the phone").into(),
+            Self::Preparing { last_error: None } => ictl_l10n::tr!("正在准备手机（挂载开发者镜像、连接无障碍服务）", "Preparing the phone (mounting the developer disk image, connecting to the accessibility service)").into(),
+            Self::Preparing { last_error: Some(e) } => ictl_l10n::trf!("准备手机失败，稍后重试：{e}", "Preparing the phone failed, retrying later: {e}"),
             Self::Ready => ictl_l10n::tr!("就绪", "Ready").into(),
         }
     }

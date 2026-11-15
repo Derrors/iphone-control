@@ -13,6 +13,7 @@
 
 pub mod apps;
 pub mod ax;
+mod coredevice;
 pub mod ddi;
 pub mod hid;
 mod media;
@@ -745,7 +746,8 @@ impl Tunnel {
     /// 停掉 HID 会话（含屏幕媒体流），隧道保留
     pub async fn close_hid(&mut self) {
         if let Some(h) = self.hid.take() {
-            let _ = tokio::time::timeout(Duration::from_secs(3), h.close()).await;
+            // boxed: the future holds the whole session, and callers that may close it would carry that
+            let _ = tokio::time::timeout(Duration::from_secs(3), Box::pin(h.close())).await;
         }
     }
 

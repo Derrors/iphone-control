@@ -67,6 +67,9 @@ impl Daemon {
                 Err(e) => return Err(e.into()),
             }
         }
+        if hid_button == Button::Home && self.native(g) {
+            return Box::pin(self.native_home(g, watched)).await;
+        }
         self.hid_do(g, |h| Box::pin(h.press(hid_button))).await?;
         Ok(ictl_l10n::trf!("已按 {button}", "Pressed {button}"))
     }
@@ -97,7 +100,13 @@ impl Daemon {
                 }
                 worked.ok_or(failed)
             }
-            None => Err(Vec::new()),
+            None => {
+                // 已经锁着就不按（同上）
+                if self.native(g) && self.native_locked(g).await.unwrap_or(false) {
+                    return self.locked_now(g);
+                }
+                Err(Vec::new())
+            }
         };
         let way = match outcome {
             Ok(way) => Some(way),

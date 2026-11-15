@@ -1950,6 +1950,7 @@ version = "0.2.6"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
+ "ictl-ax",
  "ictl-device",
  "ictl-l10n",
  "ictl-protocol",

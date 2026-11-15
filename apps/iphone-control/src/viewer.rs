@@ -2102,6 +2102,7 @@ mod tests {
             foreground: Some("com.apple.Preferences".into()),
             width: Some(440.0),
             height: Some(956.0),
+            native: false,
         };
         let v = status_json(&s, true);
         assert_eq!(v["wda_ready"], true);
@@ -2112,6 +2113,8 @@ mod tests {
         let down = protocol::StatusData::default();
         assert_eq!(status_json(&down, true)["route"], "hid", "iOS 27 and later");
         assert_eq!(status_json(&down, false)["route"], "none", "older: no HID fallback");
+        let native = protocol::StatusData { native: true, ..Default::default() };
+        assert_eq!(status_json(&native, true)["route"], "native", "iOS 27 driven without WDA");
         assert!(status_json(&down, true)["locked"].is_null());
     }
 

@@ -17,7 +17,74 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
+use ictl_wda::client::LockCheck;
 use ictl_wda::{IdleSettings, WdaClient, WdaError, elements, http::Transport, swipe_steps, tap_steps};
+
+/// What unlocking needs of the phone. WebDriverAgent implements it below; the daemon's native path (iOS 27 without
+/// WDA: HID, remoteAXService, lockdown) implements it too. Errors are WDA's: the native path maps its own onto them
+/// (`Unavailable` when it can't reach the phone, `Remote` for a step that failed and can be tried again)
+#[allow(async_fn_in_trait)]
+pub trait Screen {
+    /// Whether the phone says it is locked, cheaply ([`WdaClient::wda_reports_locked`])
+    async fn reports_locked(&mut self) -> std::result::Result<bool, WdaError>;
+    /// Whether a "not locked" from [`Self::reports_locked`] can be believed without a look at the screen
+    fn lock_state_trusted(&self) -> bool;
+    /// The lock state checked against the screen, with the element tree it read ([`WdaClient::check_lock`])
+    async fn check_lock(&mut self, reported: Option<bool>, strict: bool) -> std::result::Result<LockCheck, WdaError>;
+    /// Shorter waits for the duration of unlocking; returns what to restore
+    async fn quick_waits(&mut self) -> std::result::Result<Option<IdleSettings>, WdaError>;
+    async fn restore_waits(&mut self, to: IdleSettings) -> std::result::Result<(), WdaError>;
+    /// Home, to wake the screen. `round` counts the attempts: WDA alternates two ways of pressing it
+    async fn press_home(&mut self, round: u32) -> std::result::Result<(), WdaError>;
+    async fn view(&mut self) -> std::result::Result<elements::View, WdaError>;
+    async fn swipe(&mut self, from: (f64, f64), to: (f64, f64), ms: u64) -> std::result::Result<(), WdaError>;
+    async fn tap(&mut self, x: f64, y: f64, press_ms: u64) -> std::result::Result<(), WdaError>;
+    async fn elements(&mut self) -> std::result::Result<Vec<elements::Element>, WdaError>;
+    /// The passcode field's (total, entered) digits ([`WdaClient::passcode_field`])
+    async fn passcode_field(&mut self) -> std::result::Result<Option<(u32, u32)>, WdaError>;
+}
+
+impl<T: Transport> Screen for WdaClient<T> {
+    async fn reports_locked(&mut self) -> std::result::Result<bool, WdaError> {
+        self.wda_reports_locked().await
+    }
+    fn lock_state_trusted(&self) -> bool {
+        WdaClient::lock_state_trusted(self)
+    }
+    async fn check_lock(&mut self, reported: Option<bool>, strict: bool) -> std::result::Result<LockCheck, WdaError> {
+        WdaClient::check_lock(self, reported, strict).await
+    }
+    async fn quick_waits(&mut self) -> std::result::Result<Option<IdleSettings>, WdaError> {
+        // 解锁期间等待上限调小（不能是 0：唤醒会失败），做完恢复成平时的值。
+        // 上次异常退出没恢复的话读到的是调小的值，baseline 会按 WDA 默认值算
+        let restore = self.baseline().await?;
+        self.set_idle_settings(IdleSettings::QUICK).await?;
+        Ok(Some(restore))
+    }
+    async fn restore_waits(&mut self, to: IdleSettings) -> std::result::Result<(), WdaError> {
+        self.set_idle_settings(to).await
+    }
+    async fn press_home(&mut self, round: u32) -> std::result::Result<(), WdaError> {
+        // XCTest 的 home 和 IOHID 的 Home 轮流用：iPhone 12 mini（iOS 26.4.1）上 XCTest 的 home 点不亮熄灭的屏幕，
+        // IOHID 的能；iOS 27 上一直用的是 XCTest 的，第一轮还是它
+        if round % 2 == 0 { self.press_button("home").await } else { self.press_home_hid().await }
+    }
+    async fn view(&mut self) -> std::result::Result<elements::View, WdaError> {
+        WdaClient::view(self).await
+    }
+    async fn swipe(&mut self, from: (f64, f64), to: (f64, f64), ms: u64) -> std::result::Result<(), WdaError> {
+        self.actions(&swipe_steps(from, to, ms)).await
+    }
+    async fn tap(&mut self, x: f64, y: f64, press_ms: u64) -> std::result::Result<(), WdaError> {
+        self.actions(&tap_steps(x, y, press_ms)).await
+    }
+    async fn elements(&mut self) -> std::result::Result<Vec<elements::Element>, WdaError> {
+        WdaClient::elements(self).await
+    }
+    async fn passcode_field(&mut self) -> std::result::Result<Option<(u32, u32)>, WdaError> {
+        WdaClient::passcode_field(self).await
+    }
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum UnlockError {
@@ -100,9 +167,9 @@ impl UnlockConfig {
 }
 
 /// 未锁屏直接返回；否则按规则解锁
-pub async fn ensure_unlocked<T: Transport>(wda: &mut WdaClient<T>, cfg: &UnlockConfig) -> Result<Outcome> {
+pub async fn ensure_unlocked<D: Screen>(wda: &mut D, cfg: &UnlockConfig) -> Result<Outcome> {
     // 先只问 WDA：确定没锁就直接返回，日常操作不多发请求
-    let reported = match wda.wda_reports_locked().await {
+    let reported = match wda.reports_locked().await {
         Ok(v) => v,
         Err(WdaError::Unavailable(_)) => return Ok(Outcome::NotLocked),
         Err(e) => return Err(e.into()),
@@ -124,12 +191,11 @@ pub async fn ensure_unlocked<T: Transport>(wda: &mut WdaClient<T>, cfg: &UnlockC
         }
     }
     let code = code?;
-    // 解锁期间等待上限调小（不能是 0：唤醒会失败），做完恢复成平时的值。
-    // 上次异常退出没恢复的话读到的是调小的值，baseline 会按 WDA 默认值算
-    let restore = wda.baseline().await?;
-    wda.set_idle_settings(IdleSettings::QUICK).await?;
+    let restore = wda.quick_waits().await?;
     let r = unlock(wda, cfg, code.as_bytes()).await;
-    if let Err(e) = wda.set_idle_settings(restore).await {
+    if let Some(restore) = restore
+        && let Err(e) = wda.restore_waits(restore).await
+    {
         tracing::warn!(
             "{}",
             ictl_l10n::log_trf!("恢复 WDA 等待设置失败：{e}", "Restoring the WDA wait settings failed: {e}")
@@ -150,17 +216,12 @@ fn passcode(cfg: &UnlockConfig) -> Result<String> {
     Ok(code)
 }
 
-async fn press<T: Transport>(wda: &mut WdaClient<T>, at: (i64, i64), t: &Timing) -> Result<()> {
-    Ok(wda.actions(&tap_steps(at.0 as f64, at.1 as f64, t.key_press_ms)).await?)
+async fn press<D: Screen>(wda: &mut D, at: (i64, i64), t: &Timing) -> Result<()> {
+    Ok(wda.tap(at.0 as f64, at.1 as f64, t.key_press_ms).await?)
 }
 
 /// 用删除键把 `entered` 位残留删到 0；找不到删除键或某次没删掉返回 false（这轮作废，一位没输）
-async fn clear_residual<T: Transport>(
-    wda: &mut WdaClient<T>,
-    delete: Option<(i64, i64)>,
-    entered: u32,
-    t: &Timing,
-) -> Result<bool> {
+async fn clear_residual<D: Screen>(wda: &mut D, delete: Option<(i64, i64)>, entered: u32, t: &Timing) -> Result<bool> {
     let Some(del) = delete else { return Ok(false) };
     for left in (0..entered).rev() {
         if tap_key(wda, del, left as i64 + 1, t).await? != left as i64 {
@@ -172,7 +233,7 @@ async fn clear_residual<T: Transport>(
 
 /// 按一下键（数字或删除），等密码栏已输入位数离开 `before`；返回最后读到的位数（读不到密码栏为 -1）。
 /// 只认「变了」不认方向：删除键是变少，数字键是变多，按键被记成两下时会多变一位
-async fn tap_key<T: Transport>(wda: &mut WdaClient<T>, at: (i64, i64), before: i64, t: &Timing) -> Result<i64> {
+async fn tap_key<D: Screen>(wda: &mut D, at: (i64, i64), before: i64, t: &Timing) -> Result<i64> {
     press(wda, at, t).await?;
     let deadline = tokio::time::Instant::now() + t.key_confirm;
     loop {
@@ -199,7 +260,7 @@ fn write_flag(cfg: &UnlockConfig, why: &str) -> std::io::Result<()> {
     std::fs::write(&cfg.disabled_flag, format!("{now} {why}\n"))
 }
 
-async fn unlock<T: Transport>(wda: &mut WdaClient<T>, cfg: &UnlockConfig, code: &[u8]) -> Result<Outcome> {
+async fn unlock<D: Screen>(wda: &mut D, cfg: &UnlockConfig, code: &[u8]) -> Result<Outcome> {
     let t = &cfg.timing;
     let digit = |i: usize| (code[i] - b'0') as usize;
     let len = code.len() as u32;
@@ -208,19 +269,13 @@ async fn unlock<T: Transport>(wda: &mut WdaClient<T>, cfg: &UnlockConfig, code: 
     for round in 0..FIRST_DIGIT_ROUNDS {
         // Home 唤醒（键盘已打开时 iOS 27 只是把键收起，半截输入还在，下面用删除键处理）
         // 熄屏锁屏刚唤醒时上滑偶尔卡十几秒后报 `point.x != INFINITY`（WDA 还拿不到界面尺寸）：一位没输，算这轮落空重来。
-        // XCTest 的 home 和 IOHID 的 Home 轮流用：iPhone 12 mini（iOS 26.4.1）上 XCTest 的 home 点不亮熄灭的屏幕，
-        // IOHID 的能；iOS 27 上一直用的是 XCTest 的，第一轮还是它。
         // 唤醒后才问方向（iPad 横竖屏的上滑位置、键位换算都靠它）：熄屏时的第一个无障碍查询要等约 8 秒
         let woke = async {
-            if round % 2 == 0 {
-                wda.press_button("home").await?;
-            } else {
-                wda.press_home_hid().await?;
-            }
+            wda.press_home(round).await?;
             tokio::time::sleep(t.wake_settle).await;
             let view = wda.view().await?;
             let (cx, h) = (view.screen.width / 2.0, view.screen.height);
-            wda.actions(&swipe_steps((cx, h - 8.0), (cx, h * 0.45), 250)).await?;
+            wda.swipe((cx, h - 8.0), (cx, h * 0.45), 250).await?;
             Ok::<_, WdaError>(view)
         }
         .await;
@@ -336,8 +391,8 @@ async fn unlock<T: Transport>(wda: &mut WdaClient<T>, cfg: &UnlockConfig, code: 
 }
 
 /// 输第 2 位到最后一位并确认结果。出错直接返回（调用方保留停用标记）
-async fn enter_rest<T: Transport>(
-    wda: &mut WdaClient<T>,
+async fn enter_rest<D: Screen>(
+    wda: &mut D,
     cfg: &UnlockConfig,
     pad: &[(i64, i64); 10],
     code: &[u8],

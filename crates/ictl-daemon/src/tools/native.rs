@@ -1,0 +1,649 @@
+//! Native control of iOS 27 and later, without WebDriverAgent (`ICTL_IOS_BACKEND`, docs/dev/ios27-native.md):
+//! the screen through remoteAXService (`ictl_ax`, turned into WDA's XML so `ictl_wda::elements` reads it), touches,
+//! keys and Home through HID, text through the pasteboard, apps and links through CoreDevice AppService, the lock
+//! state through lockdown.
+//!
+//! The tools keep their WDA code; where WDA isn't there they come here when [`Daemon::native`] says so.
+
+use ictl_device::{ClipboardRestore, DeviceInfo};
+use ictl_unlock::Screen;
+use ictl_wda::client::LockCheck;
+use ictl_wda::elements::View;
+
+use super::*;
+use crate::config::IosBackend;
+
+/// A read of the screen waits at most this long for a tree (the first one of a session comes in about a second)
+pub(crate) const AX_WAIT: Duration = Duration::from_secs(5);
+/// After an action, the screen counts as unchanged when nothing is pushed within this long
+const FIRST_PUSH: Duration = Duration::from_millis(1500);
+/// No push for this long: the screen has settled
+const QUIET: Duration = Duration::from_millis(600);
+/// After Cmd-V: how long for the text to show in the field, answering the paste prompt meanwhile
+const PASTE_WAIT: Duration = Duration::from_secs(5);
+/// How long an app may take to come to the front
+const LAUNCH_WAIT: Duration = Duration::from_secs(8);
+/// The app's zoom-in takes about half a second; a tap during it is lost (the same as WDA's `LAUNCH_MIN`)
+const LAUNCH_SETTLE: Duration = Duration::from_millis(800);
+
+/// See [`IosBackend::drives_natively`]
+fn native_for(backend: IosBackend, info: Option<&DeviceInfo>) -> bool {
+    backend.drives_natively(info)
+}
+
+/// The paste prompt's "Allow Paste" button ("“Notes” would like to paste from “dtpasteboardd”"), when it is up
+fn paste_allow(tree: &Tree) -> Option<(f64, f64)> {
+    tree.alert().filter(|a| a.label.contains("dtpasteboardd"))?;
+    tree.elements
+        .iter()
+        .find(|e| e.kind == "Button" && matches!(e.label.as_str(), "允许粘贴" | "Allow Paste" | "允許貼上"))
+        .map(|e| (e.center.0 as f64, e.center.1 as f64))
+}
+
+impl Daemon {
+    /// The current phone is driven natively (no WDA): see [`native_for`]
+    pub(crate) fn native(&self, g: &Inner) -> bool {
+        native_for(self.cfg.ios_backend, g.info.as_ref())
+    }
+
+    /// One read of the screen through remoteAXService, as WDA-style XML: the last tree the phone pushed, or with
+    /// `after` the first one pushed after it, and SpringBoard's elements over the app. Returns the XML, the screen
+    /// (as turned now) and the frontmost app's process
+    pub(crate) async fn ax_read(
+        &self,
+        g: &mut Inner,
+        after: Option<Instant>,
+        wait: Duration,
+    ) -> crate::error::Result<(String, ScreenSize, i64)> {
+        let device = g.device.clone().ok_or(ictl_l10n::tr!("手机未连接", "Phone not connected"))?;
+        let t = self
+            .ensure_tunnel(g, &device)
+            .await
+            .map_err(|e| ictl_l10n::trf!("读界面失败（建隧道）：{e}", "Reading the screen failed (tunnel): {e}"))?;
+        let r = t.ax_screen(after, wait).await;
+        if r.is_err() {
+            t.close_ax().await;
+        }
+        g.ax_used = Some(Instant::now());
+        let s = r.map_err(|e| ictl_l10n::trf!("读界面失败：{e}", "Reading the screen failed: {e}"))?;
+        // the application element covers the screen: its frame is the screen in points, as turned now
+        let root = s.app.first().and_then(|e| e.frame).map(|f| ScreenSize { width: f.2, height: f.3 });
+        let size = match root.filter(|r| r.width > 1.0 && r.height > 1.0) {
+            Some(r) => {
+                if let Some(udid) = g.device.as_ref().map(|d| d.udid.clone())
+                    && g.persisted.record_screen(&udid, r.portrait())
+                {
+                    g.persisted.save(&self.cfg.state_file());
+                }
+                r
+            }
+            None => self.screen(g).await?,
+        };
+        Ok((ictl_ax::xml::to_xml(&s.app, &s.overlays, size.width, size.height), size, s.app_pid))
+    }
+
+    /// The screen's elements through remoteAXService (see [`Self::ax_read`])
+    pub(crate) async fn ax_tree(
+        &self,
+        g: &mut Inner,
+        after: Option<Instant>,
+        wait: Duration,
+    ) -> crate::error::Result<Tree> {
+        let (xml, size, _) = self.ax_read(g, after, wait).await?;
+        Ok(elements::parse_tree(&xml, size))
+    }
+
+    /// The frontmost app's bundle ID
+    pub(crate) async fn native_foreground(&self, g: &mut Inner) -> crate::error::Result<String> {
+        let (_, _, pid) = self.ax_read(g, None, AX_WAIT).await?;
+        self.bundle_of_pid(g, pid).await
+    }
+
+    async fn bundle_of_pid(&self, g: &mut Inner, pid: i64) -> crate::error::Result<String> {
+        if let Some(b) = g.dev.bundles.get(&pid) {
+            return Ok(b.clone());
+        }
+        let device = g.device.clone().ok_or(ictl_l10n::tr!("手机未连接", "Phone not connected"))?;
+        let procs = self.ensure_tunnel(g, &device).await?.processes().await?;
+        let exe = procs
+            .into_iter()
+            .find(|(p, _)| *p as i64 == pid)
+            .map(|(_, e)| e)
+            .ok_or_else(|| ictl_l10n::trf!("前台进程 {pid} 已经不在了", "The foreground process {pid} is gone"))?;
+        for attempt in 0..2 {
+            // the user's apps first: a system app never shares their paths, but this keeps the order of resolve
+            let mut apps = self.list_apps(g, false).await?;
+            apps.extend(self.list_apps(g, true).await?);
+            if let Some(b) = apps::bundle_of_process(&exe, &apps) {
+                if g.dev.bundles.len() > 200 {
+                    g.dev.bundles.clear();
+                }
+                g.dev.bundles.insert(pid, b.clone());
+                return Ok(b);
+            }
+            // installed since the list was read
+            if attempt == 0 {
+                g.dev.apps.clear();
+            }
+        }
+        Err(ictl_l10n::trf!("看不出进程 {pid}（{exe}）是哪个 App", "Can't tell which app process {pid} ({exe}) is")
+            .into())
+    }
+
+    /// [`Self::status`] for a phone driven natively
+    pub(crate) async fn native_status(
+        &self,
+        g: &mut Inner,
+        unlock: &ictl_unlock::UnlockConfig,
+    ) -> (String, StatusData) {
+        let mut data = StatusData { native: true, ..Default::default() };
+        let mut lines = vec![ictl_l10n::tr!(
+            "控制方式: 原生(iOS 27 起不用 WDA:读界面经无障碍服务,触摸和按键经 HID)",
+            "Control: native (no WDA from iOS 27: the screen through the accessibility service, touches and keys through HID)"
+        )
+        .to_owned()];
+        match self.native_locked(g).await {
+            Ok(locked) => {
+                data.locked = Some(locked);
+                lines.push(ictl_l10n::trf!("锁屏: {}", "Locked: {}", lock_text(locked, false, unlock)));
+            }
+            Err(e) => lines.push(ictl_l10n::trf!("锁屏: 查不到({e})", "Locked: unknown ({e})")),
+        }
+        match self.native_foreground(g).await {
+            Ok(app) => {
+                lines.push(ictl_l10n::trf!("前台 App: {app}", "Foreground app: {app}"));
+                data.foreground = Some(app);
+            }
+            Err(e) => lines.push(ictl_l10n::trf!("前台 App: 查不到({e})", "Foreground app: unknown ({e})")),
+        }
+        if let Ok(s) = self.screen(g).await {
+            lines.push(ictl_l10n::trf!("屏幕: {}x{} 点", "Screen: {}x{} points", fmt_g(s.width), fmt_g(s.height)));
+            (data.width, data.height) = (Some(s.width), Some(s.height));
+        }
+        (lines.join("\n"), data)
+    }
+
+    /// Whether the phone is locked (lockdown's `PasswordProtected`)
+    pub(crate) async fn native_locked(&self, g: &mut Inner) -> crate::error::Result<bool> {
+        let device = g.device.clone().ok_or(ictl_l10n::tr!("手机未连接", "Phone not connected"))?;
+        Ok(device.passcode_locked().await?)
+    }
+
+    /// The interface's rotation, from SpringBoard (a lockdown service: no tunnel, no screenshot)
+    pub(crate) async fn native_rotation(&self, g: &Inner) -> Option<Rotation> {
+        Box::pin(g.device.as_ref()?.interface_rotation()).await.ok().flatten()
+    }
+
+    /// Waits for the screen to settle after an action: the first tree pushed after it started (none within
+    /// [`FIRST_PUSH`]: nothing changed), then until nothing more is pushed for [`QUIET`]
+    pub(crate) async fn native_settle(&self, g: &mut Inner, max: Duration) -> crate::error::Result<(String, Tree)> {
+        let t0 = Instant::now();
+        let settled = self.native_quiet(g, max).await?;
+        let tree = self.ax_tree(g, None, AX_WAIT).await?;
+        let msg = if !settled {
+            ictl_l10n::trf!(
+                "{:.1} 秒内界面一直在变(可能有动画),按最后的状态返回",
+                "The screen kept changing for {:.1} s (perhaps an animation), returning the last state",
+                max.as_secs_f64()
+            )
+        } else if tree.loading {
+            ictl_l10n::trf!(
+                "界面已稳定({:.1} 秒),但页面还在加载(有加载圈);要等结果出来用 iphone_wait_for",
+                "Screen settled ({:.1} s), but the page is still loading (spinner shown); to wait for the result use iphone_wait_for",
+                t0.elapsed().as_secs_f64()
+            )
+        } else {
+            ictl_l10n::trf!("界面已稳定({:.1} 秒)", "Screen settled ({:.1} s)", t0.elapsed().as_secs_f64())
+        };
+        Ok((msg, tree))
+    }
+
+    /// Waits, at most `max`, until the phone pushes no more trees: from the first one pushed after the last action
+    /// started (none within [`FIRST_PUSH`]: nothing changed) until none comes for [`QUIET`]. False when it kept
+    /// pushing till `max`
+    pub(crate) async fn native_quiet(&self, g: &mut Inner, max: Duration) -> crate::error::Result<bool> {
+        let t0 = Instant::now();
+        let since = g.dev.acted_at.unwrap_or(t0);
+        let device = g.device.clone().ok_or(ictl_l10n::tr!("手机未连接", "Phone not connected"))?;
+        let deadline = t0 + max;
+        let t = self.ensure_tunnel(g, &device).await?;
+        let r = async {
+            let s = t.ax().await?;
+            let mut last = s.wait_push(since, FIRST_PUSH.min(max)).await.map(|p| p.at);
+            while let Some(at) = last {
+                let left = deadline.saturating_duration_since(Instant::now());
+                if left.is_zero() {
+                    return Ok(false);
+                }
+                match s.wait_push(at, QUIET.min(left)).await {
+                    Some(p) if p.at > at => last = Some(p.at),
+                    _ => break,
+                }
+            }
+            Ok::<_, DeviceError>(true)
+        }
+        .await;
+        if r.is_err() {
+            t.close_ax().await;
+        }
+        g.ax_used = Some(Instant::now());
+        Ok(r?)
+    }
+
+    /// Text appearing on screen, natively: the trees the phone pushes are read as they come
+    pub(crate) async fn native_wait_for(
+        &self,
+        g: &mut Inner,
+        text: &str,
+        timeout: Duration,
+    ) -> crate::error::Result<String> {
+        let t0 = Instant::now();
+        loop {
+            let tree = self.ax_tree(g, None, AX_WAIT).await?;
+            // 不算输入框里的字：刚输入的搜索词不能算「结果出来了」
+            if let Some(e) = elements::find_shown(&tree.elements, text).first() {
+                return Ok(ictl_l10n::trf!(
+                    "已出现 {}({:.1} 秒)",
+                    "Appeared: {} ({:.1} s)",
+                    e.describe(),
+                    t0.elapsed().as_secs_f64()
+                ));
+            }
+            if t0.elapsed() >= timeout {
+                return Err(ictl_l10n::trf!(
+                    "{:.0} 秒内没出现包含 \"{text}\" 的元素,截图看看屏幕",
+                    "No element containing \"{text}\" appeared within {:.0} s; take a screenshot to look at the screen",
+                    timeout.as_secs_f64()
+                )
+                .into());
+            }
+            tokio::time::sleep(Duration::from_millis(300)).await;
+        }
+    }
+
+    /// A system alert over the screen, natively: SpringBoard's elements are part of every read
+    pub(crate) async fn native_alert(&self, g: &mut Inner) -> crate::error::Result<(String, Option<String>)> {
+        let tree = self.ax_tree(g, None, AX_WAIT).await?;
+        Ok(match tree.alert().map(|a| a.label.clone()).filter(|l| !l.is_empty()) {
+            Some(text) => (alert_msg(&text), Some(text)),
+            None => (String::new(), None),
+        })
+    }
+
+    /// Home, natively: not pressed under a system alert (it would do nothing), and confirmed by the home screen
+    /// coming to the front; when the key does nothing, a swipe up from the bottom edge does it
+    pub(crate) async fn native_home(&self, g: &mut Inner, watched: bool) -> crate::error::Result<String> {
+        if !watched && let (_, Some(text)) = self.native_alert(g).await? {
+            return Ok(ictl_l10n::trf!(
+                "{},按 Home 不会生效,没有按;{TAP_ALERT}",
+                "{}, pressing Home would have no effect, not pressed; {TAP_ALERT_EN}",
+                blocking(&text)
+            ));
+        }
+        self.hid_do(g, |h| Box::pin(h.press(Button::Home))).await?;
+        if self.native_reached_home(g).await {
+            return Ok(ictl_l10n::tr!("已按 home", "Pressed home").into());
+        }
+        let s = self.screen(g).await?;
+        let rot = self.hid_touch_rotation(g).await?;
+        let (from, to) = ((s.width / 2.0, s.height - 2.0), (s.width / 2.0, s.height * 0.55));
+        self.hid_do(g, move |h| {
+            Box::pin(async move {
+                h.rotation = rot;
+                h.drag(from, to, 0.25).await
+            })
+        })
+        .await?;
+        if self.native_reached_home(g).await {
+            return Ok(ictl_l10n::tr!(
+                "已按 home(Home 键没反应,改为从屏幕底部上滑)",
+                "Pressed home (the key did nothing, swiped up from the bottom edge instead)"
+            )
+            .into());
+        }
+        if let (_, Some(text)) = self.native_alert(g).await? {
+            return Ok(ictl_l10n::trf!(
+                "{},按 Home 没有生效,先点弹窗上的按钮",
+                "{}, pressing Home had no effect; first tap a button on the alert",
+                blocking(&text)
+            ));
+        }
+        let app = self.native_foreground(g).await.unwrap_or_default();
+        Ok(ictl_l10n::trf!(
+            "已按 home,但前台还是 {app},先截图看看",
+            "Pressed home, but the foreground is still {app}; take a screenshot"
+        ))
+    }
+
+    /// Whether the home screen comes to the front within [`HOME_SETTLE`]
+    async fn native_reached_home(&self, g: &mut Inner) -> bool {
+        let deadline = Instant::now() + HOME_SETTLE;
+        loop {
+            if self.native_foreground(g).await.is_ok_and(|b| b == SPRINGBOARD) {
+                return true;
+            }
+            if Instant::now() >= deadline {
+                return false;
+            }
+            tokio::time::sleep(Duration::from_millis(150)).await;
+        }
+    }
+
+    /// A tap at a point through HID, the interface's rotation read first
+    pub(crate) async fn native_tap(&self, g: &mut Inner, x: f64, y: f64) -> crate::error::Result<()> {
+        let rot = self.hid_touch_rotation(g).await?;
+        self.hid_do(g, move |h| {
+            Box::pin(async move {
+                h.rotation = rot;
+                h.tap(x, y).await
+            })
+        })
+        .await
+    }
+
+    pub(crate) async fn native_long_press(
+        &self,
+        g: &mut Inner,
+        x: f64,
+        y: f64,
+        seconds: f64,
+    ) -> crate::error::Result<()> {
+        let rot = self.hid_touch_rotation(g).await?;
+        self.hid_do(g, move |h| {
+            Box::pin(async move {
+                h.rotation = rot;
+                h.long_press(x, y, seconds).await
+            })
+        })
+        .await
+    }
+
+    /// Typing, natively: all text is pasted (keys on a Pinyin keyboard would be taken as pinyin), the paste prompt
+    /// answered, and the field read back before the pasteboard is put back and Return pressed
+    pub(crate) async fn native_type(&self, g: &mut Inner, text: &str, submit: bool) -> crate::error::Result<String> {
+        let n = text.chars().count();
+        let before = self.ax_tree(g, None, AX_WAIT).await?;
+        if !before.elements.iter().any(|e| e.kind == "Keyboard") {
+            return Err(ictl_l10n::tr!(
+                "屏幕上没有键盘(没有输入框获得焦点),什么都没输;先点一下输入框,截图确认键盘出来了再输入",
+                "No keyboard on screen (no text field has focus), nothing typed; tap a text field first and check with a screenshot that the keyboard is up"
+            )
+            .into());
+        }
+        let old = elements::field_values(&before.elements);
+        let mut note = String::new();
+        if !text.is_empty() {
+            let (typed, prompt) = self.native_paste(g, text, old.as_deref()).await?;
+            if prompt {
+                note += ictl_l10n::tr!("(已替你点了「允许粘贴」)", " (“Allow Paste” was tapped for you)");
+            }
+            match typed {
+                Some(true) => {}
+                // a password field: its value can't be read
+                None => {
+                    note += ictl_l10n::tr!(
+                        "(这是密码框,读不出内容,截图确认输进去了)",
+                        " (a password field: its contents can't be read back, check with a screenshot)"
+                    )
+                }
+                Some(false) => {
+                    return Err(ictl_l10n::trf!(
+                        "粘贴了 {n} 个字符,但 {} 秒内输入框里没有这段文字{};截图看看:输入框可能没有焦点,或 App 不接受粘贴",
+                        "Pasted {n} characters, but the field didn't show the text within {} s{}; take a screenshot: the field may not have focus, or the app doesn't take pastes",
+                        PASTE_WAIT.as_secs(),
+                        if submit { ictl_l10n::tr!(",没有按回车", ", Return not pressed") } else { "" }
+                    )
+                    .into());
+                }
+            }
+        }
+        if submit {
+            self.hid_do(g, |h| Box::pin(async move { h.type_ascii("\n").await })).await.map_err(|e| {
+                ictl_l10n::trf!("文字已输入{note},按回车失败:{e}", "Text typed{note}, pressing Return failed: {e}")
+            })?;
+        }
+        Ok(ictl_l10n::trf!(
+            "已输入 {n} 个字符{note}{}",
+            "Typed {n} characters{note}{}",
+            if submit { ictl_l10n::tr!(",并按了回车", " and pressed Return") } else { "" }
+        ))
+    }
+
+    /// Pastes `text` and waits for it to show in a field (`old`: the fields' values before; None: a password field
+    /// on screen). Returns whether it showed (None: can't be read) and whether the paste prompt was answered. The
+    /// pasteboard is put back before returning
+    async fn native_paste(
+        &self,
+        g: &mut Inner,
+        text: &str,
+        old: Option<&[String]>,
+    ) -> crate::error::Result<(Option<bool>, bool)> {
+        // a paste through the WDA-down path may still wait to be put back
+        self.restore_pasteboard(g, false).await;
+        self.hid(g).await?;
+        let r = Box::pin(g.tunnel.as_mut().expect("hid() 刚建好隧道").paste_text(text)).await;
+        g.hid_used = Some(Instant::now());
+        let pending = match r {
+            Ok(p) => p,
+            Err(e @ DeviceError::InvalidInput(_)) => return Err(e.into()),
+            Err(e) => {
+                drop_tunnel(g).await;
+                return Err(ictl_l10n::trf!("粘贴失败:{e}", "Paste failed: {e}").into());
+            }
+        };
+        let deadline = Instant::now() + PASTE_WAIT;
+        let mut prompt = false;
+        let wanted = text.trim();
+        let typed = loop {
+            let tree = self.ax_tree(g, None, AX_WAIT).await?;
+            if let Some((x, y)) = paste_allow(&tree) {
+                self.native_tap(g, x, y).await?;
+                prompt = true;
+                tokio::time::sleep(Duration::from_millis(300)).await;
+                continue;
+            }
+            let now = elements::field_values(&tree.elements);
+            match (&now, old) {
+                (Some(now), Some(old)) if now.as_slice() != old && now.iter().any(|v| v.contains(wanted)) => {
+                    break Some(true);
+                }
+                (None, _) | (_, None) if Instant::now() >= deadline => break None,
+                _ if Instant::now() >= deadline => break Some(false),
+                _ => {}
+            }
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        };
+        if let Some(p) = pending {
+            let restored = match g.tunnel.as_mut() {
+                Some(t) => Box::pin(t.restore_pasteboard(p)).await,
+                None => ClipboardRestore::Failed("no tunnel".into()),
+            };
+            if let ClipboardRestore::Failed(e) = restored {
+                tracing::warn!(
+                    "{}",
+                    ictl_l10n::log_trf!(
+                        "粘贴后还原剪贴板失败：{e}",
+                        "Restoring the pasteboard after the paste failed: {e}"
+                    )
+                );
+            }
+        }
+        Ok((typed, prompt))
+    }
+
+    /// Launches `bundle_id` in front (with `url`, the link for it to open) and waits for it to be there
+    pub(crate) async fn native_launch(
+        &self,
+        g: &mut Inner,
+        bundle_id: &str,
+        url: Option<&str>,
+    ) -> crate::error::Result<ictl_wda::Launch> {
+        let device = g.device.clone().ok_or(ictl_l10n::tr!("手机未连接", "Phone not connected"))?;
+        let t0 = Instant::now();
+        self.ensure_tunnel(g, &device).await?.launch_foreground(bundle_id, url).await?;
+        loop {
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            let (xml, size, pid) = self.ax_read(g, None, AX_WAIT).await?;
+            let tree = elements::parse_tree(&xml, size);
+            if let Some(a) = tree.alert().filter(|a| !a.label.is_empty()) {
+                return Ok(ictl_wda::Launch::Blocked(a.label.clone()));
+            }
+            if self.bundle_of_pid(g, pid).await.is_ok_and(|b| b == bundle_id) {
+                if let Some(left) = LAUNCH_SETTLE.checked_sub(t0.elapsed()) {
+                    tokio::time::sleep(left).await;
+                }
+                return Ok(ictl_wda::Launch::Foreground);
+            }
+            if t0.elapsed() >= LAUNCH_WAIT {
+                return Ok(ictl_wda::Launch::Slow);
+            }
+        }
+    }
+
+    /// Ends `bundle_id`'s process (SIGKILL through CoreDevice); Ok(false) when it wasn't running
+    pub(crate) async fn native_terminate(&self, g: &mut Inner, bundle_id: &str) -> crate::error::Result<bool> {
+        let device = g.device.clone().ok_or(ictl_l10n::tr!("手机未连接", "Phone not connected"))?;
+        let procs = self.ensure_tunnel(g, &device).await?.processes().await?;
+        let mut apps = self.list_apps(g, false).await?;
+        apps.extend(self.list_apps(g, true).await?);
+        let pids: Vec<u64> = procs
+            .iter()
+            .filter(|(_, exe)| apps::bundle_of_process(exe, &apps).as_deref() == Some(bundle_id))
+            .map(|(p, _)| *p)
+            .collect();
+        for pid in &pids {
+            self.ensure_tunnel(g, &device).await?.signal(*pid, 9).await?;
+        }
+        Ok(!pids.is_empty())
+    }
+
+    /// The app that opens `url`
+    pub(crate) async fn native_app_for_url(&self, g: &mut Inner, url: &str) -> crate::error::Result<String> {
+        let mut apps = self.list_apps(g, false).await?;
+        apps.extend(self.list_apps(g, true).await?);
+        apps::app_for_url(url, &apps)
+            .ok_or_else(|| ictl_l10n::trf!("手机上没有 App 能打开 {url}", "No app on the phone opens {url}").into())
+    }
+
+    /// Unlocks natively, with the same rules and guards as through WDA (`ictl_unlock`)
+    pub(crate) async fn native_unlock(
+        &self,
+        g: &mut Inner,
+        cfg: &ictl_unlock::UnlockConfig,
+    ) -> ictl_unlock::Result<ictl_unlock::Outcome> {
+        let mut screen = NativeScreen { d: self, g };
+        Box::pin(ictl_unlock::ensure_unlocked(&mut screen, cfg)).await
+    }
+}
+
+/// The phone as [`ictl_unlock`] sees it, driven natively
+struct NativeScreen<'a> {
+    d: &'a Daemon,
+    g: &'a mut Inner,
+}
+
+/// A step that failed: unlocking tries another round
+fn step(e: impl std::fmt::Display) -> WdaError {
+    WdaError::Remote { kind: "native".into(), message: e.to_string() }
+}
+
+impl Screen for NativeScreen<'_> {
+    async fn reports_locked(&mut self) -> std::result::Result<bool, WdaError> {
+        self.d.native_locked(self.g).await.map_err(|e| WdaError::Unavailable(e.to_string()))
+    }
+
+    fn lock_state_trusted(&self) -> bool {
+        // lockdown knows: no lock-screen-looking notification center to tell apart
+        true
+    }
+
+    async fn check_lock(&mut self, _reported: Option<bool>, _strict: bool) -> std::result::Result<LockCheck, WdaError> {
+        let locked = self.d.native_locked(self.g).await.map_err(|e| WdaError::Unavailable(e.to_string()))?;
+        let tree = if locked {
+            self.d.ax_read(self.g, None, Duration::from_secs(3)).await.ok().map(|(x, _, _)| x)
+        } else {
+            None
+        };
+        Ok(LockCheck { locked, uncertain: false, tree })
+    }
+
+    async fn quick_waits(&mut self) -> std::result::Result<Option<ictl_wda::IdleSettings>, WdaError> {
+        Ok(None)
+    }
+
+    async fn restore_waits(&mut self, _: ictl_wda::IdleSettings) -> std::result::Result<(), WdaError> {
+        Ok(())
+    }
+
+    async fn press_home(&mut self, _round: u32) -> std::result::Result<(), WdaError> {
+        self.d.hid_do(self.g, |h| Box::pin(h.press(Button::Home))).await.map_err(step)
+    }
+
+    async fn view(&mut self) -> std::result::Result<View, WdaError> {
+        self.d.screen(self.g).await.map(View::from).map_err(|e| WdaError::Unavailable(e.to_string()))
+    }
+
+    async fn swipe(&mut self, from: (f64, f64), to: (f64, f64), ms: u64) -> std::result::Result<(), WdaError> {
+        let rot = self.d.hid_touch_rotation(self.g).await.map_err(step)?;
+        let seconds = ms as f64 / 1000.0;
+        self.d
+            .hid_do(self.g, move |h| {
+                Box::pin(async move {
+                    h.rotation = rot;
+                    h.drag(from, to, seconds).await
+                })
+            })
+            .await
+            .map_err(step)
+    }
+
+    async fn tap(&mut self, x: f64, y: f64, _press_ms: u64) -> std::result::Result<(), WdaError> {
+        self.d.native_tap(self.g, x, y).await.map_err(step)
+    }
+
+    async fn elements(&mut self) -> std::result::Result<Vec<elements::Element>, WdaError> {
+        Ok(self.d.ax_tree(self.g, None, Duration::from_secs(3)).await.map_err(step)?.elements)
+    }
+
+    async fn passcode_field(&mut self) -> std::result::Result<Option<(u32, u32)>, WdaError> {
+        Ok(elements::passcode_field(&self.elements().await?))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn info(version: &str) -> DeviceInfo {
+        DeviceInfo {
+            udid: "u".into(),
+            name: "n".into(),
+            product_type: "iPhone16,2".into(),
+            product_version: version.into(),
+        }
+    }
+
+    #[test]
+    fn ios_27_and_later_are_native_unless_wda_is_asked_for() {
+        assert!(native_for(IosBackend::Auto, Some(&info("27.2.1"))));
+        assert!(native_for(IosBackend::Native, Some(&info("28.0"))));
+        assert!(!native_for(IosBackend::Wda, Some(&info("27.2.1"))));
+        // no HID below 27
+        assert!(!native_for(IosBackend::Native, Some(&info("26.7.3"))));
+        assert!(!native_for(IosBackend::Auto, None));
+    }
+
+    #[test]
+    fn the_paste_prompt_is_answered_only_for_our_paste() {
+        let xml = |alert: &str| {
+            format!(
+                r#"<XCUIElementTypeApplication type="XCUIElementTypeApplication" label="备忘录" x="0" y="0" width="430" height="932"><XCUIElementTypeAlert type="XCUIElementTypeAlert" label="{alert}" x="55" y="390" width="320" height="175"><XCUIElementTypeButton type="XCUIElementTypeButton" label="允许粘贴" x="71" y="501" width="140" height="49"/><XCUIElementTypeButton type="XCUIElementTypeButton" label="不允许粘贴" x="219" y="501" width="140" height="49"/></XCUIElementTypeAlert></XCUIElementTypeApplication>"#
+            )
+        };
+        let screen = ScreenSize { width: 430.0, height: 932.0 };
+        let ours = elements::parse_tree(&xml("“备忘录”想从“dtpasteboardd”粘贴"), screen);
+        assert_eq!(paste_allow(&ours), Some((141.0, 526.0)));
+        let other = elements::parse_tree(&xml("“备忘录”想从“微信”粘贴"), screen);
+        assert_eq!(paste_allow(&other), None);
+    }
+}

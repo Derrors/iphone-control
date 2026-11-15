@@ -1136,6 +1136,13 @@ async fn device_setup(cli: &Cli) -> anyhow::Result<()> {
         println!("{}", ictl_l10n::tr!("  已打开", "  Turned on"));
     }
 
+    // iOS 27 起默认原生控制：不用 WDA，也就不用 Apple ID 和签名（ICTL_IOS_BACKEND=wda 时照旧）
+    let backend =
+        ictl_daemon::config::IosBackend::parse(std::env::var(ictl_daemon::protocol::env::IOS_BACKEND).ok().as_deref());
+    if backend.drives_natively(Some(&target)) {
+        return native_setup(socket, &device.udid).await;
+    }
+
     println!("{}", ictl_l10n::tr!("[4/6] 登录 Apple ID", "[4/6] Apple ID sign-in"));
     match account_dir(&cli.data_dir).selected_email().await {
         Ok(e) => println!("{}", ictl_l10n::trf!("  已登录 {e}", "  Signed in as {e}")),
@@ -1216,6 +1223,43 @@ async fn device_setup(cli: &Cli) -> anyhow::Result<()> {
             ictl_l10n::tr!(
                 "10 分钟内 WDA 没就绪,运行 iphone-control doctor 看看卡在哪",
                 "WDA wasn't ready within 10 minutes; run iphone-control doctor to see where it is stuck"
+            )
+        }
+    );
+    Ok(())
+}
+
+/// The last steps of [`device_setup`] for a phone driven natively: no Apple ID, no signing, the daemon only mounts
+/// the developer disk image and connects to the accessibility service
+async fn native_setup(socket: &Path, udid: &str) -> anyhow::Result<()> {
+    println!(
+        "{}",
+        ictl_l10n::tr!(
+            "[4/6] 登录 Apple ID：跳过（iOS 27 起原生控制，不用 WDA，不用签名）\n[5/6] 签名安装 WDA：跳过（要改回 WDA，在 ~/.config/iphone-control/env 里设 ICTL_IOS_BACKEND=wda）",
+            "[4/6] Apple ID sign-in: skipped (native control from iOS 27, no WDA, no signing)\n[5/6] Signing and installing WDA: skipped (to go back to WDA, set ICTL_IOS_BACKEND=wda in ~/.config/iphone-control/env)"
+        )
+    );
+    println!(
+        "{}",
+        ictl_l10n::tr!(
+            "[6/6] 等待手机准备好（挂载开发者镜像、连接无障碍服务；手机要保持解锁）",
+            "[6/6] Waiting for the phone to get ready (mounting the developer disk image, connecting to the accessibility service; keep the phone unlocked)"
+        )
+    );
+    let ready = wait_until(Duration::from_secs(300), Duration::from_secs(3), || async {
+        snapshot(socket).await.is_ok_and(|s| {
+            s.state == ictl_daemon::machine::DeviceState::Ready && s.device.as_ref().is_none_or(|d| d.udid == udid)
+        })
+    })
+    .await;
+    println!(
+        "  {}",
+        if ready {
+            ictl_l10n::tr!("就绪（原生控制）", "Ready (native control)")
+        } else {
+            ictl_l10n::tr!(
+                "5 分钟内没准备好，运行 iphone-control doctor 看看卡在哪",
+                "Not ready within 5 minutes; run iphone-control doctor to see where it is stuck"
             )
         }
     );

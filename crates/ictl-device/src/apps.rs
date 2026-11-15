@@ -8,6 +8,11 @@ pub struct AppInfo {
     pub bundle_id: String,
     /// CFBundleExecutable: the process name the app runs as (for filtering its logs)
     pub executable: String,
+    /// Where the app is installed (`Path`, e.g. `/Applications/Preferences.app`): a running process's executable is
+    /// inside it, which tells which app a process is (see [`bundle_of_process`])
+    pub path: String,
+    /// The link schemes it opens (`CFBundleURLTypes`), lowercase
+    pub schemes: Vec<String>,
 }
 
 /// 解析 installation_proxy `Lookup` 的结果，按名字排序。
@@ -32,11 +37,54 @@ pub fn parse_apps(lookup: HashMap<String, plist::Value>) -> Vec<AppInfo> {
                 .to_owned();
             let bundle_id = d.get("CFBundleIdentifier").and_then(|v| v.as_string()).unwrap_or(&bid).to_owned();
             let executable = d.get("CFBundleExecutable").and_then(|v| v.as_string()).unwrap_or_default().to_owned();
-            Some(AppInfo { name, bundle_id, executable })
+            let path = d.get("Path").and_then(|v| v.as_string()).unwrap_or_default().to_owned();
+            let schemes = d
+                .get("CFBundleURLTypes")
+                .and_then(|v| v.as_array())
+                .into_iter()
+                .flatten()
+                .filter_map(|t| t.as_dictionary()?.get("CFBundleURLSchemes")?.as_array())
+                .flatten()
+                .filter_map(|s| s.as_string().map(str::to_ascii_lowercase))
+                .collect();
+            Some(AppInfo { name, bundle_id, executable, path, schemes })
         })
         .collect();
     out.sort_by(|a, b| a.name.cmp(&b.name).then_with(|| a.bundle_id.cmp(&b.bundle_id)));
     out
+}
+
+/// SpringBoard's executable (the home screen, the lock screen); not in the installed apps
+pub const SPRINGBOARD_EXECUTABLE: &str = "/System/Library/CoreServices/SpringBoard.app/SpringBoard";
+
+/// The bundle ID of the app whose process runs `executable` (a process's executable URL or path, as CoreDevice's
+/// process list gives it), from where the apps are installed. SpringBoard is `com.apple.springboard`
+pub fn bundle_of_process<'a>(executable: &str, apps: impl IntoIterator<Item = &'a AppInfo>) -> Option<String> {
+    // /var is a link to /private/var: compare without it
+    fn norm(p: &str) -> &str {
+        p.strip_prefix("/private").unwrap_or(p)
+    }
+    let exe = executable.strip_prefix("file://").unwrap_or(executable);
+    if norm(exe) == norm(SPRINGBOARD_EXECUTABLE) {
+        return Some("com.apple.springboard".into());
+    }
+    apps.into_iter()
+        .filter(|a| !a.path.is_empty())
+        .find(|a| norm(exe).strip_prefix(norm(a.path.trim_end_matches('/'))).is_some_and(|rest| rest.starts_with('/')))
+        .map(|a| a.bundle_id.clone())
+}
+
+/// The app that opens `url`: Safari for web pages, otherwise the first of `apps` (pass the user's apps first) that
+/// declares its scheme. None for a link no app opens, or one without a scheme
+pub fn app_for_url<'a>(url: &str, apps: impl IntoIterator<Item = &'a AppInfo>) -> Option<String> {
+    let scheme = url.split_once(':')?.0.to_ascii_lowercase();
+    if scheme.is_empty() || !scheme.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.')) {
+        return None;
+    }
+    if scheme == "http" || scheme == "https" {
+        return Some("com.apple.mobilesafari".into());
+    }
+    apps.into_iter().find(|a| a.schemes.contains(&scheme)).map(|a| a.bundle_id.clone())
 }
 
 /// 看起来就是 Bundle ID（带点、不带空格），不用查列表
@@ -98,7 +146,9 @@ mod tests {
         assert!(s.contains(&AppInfo {
             name: "设置".into(),
             bundle_id: "com.apple.Preferences".into(),
-            executable: String::new()
+            executable: String::new(),
+            path: String::new(),
+            schemes: Vec::new(),
         }));
         assert!(s.iter().all(|a| a.bundle_id != "com.apple.NewDeviceSetupUIService"));
         assert_eq!(s.iter().filter(|a| a.name == "设置").count(), 1);
@@ -139,5 +189,49 @@ mod tests {
         assert!(!looks_like_bundle_id("Safari 浏览器"));
         let (u, s) = (user(), system());
         assert_eq!(resolve("不存在的 App", [&u[..], &s[..]]), None);
+    }
+
+    #[test]
+    fn a_process_is_named_by_the_app_it_runs_in() {
+        let app = |b: &str, p: &str| AppInfo {
+            name: String::new(),
+            bundle_id: b.into(),
+            executable: String::new(),
+            path: p.into(),
+            schemes: Vec::new(),
+        };
+        let apps = [
+            app("com.apple.Preferences", "/Applications/Preferences.app"),
+            app("com.tencent.xin", "/private/var/containers/Bundle/Application/AB-12/WeChat.app"),
+            app("com.example.pref", "/Applications/Preferences.appx"),
+        ];
+        let of = |exe: &str| bundle_of_process(exe, &apps);
+        assert_eq!(of("file:///Applications/Preferences.app/Preferences").as_deref(), Some("com.apple.Preferences"));
+        assert_eq!(
+            of("file:///var/containers/Bundle/Application/AB-12/WeChat.app/WeChat").as_deref(),
+            Some("com.tencent.xin")
+        );
+        assert_eq!(
+            of("file:///System/Library/CoreServices/SpringBoard.app/SpringBoard").as_deref(),
+            Some("com.apple.springboard")
+        );
+        assert_eq!(of("file:///usr/libexec/backboardd"), None);
+    }
+
+    #[test]
+    fn a_link_opens_in_the_app_of_its_scheme() {
+        let app = |b: &str, schemes: &[&str]| AppInfo {
+            name: String::new(),
+            bundle_id: b.into(),
+            executable: String::new(),
+            path: String::new(),
+            schemes: schemes.iter().map(|s| s.to_string()).collect(),
+        };
+        let apps = [app("com.tencent.xin", &["weixin", "wechat"]), app("com.apple.Maps", &["maps"])];
+        assert_eq!(app_for_url("https://example.com", &apps).as_deref(), Some("com.apple.mobilesafari"));
+        assert_eq!(app_for_url("WeiXin://dl/chat", &apps).as_deref(), Some("com.tencent.xin"));
+        assert_eq!(app_for_url("maps:?q=x", &apps).as_deref(), Some("com.apple.Maps"));
+        assert_eq!(app_for_url("nothing://x", &apps), None);
+        assert_eq!(app_for_url("no scheme", &apps), None);
     }
 }

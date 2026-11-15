@@ -6,7 +6,7 @@ use std::time::{Duration, Instant, UNIX_EPOCH};
 use ictl_device::{Device, DeviceError, LogStream, Rotation, ScreenSize, Tunnel, UsbDevice};
 use ictl_wda::{WdaClient, WdaError, WdaRunner, http::DeviceTransport};
 
-use crate::core::{Daemon, DetachedWda, DeviceProfile, Inner, close_hid};
+use crate::core::{Daemon, DetachedWda, DeviceProfile, Inner, close_hid, drop_tunnel};
 use crate::machine::DeviceState;
 use crate::notify::Event;
 
@@ -27,6 +27,8 @@ const PIN_ATTEMPT: Duration = Duration::from_secs(25);
 /// HID 会话空闲这么久就关掉。它持有屏幕媒体流，开着时 iOS 当作屏幕被远程查看：不会自动锁屏，
 /// 还会弹「viewed remotely」通知。重开约 0.5 秒
 pub(crate) const HID_IDLE: Duration = Duration::from_secs(30);
+/// 原生控制：无障碍会话空闲这么久就关掉。开着时手机为我们开着无障碍运行时，每次界面变化都推一棵树；重开约 1 秒
+pub(crate) const AX_IDLE: Duration = Duration::from_secs(60);
 /// 连续这么多轮列不出设备才当作离线
 const LIST_ERRORS_OFFLINE: u32 = 3;
 /// 开发者镜像连续挂载失败这么多次就清缓存重新下载
@@ -113,6 +115,12 @@ impl Daemon {
                 )
             );
         }
+        if g.ax_used.is_none_or(|t| t.elapsed() >= AX_IDLE)
+            && let Some(t) = g.tunnel.as_mut().filter(|t| t.ax_open())
+        {
+            t.close_ax().await;
+            tracing::info!("{}", ictl_l10n::log_tr!("无障碍会话空闲，已关闭", "Accessibility session idle, closed it"));
+        }
         self.restore_pasteboard(g, true).await;
         self.poll_start(g).await;
 
@@ -183,9 +191,20 @@ impl Daemon {
         let device = g.device.clone();
         // an old size is measured again only while nobody acts: on an iPad mini 5 that takes WDA 0.95 s
         let refresh = !gesture_start && !self.acting_now(ACTION_QUIET);
-        let Some(wda) = self.wda(g) else { return (None, self.update_display(g, None).await) };
-        let (size, rotation) =
-            wda.display_sample(previous, refresh, async { device?.interface_rotation().await.ok().flatten() }).await;
+        let Some(wda) = self.wda(g) else {
+            // 原生控制：方向问 SpringBoard（lockdown 服务），尺寸是读界面时记下的（竖放）
+            if self.native(g) {
+                let rotation = self.native_rotation(g).await;
+                let size = g.persisted.screen_for(device.as_ref().map(|d| d.udid.as_str()));
+                let changed = self.record_display_sample(g, size, rotation, gesture_start).await;
+                return (rotation, changed);
+            }
+            return (None, self.update_display(g, None).await);
+        };
+        let (size, rotation) = Box::pin(
+            wda.display_sample(previous, refresh, async { device?.interface_rotation().await.ok().flatten() }),
+        )
+        .await;
         let changed = self.record_display_sample(g, size, rotation, gesture_start).await;
         (rotation, changed)
     }
@@ -312,6 +331,10 @@ impl Daemon {
         if g.state != DeviceState::Ready && !device.developer_mode_enabled().await.unwrap_or(true) {
             return self.set_state(g, DeviceState::DeveloperModeOff);
         }
+        // iOS 27 起默认原生控制：不签名、不启动 WDA（docs/dev/ios27-native.md）
+        if self.native(g) {
+            return Box::pin(self.native_online(g, device)).await;
+        }
         let Some(bundle) = g.persisted.wda_bundle.clone() else {
             return self.set_state(g, DeviceState::NeedsSigning);
         };
@@ -357,6 +380,109 @@ impl Daemon {
             return;
         }
         self.spawn_start(g, device, bundle);
+    }
+
+    /// [`Self::online`] for a phone driven natively: the developer disk image mounted in the background (as before
+    /// WDA starts), then the accessibility service's handshake and a first read of the screen
+    async fn native_online(&self, g: &mut Inner, device: Device) {
+        if g.preparing.as_ref().is_some_and(|h| h.is_finished()) {
+            let h = g.preparing.take().expect("刚检查过");
+            let r = h.await.unwrap_or_else(|e| {
+                Err((DeviceError::Idevice(ictl_l10n::trf!("准备任务异常：{e}", "Preparing task failed: {e}")), false))
+            });
+            match r {
+                Ok(mounted) => {
+                    g.dev.ddi_failures = 0;
+                    if let Some(v) = mounted {
+                        self.log.log(&ictl_l10n::log_trf!("开发者镜像已挂载 {v}", "Developer disk image mounted {v}"));
+                        // a tunnel opened before the image was mounted doesn't list the accessibility service
+                        drop_tunnel(g).await;
+                    }
+                    match Box::pin(self.native_check(g, &device)).await {
+                        Ok(()) => {
+                            self.log.log(ictl_l10n::log_tr!(
+                                "原生控制就绪（无障碍服务、HID，不用 WDA）",
+                                "Native control ready (accessibility service and HID, no WDA)"
+                            ));
+                            g.backoff.reset();
+                            self.set_state(g, DeviceState::Ready);
+                            self.sample_display(g, false).await;
+                        }
+                        Err(e) => {
+                            self.log.log(&ictl_l10n::log_trf!("准备手机失败：{e}", "Preparing the phone failed: {e}"));
+                            g.backoff.failed(Instant::now());
+                            self.set_state(g, DeviceState::Preparing { last_error: Some(e) });
+                        }
+                    }
+                }
+                Err((DeviceError::PasswordProtected, _)) => {
+                    g.backoff.retry_after(Instant::now(), crate::machine::UNLOCK_RETRY);
+                    self.set_state(g, DeviceState::NeedsUnlock);
+                }
+                Err((e, mount_failed)) => {
+                    self.ddi_failed(g, mount_failed);
+                    g.backoff.failed(Instant::now());
+                    let e = ictl_l10n::trf!("开发者镜像：{e}", "Developer disk image: {e}");
+                    self.log.log(&ictl_l10n::log_trf!("准备手机失败：{e}", "Preparing the phone failed: {e}"));
+                    self.set_state(g, DeviceState::Preparing { last_error: Some(e) });
+                }
+            }
+            return;
+        }
+        if g.state == DeviceState::Ready {
+            self.sample_display(g, false).await;
+            return;
+        }
+        if g.preparing.is_some() || !g.backoff.ready(Instant::now()) {
+            return;
+        }
+        // retrying: the last error stays up until this round's outcome
+        if !matches!(g.state, DeviceState::Preparing { .. }) {
+            self.set_state(g, DeviceState::Preparing { last_error: None });
+        }
+        let (cache, url, user_dir) = (self.cfg.ddi_cache(), self.cfg.ddi_url.clone(), self.cfg.ddi_dir.clone());
+        let Ok(lease) = crate::maintenance::shared() else { return };
+        let wake = self.wake.clone();
+        g.preparing = Some(tokio::task::spawn_local(then_wake(wake, async move {
+            let _lease = lease;
+            let mut t = device.open_tunnel().await.map_err(|e| (e, false))?;
+            let r = ensure_ddi(&mut t, &cache, &url, user_dir.as_deref()).await;
+            t.close().await;
+            r
+        })));
+    }
+
+    /// The accessibility service answers and the screen can be read (which records its size)
+    async fn native_check(&self, g: &mut Inner, device: &Device) -> Result<(), String> {
+        for attempt in 0..2 {
+            let t = self.ensure_tunnel(g, device).await.map_err(|e| e.to_string())?;
+            if t.ax_supported() {
+                break;
+            }
+            // the tunnel lists the services as they were when it was opened
+            drop_tunnel(g).await;
+            if attempt == 1 {
+                return Err(ictl_l10n::tr!(
+                    "手机没有提供无障碍服务（remoteAXService）：开发者镜像可能没挂上",
+                    "The phone offers no accessibility service (remoteAXService): the developer disk image may not be mounted"
+                )
+                .into());
+            }
+        }
+        Box::pin(self.ax_read(g, None, crate::tools::AX_WAIT)).await.map(|_| ()).map_err(|e| e.to_string())
+    }
+
+    /// A mount that failed may be a broken cache: after a few in a row it is downloaded again (`ICTL_DDI_DIR` is the
+    /// user's own and never deleted)
+    fn ddi_failed(&self, g: &mut Inner, mount_failed: bool) {
+        if mount_failed && self.cfg.ddi_dir.is_none() {
+            g.dev.ddi_failures += 1;
+            if g.dev.ddi_failures >= DDI_FAILURES_INVALIDATE {
+                self.log.log(&ictl_l10n::log_trf!("开发者镜像连续 {} 次挂载失败，清掉缓存，下次重新下载", "Mounting the developer disk image failed {} times in a row, clearing the cache to download it again", g.dev.ddi_failures));
+                ictl_device::ddi::invalidate(&self.cfg.ddi_cache());
+                g.dev.ddi_failures = 0;
+            }
+        }
     }
 
     /// WDA 卡死了没有：经 XCTest 的请求连续 [`ictl_wda::client::STALL_LIMIT`] 次没有应答（[`WdaClient::stalled`]）。
@@ -440,18 +566,7 @@ impl Daemon {
             type Ready = (Option<String>, Result<Option<Detached>, DeviceError>, Option<LogStream>);
             let ddi: Result<Ready, (DeviceError, bool)> = async {
                 let mut t = device.open_tunnel().await.map_err(|e| (e, false))?;
-                let r = async {
-                    if t.ddi_mounted().await.map_err(|e| (e, false))?.is_some() {
-                        return Ok(None);
-                    }
-                    let dir = match &user_dir {
-                        Some(d) => ictl_device::ddi::require_complete(d),
-                        None => ictl_device::ddi::ensure_cache(&cache, &url).await,
-                    }
-                    .map_err(|e| (e, false))?;
-                    Ok(Some(t.mount_ddi(&dir).await.map_err(|e| (e, true))?))
-                }
-                .await;
+                let r = ensure_ddi(&mut t, &cache, &url, user_dir.as_deref()).await;
                 let r = match r {
                     Ok(m) => {
                         // 后台启动前先开系统日志流：认「Enable UI Automation」密码框靠它（见 WdaRunner::attach）
@@ -545,14 +660,7 @@ impl Daemon {
             }
             StartOutcome::Ddi { error: e, mount_failed } => {
                 // 只有挂载失败才可能是缓存坏了；ICTL_DDI_DIR 是用户自己的文件，从不删
-                if mount_failed && self.cfg.ddi_dir.is_none() {
-                    g.dev.ddi_failures += 1;
-                    if g.dev.ddi_failures >= DDI_FAILURES_INVALIDATE {
-                        self.log.log(&ictl_l10n::log_trf!("开发者镜像连续 {} 次挂载失败，清掉缓存，下次重新下载", "Mounting the developer disk image failed {} times in a row, clearing the cache to download it again", g.dev.ddi_failures));
-                        ictl_device::ddi::invalidate(&self.cfg.ddi_cache());
-                        g.dev.ddi_failures = 0;
-                    }
-                }
+                self.ddi_failed(g, mount_failed);
                 g.backoff.failed(Instant::now());
                 self.set_state(
                     g,
@@ -897,6 +1005,25 @@ impl Daemon {
 
 fn now_secs() -> u64 {
     std::time::SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs()
+}
+
+/// 手机重启后开发者镜像可能掉了：没挂就挂上（返回挂上的版本），已挂载时只是一次查询。
+/// 错误带上「是不是挂载这一步」（才可能是缓存坏了）
+async fn ensure_ddi(
+    t: &mut Tunnel,
+    cache: &std::path::Path,
+    url: &str,
+    user_dir: Option<&std::path::Path>,
+) -> Result<Option<String>, (DeviceError, bool)> {
+    if t.ddi_mounted().await.map_err(|e| (e, false))?.is_some() {
+        return Ok(None);
+    }
+    let dir = match user_dir {
+        Some(d) => ictl_device::ddi::require_complete(d),
+        None => ictl_device::ddi::ensure_cache(cache, url).await,
+    }
+    .map_err(|e| (e, false))?;
+    Ok(Some(t.mount_ddi(&dir).await.map_err(|e| (e, true))?))
 }
 
 /// 实验开关（`ICTL_WDA_DETACHED`）的那一步，在挂镜像的隧道上做：

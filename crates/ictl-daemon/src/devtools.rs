@@ -418,7 +418,13 @@ mod tests {
 
     #[test]
     fn uninstall_needs_an_exact_name() {
-        let app = |n: &str, b: &str| AppInfo { name: n.into(), bundle_id: b.into(), executable: String::new() };
+        let app = |n: &str, b: &str| AppInfo {
+            name: n.into(),
+            bundle_id: b.into(),
+            executable: String::new(),
+            path: String::new(),
+            schemes: Vec::new(),
+        };
         let apps = [
             app("Test Flight", "com.apple.TestFlight"),
             app("MyTest", "com.example.mytest"),

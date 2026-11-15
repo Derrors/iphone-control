@@ -48,6 +48,11 @@ impl Daemon {
                 Err(e) => return Err(e.into()),
             }
         }
+        // natively HID is the way, not a fallback: the page's view was checked above as through WDA
+        if self.native(g) {
+            Box::pin(self.native_tap(g, x, y)).await?;
+            return Ok(ictl_l10n::trf!("已点击 {pos}", "Tapped {pos}"));
+        }
         if view.is_some() {
             return Err(wda_down(&g.state, g.info.as_ref()).into());
         }
@@ -133,7 +138,7 @@ impl Daemon {
             },
         };
         h.rotation = rot;
-        let result = h.touch(contact, x, y).await;
+        let result = Box::pin(h.touch(contact, x, y)).await;
         g.hid_used = Some(Instant::now());
         if let Err(e) = result {
             // A failed write may still have reached the phone.
@@ -205,7 +210,7 @@ impl Daemon {
                 ));
             }
         };
-        self.require_wda(g)?.tap(x, y).await?;
+        self.tap_at(g, x, y).await?;
         let note = if matches.len() > 1 {
             ictl_l10n::trf!("(共匹配 {} 个,点的是第 {index} 个)", " ({} matches, tapped number {index})", matches.len())
         } else {
@@ -223,7 +228,12 @@ impl Daemon {
         view: Option<&str>,
     ) -> crate::error::Result<String> {
         self.prepare_coordinates(g, view, true).await?;
-        self.require_wda(g)?.touch_and_hold(x, y, seconds).await?;
+        let native = self.native(g);
+        match self.wda(g) {
+            Some(w) => w.touch_and_hold(x, y, seconds).await?,
+            None if native => Box::pin(self.native_long_press(g, x, y, seconds)).await?,
+            None => self.require_wda(g)?.touch_and_hold(x, y, seconds).await?,
+        }
         Ok(ictl_l10n::trf!("已长按 ({},{}) {} 秒", "Long-pressed ({},{}) for {} s", fmt_g(x), fmt_g(y), fmt_g(seconds)))
     }
 
@@ -258,7 +268,8 @@ impl Daemon {
                 Err(e) => return Err(e.into()),
             }
         }
-        if view.is_some() {
+        let native = self.native(g);
+        if view.is_some() && !native {
             return Err(wda_down(&g.state, g.info.as_ref()).into());
         }
         let rot = self.hid_touch_rotation(g).await?;
@@ -269,7 +280,20 @@ impl Daemon {
             })
         })
         .await?;
-        Ok(ictl_l10n::trf!("已滑动 {desc}(经 HID)", "Swiped {desc} (via HID)"))
+        if !native {
+            return Ok(ictl_l10n::trf!("已滑动 {desc}(经 HID)", "Swiped {desc} (via HID)"));
+        }
+        // as through WDA: a list still scrolling only stops at the next tap; the pushed trees say when it stopped
+        let note = if watched || matches!(Box::pin(self.native_quiet(g, SCROLL_SETTLE)).await, Ok(true) | Err(_)) {
+            String::new()
+        } else {
+            ictl_l10n::trf!(
+                "({:.1} 秒后列表还在动,可能还在滚动)",
+                " (the list was still moving after {:.1} s, it may still be scrolling)",
+                SCROLL_SETTLE.as_secs_f64()
+            )
+        };
+        Ok(ictl_l10n::trf!("已滑动 {desc}{note}", "Swiped {desc}{note}"))
     }
 
     pub(crate) async fn type_text(&self, g: &mut Inner, text: &str, submit: bool) -> crate::error::Result<String> {
@@ -323,6 +347,9 @@ impl Daemon {
                 Err(e) => return Err(e.into()),
             }
         }
+        if self.native(g) {
+            return Box::pin(self.native_type(g, text, submit)).await;
+        }
         let payload = if submit { format!("{text}\n") } else { text.to_owned() };
         // 美式键盘按得出来的直接按键，不动剪贴板
         if payload.chars().all(|c| ascii_to_usage(c).is_some()) {
@@ -341,7 +368,7 @@ impl Daemon {
         let n = text.chars().count();
         self.restore_pasteboard(g, false).await;
         self.hid(g).await?;
-        let r = g.tunnel.as_mut().expect("hid() 刚建好隧道").paste_text(text).await;
+        let r = Box::pin(g.tunnel.as_mut().expect("hid() 刚建好隧道").paste_text(text)).await;
         g.hid_used = Some(Instant::now());
         let pending = match r {
             Ok(p) => p,
@@ -390,7 +417,7 @@ impl Daemon {
         let Some((_, p)) = g.dev.pending_paste.take() else { return };
         let Some(device) = g.device.clone() else { return };
         let r = match self.ensure_tunnel(g, &device).await {
-            Ok(t) => t.restore_pasteboard(p).await,
+            Ok(t) => Box::pin(t.restore_pasteboard(p)).await,
             Err(e) => ClipboardRestore::Failed(e.to_string()),
         };
         match r {

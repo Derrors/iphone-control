@@ -156,7 +156,7 @@ fn is_key_char(label: &str) -> bool {
 }
 
 /// Where each element goes, in screen points; None = left out
-fn place(els: &[Element], keyboard: &HashSet<i64>) -> Vec<Option<Frame>> {
+fn place(els: &[Element], keyboard: &HashSet<i64>, web: &HashSet<i64>) -> Vec<Option<Frame>> {
     let app_pid = els.first().map_or(0, Element::pid);
     let mut offset: HashMap<i64, (f64, f64)> = HashMap::new();
     let mut host: Option<Frame> = None;
@@ -192,6 +192,9 @@ fn place(els: &[Element], keyboard: &HashSet<i64>) -> Vec<Option<Frame>> {
             Some((dx, dy)) => out.push(Some((x + dx, y + dy, w, h))),
             // the keyboard is kept (it marks the keyboard as shown) even when its keys can't be placed
             None if keyboard.contains(&e.pid()) => out.push(Some((0.0, 0.0, 0.0, 0.0))),
+            // a page (WebKit's web content process) is listed without a host, in screen points (Pinky
+            // `webcontent.go`)
+            None if web.contains(&e.pid()) => out.push(Some((x, y, w, h))),
             None => out.push(None),
         }
     }
@@ -240,22 +243,48 @@ fn open_tag(out: &mut String, kind: &str, e: &Element, (x, y, w, h): Frame, clos
 }
 
 /// The XML for `app` (the frontmost application's tree, its element first) with `overlays` (what SpringBoard
-/// draws over it: alerts, banners; in screen points) after it, on a `width`×`height` screen
-pub fn to_xml(app: &[Element], overlays: &[Element], width: f64, height: f64) -> String {
+/// draws over it: alerts, banners; in screen points) after it, on a `width`×`height` screen. `web`: the processes
+/// that are WebKit's web content (a page's elements), placed as they come. `springboard_front`: SpringBoard is the
+/// app in front, as when it asks something over an app (see [`looks_like_dialog`])
+pub fn to_xml(
+    app: &[Element],
+    overlays: &[Element],
+    width: f64,
+    height: f64,
+    web: &HashSet<i64>,
+    springboard_front: bool,
+) -> String {
     let app_pid = app.first().map_or(0, Element::pid);
     let mut keys: HashMap<i64, usize> = HashMap::new();
-    for e in app.iter().filter(|e| e.pid() != app_pid && is_key_char(&e.label)) {
+    // a page's own one-letter links are no keys
+    for e in app.iter().filter(|e| e.pid() != app_pid && !web.contains(&e.pid()) && is_key_char(&e.label)) {
         *keys.entry(e.pid()).or_default() += 1;
     }
     let keyboard: HashSet<i64> = keys.into_iter().filter(|(_, n)| *n >= KEYBOARD_KEYS).map(|(p, _)| p).collect();
-    let placed = place(app, &keyboard);
+    let placed = place(app, &keyboard, web);
 
     let mut out = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\"?>");
     let root = app.first().cloned().unwrap_or_default();
     open_tag(&mut out, "Application", &root, (0.0, 0.0, width, height), false);
     // the keyboard's keys, gathered under one Keyboard element at the end (drawn over the app)
     let mut kb_keys: Vec<(usize, Frame)> = Vec::new();
+    let dialog = springboard_front && looks_like_dialog(app);
+    if dialog {
+        let title = app.iter().skip(1).find(|e| kind(e) == "StaticText" && !e.label.is_empty());
+        let a = Element {
+            label: title.map(|e| e.label.clone()).unwrap_or_default(),
+            enabled: true,
+            visible: true,
+            ..Default::default()
+        };
+        let boxes: Vec<(usize, Frame)> =
+            placed.iter().enumerate().skip(1).filter_map(|(i, f)| f.map(|f| (i, f))).collect();
+        open_tag(&mut out, "Alert", &a, keys_box(&boxes).unwrap_or((0.0, 0.0, width, height)), false);
+    }
     write_children(&mut out, app, &placed, Some(0), 0, &keyboard, &mut kb_keys);
+    if dialog {
+        out.push_str("</XCUIElementTypeAlert>");
+    }
     let has_keyboard_type = app.iter().zip(&placed).any(|(e, p)| p.is_some() && kind(e) == "Keyboard");
     if !keyboard.is_empty() && !has_keyboard_type {
         let frame = keys_box(&kb_keys).unwrap_or((0.0, height * 0.6, width, height * 0.4));
@@ -277,6 +306,17 @@ pub fn to_xml(app: &[Element], overlays: &[Element], width: f64, height: f64) ->
     write_children(&mut out, overlays, &shown, None, 0, &HashSet::new(), &mut Vec::new());
     out.push_str("</XCUIElementTypeApplication>");
     out
+}
+
+/// SpringBoard in front with a few texts and two buttons or more, and none of the home screen's icons, a
+/// keyboard, the passcode field or list cells: a question it asks over an app («“设置”想从“dtpasteboardd”粘贴»,
+/// permission requests). Read through WDA it is an Alert; here it comes without one (iPhone 15 Pro Max, iOS 27.2.1)
+fn looks_like_dialog(app: &[Element]) -> bool {
+    let kinds: Vec<&str> = app.iter().skip(1).map(kind).collect();
+    app.len() <= 13
+        && kinds.iter().filter(|k| **k == "Button").count() >= 2
+        && kinds.contains(&"StaticText")
+        && !kinds.iter().any(|k| matches!(*k, "Icon" | "Key" | "SecureTextField" | "Cell" | "Alert"))
 }
 
 /// Elements under a left-out element are left out too
@@ -359,7 +399,7 @@ mod tests {
             el(10, 3, Some(1), "通用", 9, (20.0, 745.3, 390.0, 52.3)),
             el(10, 4, Some(0), "a & <b>", 48, (1.0, 2.0, 3.0, 4.0)),
         ];
-        let xml = to_xml(&els, &[], 430.0, 932.0);
+        let xml = to_xml(&els, &[], 430.0, 932.0, &HashSet::new(), false);
         assert!(xml.contains(r#"<XCUIElementTypeApplication type="XCUIElementTypeApplication" label="设置""#), "{xml}");
         assert!(xml.contains(r#"<XCUIElementTypeOther type="XCUIElementTypeOther" enabled"#), "{xml}");
         assert!(
@@ -386,7 +426,7 @@ mod tests {
             // a widget with no host before it
             el(88, 1, Some(0), "今天无日程", 48, (19.0, 97.0, 85.0, 21.0)),
         ];
-        let xml = to_xml(&els, &[], 430.0, 932.0);
+        let xml = to_xml(&els, &[], 430.0, 932.0, &HashSet::new(), false);
         assert!(
             xml.contains(
                 r#"label="上海市" name="上海市" enabled="true" selected="false" focused="false" x="46" y="100""#
@@ -403,7 +443,7 @@ mod tests {
         for (i, c) in "qwertyuiop".chars().enumerate() {
             els.push(el(55, i as u64 + 1, Some(0), &c.to_string(), 0, (i as f64 * 40.0, 600.0, 40.0, 50.0)));
         }
-        let xml = to_xml(&els, &[], 430.0, 932.0);
+        let xml = to_xml(&els, &[], 430.0, 932.0, &HashSet::new(), false);
         // the keys can't be placed (no host): one Keyboard over the lower part of the screen
         assert!(xml.contains(r#"<XCUIElementTypeKeyboard type="XCUIElementTypeKeyboard" enabled="true" selected="false" focused="false" x="0" y="559" width="430" height="373"/>"#), "{xml}");
         assert!(!xml.contains(r#"label="q""#));
@@ -419,7 +459,7 @@ mod tests {
             el(39, 3, None, "“备忘录”想从“dtpasteboardd”粘贴", 7, (55.0, 390.0, 320.0, 175.0)),
             el(39, 4, Some(1), "允许粘贴", 9, (71.0, 501.0, 140.0, 49.0)),
         ];
-        let xml = to_xml(&app, &overlays, 430.0, 932.0);
+        let xml = to_xml(&app, &overlays, 430.0, 932.0, &HashSet::new(), false);
         assert!(!xml.contains("14:03"));
         let alert = xml.find("XCUIElementTypeAlert ").unwrap();
         assert!(alert < xml.find("允许粘贴").unwrap());
@@ -449,5 +489,48 @@ mod tests {
         let untyped =
             Element { traits: trait_bit::TEXT_FIELD, value: "共6位数，已输入1位".into(), ..Default::default() };
         assert_eq!(kind(&untyped), "SecureTextField");
+    }
+
+    #[test]
+    fn a_page_is_placed_as_it_comes_and_a_widget_without_host_is_left_out() {
+        let obj = |pid: i64, id: u64| Some(crate::ObjectRef { pid, id, is_app: false });
+        let el = |pid, id, parent, label: &str, y| Element {
+            object: obj(pid, id),
+            parent,
+            label: label.into(),
+            frame: Some((20.0, y, 200.0, 40.0)),
+            xc_type: 48,
+            is_element: true,
+            enabled: true,
+            visible: true,
+            ..Default::default()
+        };
+        let mut app = el(10, 1, None, "Safari", 0.0);
+        app.frame = Some((0.0, 0.0, 430.0, 932.0));
+        let els = vec![app, el(20, 2, Some(0), "This domain is for use", 300.0), el(30, 3, Some(0), "Widget", 500.0)];
+        let web: HashSet<i64> = [20].into();
+        let xml = to_xml(&els, &[], 430.0, 932.0, &web, false);
+        assert!(xml.contains(r#"label="This domain is for use""#) && xml.contains(r#"y="300""#), "{xml}");
+        assert!(!xml.contains("Widget"), "{xml}");
+    }
+
+    #[test]
+    fn a_question_springboard_asks_reads_as_an_alert() {
+        let f = |y| (40.0, y, 350.0, 40.0);
+        let els = vec![
+            el(39, 1, None, " ", 2, (0.0, 0.0, 430.0, 932.0)),
+            el(39, 2, Some(0), "“设置”想从“dtpasteboardd”粘贴", 48, f(380.0)),
+            el(39, 3, Some(0), "你允许这样做吗？", 48, f(420.0)),
+            el(39, 4, Some(0), "允许粘贴", 9, f(480.0)),
+            el(39, 5, Some(0), "不允许粘贴", 9, f(530.0)),
+        ];
+        let xml = to_xml(&els, &[], 430.0, 932.0, &HashSet::new(), true);
+        assert!(
+            xml.contains(r#"<XCUIElementTypeAlert type="XCUIElementTypeAlert" label="“设置”想从“dtpasteboardd”粘贴""#),
+            "{xml}"
+        );
+        // the same in an app, or the lock screen's single button: no alert
+        assert!(!to_xml(&els, &[], 430.0, 932.0, &HashSet::new(), false).contains("Alert"));
+        assert!(!to_xml(&els[..4], &[], 430.0, 932.0, &HashSet::new(), true).contains("Alert"));
     }
 }

@@ -375,6 +375,8 @@ pub(crate) struct PerDevice {
     pub acted_at: Option<Instant>,
     /// 原生控制：进程号 → Bundle ID（前台 App 由无障碍服务给进程号）
     pub bundles: HashMap<i64, String>,
+    /// 原生控制：进程号 → 是不是网页内容进程（WebKit WebContent，网页的元素来自它）
+    pub web_pids: HashMap<i64, bool>,
 }
 
 /// What preparing a phone for native control gives: the developer disk image's version if it was mounted just now;

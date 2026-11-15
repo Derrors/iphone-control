@@ -36,7 +36,9 @@ pub struct AxScreen {
     /// What SpringBoard shows over the app (alerts, banners, its status bar); empty when SpringBoard is the app
     pub overlays: Vec<Element>,
     pub app_pid: i64,
-    /// When the phone pushed the tree
+    /// SpringBoard is the app in front (the home screen, the lock screen, or a question it asks over an app)
+    pub springboard_front: bool,
+    /// When the screen was read
     pub at: Instant,
 }
 
@@ -111,7 +113,13 @@ impl Tunnel {
                 Err(e) => tracing::debug!("SpringBoard's elements: {e}"),
             }
         }
-        Ok(AxScreen { app: elements, overlays, app_pid: app.pid, at: Instant::now() })
+        Ok(AxScreen {
+            app: elements,
+            overlays,
+            app_pid: app.pid,
+            springboard_front: sb == Some(app.pid),
+            at: Instant::now(),
+        })
     }
 
     /// The frontmost app's process (one request, no walk)

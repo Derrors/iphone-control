@@ -22,12 +22,20 @@ const REACT: Duration = Duration::from_millis(400);
 const PASTE_WAIT: Duration = Duration::from_secs(5);
 /// How long an app may take to come to the front
 const LAUNCH_WAIT: Duration = Duration::from_secs(8);
+/// After unlocking, the lock screen slides away for about half a second
+const UNLOCK_SETTLE: Duration = Duration::from_millis(700);
 /// The app's zoom-in takes about half a second; a tap during it is lost (the same as WDA's `LAUNCH_MIN`)
 const LAUNCH_SETTLE: Duration = Duration::from_millis(800);
 
 /// See [`IosBackend::drives_natively`]
 fn native_for(backend: IosBackend, info: Option<&DeviceInfo>) -> bool {
     backend.drives_natively(info)
+}
+
+/// The on-screen keyboard is up: a Keyboard element, or its keys (the keyboard's process reads as the app's own
+/// elements at times, then no Keyboard is made of them, `ictl_ax::xml`)
+fn keyboard_up(tree: &Tree) -> bool {
+    tree.elements.iter().any(|e| e.kind == "Keyboard") || tree.elements.iter().filter(|e| e.kind == "Key").count() >= 8
 }
 
 /// The paste prompt's "Allow Paste" button ("“Notes” would like to paste from “dtpasteboardd”"), when it is up
@@ -86,7 +94,36 @@ impl Daemon {
             size.width,
             size.height
         );
-        Ok((ictl_ax::xml::to_xml(&s.app, &s.overlays, size.width, size.height), size, s.app_pid))
+        let web = self.web_processes(g, &s.app).await;
+        Ok((
+            ictl_ax::xml::to_xml(&s.app, &s.overlays, size.width, size.height, &web, s.springboard_front),
+            size,
+            s.app_pid,
+        ))
+    }
+
+    /// Which of the processes in a read are WebKit's web content (a page's elements, listed without a host): from
+    /// the process list, read again only for a process not seen yet
+    async fn web_processes(&self, g: &mut Inner, app: &[ictl_ax::Element]) -> std::collections::HashSet<i64> {
+        let app_pid = app.first().map_or(0, ictl_ax::Element::pid);
+        let mut pids: Vec<i64> = app.iter().map(ictl_ax::Element::pid).filter(|p| *p != app_pid).collect();
+        pids.sort_unstable();
+        pids.dedup();
+        if pids.iter().any(|p| !g.dev.web_pids.contains_key(p))
+            && let Some(device) = g.device.clone()
+            && let Ok(t) = self.ensure_tunnel(g, &device).await
+            && let Ok(procs) = t.processes().await
+        {
+            if g.dev.web_pids.len() > 200 {
+                g.dev.web_pids.clear();
+            }
+            for p in &pids {
+                let exe = procs.iter().find(|(q, _)| *q as i64 == *p).map(|(_, e)| e.as_str()).unwrap_or("");
+                let name = exe.rsplit('/').next().unwrap_or("");
+                g.dev.web_pids.insert(*p, name.starts_with("com.apple.WebKit.WebContent"));
+            }
+        }
+        pids.into_iter().filter(|p| g.dev.web_pids.get(p) == Some(&true)).collect()
     }
 
     /// The screen's elements through remoteAXService (see [`Self::ax_read`])
@@ -192,6 +229,11 @@ impl Daemon {
             tokio::time::sleep(left).await;
         }
         let mut prev = self.ax_tree(g, AX_WAIT).await?;
+        if prev.elements.len() < VISUAL_SETTLE_BELOW {
+            // between two pages (a slide back) the tree can be nearly empty for a moment: once more
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            prev = self.ax_tree(g, AX_WAIT).await?;
+        }
         if prev.elements.len() < VISUAL_SETTLE_BELOW {
             // too few elements to tell (a game, a map): the caller looks at the picture
             return Ok((String::new(), prev));
@@ -380,7 +422,7 @@ impl Daemon {
     pub(crate) async fn native_type(&self, g: &mut Inner, text: &str, submit: bool) -> crate::error::Result<String> {
         let n = text.chars().count();
         let before = self.ax_tree(g, AX_WAIT).await?;
-        if !before.elements.iter().any(|e| e.kind == "Keyboard") {
+        if !keyboard_up(&before) {
             return Err(ictl_l10n::tr!(
                 "屏幕上没有键盘(没有输入框获得焦点),什么都没输;先点一下输入框,截图确认键盘出来了再输入",
                 "No keyboard on screen (no text field has focus), nothing typed; tap a text field first and check with a screenshot that the keyboard is up"
@@ -549,7 +591,13 @@ impl Daemon {
         cfg: &ictl_unlock::UnlockConfig,
     ) -> ictl_unlock::Result<ictl_unlock::Outcome> {
         let mut screen = NativeScreen { d: self, g };
-        Box::pin(ictl_unlock::ensure_unlocked(&mut screen, cfg)).await
+        let r = Box::pin(ictl_unlock::ensure_unlocked(&mut screen, cfg)).await;
+        if matches!(r, Ok(ictl_unlock::Outcome::Unlocked)) {
+            // the lock screen is still sliding away: a tap now is lost (a tap by text right after unlocking did
+            // nothing on the phone)
+            tokio::time::sleep(UNLOCK_SETTLE).await;
+        }
+        r
     }
 }
 

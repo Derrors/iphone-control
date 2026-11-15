@@ -6,13 +6,14 @@
 //! and 2, `docs/dev/ios27-native.md`). Answering as Xcode does (7), acknowledging, and waiting for
 //! `deviceAPIVersion` before `clientNeedsAccessibility:` is what Pinky does (DIYgod/pinky `rax.go`, Apache-2.0).
 
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use plist::Value;
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt, ReadHalf, WriteHalf};
-use tokio::sync::{oneshot, watch};
+use tokio::sync::{mpsc, watch};
 
 use crate::archive::{self, Obj, ObjectRef, Param};
 use crate::dtx::{self, Frame};
@@ -70,7 +71,11 @@ pub struct PushedAt {
     pub at: Instant,
 }
 
-type Waiter = Arc<Mutex<Option<oneshot::Sender<Response>>>>;
+/// Where answers go while requests are out (one caller at a time, [`Session::requests`])
+type Waiter = Arc<Mutex<Option<mpsc::UnboundedSender<Response>>>>;
+/// Attribute requests sent at once in a walk: answers carry the element they are for, so they need no waiting one by
+/// one (a walk of 57 elements took 2.5 s one at a time over USB)
+const BATCH: usize = 64;
 
 pub struct Session<S> {
     writer: Arc<tokio::sync::Mutex<WriteHalf<S>>>,
@@ -198,7 +203,7 @@ async fn read_loop<S: AsyncRead + AsyncWrite + Unpin + Send>(
             changes.send_replace(Some(Instant::now()));
             continue;
         }
-        if let Some(w) = waiter.lock().unwrap_or_else(|p| p.into_inner()).take() {
+        if let Some(w) = waiter.lock().unwrap_or_else(|p| p.into_inner()).as_ref() {
             let _ = w.send(r);
         }
     }
@@ -254,7 +259,8 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> Session<S> {
         }
     }
 
-    /// One request, answered within [`REQUEST_TIMEOUT`]
+    /// One request, answered within [`REQUEST_TIMEOUT`]. An answer to another request (one that came too late
+    /// for it) is passed over
     pub async fn request(
         &self,
         request_type: i64,
@@ -265,26 +271,95 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> Session<S> {
             return Err(AxError::Closed);
         }
         let _one = self.requests.lock().await;
-        let (tx, rx) = oneshot::channel();
+        let (tx, mut rx) = mpsc::unbounded_channel();
         *self.waiter.lock().unwrap_or_else(|p| p.into_inner()) = Some(tx);
-        let body = archive::encode_data(&archive::encode_request(request_type, 0, object, params, CLIENT_TYPE));
-        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
-        send(&mut *self.writer.lock().await, &dtx::invocation(id, "processDataFromHost:", vec![body], false)).await?;
-        let r = match tokio::time::timeout(REQUEST_TIMEOUT, rx).await {
-            Ok(Ok(r)) => r,
-            Ok(Err(_)) => return Err(AxError::Closed),
-            Err(_) => {
-                self.waiter.lock().unwrap_or_else(|p| p.into_inner()).take();
-                return Err(AxError::Timeout("request"));
+        let r = async {
+            let body = archive::encode_data(&archive::encode_request(request_type, 0, object, params, CLIENT_TYPE));
+            let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+            send(&mut *self.writer.lock().await, &dtx::invocation(id, "processDataFromHost:", vec![body], false))
+                .await?;
+            let deadline = tokio::time::Instant::now() + REQUEST_TIMEOUT;
+            loop {
+                let r = match tokio::time::timeout_at(deadline, rx.recv()).await {
+                    Ok(Some(r)) => r,
+                    Ok(None) => return Err(AxError::Closed),
+                    Err(_) => return Err(AxError::Timeout("request")),
+                };
+                let same_object = object.is_none_or(|o| r.object.is_none_or(|a| (a.pid, a.id) == (o.pid, o.id)));
+                if r.request_type == request_type && same_object {
+                    return Ok(r);
+                }
+                tracing::debug!("remoteAXService: passed over a late answer to request type {}", r.request_type);
             }
-        };
-        if r.request_type != request_type {
-            return Err(AxError::Protocol(format!("answer to request type {}, asked {request_type}", r.request_type)));
         }
+        .await;
+        self.waiter.lock().unwrap_or_else(|p| p.into_inner()).take();
+        let r = r?;
         if r.error != 0 {
             return Err(AxError::Protocol(format!("request type {request_type} failed: error {}", r.error)));
         }
         Ok(r)
+    }
+
+    /// The attributes [`attr::WALK`] of several elements, asked for at once: by element, those answered (an element
+    /// that failed, or gone meanwhile, is left out)
+    pub async fn attributes_of(&self, objects: &[ObjectRef]) -> Result<HashMap<ObjectRef, Obj>> {
+        if self.is_closed() {
+            return Err(AxError::Closed);
+        }
+        let mut out = HashMap::new();
+        if objects.is_empty() {
+            return Ok(out);
+        }
+        let _one = self.requests.lock().await;
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        *self.waiter.lock().unwrap_or_else(|p| p.into_inner()) = Some(tx);
+        let r = async {
+            let list = Param::Ints(attr::WALK.to_vec());
+            {
+                let mut w = self.writer.lock().await;
+                for o in objects {
+                    let req = archive::encode_request(
+                        request::ATTRIBUTES,
+                        0,
+                        Some(*o),
+                        &[("attributes", list.clone())],
+                        CLIENT_TYPE,
+                    );
+                    let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+                    let msg = dtx::invocation(id, "processDataFromHost:", vec![archive::encode_data(&req)], false);
+                    w.write_all(&msg).await?;
+                }
+                w.flush().await?;
+            }
+            let mut pending: Vec<ObjectRef> = objects.to_vec();
+            let deadline =
+                tokio::time::Instant::now() + REQUEST_TIMEOUT + Duration::from_millis(20) * objects.len() as u32;
+            while !pending.is_empty() {
+                let r = match tokio::time::timeout_at(deadline, rx.recv()).await {
+                    Ok(Some(r)) => r,
+                    Ok(None) => return Err(AxError::Closed),
+                    Err(_) => return Err(AxError::Timeout("attributes")),
+                };
+                if r.request_type != request::ATTRIBUTES {
+                    continue;
+                }
+                // the element it answers for; without one, the oldest still waiting (answers come in order)
+                let at = match r.object {
+                    Some(a) => pending.iter().position(|o| (o.pid, o.id) == (a.pid, a.id)),
+                    None => Some(0),
+                };
+                let Some(at) = at else { continue };
+                let o = pending.remove(at);
+                if r.error == 0 {
+                    out.insert(o, r.result);
+                }
+            }
+            Ok(())
+        }
+        .await;
+        self.waiter.lock().unwrap_or_else(|p| p.into_inner()).take();
+        r.map(|()| out)
     }
 
     /// The frontmost application's element
@@ -305,9 +380,9 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> Session<S> {
         Ok(self.request(request::ATTRIBUTES, Some(object), &[("attributes", list)]).await?.result)
     }
 
-    /// `root` and the elements under it, depth first in reading order, each with [`attr::WALK`] (one request each, a
-    /// few milliseconds over USB): at most `limit` of them, within `budget`. Elements with any of the traits `prune`
-    /// are listed, but not walked into. Also says whether the walk got to the end.
+    /// `root` and the elements under it, depth first in reading order, each with [`attr::WALK`]: at most `limit` of
+    /// them, within `budget`. Each level's elements are asked for at once ([`Self::attributes_of`]). Elements with
+    /// any of the traits `prune` are listed, but not walked into. Also says whether the walk got to the end.
     ///
     /// This is how the screen is read: the phone pushes a tree by itself only when the frontmost app changes (and on
     /// connecting), not when an app changes its own screen (iPhone 15 Pro Max, iOS 27.2.1, 2026-11-15; Pinky reads
@@ -320,26 +395,34 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> Session<S> {
         prune: u64,
     ) -> Result<(Vec<Element>, bool)> {
         let deadline = Instant::now() + budget;
-        let mut stack = vec![(root, None, 0usize)];
-        let mut seen = std::collections::HashSet::new();
-        let mut out = Vec::new();
-        while let Some((o, parent, depth)) = stack.pop() {
-            if out.len() >= limit || Instant::now() >= deadline {
-                return Ok((out, false));
+        let mut attrs: HashMap<ObjectRef, Obj> = HashMap::new();
+        let mut seen = HashSet::from([(root.pid, root.id)]);
+        let mut frontier: VecDeque<(ObjectRef, usize)> = VecDeque::from([(root, 0)]);
+        let mut complete = true;
+        while !frontier.is_empty() {
+            if attrs.len() >= limit || Instant::now() >= deadline {
+                complete = false;
+                break;
             }
-            if depth > 40 || !seen.insert((o.pid, o.id)) {
-                continue;
+            let n = frontier.len().min(BATCH).min(limit - attrs.len());
+            let chunk: Vec<(ObjectRef, usize)> = frontier.drain(..n).collect();
+            let objects: Vec<ObjectRef> = chunk.iter().map(|(o, _)| *o).collect();
+            let got = self.attributes_of(&objects).await?;
+            for (o, depth) in chunk {
+                let Some(a) = got.get(&o) else { continue };
+                let (e, kids) = tree::element(Some(o), a, None, depth);
+                if (depth > 0 && e.traits & prune != 0) || depth >= 40 {
+                    continue;
+                }
+                for k in kids {
+                    if seen.insert((k.pid, k.id)) {
+                        frontier.push_back((k, depth + 1));
+                    }
+                }
             }
-            let a = self.attributes(o).await?;
-            let (e, kids) = tree::element(Some(o), &a, parent, depth);
-            let walk_into = depth == 0 || e.traits & prune == 0;
-            out.push(e);
-            let idx = out.len() - 1;
-            for k in kids.into_iter().rev().filter(|_| walk_into) {
-                stack.push((k, Some(idx), depth + 1));
-            }
+            attrs.extend(got);
         }
-        Ok((out, true))
+        Ok((tree::assemble(root, &attrs), complete))
     }
 
     /// The elements under `root` as [`Self::walk`] reads them, without the root: the `parent` indexes point into the

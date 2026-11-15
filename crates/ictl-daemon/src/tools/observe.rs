@@ -124,7 +124,8 @@ impl Daemon {
     async fn settle_native(&self, g: &mut Inner, t0: Instant, max: Duration) -> crate::error::Result<String> {
         let (msg, tree) = Box::pin(self.native_settle(g, max)).await?;
         let note = alert_note(&tree);
-        if tree.elements.len() < VISUAL_SETTLE_BELOW {
+        // no word from it: a screen with few elements that stay the same (a game, a map), judged by the picture
+        if msg.is_empty() {
             let left = max.saturating_sub(t0.elapsed()).max(Duration::from_millis(600));
             let msg = self.settle_visually(g, Instant::now(), left).await?;
             let change = self.change_note(g, None).await;

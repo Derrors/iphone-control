@@ -268,14 +268,18 @@ impl Daemon {
         let mut snap = self.ax_snapshot(g, AX_WAIT, false).await?;
         let mut prev = self.snapshot_tree(g, &snap).await?;
         if prev.elements.len() < VISUAL_SETTLE_BELOW {
-            // between two pages (a slide back) the tree can be nearly empty for a moment: once more
+            // between two pages (a slide in or back) the tree can be nearly empty for a moment: once more. Few
+            // elements twice, and the same: a screen whose changes the tree doesn't show (a game, a map), the caller
+            // looks at the picture. Otherwise the tree goes on telling (Settings → General has 12 or 13 elements,
+            // fewer while it slides in)
             tokio::time::sleep(Duration::from_millis(300)).await;
-            snap = self.ax_snapshot(g, AX_WAIT, false).await?;
-            prev = self.snapshot_tree(g, &snap).await?;
-        }
-        if prev.elements.len() < VISUAL_SETTLE_BELOW {
-            // too few elements to tell (a game, a map): the caller looks at the picture
-            return Ok((String::new(), self.with_overlays(g, snap).await?));
+            let again = self.ax_snapshot(g, AX_WAIT, false).await?;
+            let cur = self.snapshot_tree(g, &again).await?;
+            let sparse = cur.elements.len() < VISUAL_SETTLE_BELOW && cur.close_to(&prev, STILL_TOLERANCE);
+            (snap, prev) = (again, cur);
+            if sparse {
+                return Ok((String::new(), self.with_overlays(g, snap).await?));
+            }
         }
         loop {
             if t0.elapsed() >= max {

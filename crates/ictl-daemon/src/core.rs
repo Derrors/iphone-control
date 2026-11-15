@@ -62,10 +62,15 @@ pub struct Persisted {
     /// 运行中选定要控制的设备（`iphone-control select`、`iphone_select_device`）；None 是自动选。
     /// 设了 `IPHONE_UDID` 时以它为准，这个不起作用
     pub selected_udid: Option<String>,
-    /// 实验（`ICTL_WDA_DETACHED`）：后台启动的 WDA 是哪台设备上的哪个进程。守护进程重启后据此直接接上它，
-    /// 不重新启动；关掉实验开关后据此结束它（不然它一直占着 8100 端口，新 runner 的 HTTP 服务起不来）
+    /// 实验（`ICTL_WDA_DETACHED`）：最近记下的那个后台启动的 WDA（哪台设备上的哪个进程）。只留给旧版本读
+    /// （降级后它据此接上或结束这一个）；新版本看 [`Self::detached_wdas`]，经 [`Self::detached_for`] 等读写
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub detached_wda: Option<DetachedWda>,
+    /// 实验（`ICTL_WDA_DETACHED`）：每台设备上后台启动的 WDA 的进程号，按 UDID。守护进程重启、切换设备再切回来时
+    /// 据此直接接上，不重新启动；关掉实验开关、改走原生控制、`service stop`/`uninstall` 时据此结束它（不然它一直
+    /// 占着 8100 端口，新 runner 的 HTTP 服务起不来）。见 [`crate::detached`]
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub detached_wdas: std::collections::BTreeMap<String, u64>,
     /// Which way Home and locking work on each device, by UDID ([`Self::ways_for`]). Kept here, not only in memory:
     /// after a restart or switching devices the first Home on an iPad mini 5 tried the way that doesn't work there,
     /// waited 2 s for the home screen, then pressed again (4.4 s instead of 0.8)
@@ -152,6 +157,63 @@ impl Persisted {
         }
         self.button_ways.insert(key, now);
         true
+    }
+
+    /// The WDA launched in the background on `udid`, if one is recorded (by an older version: only the last one)
+    pub fn detached_for(&self, udid: &str) -> Option<u64> {
+        self.detached_wdas
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case(udid))
+            .map(|(_, p)| *p)
+            .or_else(|| self.detached_wda.as_ref().filter(|d| d.udid.eq_ignore_ascii_case(udid)).map(|d| d.pid))
+    }
+
+    /// Every recorded background WDA: (UDID, pid)
+    pub fn detached_all(&self) -> Vec<(String, u64)> {
+        let mut all: Vec<_> = self.detached_wdas.iter().map(|(u, p)| (u.clone(), *p)).collect();
+        if let Some(d) = &self.detached_wda
+            && !all.iter().any(|(u, _)| u.eq_ignore_ascii_case(&d.udid))
+        {
+            all.push((d.udid.clone(), d.pid));
+        }
+        all
+    }
+
+    /// Records the WDA launched in the background on `udid` (the other devices' stay); whether anything changed
+    /// (then save)
+    pub fn record_detached(&mut self, udid: &str, pid: u64) -> bool {
+        // an older version's only record is overwritten below: keep it among the devices' records first
+        if let Some(d) = self.detached_wda.clone()
+            && !self.detached_wdas.keys().any(|k| k.eq_ignore_ascii_case(&d.udid))
+        {
+            self.detached_wdas.insert(d.udid, d.pid);
+        }
+        let key = self
+            .detached_wdas
+            .keys()
+            .find(|k| k.eq_ignore_ascii_case(udid))
+            .cloned()
+            .unwrap_or_else(|| udid.to_owned());
+        let last = Some(DetachedWda { udid: key.clone(), pid });
+        let changed = self.detached_wdas.get(&key) != Some(&pid) || self.detached_wda != last;
+        self.detached_wdas.insert(key, pid);
+        self.detached_wda = last;
+        changed
+    }
+
+    /// Forgets the background WDA recorded for `udid` (only if it is `pid`, when given); whether anything changed
+    /// (then save)
+    pub fn forget_detached(&mut self, udid: &str, pid: Option<u64>) -> bool {
+        let before = (self.detached_wdas.len(), self.detached_wda.is_some());
+        self.detached_wdas.retain(|k, p| !(k.eq_ignore_ascii_case(udid) && pid.is_none_or(|x| x == *p)));
+        if self
+            .detached_wda
+            .as_ref()
+            .is_some_and(|d| d.udid.eq_ignore_ascii_case(udid) && pid.is_none_or(|x| x == d.pid))
+        {
+            self.detached_wda = None;
+        }
+        before != (self.detached_wdas.len(), self.detached_wda.is_some())
     }
 
     /// 记下这次重签的结果：新字段，加上旧版本认的中文整句
@@ -382,19 +444,8 @@ pub(crate) struct PerDevice {
 /// What preparing a phone for native control gives: the developer disk image's version if it was mounted just now,
 /// and what became of the WDA launched in the background earlier (if one was recorded for it); failed, whether it was
 /// the mount itself
-pub(crate) type Prepared = std::result::Result<(Option<String>, Option<StoppedWda>), (DeviceError, bool)>;
-
-/// The WDA launched in the background earlier (by its pid), once it is no longer wanted (driven natively, or the
-/// background launch turned off)
-#[derive(Debug)]
-pub(crate) enum StoppedWda {
-    /// It was running and is gone now
-    Ended(u64),
-    /// It wasn't running (anymore)
-    NotRunning(u64),
-    /// It may still be running: why
-    Failed(u64, String),
-}
+pub(crate) type Prepared =
+    std::result::Result<(Option<String>, Option<(String, crate::detached::StoppedWda)>), (DeviceError, bool)>;
 
 pub(crate) struct Inner {
     pub persisted: Persisted,
@@ -1436,6 +1487,50 @@ fn check_request(req: &Request) -> Result<(), String> {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+
+    /// Each device keeps its own background WDA: switching to another device and back attaches to it again, and
+    /// `service stop` sees all of them. The last one is still written the old way for older versions
+    #[test]
+    fn each_device_keeps_its_background_wda() {
+        let mut p = Persisted::default();
+        assert!(p.record_detached("IPHONE", 10));
+        assert!(p.record_detached("IPAD", 20));
+        assert!(!p.record_detached("ipad", 20), "the same again changes nothing");
+        assert_eq!(p.detached_for("IPHONE"), Some(10), "switching to the iPad kept the iPhone's");
+        assert_eq!(p.detached_for("iPad"), Some(20));
+        assert_eq!(
+            p.detached_wda,
+            Some(DetachedWda { udid: "IPAD".into(), pid: 20 }),
+            "the last one, for old versions"
+        );
+        assert_eq!(p.detached_all(), vec![("IPAD".into(), 20), ("IPHONE".into(), 10)]);
+
+        assert!(!p.forget_detached("IPHONE", Some(11)), "another pid: a newer one, kept");
+        assert!(p.forget_detached("IPHONE", Some(10)));
+        assert_eq!(p.detached_for("IPHONE"), None);
+        assert!(p.forget_detached("ipad", None));
+        assert_eq!((p.detached_all(), p.detached_wda), (vec![], None));
+    }
+
+    /// A state.json from an older version has only the one record: it is still found, attached to and forgotten
+    #[test]
+    fn an_older_versions_background_wda_is_still_known() {
+        let p: Persisted = serde_json::from_str(r#"{"detached_wda":{"udid":"IPHONE","pid":7}}"#).unwrap();
+        assert_eq!(p.detached_for("iphone"), Some(7));
+        assert_eq!(p.detached_for("IPAD"), None);
+        assert_eq!(p.detached_all(), vec![("IPHONE".into(), 7)]);
+
+        let mut q = p.clone();
+        assert!(q.forget_detached("IPHONE", Some(7)));
+        assert_eq!(q.detached_all(), vec![]);
+
+        let mut r = p;
+        assert!(r.record_detached("IPAD", 8));
+        assert_eq!(r.detached_all(), vec![("IPAD".into(), 8), ("IPHONE".into(), 7)], "the old record is kept");
+        let json = serde_json::to_value(&r).unwrap();
+        assert_eq!(json["detached_wdas"], serde_json::json!({"IPAD": 8, "IPHONE": 7}));
+        assert_eq!(json["detached_wda"], serde_json::json!({"udid": "IPAD", "pid": 8}));
+    }
 
     /// 重签结果存成时间和成败，按看的人的语言显示；旧字段照旧写中文整句，旧版本的 state.json 照样读
     #[test]

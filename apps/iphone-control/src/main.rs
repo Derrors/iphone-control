@@ -185,9 +185,10 @@ enum UpdateAction {
 enum ServiceAction {
     #[command(about = ictl_l10n::tr!("装成登录后自动启动的后台服务并启动（已有就直接启动）", "Set up the service that starts at login and start it (just start it if it exists)"))]
     Install,
-    #[command(about = ictl_l10n::tr!("停止并移除本程序装的后台服务（数据保留）", "Stop and remove the service this program set up (data is kept)"))]
+    #[command(about = ictl_l10n::tr!("停止并移除本程序装的后台服务（数据保留），后台启动的 WDA 也一并结束", "Stop and remove the service this program set up (data is kept), and the WDA launched in the background with it"))]
     Uninstall,
     Start,
+    #[command(about = ictl_l10n::tr!("停止后台服务；后台启动的 WDA（ICTL_WDA_DETACHED）也一并结束（restart 和升级不会）", "Stop the service, and the WDA launched in the background (ICTL_WDA_DETACHED) with it (restart and updates leave it running)"))]
     Stop,
     #[command(about = ictl_l10n::tr!("重启，改过 ~/.config/iphone-control/env 后用", "Restart, after editing ~/.config/iphone-control/env"))]
     Restart,
@@ -479,6 +480,36 @@ fn mcp_config(socket: &Path) -> anyhow::Result<String> {
     Ok(mcp_command(&service::stable_exe()?, socket))
 }
 
+/// After `service stop` / `uninstall`: a WDA launched in the background (`ICTL_WDA_DETACHED`) doesn't end with the
+/// daemon, so restarts and updates don't interrupt it; stopping the service on purpose ends it too. Not while a
+/// daemon still answers (one run by hand): it keeps using its WDA
+async fn end_background_wda(socket: &Path, data_dir: &Path) {
+    use ictl_daemon::detached::StoppedWda;
+    if tokio::net::UnixStream::connect(socket).await.is_ok() {
+        return;
+    }
+    let cfg = ictl_daemon::Config::from_env(data_dir);
+    for (udid, s) in ictl_daemon::detached::end_recorded(&cfg).await {
+        match s {
+            StoppedWda::Ended(pid) => println!(
+                "{}",
+                ictl_l10n::trf!(
+                    "已结束 {udid} 上后台启动的 WDA（进程 {pid}）",
+                    "Stopped the WDA launched in the background on {udid} (pid {pid})"
+                )
+            ),
+            StoppedWda::NotRunning(_) => {}
+            StoppedWda::Failed(pid, e) => println!(
+                "{}",
+                ictl_l10n::trf!(
+                    "没能结束 {udid} 上后台启动的 WDA（进程 {pid}）：{e}。守护进程下次准备这台手机时会再处理",
+                    "Couldn't stop the WDA launched in the background on {udid} (pid {pid}): {e}. The daemon deals with it the next time it prepares this phone"
+                )
+            ),
+        }
+    }
+}
+
 async fn service_cmd(socket: &Path, data_dir: &Path, action: ServiceAction) -> anyhow::Result<()> {
     let none = || {
         anyhow::anyhow!(
@@ -494,9 +525,15 @@ async fn service_cmd(socket: &Path, data_dir: &Path, action: ServiceAction) -> a
             let s = service::install()?;
             println!("{}", ictl_l10n::trf!("已安装并启动：{}", "Installed and started: {}", s.describe()));
         }
-        ServiceAction::Uninstall => service::uninstall()?,
+        ServiceAction::Uninstall => {
+            service::uninstall()?;
+            end_background_wda(socket, data_dir).await;
+        }
         ServiceAction::Start => service::start(&service::find().ok_or_else(none)?)?,
-        ServiceAction::Stop => service::stop(&service::find().ok_or_else(none)?)?,
+        ServiceAction::Stop => {
+            service::stop(&service::find().ok_or_else(none)?)?;
+            end_background_wda(socket, data_dir).await;
+        }
         ServiceAction::Restart => service::restart(&service::find().ok_or_else(none)?)?,
         ServiceAction::Viewer { action } => viewer_service_cmd(action)?,
         ServiceAction::Status => {

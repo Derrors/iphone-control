@@ -6,7 +6,8 @@ use std::time::{Duration, Instant, UNIX_EPOCH};
 use ictl_device::{Device, DeviceError, LogStream, Rotation, ScreenSize, Tunnel, UsbDevice};
 use ictl_wda::{WdaClient, WdaError, WdaRunner, http::DeviceTransport};
 
-use crate::core::{Daemon, DetachedWda, DeviceProfile, Inner, StoppedWda, close_hid, drop_tunnel};
+use crate::core::{Daemon, DeviceProfile, Inner, close_hid, drop_tunnel};
+use crate::detached::{self, StoppedWda};
 use crate::machine::DeviceState;
 use crate::notify::Event;
 
@@ -395,8 +396,8 @@ impl Daemon {
             match r {
                 Ok((mounted, stopped)) => {
                     g.dev.ddi_failures = 0;
-                    if let Some(s) = stopped {
-                        self.detached_stopped(g, s);
+                    if let Some((udid, s)) = stopped {
+                        self.detached_stopped(g, &udid, s);
                     }
                     if let Some(v) = mounted {
                         self.log.log(&ictl_l10n::log_trf!("开发者镜像已挂载 {v}", "Developer disk image mounted {v}"));
@@ -448,7 +449,7 @@ impl Daemon {
         let (cache, url, user_dir) = (self.cfg.ddi_cache(), self.cfg.ddi_url.clone(), self.cfg.ddi_dir.clone());
         // a WDA launched in the background before (WDA control earlier): not wanted now, ended once the image is up
         // (AppService needs it)
-        let known = g.persisted.detached_wda.as_ref().filter(|d| d.udid == device.udid).map(|d| d.pid);
+        let known = g.persisted.detached_for(&device.udid);
         let Ok(lease) = crate::maintenance::shared() else { return };
         let wake = self.wake.clone();
         g.preparing = Some(tokio::task::spawn_local(then_wake(wake, async move {
@@ -456,7 +457,7 @@ impl Daemon {
             let mut t = device.open_tunnel().await.map_err(|e| (e, false))?;
             let r = ensure_ddi(&mut t, &cache, &url, user_dir.as_deref()).await;
             let stopped = match (&r, known) {
-                (Ok(_), Some(pid)) => Some(stop_detached(&mut t, pid).await),
+                (Ok(_), Some(pid)) => Some((device.udid.clone(), detached::stop(&mut t, pid).await)),
                 _ => None,
             };
             t.close().await;
@@ -464,9 +465,9 @@ impl Daemon {
         })));
     }
 
-    /// What became of the WDA launched in the background earlier, on a phone driven natively: forgotten once it is
-    /// gone; one that may still run stays recorded (tried again the next time the phone is prepared)
-    fn detached_stopped(&self, g: &mut Inner, s: StoppedWda) {
+    /// What became of the WDA launched in the background earlier on `udid`, a phone driven natively: forgotten once
+    /// it is gone; one that may still run stays recorded (tried again the next time the phone is prepared)
+    fn detached_stopped(&self, g: &mut Inner, udid: &str, s: StoppedWda) {
         let pid = match s {
             StoppedWda::Ended(pid) => {
                 self.log.log(&ictl_l10n::log_trf!(
@@ -484,8 +485,7 @@ impl Daemon {
                 return;
             }
         };
-        if g.persisted.detached_wda.as_ref().is_some_and(|d| d.pid == pid) {
-            g.persisted.detached_wda = None;
+        if g.persisted.forget_detached(udid, Some(pid)) {
             g.persisted.save(&self.cfg.state_file());
         }
     }
@@ -551,14 +551,22 @@ impl Daemon {
             ictl_wda::client::STALL_LIMIT
         ));
         // 后台启动的那个不能再接上：忘掉它，重新后台启动时会先结束它
-        if g.persisted.detached_wda.take().is_some() {
-            g.persisted.save(&self.cfg.state_file());
-        }
+        self.forget_detached_here(g);
         self.update_display(g, None).await;
         self.drop_session(g).await;
         let (Some(device), Some(bundle)) = (g.device.clone(), g.persisted.wda_bundle.clone()) else { return };
         if g.starting.is_none() && g.backoff.ready(Instant::now()) {
             self.spawn_start(g, device, bundle);
+        }
+    }
+
+    /// Forgets the background WDA recorded for the device in use (it didn't answer): the next background launch
+    /// replaces it
+    fn forget_detached_here(&self, g: &mut Inner) {
+        if let Some(udid) = g.device.as_ref().map(|d| d.udid.clone())
+            && g.persisted.forget_detached(&udid, None)
+        {
+            g.persisted.save(&self.cfg.state_file());
         }
     }
 
@@ -592,7 +600,7 @@ impl Daemon {
                 ictl_l10n::log_tr!("启动 WDA", "Starting WDA")
             });
         }
-        let known = g.persisted.detached_wda.as_ref().filter(|d| d.udid == device.udid).map(|d| d.pid);
+        let known = g.persisted.detached_for(&device.udid);
         let (cache, url, user_dir) = (self.cfg.ddi_cache(), self.cfg.ddi_url.clone(), self.cfg.ddi_dir.clone());
         let Ok(lease) = crate::maintenance::shared() else { return };
         let wake = self.wake.clone();
@@ -677,12 +685,16 @@ impl Daemon {
                     )),
                     None => {}
                 }
-                let record = detached
-                    .zip(g.device.as_ref())
-                    .map(|(d, dev)| DetachedWda { udid: dev.udid.clone(), pid: d.pid() });
-                if g.persisted.detached_wda != record {
-                    g.persisted.detached_wda = record;
-                    g.persisted.save(&self.cfg.state_file());
+                // this device's record only: the other devices' background WDAs keep running and are attached to
+                // again when switched back to
+                if let Some(udid) = g.device.as_ref().map(|d| d.udid.clone()) {
+                    let changed = match detached {
+                        Some(d) => g.persisted.record_detached(&udid, d.pid()),
+                        None => g.persisted.forget_detached(&udid, None),
+                    };
+                    if changed {
+                        g.persisted.save(&self.cfg.state_file());
+                    }
                 }
                 g.dev.ddi_failures = 0;
                 g.runner = Some(runner);
@@ -721,8 +733,8 @@ impl Daemon {
                 };
                 g.backoff.failed(Instant::now());
                 // 接上的后台 WDA 没应答：忘掉它，下一次重新后台启动（会先结束它）
-                if self.cfg.wda_detached && g.persisted.detached_wda.take().is_some() {
-                    g.persisted.save(&self.cfg.state_file());
+                if self.cfg.wda_detached {
+                    self.forget_detached_here(g);
                 }
                 // StartFailed 自己就以「WDA 启动失败：」开头，日志和状态里再加一遍就重复了
                 let e = match e {
@@ -1074,10 +1086,10 @@ async fn prepare_detached(
     bundle: &str,
 ) -> Result<Option<Detached>, DeviceError> {
     match (detached, known) {
-        (true, Some(pid)) if is_wda(&t.processes().await?, pid) => Ok(Some(Detached::Adopted(pid))),
+        (true, Some(pid)) if detached::is_wda(&t.processes().await?, pid) => Ok(Some(Detached::Adopted(pid))),
         (true, _) => Ok(Some(Detached::Launched(t.launch_in_background(bundle).await?))),
         (false, Some(pid)) => {
-            match stop_detached(t, pid).await {
+            match detached::stop(t, pid).await {
                 StoppedWda::Ended(_) => tracing::info!(
                     "{}",
                     ictl_l10n::log_trf!(
@@ -1091,37 +1103,6 @@ async fn prepare_detached(
             Ok(None)
         }
         (false, None) => Ok(None),
-    }
-}
-
-/// Whether process `pid` in the phone's process list is WDA
-fn is_wda(procs: &[(u64, String)], pid: u64) -> bool {
-    procs.iter().any(|(p, path)| *p == pid && path.contains("WebDriverAgentRunner"))
-}
-
-/// Ends the WDA launched in the background earlier (`pid`) if it still runs: SIGKILL through AppService (DVT's
-/// `kill_app` leaves WDA running), then waits up to 2 s for it to leave the process list
-async fn stop_detached(t: &mut Tunnel, pid: u64) -> StoppedWda {
-    match t.processes().await {
-        Ok(p) if !is_wda(&p, pid) => return StoppedWda::NotRunning(pid),
-        Ok(_) => {}
-        Err(e) => return StoppedWda::Failed(pid, e.to_string()),
-    }
-    if let Err(e) = t.signal(pid, 9).await {
-        return StoppedWda::Failed(pid, e.to_string());
-    }
-    let deadline = Instant::now() + Duration::from_secs(2);
-    loop {
-        tokio::time::sleep(Duration::from_millis(200)).await;
-        if t.processes().await.is_ok_and(|p| !is_wda(&p, pid)) {
-            return StoppedWda::Ended(pid);
-        }
-        if Instant::now() >= deadline {
-            return StoppedWda::Failed(
-                pid,
-                ictl_l10n::tr!("发了 SIGKILL，2 秒后还在运行", "still running 2 s after SIGKILL").to_string(),
-            );
-        }
     }
 }
 

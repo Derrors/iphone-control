@@ -8,6 +8,7 @@
 
 pub mod config;
 pub mod core;
+pub mod detached;
 pub mod devices;
 mod devtools;
 mod doctor;

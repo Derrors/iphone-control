@@ -83,9 +83,21 @@ impl Tunnel {
     /// accessibility tree first)
     pub async fn ax_screen(&mut self, wait: Duration) -> Result<AxScreen> {
         let sb = self.springboard_pid().await;
+        let (mut app, (mut elements, mut complete)) = {
+            let s = self.ax().await?;
+            let app = frontmost(s, wait).await?;
+            (app, s.walk(app, WALK_LIMIT, WALK_BUDGET, 0).await?)
+        };
+        // A session that lived through the phone locking reads the app's element alone from then on (the passcode
+        // keypad up, a new session read 15 elements): read again on a new one
+        if elements.len() <= 1 {
+            tracing::debug!("remoteAXService: app {} reads empty, reconnecting", app.pid);
+            self.close_ax().await;
+            let s = self.ax().await?;
+            app = frontmost(s, wait).await?;
+            (elements, complete) = s.walk(app, WALK_LIMIT, WALK_BUDGET, 0).await?;
+        }
         let s = self.ax().await?;
-        let app = frontmost(s, wait).await?;
-        let (elements, complete) = s.walk(app, WALK_LIMIT, WALK_BUDGET, 0).await?;
         if !complete {
             tracing::debug!("remoteAXService: walk cut at {} elements", elements.len());
         }

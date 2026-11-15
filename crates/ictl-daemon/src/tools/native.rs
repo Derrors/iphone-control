@@ -77,6 +77,15 @@ impl Daemon {
             }
             None => self.screen(g).await?,
         };
+        tracing::debug!(
+            "native read: app pid {} with {} elements, {} over it, app frame {:?}, screen {}x{}",
+            s.app_pid,
+            s.app.len(),
+            s.overlays.len(),
+            s.app.first().and_then(|e| e.frame),
+            size.width,
+            size.height
+        );
         Ok((ictl_ax::xml::to_xml(&s.app, &s.overlays, size.width, size.height), size, s.app_pid))
     }
 
@@ -550,6 +559,30 @@ struct NativeScreen<'a> {
     g: &'a mut Inner,
 }
 
+/// Reads the lock screen: with the HID session's screen stream open, the phone hides the lock screen and its
+/// passcode keypad from accessibility (one element, the app's, for every session; iPhone 15 Pro Max, iOS 27.2.1), so
+/// the session is closed first, and the elements come back a moment after. The next tap opens it again (about 0.5 s)
+async fn read_lock_screen(d: &Daemon, g: &mut Inner) -> crate::error::Result<(String, ScreenSize, i64)> {
+    let was_open = g.tunnel.as_ref().is_some_and(ictl_device::Tunnel::hid_open);
+    crate::core::close_hid(g).await;
+    let t0 = Instant::now();
+    loop {
+        let read = Box::pin(d.ax_read(g, Duration::from_secs(3))).await?;
+        let shown = read.0.matches("<XCUIElementType").count() > 1;
+        if shown || !was_open || t0.elapsed() >= LOCK_SCREEN_BACK {
+            tracing::debug!(
+                "lock screen read {:.0} ms after closing HID, elements shown: {shown}",
+                t0.elapsed().as_secs_f64() * 1000.0
+            );
+            return Ok(read);
+        }
+        tokio::time::sleep(Duration::from_millis(150)).await;
+    }
+}
+
+/// How long after the HID session closes the lock screen's elements may take to come back
+const LOCK_SCREEN_BACK: Duration = Duration::from_secs(3);
+
 /// A step that failed: unlocking tries another round
 fn step(e: impl std::fmt::Display) -> WdaError {
     WdaError::Remote { kind: "native".into(), message: e.to_string() }
@@ -567,8 +600,7 @@ impl Screen for NativeScreen<'_> {
 
     async fn check_lock(&mut self, _reported: Option<bool>, _strict: bool) -> std::result::Result<LockCheck, WdaError> {
         let locked = self.d.native_locked(self.g).await.map_err(|e| WdaError::Unavailable(e.to_string()))?;
-        let tree =
-            if locked { self.d.ax_read(self.g, Duration::from_secs(3)).await.ok().map(|(x, _, _)| x) } else { None };
+        let tree = if locked { read_lock_screen(self.d, self.g).await.ok().map(|(x, _, _)| x) } else { None };
         Ok(LockCheck { locked, uncertain: false, tree })
     }
 
@@ -607,7 +639,8 @@ impl Screen for NativeScreen<'_> {
     }
 
     async fn elements(&mut self) -> std::result::Result<Vec<elements::Element>, WdaError> {
-        Ok(self.d.ax_tree(self.g, Duration::from_secs(3)).await.map_err(step)?.elements)
+        let (xml, size, _) = read_lock_screen(self.d, self.g).await.map_err(step)?;
+        Ok(elements::parse(&xml, size))
     }
 
     async fn passcode_field(&mut self) -> std::result::Result<Option<(u32, u32)>, WdaError> {

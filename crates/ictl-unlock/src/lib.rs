@@ -299,6 +299,7 @@ async fn unlock<D: Screen>(wda: &mut D, cfg: &UnlockConfig, code: &[u8]) -> Resu
         if !check.locked && !check.uncertain {
             return Ok(Outcome::Unlocked);
         }
+        tracing::debug!("unlock round {round}: locked, tree read with the check: {}", check.tree.is_some());
         // 核对时已取到元素树就直接用，密码栏也从树里读。那棵树是上滑后马上取的，键盘有时还没进树：
         // 缺键盘或密码栏时再取一次（真机上这样省掉一整轮，约 4.5 秒）
         let mut els = match &check.tree {
@@ -321,6 +322,11 @@ async fn unlock<D: Screen>(wda: &mut D, cfg: &UnlockConfig, code: &[u8]) -> Resu
             None => wda.passcode_field().await?,
         };
         let (Some(pad), Some((total, entered))) = (elements::keypad(&els), field) else {
+            tracing::debug!(
+                "unlock round {round}: keypad {}, passcode field {field:?} among {} elements",
+                if elements::keypad(&els).is_some() { "found" } else { "not found" },
+                els.len()
+            );
             continue;
         };
         if total != len {
@@ -337,7 +343,10 @@ async fn unlock<D: Screen>(wda: &mut D, cfg: &UnlockConfig, code: &[u8]) -> Resu
                 break;
             }
             n if n > 1 => return Err(UnlockError::Incomplete(1)),
-            _ => continue,
+            n => {
+                tracing::debug!("unlock round {round}: the first digit didn't register (field reads {n})");
+                continue;
+            }
         }
     }
     let pad = keys.ok_or(UnlockError::NoKeypad)?;

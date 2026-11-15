@@ -105,12 +105,14 @@ pub const TYPES: [&str; 83] = [
 
 /// The element's type name: the XCUIElementType, or, in a first pushed tree that lacks it, a guess from the traits
 pub fn kind(e: &Element) -> &'static str {
+    let k = typed_kind(e);
+    // the lock screen's passcode field reads as a plain text field here (typed or not); WDA calls it a secure one,
+    // which is what finds it when unlocking (`ictl_wda::elements::passcode_field`, `cover_sheet`)
+    if k == "TextField" && passcode_value(&e.value) { "SecureTextField" } else { k }
+}
+
+fn typed_kind(e: &Element) -> &'static str {
     if let Some(t) = usize::try_from(e.xc_type).ok().filter(|t| (1..TYPES.len()).contains(t)) {
-        // the lock screen's passcode field reads as a plain text field here; WDA calls it a secure one, which is
-        // what finds it when unlocking (`ictl_wda::elements::passcode_field`, `cover_sheet`)
-        if TYPES[t] == "TextField" && passcode_value(&e.value) {
-            return "SecureTextField";
-        }
         return TYPES[t];
     }
     let t = e.traits;
@@ -443,5 +445,9 @@ mod tests {
         assert_eq!(kind(&field("6-digit passcode, 2 entered")), "SecureTextField");
         assert_eq!(kind(&field("2 杯咖啡 3 份")), "TextField");
         assert_eq!(kind(&field("hello")), "TextField");
+        // untyped, a text field by its traits
+        let untyped =
+            Element { traits: trait_bit::TEXT_FIELD, value: "共6位数，已输入1位".into(), ..Default::default() };
+        assert_eq!(kind(&untyped), "SecureTextField");
     }
 }

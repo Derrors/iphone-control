@@ -1,6 +1,6 @@
 # Auto-unlock
 
-Off by default. When enabled, MCP actions unlock the phone with your saved passcode if it is locked, and so do the read-only screenshot, element-list and `iphone_wait_for` tools. Nothing is unlocked while WDA is unavailable.
+Off by default. When enabled, MCP actions unlock the phone with your saved passcode if it is locked, and so do the read-only screenshot, element-list and `iphone_wait_for` tools. Native control (iOS 27 and later) follows the same rules as WDA; a device on WDA isn't unlocked while WDA is unavailable.
 
 ::: danger Understand the risk first
 The passcode is stored **in plain text** in the data directory. Anyone who can log in to the host, read backups of the data directory, or call this MCP server can unlock your phone. Only enable it on a host you fully control, preferably with a phone dedicated to automation.

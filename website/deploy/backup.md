@@ -4,8 +4,8 @@
 
 | 路径 | 内容 | 丢了会怎样 |
 |---|---|---|
-| `account/` | Apple ID 会话、开发签名私钥和证书 | 要重新登录；会生成新证书 |
-| `wda/` | 签好的 WebDriverAgent | 自动重签 |
+| `account/` | Apple ID 会话、开发签名私钥和证书（只有用 WDA 时有） | 要重新登录；会生成新证书 |
+| `wda/` | 签好的 WebDriverAgent（只有用 WDA 时有） | 自动重签 |
 | `ddi/` | 开发者镜像缓存 | 自动重新下载 |
 | `secrets/passcodes/` | 各设备的锁屏密码（仅开启自动解锁时） | 要重新 `passcode set` |
 | `viewer-tokens.json` | 控制台的登录令牌（像密码一样保管，别放进会同步到别处的备份） | 控制台第一次启动时生成新的 `owner`；之前的令牌、登录过的浏览器和 MCP 客户端都要换新的 |

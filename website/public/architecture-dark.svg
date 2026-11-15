@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 600" width="1200" height="600" role="img" aria-label="iphone-control architecture: an MCP client talks to iphone-control mcp over stdio, which talks to the daemon over a Unix socket; the daemon drives the iPhone or iPad over USB through WebDriverAgent, with CoreDevice HID as fallback">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 600" width="1200" height="600" role="img" aria-label="iphone-control architecture: an MCP client talks to iphone-control mcp over stdio, which talks to the daemon over a Unix socket; the daemon drives the iPhone or iPad over USB, natively on iOS 27 and later and through WebDriverAgent below that">
   <title>iphone-control architecture</title>
   <defs>
     <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
@@ -42,23 +42,23 @@
   <text x="349" y="350" class="label" text-anchor="middle">Unix</text>
   <text x="349" y="396" class="label" text-anchor="middle">socket</text>
 
-  <text x="48" y="500" class="sub">Nothing listens on the network.</text>
-  <text x="48" y="526" class="sub">WebDriverAgent is reached through usbmuxd.</text>
+  <text x="48" y="500" class="sub">Works with the control page closed.</text>
+  <text x="48" y="526" class="sub">The page and remote MCP are opt-in.</text>
 
   <!-- daemon -->
   <rect x="392" y="88" width="496" height="468" rx="20" fill="#0b2a33" stroke="#22d3ee" stroke-width="2"/>
   <text x="420" y="130" class="h2" style="fill:#22d3ee">iphone-control daemon</text>
   <text x="420" y="160" class="sub">one long-running process owns the phone</text>
   <rect x="420" y="186" width="440" height="100" rx="14" fill="#0d1117" stroke="#155e75" stroke-width="1.5"/>
-  <text x="444" y="228" class="h3">WebDriverAgent client</text>
+  <text x="444" y="228" class="h3">Native control</text>
   <rect x="752" y="206" width="88" height="30" rx="15" fill="#22d3ee"/>
-  <text x="796" y="227" class="pill" style="fill:#0d1117" text-anchor="middle">primary</text>
-  <text x="444" y="260" class="sub">element tree · tap · type · screenshot</text>
+  <text x="796" y="227" class="pill" style="fill:#0d1117" text-anchor="middle">iOS 27+</text>
+  <text x="444" y="260" class="sub">accessibility · HID · nothing on the phone</text>
   <rect x="420" y="306" width="440" height="100" rx="14" fill="#0d1117" stroke="#155e75" stroke-width="1.5"/>
-  <text x="444" y="348" class="h3">CoreDevice HID</text>
+  <text x="444" y="348" class="h3">WebDriverAgent client</text>
   <rect x="752" y="326" width="88" height="30" rx="15" fill="#fbbf24"/>
-  <text x="796" y="347" class="pill" style="fill:#0d1117" text-anchor="middle">fallback</text>
-  <text x="444" y="380" class="sub">tap · swipe · keys · screenshot while WDA is down</text>
+  <text x="796" y="347" class="pill" style="fill:#0d1117" text-anchor="middle">iOS 17–26</text>
+  <text x="444" y="380" class="sub">for older iOS · signed with a free Apple ID</text>
   <rect x="420" y="426" width="440" height="100" rx="14" fill="#0d1117" stroke="#155e75" stroke-width="1.5"/>
   <text x="444" y="468" class="h3">Supervisor</text>
   <text x="444" y="500" class="sub">usbmuxd · reconnect · disk image · re-sign · notify</text>
@@ -75,15 +75,15 @@
   <text x="1080" y="196" text-anchor="middle" style="fill:#ffffff;font-size:20px;font-weight:700">iPhone / iPad</text>
   <text x="1080" y="222" text-anchor="middle" style="fill:#ffffff;font-size:15px;opacity:.8">iOS 17+</text>
   <rect x="1018" y="262" width="124" height="64" rx="12" fill="#ffffff" fill-opacity="0.14"/>
-  <text x="1080" y="290" text-anchor="middle" style="fill:#ffffff;font-size:15px;font-weight:600">WebDriver</text>
-  <text x="1080" y="312" text-anchor="middle" style="fill:#ffffff;font-size:15px;font-weight:600">Agent</text>
-  <text x="1080" y="378" text-anchor="middle" style="fill:#ffffff;font-size:13px;opacity:.8">signed with a</text>
-  <text x="1080" y="396" text-anchor="middle" style="fill:#ffffff;font-size:13px;opacity:.8">free Apple ID</text>
+  <text x="1080" y="290" text-anchor="middle" style="fill:#ffffff;font-size:15px;font-weight:600">iOS 27+</text>
+  <text x="1080" y="312" text-anchor="middle" style="fill:#ffffff;font-size:15px;font-weight:600">no install</text>
+  <text x="1080" y="378" text-anchor="middle" style="fill:#ffffff;font-size:13px;opacity:.8">older iOS:</text>
+  <text x="1080" y="396" text-anchor="middle" style="fill:#ffffff;font-size:13px;opacity:.8">WebDriverAgent</text>
 
   <!-- outbound internet -->
   <path d="M862 476 C 904 476, 920 506, 944 506" fill="none" stroke="#9198a1" stroke-width="2" stroke-dasharray="6 5" marker-end="url(#arrow)"/>
   <rect x="948" y="456" width="236" height="100" rx="16" fill="#2b2111" stroke="#d4a72c" stroke-width="1.5"/>
   <text x="970" y="490" class="h3" style="font-size:17px">Outbound HTTPS</text>
-  <text x="970" y="516" class="sub">Apple ID · anisette</text>
+  <text x="970" y="516" class="sub">Apple ID (WDA only)</text>
   <text x="970" y="538" class="sub">Bark · Telegram</text>
 </svg>

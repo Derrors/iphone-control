@@ -4,12 +4,12 @@
   </a>
 
   <p align="center">
-    让 AI agent 操作一台接在 Linux 或 Mac 上的真实 iPhone 或 iPad：一个 Rust 二进制，不需要 Xcode，不需要付费开发者账号，不越狱。
+    让 AI agent 稳定、高效地操作一台接在 Linux 或 Mac 上的真实 iPhone 或 iPad：一个 Rust 二进制，不需要 Xcode，不需要付费开发者账号，不越狱；iOS 27 起连 Apple ID 都不用。
   </p>
 
   <p align="center">
     <a href="https://github.com/Derrors/iphone-control/releases/latest"><img src="https://img.shields.io/github/v/release/Derrors/iphone-control?style=flat" alt="Release"></a>
-    <img src="https://img.shields.io/badge/iOS-17%2B-black?style=flat&logo=apple" alt="iOS">
+    <img src="https://img.shields.io/badge/iOS-27%2B%20%E6%8E%A8%E8%8D%90%20%C2%B7%2017%2B%20%E5%8F%AF%E7%94%A8-black?style=flat&logo=apple" alt="iOS：推荐 27+，17+ 可用">
     <img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS-0E7490?style=flat" alt="平台：Linux | macOS">
     <img src="https://img.shields.io/badge/MCP-17%20tools-8A2BE2?style=flat" alt="MCP">
     <a href="Cargo.toml"><img src="https://img.shields.io/badge/Rust-1.89%2B-CE422B?style=flat&logo=rust&logoColor=white" alt="Rust"></a>
@@ -38,33 +38,63 @@
 
 AI agent 已经能操作浏览器和电脑桌面，但真实的 iPhone 难得多：苹果的自动化工具需要 Mac 和 Xcode，开源替代品又是零散的几块，每一块都要单独安装、签名、看护。
 
-iphone-control 在 Linux 或 macOS 上用**一个 Rust 二进制**把这些事都做了，基于 [idevice](https://github.com/jkcoxson/idevice)、[Impactor](https://github.com/claration/impactor) 和 [WebDriverAgent](https://github.com/appium/WebDriverAgent)。一个常驻守护进程独占手机（隧道、HID 会话、WebDriverAgent 会话常驻复用），把它交给 Claude Code 或任何 MCP 客户端。它是 [iphone-control-toolkit](https://github.com/Derrors/iphone-control-toolkit) 的继任者，MCP 工具保持兼容。
+iphone-control 在 Linux 或 macOS 上用**一个 Rust 二进制**把这些事都做了，基于 [idevice](https://github.com/jkcoxson/idevice)、[Impactor](https://github.com/claration/impactor) 和 [WebDriverAgent](https://github.com/appium/WebDriverAgent)。它是 [iphone-control-toolkit](https://github.com/Derrors/iphone-control-toolkit) 的继任者，MCP 工具保持兼容。
+
+它分三层，核心是设备控制：
+
+| 层 | 做什么 | 要不要开控制台 |
+| --- | --- | --- |
+| **设备控制**（核心） | 常驻守护进程独占手机，提供 MCP 工具；断线、重启后自动恢复；AI 任务的暂停、接管和人工确认 | 不要 |
+| **接入** | 本机的 AI 客户端经 stdio 接入；别的机器经 HTTP MCP（`/mcp`）、`mcp --url` 接入 | 本机不要，远程要开控制台服务 |
+| **控制台**（可选） | 浏览器里看实时画面、直接操作、下达 AI 任务 | 就是它 |
+
+设备控制有两条路线，按 iOS 版本自动选：
+
+- **iOS 27 及以上：原生控制（默认）**。读界面用系统的无障碍服务，点按、滑动、按键走 HID，启动 App 走 CoreDevice。手机上什么都不装，不用 Apple ID、不用签名，几秒就绪。
+- **iOS 17–26：WebDriverAgent**。用免费 Apple ID 签名后装到手机上，7 天到期前自动重签。这条路线继续维护。
+
+> [!TIP]
+> **推荐用 iOS 27 及以上的设备**，或者把手机升级到 iOS 27：不用登录 Apple ID、不用签名，重启后也不用在手机上输「UI 自动化」的密码，更没有签名过期、证书被吊销、WebDriverAgent 卡死这类问题。
 
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="website/public/architecture-dark.svg">
-    <img src="website/public/architecture-light.svg" alt="架构：MCP 客户端经 stdio 调用 iphone-control mcp，再经 Unix socket 交给守护进程；守护进程经 USB 用 WebDriverAgent 操作 iPhone 或 iPad，CoreDevice HID 作为后备" width="900">
+    <img src="website/public/architecture-light.svg" alt="架构：MCP 客户端经 stdio 调用 iphone-control mcp，再经 Unix socket 交给守护进程；守护进程经 USB 操作 iPhone 或 iPad，iOS 27 起用原生控制，更低的版本用 WebDriverAgent" width="900">
   </picture>
 </p>
 
 ## 功能特性
 
 <p align="center">
-  <img src="docs/images/features.zh-CN.svg" alt="一个二进制、17 个 MCP 工具、少走往返、无人值守、HID 后备、诊断与通知" width="900">
+  <img src="docs/images/features.zh-CN.svg" alt="一个二进制、17 个 MCP 工具、少走往返、无人值守、iOS 27 原生控制、诊断与通知" width="900">
 </p>
+
+**设备控制（核心）**
 
 - **看屏幕、点屏幕**：截图（可放大某块区域）、点击、滑动、长按、输入文字（支持中文）、硬件按键
 - **按界面元素操作**：读元素树、按文字点击（自动避开悬浮栏、键盘挡住的部分）、启动和结束 App、打开链接、等某段文字出现
-- **省往返**：任何操作都可以等界面稳定后顺带返回操作后的样子，并提示页面是否还在加载、有没有弹窗挡着；`iphone_batch` 一次执行最多 20 步
-- **自动后备**：WebDriverAgent 不可用时，截图、点击、滑动、按键改走苹果的 CoreDevice HID 服务（iOS 27 起）
-- **无人值守**：拔插、手机重启、WebDriverAgent 崩溃后自动恢复；用免费 Apple ID 签名，7 天描述文件过期前自动重签
-- **告警通知**：重签失败、Apple ID 会话失效、手机离线、重启后需要输密码时，经 Telegram 或 Bark 推送
+- **省往返**：任何操作都可以等界面稳定后顺带返回操作后的样子，说明界面变没变，并提示页面是否还在加载、有没有弹窗挡着；`iphone_batch` 一次执行最多 20 步
+- **无人值守**：拔插、手机重启、连接中断后自动恢复，不开控制台也一直提供服务；WebDriverAgent 卡死会被重启，签名到期前自动重签
+- **人工把关**：AI 任务可以随时暂停、接管、停止；付款、删除、发消息之前要你确认，Agent 不能批准自己的任务
+- **多台设备**：接多台 iPhone / iPad，随时切换控制哪一台
 - **可选的自动解锁**：每输一位都核对，密码错了只试一次就停用
-- **诊断**：`doctor` 从 USB 到 WebDriverAgent 逐层检查，每项失败都告诉你怎么修
+- **告警通知**：手机离线、重启后需要输密码、重签失败时，经 Telegram 或 Bark 推送
+- **诊断**：`doctor` 从 USB 起逐层检查，每项失败都告诉你怎么修
+
+**接入**
+
+- **本机**：Claude Code、Codex 或任何 MCP 客户端经 stdio 接入；`task run` 让任何 agent 平台在任务里运行，你能看到每一步
+- **远程**：控制台服务同一端口上有 HTTP MCP（`/mcp`），对局域网开放时走 HTTPS、要登录令牌（可以是只读的）；`mcp --url`、`task --url` 操作另一台机器上的手机
+
+**控制台（可选）**
+
+- **实时画面**：iOS 27 起直接用手机自己的视频（约每秒 60 帧），其他情况用 H.264；有弱网模式
+- **直接操作**：鼠标像手指一样点按、拖动；看不到的系统弹窗画在画面上，也能点
+- **下达任务**：把任务交给本机的 Claude Code 或 Codex，看着它做，随时接管
 
 ## 快速开始
 
-需要一部 iOS 17 以上的 iPhone 或 iPad 和能**传数据**的线、一个免费 Apple ID（建议专门注册一个），以及一台 Apple Silicon 的 Mac 或一台 Linux 机器。
+需要一部 iPhone 或 iPad（推荐 iOS 27 及以上，iOS 17 起都能用）和能**传数据**的线，以及一台 Apple Silicon 的 Mac 或一台 Linux 机器。iOS 26 及以下还要一个免费 Apple ID（建议专门注册一个），用来给 WebDriverAgent 签名。
 
 **macOS 或 Linux，一行命令安装**
 
@@ -98,9 +128,9 @@ Linux 上要用系统的 usbmuxd（`sudo apt install usbmuxd`，.deb 会自动�
 iphone-control
 ```
 
-第一次运行时，它在终端里一步步带你完成设置：语言、代理、后台服务、配对、开发者模式、Apple ID、签名并安装 WebDriverAgent，可选的自动解锁和通知，最后注册到 Claude Code 和 Codex。按提示在手机上操作即可。做过的步骤会跳过；设置好以后再运行 `iphone-control` 只显示状态。
+第一次运行时，它在终端里一步步带你完成设置：语言、代理、后台服务、配对、开发者模式（iOS 26 及以下还有 Apple ID、签名并安装 WebDriverAgent），可选的自动解锁和通知，最后注册到 Claude Code 和 Codex。按提示在手机上操作即可。做过的步骤会跳过；设置好以后再运行 `iphone-control` 只显示状态。
 
-然后打开一个新的 Claude Code 或 Codex 会话，试着说：「打开时钟，切到秒表并启动」。也可以运行 `iphone-control viewer` 打开浏览器里的控制台（http://127.0.0.1:8200，用 `iphone-control viewer token` 打印的链接登录），在实时画面上直接操作，或把任务交给本机的 Claude Code 或 Codex；局域网和别的机器也能用，见[控制台与远程使用](https://derrors.github.io/iphone-control/guide/remote)。
+然后打开一个新的 Claude Code 或 Codex 会话，试着说：「打开时钟，切到秒表并启动」。到这里设备控制就完整可用了，控制台不是必需的。想在浏览器里看着手机，可以运行 `iphone-control viewer` 打开浏览器里的控制台（http://127.0.0.1:8200，用 `iphone-control viewer token` 打印的链接登录），在实时画面上直接操作，或把任务交给本机的 Claude Code 或 Codex；局域网和别的机器也能用，见[控制台与远程使用](https://derrors.github.io/iphone-control/guide/remote)。
 
 更多：[分步指南](https://derrors.github.io/iphone-control/guide/getting-started) · [从源码编译](https://derrors.github.io/iphone-control/deploy/source) · [macOS 指南](https://derrors.github.io/iphone-control/deploy/macos) · [其他 MCP 客户端](https://derrors.github.io/iphone-control/guide/mcp-clients)
 
@@ -139,15 +169,15 @@ iphone-control
 | `mcp [--url <控制台>]` | MCP 服务，由 AI 客户端拉起；加 `--url` 时转接到另一台机器的控制台 |
 | `status` | 守护进程状态、描述文件还剩多久、最近日志 |
 | `doctor` | 逐层诊断，每项失败都给出修复办法 |
-| `login` | Apple ID 会话失效时重新登录 |
-| `sign` | 立即签名并安装 WebDriverAgent |
-| `resign [--force]` | 快过期才重签 WebDriverAgent（或立即重签） |
+| `login` | Apple ID 会话失效时重新登录（只有用 WebDriverAgent 的设备需要） |
+| `sign` | 立即签名并安装 WebDriverAgent（同上） |
+| `resign [--force]` | 快过期才重签 WebDriverAgent（或立即重签）（同上） |
 | `passcode set\|clear` | 开启或关闭一台设备的自动解锁（密码按设备分开存） |
 | `unlock-reset` | 自动解锁被停用后恢复 |
 | `devices` / `select <UDID\|设备名\|auto>` | 列出接着的设备 / 切换控制哪一台 |
 | `notify-test [事件]` | 发送测试通知 |
 | `mcp-config` | 打印注册 MCP 的命令 |
-| `wda-bridge [--port]` | 把 WebDriverAgent 桥接到 127.0.0.1 给别的工具用，用完就停 |
+| `wda-bridge [--port]` | 把 WebDriverAgent 桥接到 127.0.0.1 给别的工具用，用完就停（只用于 WebDriverAgent 设备） |
 | `viewer [--port] [--lan]` | 控制台页面，地址 127.0.0.1:8200，要登录（`viewer token` 显示令牌和登录链接，可以加只读令牌）：实时画面可直接点击、滑动、输入，设备面板，还能把任务交给本机的 Claude Code 或 Codex 执行。`--lan` 对局域网开放（HTTPS），同一个端口上还有 MCP over HTTP（`/mcp`） |
 | `task run [--url <控制台>] -- <命令>` | 给别的 agent 平台用的 AI 任务；`--url` 时手机在另一台机器上。`task list`、`pause`、`approve` 等查看和控制任务 |
 | `viewer token [add <名字> [--read-only]\|list\|show <名字>\|remove <名字>]` | 控制台的登录令牌：显示 owner 的令牌，或者加有名字的、只读的令牌 |

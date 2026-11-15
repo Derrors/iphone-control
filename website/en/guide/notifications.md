@@ -2,6 +2,8 @@
 
 The daemon notifies you when the phone needs attention, through whichever channels are configured.
 
+The notifications below about re-signing, the Apple ID, the signing certificate and WDA only come for devices on WDA; native control on iOS 27 and later has none of them.
+
 ## When
 
 | Event | What to do |

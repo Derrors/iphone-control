@@ -6,13 +6,13 @@ This page has the essentials. What is stored, who can reach it and the details o
 
 ## What is stored
 
-- **The data directory** holds the Apple ID session, the signing key, pairing records and, with auto-unlock on, the passcode in **plain text**. Keep it and its backups as safe as a password. The Apple ID password is never stored.
+- **The data directory** holds pairing records, with WDA also the Apple ID session and the signing key, and, with auto-unlock on, the passcode in **plain text**. Keep it and its backups as safe as a password. The Apple ID password is never stored.
 - **The control socket** is a Unix socket with mode 0600, and whoever can connect to it controls the phone: root on the host and the user the daemon runs as.
 - **Notification keys** are in the settings file `~/.config/iphone-control/env`, mode 0600.
 
 ## Built-in protections
 
-- **No network ports.** WDA is reached through usbmuxd. `wda-bridge` and the live `viewer` are explicit opt-ins that bind 127.0.0.1 by default (`viewer --lan` also opens to the local network, over HTTPS), and other web pages in your browser can't act through them. `wda-bridge` has no login: every local user can use it, so stop it when done. The `viewer` and the MCP on its port (`/mcp`) need the login token, from this machine too, since the viewer can't tell a local browser from a visit forwarded by frp, cloudflared or another reverse proxy. Tokens are kept in the data directory (0600); `viewer token` shows the owner's and `--new` replaces it, and named read-only tokens (`viewer token add <name> --read-only`) can watch but not act. An agent on another machine gets only its task's token: it acts for that task and can't pause or confirm it. `viewer --lan` opens the viewer to the local network, only to local-network addresses and over HTTPS there.
+- **No network ports.** The daemon reaches the phone through usbmuxd. `wda-bridge` and the live `viewer` are explicit opt-ins that bind 127.0.0.1 by default (`viewer --lan` also opens to the local network, over HTTPS), and other web pages in your browser can't act through them. `wda-bridge` has no login: every local user can use it, so stop it when done. The `viewer` and the MCP on its port (`/mcp`) need the login token, from this machine too, since the viewer can't tell a local browser from a visit forwarded by frp, cloudflared or another reverse proxy. Tokens are kept in the data directory (0600); `viewer token` shows the owner's and `--new` replaces it, and named read-only tokens (`viewer token add <name> --read-only`) can watch but not act. An agent on another machine gets only its task's token: it acts for that task and can't pause or confirm it. `viewer --lan` opens the viewer to the local network, only to local-network addresses and over HTTPS there.
 - **No root.** The daemon runs as your regular user, as a per-user service; the install script refuses to run as root.
 - **Auto-unlock is off by default** and disables itself after one wrong attempt.
 - **Developer tools are off by default.**
@@ -20,8 +20,8 @@ This page has the essentials. What is stored, who can reach it and the details o
 
 ## Risks to know about
 
-- **The anisette server.** Apple ID logins use a public third-party server by default (`mac-ani.jkcoxson.com`). It never gets your password, but it can see when you log in. To avoid it, run your own [anisette-v3-server](https://github.com/Dadoum/anisette-v3-server) and set `ICTL_ANISETTE_URL`.
-- **Use a dedicated Apple ID.** A separate account contains the damage if the host is compromised.
+- **The anisette server (WDA only).** Apple ID logins use a public third-party server by default (`mac-ani.jkcoxson.com`). It never gets your password, but it can see when you log in. To avoid it, run your own [anisette-v3-server](https://github.com/Dadoum/anisette-v3-server) and set `ICTL_ANISETTE_URL`.
+- **Use a dedicated Apple ID (WDA only).** Native control on iOS 27 and later needs no Apple ID. A separate account contains the damage if the host is compromised.
 - **The agent acts with your hands.** It can send messages, buy things and change settings. The server tells agents to ask first for these, but that is an instruction, not enforcement.
 - **The developer tools add risk while they are on.** `iphone_web_eval` runs JavaScript in any inspectable page, Safari tabs included: it can read cookies and `localStorage` and send requests as the logged-in user. `iphone_install_app` accepts any path on the machine that runs the daemon. System logs and crash reports go into the agent's context and can contain private data. The `IPHONE_CONTROL_DEV_TOOLS` switch only decides whether the MCP server offers these tools; it is not a permission boundary. Turn it off when done.
 

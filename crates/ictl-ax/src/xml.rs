@@ -270,7 +270,10 @@ pub fn to_xml(
     let mut kb_keys: Vec<(usize, Frame)> = Vec::new();
     let dialog = springboard_front && looks_like_dialog(app);
     if dialog {
-        let title = app.iter().skip(1).find(|e| kind(e) == "StaticText" && !e.label.is_empty());
+        let title = app
+            .iter()
+            .skip(1)
+            .find(|e| kind(e) == "StaticText" && !e.label.is_empty() && e.traits & trait_bit::STATUS_BAR == 0);
         let a = Element {
             label: title.map(|e| e.label.clone()).unwrap_or_default(),
             enabled: true,
@@ -312,8 +315,11 @@ pub fn to_xml(
 /// keyboard, the passcode field or list cells: a question it asks over an app («“设置”想从“dtpasteboardd”粘贴»,
 /// permission requests). Read through WDA it is an Alert; here it comes without one (iPhone 15 Pro Max, iOS 27.2.1)
 fn looks_like_dialog(app: &[Element]) -> bool {
-    let kinds: Vec<&str> = app.iter().skip(1).map(kind).collect();
-    app.len() <= 13
+    // the status bar's items don't count (with SpringBoard in front they are its own: the lock screen, Face ID's
+    // prompt read as an alert titled with the time)
+    let shown: Vec<&Element> = app.iter().skip(1).filter(|e| e.traits & trait_bit::STATUS_BAR == 0).collect();
+    let kinds: Vec<&str> = shown.iter().map(|e| kind(e)).collect();
+    shown.len() <= 12
         && kinds.iter().filter(|k| **k == "Button").count() >= 2
         && kinds.contains(&"StaticText")
         && !kinds.iter().any(|k| matches!(*k, "Icon" | "Key" | "SecureTextField" | "Cell" | "Alert"))
@@ -532,5 +538,10 @@ mod tests {
         // the same in an app, or the lock screen's single button: no alert
         assert!(!to_xml(&els, &[], 430.0, 932.0, &HashSet::new(), false).contains("Alert"));
         assert!(!to_xml(&els[..4], &[], 430.0, 932.0, &HashSet::new(), true).contains("Alert"));
+        // the status bar's time and buttons alone are no question
+        let bar =
+            |id, label: &str, xc| Element { traits: trait_bit::STATUS_BAR, ..el(39, id, Some(0), label, xc, f(10.0)) };
+        let status_only = vec![els[0].clone(), bar(6, "18:36", 48), bar(7, "Wi-Fi", 9), bar(8, "电池", 9)];
+        assert!(!to_xml(&status_only, &[], 430.0, 932.0, &HashSet::new(), true).contains("Alert"));
     }
 }

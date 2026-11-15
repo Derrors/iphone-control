@@ -93,13 +93,14 @@ async fn then_wake<T>(wake: Arc<tokio::sync::Notify>, work: impl std::future::Fu
 impl Daemon {
     // ------------------------------------------------------------------ 状态机
 
-    /// 每 10 秒一次。有请求在用设备就跳过这一轮（巡检不排队，下一轮再来）
-    pub async fn tick(self: Arc<Self>) {
+    /// 每 10 秒一次。有请求在用设备就跳过这一轮（巡检不排队，下一轮再来）。返回这一轮跑了没有（拿不到设备锁时
+    /// 没跑：被唤醒的一轮就再来，见 `lib.rs` 的主循环）
+    pub async fn tick(self: Arc<Self>) -> bool {
         let Ok(_lease) = crate::maintenance::shared() else {
             self.heartbeat.beat();
-            return;
+            return true;
         };
-        let Ok(mut g) = self.inner.try_lock() else { return };
+        let Ok(mut g) = self.inner.try_lock() else { return false };
         let g = &mut *g;
 
         if g.tunnel.as_ref().is_some_and(Tunnel::hid_open)
@@ -142,7 +143,7 @@ impl Daemon {
                 );
                 if g.list_errors < LIST_ERRORS_OFFLINE {
                     self.publish(g);
-                    return;
+                    return true;
                 }
                 Vec::new()
             }
@@ -183,6 +184,7 @@ impl Daemon {
         self.web_housekeeping(g.device.as_ref().map(|d| d.udid.as_str()));
         Self::log_housekeeping(g);
         self.publish(g);
+        true
     }
 
     /// Returns the rotation actually observed in this sample and whether the published view changed.

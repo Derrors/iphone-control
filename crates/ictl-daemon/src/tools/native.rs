@@ -353,7 +353,14 @@ impl Daemon {
         }
         while t0.elapsed() < SCROLL_SETTLE {
             let Ok(cur) = self.ax_tree_app(g).await else { return String::new() };
-            if cur.still_along_common(&prev, vertical, STILL_TOLERANCE) {
+            let still = cur.still_along_common(&prev, vertical, STILL_TOLERANCE);
+            tracing::debug!(
+                "scroll wait at {:.2} s: {} then {} elements, still: {still}",
+                t0.elapsed().as_secs_f64(),
+                prev.elements.len(),
+                cur.elements.len()
+            );
+            if still {
                 return String::new();
             }
             prev = cur;

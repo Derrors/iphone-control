@@ -80,13 +80,20 @@ async fn serve(cfg: Config, listener: tokio::net::UnixListener) -> anyhow::Resul
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     // 每个连接一个任务；请求在任务里等设备锁，主循环本身从不阻塞，停止信号随时能处理
     let mut conns = JoinSet::new();
-    let mut ticking: Option<JoinHandle<()>> = None;
-    // a round asked for (`Daemon::wake`) while one was still running: it starts once that one is done
+    // the round running, and whether it was asked for (`Daemon::wake`)
+    let mut ticking: Option<(JoinHandle<bool>, bool)> = None;
+    // a round asked for while one was still running: it starts once that one is done. One asked for that couldn't
+    // run (a request held the device) is asked for again: a phone made ready in the background waited 10 s for the
+    // next round when switching back to it
     let mut woken = false;
     loop {
-        if woken && ticking.as_ref().is_none_or(JoinHandle::is_finished) {
+        if let Some((h, asked)) = ticking.take_if(|(h, _)| h.is_finished()) {
+            let ran = h.await.unwrap_or(true);
+            woken |= asked && !ran;
+        }
+        if woken && ticking.is_none() {
             woken = false;
-            ticking = Some(tokio::task::spawn_local(daemon.clone().tick()));
+            ticking = Some((tokio::task::spawn_local(daemon.clone().tick()), true));
         }
         tokio::select! {
             biased;
@@ -105,8 +112,8 @@ async fn serve(cfg: Config, listener: tokio::net::UnixListener) -> anyhow::Resul
             Some(_) = conns.join_next(), if !conns.is_empty() => {}
             _ = tick.tick() => {
                 // 上一轮还没跑完（例如在重启 usbmuxd）就不叠加
-                if ticking.as_ref().is_none_or(JoinHandle::is_finished) {
-                    ticking = Some(tokio::task::spawn_local(daemon.clone().tick()));
+                if ticking.as_ref().is_none_or(|(h, _)| h.is_finished()) {
+                    ticking = Some((tokio::task::spawn_local(daemon.clone().tick()), false));
                 }
             }
             () = daemon.wake.notified() => woken = true,
@@ -123,7 +130,7 @@ async fn serve(cfg: Config, listener: tokio::net::UnixListener) -> anyhow::Resul
     // 自动解锁被打断时停用标记会留着（ictl-unlock），不会因此输错第二次
     conns.abort_all();
     while conns.join_next().await.is_some() {}
-    if let Some(t) = ticking {
+    if let Some((t, _)) = ticking {
         t.abort();
         let _ = t.await;
     }

@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 600" width="1200" height="600" role="img" aria-label="iphone-control architecture: an MCP client talks to iphone-control mcp over stdio, which talks to the daemon over a Unix socket; the daemon drives the iPhone or iPad over USB, natively on iOS 27 and later and through WebDriverAgent below that">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 660" width="1200" height="660" role="img" aria-label="iphone-control architecture: AI clients use iphone-control mcp over stdio, and the optional control page (iphone-control viewer) serves browsers and remote agents over HTTPS; both talk to the daemon over a Unix socket. The daemon is the core: it owns the iPhone or iPad over USB, natively on iOS 27 and later and through WebDriverAgent on iOS 17 to 26, and keeps running with the control page closed">
   <title>iphone-control architecture</title>
   <defs>
     <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
@@ -19,71 +19,90 @@
     </style>
   </defs>
 
-  <!-- Linux host -->
-  <rect x="16" y="16" width="900" height="568" rx="24" fill="none" stroke="#3d444d" stroke-width="2" stroke-dasharray="8 6"/>
+  <!-- host -->
+  <rect x="16" y="16" width="900" height="628" rx="24" fill="none" stroke="#3d444d" stroke-width="2" stroke-dasharray="8 6"/>
   <text x="44" y="54" class="frame"><tspan style="font-weight:700;fill:#e6edf3">Linux or macOS host</tspan>  ·  launchd, systemd user service or a terminal</text>
 
-  <!-- AI client -->
-  <rect x="48" y="88" width="260" height="128" rx="16" fill="#151b23" stroke="#3d444d" stroke-width="1.5"/>
-  <text x="72" y="134" class="h3">AI client</text>
-  <text x="72" y="166" class="sub">Claude Code · Cursor ·</text>
-  <text x="72" y="190" class="sub">any MCP client</text>
+  <!-- access: AI client -->
+  <rect x="48" y="88" width="260" height="112" rx="16" fill="#151b23" stroke="#3d444d" stroke-width="1.5"/>
+  <text x="72" y="130" class="h3">AI client</text>
+  <text x="72" y="160" class="sub">Claude Code · Codex ·</text>
+  <text x="72" y="182" class="sub">any MCP client</text>
 
-  <line x1="178" y1="218" x2="178" y2="300" stroke="#9198a1" stroke-width="2" marker-end="url(#arrow)"/>
-  <text x="194" y="265" class="label">MCP · stdio</text>
+  <line x1="178" y1="202" x2="178" y2="258" stroke="#9198a1" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="194" y="236" class="label">MCP · stdio</text>
 
-  <!-- MCP server -->
-  <rect x="48" y="304" width="260" height="128" rx="16" fill="#151b23" stroke="#3d444d" stroke-width="1.5"/>
-  <text x="72" y="350" class="h3">iphone-control mcp</text>
-  <text x="72" y="382" class="sub">one per agent session,</text>
-  <text x="72" y="406" class="sub">a thin client</text>
+  <!-- access: MCP server -->
+  <rect x="48" y="262" width="260" height="112" rx="16" fill="#151b23" stroke="#3d444d" stroke-width="1.5"/>
+  <text x="72" y="304" class="h3">iphone-control mcp</text>
+  <text x="72" y="334" class="sub">one per agent session,</text>
+  <text x="72" y="356" class="sub">a thin client</text>
 
-  <line x1="310" y1="368" x2="388" y2="368" stroke="#9198a1" stroke-width="2" marker-end="url(#arrow)"/>
-  <text x="349" y="350" class="label" text-anchor="middle">Unix</text>
-  <text x="349" y="396" class="label" text-anchor="middle">socket</text>
+  <line x1="310" y1="318" x2="388" y2="318" stroke="#9198a1" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="349" y="302" class="label" text-anchor="middle">Unix</text>
+  <text x="349" y="344" class="label" text-anchor="middle">socket</text>
 
-  <text x="48" y="500" class="sub">Works with the control page closed.</text>
-  <text x="48" y="526" class="sub">The page and remote MCP are opt-in.</text>
+  <!-- optional control page -->
+  <rect x="48" y="420" width="260" height="156" rx="16" fill="#151b23" stroke="#3d444d" stroke-width="1.5" stroke-dasharray="6 5"/>
+  <text x="72" y="462" class="h3">Control page</text>
+  <rect x="210" y="442" width="82" height="28" rx="14" fill="#3d444d"/>
+  <text x="251" y="461" class="pill" text-anchor="middle">optional</text>
+  <text x="72" y="492" class="label">iphone-control viewer</text>
+  <text x="72" y="522" class="sub">live picture · AI tasks</text>
+  <text x="72" y="546" class="sub">HTTP MCP at /mcp</text>
 
-  <!-- daemon -->
-  <rect x="392" y="88" width="496" height="468" rx="20" fill="#0b2a33" stroke="#22d3ee" stroke-width="2"/>
+  <line x1="310" y1="498" x2="388" y2="498" stroke="#9198a1" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="349" y="482" class="label" text-anchor="middle">Unix</text>
+  <text x="349" y="524" class="label" text-anchor="middle">socket</text>
+
+  <line x1="178" y1="632" x2="178" y2="580" stroke="#9198a1" stroke-width="2" stroke-dasharray="6 5" marker-end="url(#arrow)"/>
+  <text x="194" y="616" class="sub">browsers, remote agents · HTTPS, login</text>
+
+  <!-- daemon: the core -->
+  <rect x="392" y="88" width="496" height="512" rx="20" fill="#0b2a33" stroke="#22d3ee" stroke-width="2"/>
   <text x="420" y="130" class="h2" style="fill:#22d3ee">iphone-control daemon</text>
-  <text x="420" y="160" class="sub">one long-running process owns the phone</text>
-  <rect x="420" y="186" width="440" height="100" rx="14" fill="#0d1117" stroke="#155e75" stroke-width="1.5"/>
+  <text x="420" y="160" class="sub">the core: owns the phone, runs with the page closed</text>
+
+  <rect x="420" y="186" width="440" height="116" rx="14" fill="#0d1117" stroke="#155e75" stroke-width="1.5"/>
   <text x="444" y="228" class="h3">Native control</text>
-  <rect x="752" y="206" width="88" height="30" rx="15" fill="#22d3ee"/>
-  <text x="796" y="227" class="pill" style="fill:#0d1117" text-anchor="middle">iOS 27+</text>
-  <text x="444" y="260" class="sub">accessibility · HID · nothing on the phone</text>
-  <rect x="420" y="306" width="440" height="100" rx="14" fill="#0d1117" stroke="#155e75" stroke-width="1.5"/>
-  <text x="444" y="348" class="h3">WebDriverAgent client</text>
-  <rect x="752" y="326" width="88" height="30" rx="15" fill="#fbbf24"/>
-  <text x="796" y="347" class="pill" style="fill:#0d1117" text-anchor="middle">iOS 17–26</text>
-  <text x="444" y="380" class="sub">for older iOS · signed with a free Apple ID</text>
-  <rect x="420" y="426" width="440" height="100" rx="14" fill="#0d1117" stroke="#155e75" stroke-width="1.5"/>
-  <text x="444" y="468" class="h3">Supervisor</text>
-  <text x="444" y="500" class="sub">usbmuxd · reconnect · disk image · re-sign · notify</text>
+  <rect x="704" y="208" width="136" height="30" rx="15" fill="#0e7490"/>
+  <text x="772" y="229" class="pill" style="fill:#ffffff" text-anchor="middle">iOS 27+ · default</text>
+  <text x="444" y="260" class="sub">accessibility service · HID · CoreDevice</text>
+  <text x="444" y="284" class="sub">nothing installed, no Apple ID</text>
 
-  <!-- USB link -->
-  <line x1="890" y1="270" x2="984" y2="270" stroke="#9198a1" stroke-width="2.5" marker-start="url(#arrow)" marker-end="url(#arrow)"/>
-  <text x="937" y="256" class="label" text-anchor="middle">USB</text>
-  <text x="937" y="296" class="label" text-anchor="middle">usbmuxd</text>
+  <rect x="420" y="322" width="440" height="116" rx="14" fill="#0d1117" stroke="#155e75" stroke-width="1.5"/>
+  <text x="444" y="364" class="h3">WebDriverAgent</text>
+  <rect x="740" y="344" width="100" height="30" rx="15" fill="#3d444d"/>
+  <text x="790" y="365" class="pill" text-anchor="middle">iOS 17–26</text>
+  <text x="444" y="396" class="sub">runs on the phone, signed with a free Apple ID</text>
+  <text x="444" y="420" class="sub">re-signed before the 7-day profile expires</text>
 
-  <!-- iPhone -->
-  <rect x="990" y="72" width="180" height="350" rx="36" fill="#e6edf3"/>
-  <rect x="1002" y="84" width="156" height="326" rx="26" fill="url(#screen)"/>
-  <rect x="1050" y="96" width="60" height="16" rx="8" fill="#0b1220"/>
-  <text x="1080" y="196" text-anchor="middle" style="fill:#ffffff;font-size:20px;font-weight:700">iPhone / iPad</text>
-  <text x="1080" y="222" text-anchor="middle" style="fill:#ffffff;font-size:15px;opacity:.8">iOS 17+</text>
-  <rect x="1018" y="262" width="124" height="64" rx="12" fill="#ffffff" fill-opacity="0.14"/>
-  <text x="1080" y="290" text-anchor="middle" style="fill:#ffffff;font-size:15px;font-weight:600">iOS 27+</text>
-  <text x="1080" y="312" text-anchor="middle" style="fill:#ffffff;font-size:15px;font-weight:600">no install</text>
-  <text x="1080" y="378" text-anchor="middle" style="fill:#ffffff;font-size:13px;opacity:.8">older iOS:</text>
-  <text x="1080" y="396" text-anchor="middle" style="fill:#ffffff;font-size:13px;opacity:.8">WebDriverAgent</text>
+  <rect x="420" y="458" width="440" height="116" rx="14" fill="#0d1117" stroke="#155e75" stroke-width="1.5"/>
+  <text x="444" y="500" class="h3">Tasks and supervisor</text>
+  <text x="444" y="532" class="sub">pause · take over · confirm before risky steps</text>
+  <text x="444" y="556" class="sub">reconnect · disk image · unlock · notify</text>
+
+  <!-- USB -->
+  <line x1="890" y1="300" x2="984" y2="300" stroke="#9198a1" stroke-width="2.5" marker-start="url(#arrow)" marker-end="url(#arrow)"/>
+  <text x="937" y="286" class="label" text-anchor="middle">USB</text>
+  <text x="937" y="326" class="label" text-anchor="middle">usbmuxd</text>
+
+  <!-- phone -->
+  <rect x="990" y="88" width="180" height="360" rx="36" fill="#0d1117"/>
+  <rect x="1002" y="100" width="156" height="336" rx="26" fill="url(#screen)"/>
+  <rect x="1050" y="112" width="60" height="16" rx="8" fill="#0b1220"/>
+  <text x="1080" y="206" text-anchor="middle" style="fill:#ffffff;font-size:20px;font-weight:700">iPhone / iPad</text>
+  <text x="1080" y="232" text-anchor="middle" style="fill:#ffffff;font-size:15px;opacity:.8">iOS 17+</text>
+  <rect x="1012" y="268" width="136" height="64" rx="12" fill="#ffffff" fill-opacity="0.14"/>
+  <text x="1080" y="296" text-anchor="middle" style="fill:#ffffff;font-size:15px;font-weight:600">iOS 27+</text>
+  <text x="1080" y="318" text-anchor="middle" style="fill:#ffffff;font-size:15px;font-weight:600">nothing to install</text>
+  <text x="1080" y="394" text-anchor="middle" style="fill:#ffffff;font-size:13px;opacity:.8">iOS 17–26:</text>
+  <text x="1080" y="412" text-anchor="middle" style="fill:#ffffff;font-size:13px;opacity:.8">WebDriverAgent</text>
 
   <!-- outbound internet -->
-  <path d="M862 476 C 904 476, 920 506, 944 506" fill="none" stroke="#9198a1" stroke-width="2" stroke-dasharray="6 5" marker-end="url(#arrow)"/>
-  <rect x="948" y="456" width="236" height="100" rx="16" fill="#2b2111" stroke="#d4a72c" stroke-width="1.5"/>
-  <text x="970" y="490" class="h3" style="font-size:17px">Outbound HTTPS</text>
-  <text x="970" y="516" class="sub">Apple ID (WDA only)</text>
-  <text x="970" y="538" class="sub">Bark · Telegram</text>
+  <path d="M862 516 C 904 516, 920 546, 944 546" fill="none" stroke="#9198a1" stroke-width="2" stroke-dasharray="6 5" marker-end="url(#arrow)"/>
+  <rect x="948" y="496" width="236" height="100" rx="16" fill="#2b2111" stroke="#d4a72c" stroke-width="1.5"/>
+  <text x="970" y="530" class="h3" style="font-size:17px">Outbound HTTPS</text>
+  <text x="970" y="556" class="sub">Apple ID (WDA only)</text>
+  <text x="970" y="578" class="sub">Bark · Telegram</text>
 </svg>

@@ -15,8 +15,8 @@ The core is device control: a long-running daemon owns the phone and keeps servi
 
 ## How it works
 
-![Architecture: an MCP client talks to iphone-control mcp over stdio, which talks to the daemon over a Unix socket; the daemon drives the iPhone or iPad over USB, natively on iOS 27 and later and through WebDriverAgent below that](/architecture-light.svg){.light-only}
-![Architecture: an MCP client talks to iphone-control mcp over stdio, which talks to the daemon over a Unix socket; the daemon drives the iPhone or iPad over USB, natively on iOS 27 and later and through WebDriverAgent below that](/architecture-dark.svg){.dark-only}
+![Architecture: AI clients use iphone-control mcp over stdio, and the optional control page serves browsers and remote agents over HTTPS; both talk to the daemon over a Unix socket. The daemon is the core: it drives the iPhone or iPad over USB, natively on iOS 27 and later and through WebDriverAgent on iOS 17–26, and keeps running with the control page closed](/architecture-light.svg){.light-only}
+![Architecture: AI clients use iphone-control mcp over stdio, and the optional control page serves browsers and remote agents over HTTPS; both talk to the daemon over a Unix socket. The daemon is the core: it drives the iPhone or iPad over USB, natively on iOS 27 and later and through WebDriverAgent on iOS 17–26, and keeps running with the control page closed](/architecture-dark.svg){.dark-only}
 
 - A **daemon** runs all the time and owns the phone: it pairs, mounts the Developer Disk Image, opens a tunnel, and then drives the phone one of two ways, by iOS version:
   - **iOS 27 and later: native control (default).** The screen is read through the system's accessibility service, taps, swipes and buttons go through CoreDevice HID, and apps launch through CoreDevice. Nothing is installed on the phone, no Apple ID is needed, and it's ready in seconds.

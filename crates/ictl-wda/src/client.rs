@@ -15,8 +15,10 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 pub const XCTEST_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 /// 经 XCTest 的请求连续这么多次送到了却没有应答（超时，或应答到一半断了），就当 WDA 卡死（见 [`WdaClient::stalled`]）
 pub const STALL_LIMIT: u32 = 3;
-/// How long a measured screen size is trusted at the start of a gesture. `/wda/screen` takes about 100 ms (measured on
-/// iOS 27) and only Display Zoom changes the size, so a touch-down doesn't pay for it every time
+/// How long a measured screen size is used before it is measured again, and then in the background
+/// ([`WdaClient::display_sample`] with `refresh_stale`), not at the start of a gesture: only Display Zoom changes the
+/// size, and `/wda/screen` takes about 100 ms on an iPhone with iOS 27 but 0.95 s on an iPad mini 5 (iPadOS 26.7.3),
+/// which the first tap or swipe after a minute paid on top of its own 0.85 s
 const SCREEN_RECHECK: Duration = Duration::from_secs(60);
 /// 普通点击按下的时长（毫秒）。太短可能不被识别成点击；解锁按键另有自己的时长
 const TAP_PRESS_MS: u64 = 50;
@@ -387,18 +389,18 @@ impl<T: Transport> WdaClient<T> {
     }
 
     /// Poll rotation to detect a changed view. The screen size (a slower request) is measured on acquisition and on
-    /// rotation; a gesture start measures it again only once the last measurement is older than [`SCREEN_RECHECK`]
-    /// (Display Zoom), so a touch-down usually costs only the rotation request.
+    /// rotation, and again once the last measurement is older than [`SCREEN_RECHECK`] (Display Zoom) when
+    /// `refresh_stale`: a poll while nobody acts, never a gesture's start, which costs only the rotation request.
     pub async fn display_sample(
         &mut self,
         previous: Option<u16>,
-        gesture_start: bool,
+        refresh_stale: bool,
         fallback: impl Future<Output = Option<Rotation>>,
     ) -> (Option<ScreenSize>, Option<Rotation>) {
         let rotation = self.interface_rotation(fallback).await;
         let stale = self.screen_at.is_none_or(|t| t.elapsed() >= SCREEN_RECHECK);
         let rotated = rotation.is_some_and(|r| Some(r.degrees()) != previous);
-        let size = if rotated || (gesture_start && stale) {
+        let size = if rotated || (refresh_stale && stale) {
             self.measure_screen().await
         } else {
             self.base_screen_size().await
@@ -868,22 +870,26 @@ mod tests {
         let size = (200, r#"{"value":{"screenSize":{"width":393,"height":852}}}"#);
         let portrait = (200, r#"{"value":{"z":0}}"#);
         let landscape = (200, r#"{"value":{"z":90}}"#);
-        let m = Mock::with(&[session, portrait, size, portrait, landscape, size, landscape, landscape, size]);
+        let m =
+            Mock::with(&[session, portrait, size, portrait, landscape, size, landscape, landscape, landscape, size]);
         let mut w = WdaClient::new(&m);
-        // (previous rotation, gesture start, size older than SCREEN_RECHECK, expected rotation)
-        for (previous, start, stale, expected) in [
-            (None, false, false, Rotation::Portrait),
-            (Some(0), false, false, Rotation::Portrait),
+        // (previous rotation, a poll that may refresh the size, size older than SCREEN_RECHECK, expected rotation)
+        for (previous, refresh, stale, expected) in [
+            (None, true, false, Rotation::Portrait),
+            (Some(0), true, false, Rotation::Portrait),
+            // rotated: measured whatever the caller
             (Some(0), false, false, Rotation::TopToRight),
             // a touch-down with a recent size: rotation only
-            (Some(90), true, false, Rotation::TopToRight),
-            // a touch-down once the size is old: measured again (Display Zoom)
+            (Some(90), false, false, Rotation::TopToRight),
+            // a touch-down with an old size: still rotation only (0.95 s on an iPad mini 5)
+            (Some(90), false, true, Rotation::TopToRight),
+            // a quiet poll with an old size: measured again (Display Zoom)
             (Some(90), true, true, Rotation::TopToRight),
         ] {
             if stale {
                 w.screen_at = Some(Instant::now() - SCREEN_RECHECK);
             }
-            let (size, rotation) = w.display_sample(previous, start, async { panic!("unexpected fallback") }).await;
+            let (size, rotation) = w.display_sample(previous, refresh, async { panic!("unexpected fallback") }).await;
             assert_eq!(rotation, Some(expected));
             assert_eq!(size.unwrap().width, 393.);
         }
@@ -897,6 +903,7 @@ mod tests {
                 "/session/A/rotation",
                 "/session/A/rotation",
                 "/wda/screen",
+                "/session/A/rotation",
                 "/session/A/rotation",
                 "/session/A/rotation",
                 "/wda/screen"

@@ -13,6 +13,9 @@ use crate::notify::Event;
 /// Three 10-second supervisor intervals. A missing background sample within this
 /// window can leave a verified gesture running, but can never authorize a new one.
 const DISPLAY_SAMPLE_GRACE: Duration = Duration::from_secs(30);
+/// How long after an action an old screen size isn't measured again ([`Daemon::sample_display`]): someone tapping
+/// or swiping may well go on, and the measurement would sit in WDA's queue before their next gesture
+const ACTION_QUIET: Duration = Duration::from_secs(3);
 /// 正常 2～10 秒就绪。手机重启后未授权 automation 时，testmanagerd 握手每次卡 30 秒、要重试一两次，
 /// 60 秒常常等不到 runner 启动，也就认不出「需要输入密码」
 const WDA_START_TIMEOUT: Duration = Duration::from_secs(120);
@@ -177,10 +180,11 @@ impl Daemon {
     pub(crate) async fn sample_display(&self, g: &mut Inner, gesture_start: bool) -> (Option<Rotation>, bool) {
         let previous = g.dev.display.as_ref().map(|v| v.rotation);
         let device = g.device.clone();
+        // an old size is measured again only while nobody acts: on an iPad mini 5 that takes WDA 0.95 s
+        let refresh = !gesture_start && !self.acting_now(ACTION_QUIET);
         let Some(wda) = self.wda(g) else { return (None, self.update_display(g, None).await) };
-        let (size, rotation) = wda
-            .display_sample(previous, gesture_start, async { device?.interface_rotation().await.ok().flatten() })
-            .await;
+        let (size, rotation) =
+            wda.display_sample(previous, refresh, async { device?.interface_rotation().await.ok().flatten() }).await;
         let changed = self.record_display_sample(g, size, rotation, gesture_start).await;
         (rotation, changed)
     }

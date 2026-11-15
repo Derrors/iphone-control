@@ -112,13 +112,15 @@ jobs:
           {
             echo "## English"; echo; echo "$en"; echo
             echo "## 中文"; echo; echo "$zh"; echo
+            # 已装的程序在「---」加「**Binaries / 二进制:**」处截掉页脚，按「## English」「## 中文」分语言，这三处别改
             echo "---"; echo
-            echo "**Binaries / 二进制:** \`linux-x86_64\`, \`linux-aarch64\` (glibc 2.34+), \`macos-arm64\` (macOS 11+, Apple Silicon); \`.deb\` amd64, arm64 (Debian 12+, Ubuntu 22.04+)"; echo
-            echo "**Debian/Ubuntu:** \`sudo apt install ./iphone-control_${version}_amd64.deb\` (or \`_arm64.deb\`)"
+            echo "**Binaries / 二进制:** macOS \`macos-arm64\` (11+, Apple Silicon) · Linux \`linux-x86_64\`, \`linux-aarch64\` (glibc 2.34+) · \`.deb\` amd64, arm64 (Debian 12+, Ubuntu 22.04+)"; echo
             if [[ "$GITHUB_REF_NAME" != *-* ]]; then
-              echo "**Installer:** \`curl -fsSL https://github.com/$GITHUB_REPOSITORY/releases/download/$GITHUB_REF_NAME/install.sh | sh\` (once the signed assets for your platform are available)"
-              if [[ -n "$ICTL_UPDATE_TAP" ]]; then echo "**Homebrew:** \`brew install $ICTL_UPDATE_TAP/iphone-control\`"; fi
+              echo "- **Script / 脚本:** \`curl -fsSL https://github.com/$GITHUB_REPOSITORY/releases/download/$GITHUB_REF_NAME/install.sh | sh\`"
+              if [[ -n "$ICTL_UPDATE_TAP" ]]; then echo "- **Homebrew:** \`brew install $ICTL_UPDATE_TAP/iphone-control\`"; fi
             fi
+            echo "- **Debian / Ubuntu:** \`sudo apt install ./iphone-control_${version}_amd64.deb\` (or / 或 \`_arm64.deb\`)"; echo
+            echo "Already installed? Run \`iphone-control update\`. / 已安装的运行 \`iphone-control update\` 升级。"
           } > notes.md
       - name: Create release
         run: |

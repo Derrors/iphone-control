@@ -15,6 +15,8 @@ iphone-control doctor    # 逐层检查，每项失败都给出修复办法
 | 未配对 | 没有配对记录 | 运行 `setup --reconfigure` 选「手机」，手机上点「信任」 |
 | 开发者模式未打开 | — | 在手机的 设置 → 隐私与安全性 → 开发者模式 打开。手机被开发者工具连接过才会出现这个开关，运行 `setup --reconfigure` 选「手机」会处理 |
 | 手机锁屏，隧道建不起来 | 重启后还没解锁过 | 手动解锁一次；解锁前状态一直是这个，守护进程会定期重试 |
+| 正在准备手机（挂载开发者镜像、连接无障碍服务） | 原生控制（iOS 27 及以上）正在准备 | 等一下，通常几秒到半分钟；保持手机解锁 |
+| 准备手机失败，稍后重试：… | 原生控制没准备好 | 看冒号后的错误，运行 `doctor`，见[原生控制准备不好](#native-control) |
 | WDA 还没签名安装 | — | 运行 `sign` 或 `setup` |
 | 正在启动 WDA | 最长约 2 分钟 | 等一下。iOS 27 起期间点击、滑动、截图走 HID 后备，仍可用，但横屏时要 30 秒内从 WDA 拿到过方向，否则拒绝触摸；屏幕尺寸未知时报错，见[工具一览](../guide/tools#wda-不可用时-hid-后备)。更早的 iOS 要等 WDA 起来 |
 | WDA 卡在手机上的「Enable UI Automation」密码框 | 手机在等「为 XCTest 输入 iPhone 密码」 | 在手机上输入锁屏密码。手机重启后会出现，连续重启守护进程几次后有时也会。守护进程每 60 秒重试，只通知一次 |
@@ -31,7 +33,17 @@ iphone-control doctor    # 逐层检查，每项失败都给出修复办法
 - **充电时大约每分钟断开一次：** 手机开着「设置 → 电池 → 充电 → 80% 上限」时，在 80% 附近反复开始、停止充电，每次 USB-C 重新协商供电都会让 USB 断开 3～5 秒。用来做自动化的手机把上限改成 100%。
 - **Mac 上：** usbmuxd 是系统自带的，`doctor` 报连不上时运行 `sudo launchctl kickstart -k system/com.apple.usbmuxd`。见 [macOS](../deploy/macos)。
 
+## 原生控制准备不好 {#native-control}
+
+iOS 27 及以上默认原生控制，只要配对、开发者模式、开发者镜像和无障碍服务。`status` 一直是「准备手机失败」时：
+
+- **开发者镜像下载失败：** 要能访问 GitHub，配好代理（`iphone-control setup --reconfigure` 选「代理」）。
+- **手机锁着：** 准备时手机要保持解锁。
+- **还是不行：** 运行 `doctor` 看卡在哪一层，[提 issue](https://github.com/Derrors/iphone-control/issues/new/choose)。临时可以在 `~/.config/iphone-control/env` 里设 `ICTL_IOS_BACKEND=wda` 改回 WDA，再 `iphone-control service restart`（要 Apple ID，见下一节）。
+
 ## WDA 起不来
+
+只对用 WDA 的设备：iOS 26 及以下，或设了 `ICTL_IOS_BACKEND=wda` 的。
 
 - **「不受信任的开发者」：** 首次安装后在 设置 → 通用 → VPN 与设备管理 里信任你的 Apple ID（手机要联网）。
 - <a id="cert"></a>**签名证书被吊销了：**`status` 报 `unexpected response`，描述文件却还有效；在设备上点 WebDriverAgentRunner 图标提示「无法验证 App」。

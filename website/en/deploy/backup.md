@@ -4,8 +4,8 @@
 
 | Path | Contents | If lost |
 |---|---|---|
-| `account/` | Apple ID session, signing key and certificate | Log in again; a new certificate is created |
-| `wda/` | Signed WebDriverAgent | Re-signed automatically |
+| `account/` | Apple ID session, signing key and certificate (WDA only) | Log in again; a new certificate is created |
+| `wda/` | Signed WebDriverAgent (WDA only) | Re-signed automatically |
 | `ddi/` | Developer Disk Image cache | Downloaded again |
 | `secrets/passcodes/` | Per-device passcodes (only with auto-unlock) | Run `passcode set` again |
 | `viewer-tokens.json` | The viewer's login tokens (keep them like passwords, out of backups that sync elsewhere) | The viewer makes a new `owner` on its next start; browsers and MCP clients that logged in need the new one |

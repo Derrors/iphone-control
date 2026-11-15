@@ -6,7 +6,7 @@ The MCP server provides 17 tools, 23 with the [developer tools](#developer-tools
 
 | Tool | What it does |
 |---|---|
-| `iphone_status` | WDA ready or not, locked or not, foreground app, screen size |
+| `iphone_status` | Ready or not, native or WDA, locked or not, foreground app, screen size |
 | `iphone_screenshot` | Screenshot; with `x`, `y`, `width`, `height` it returns an enlarged region for small text and icons |
 | `iphone_list_elements` | Elements with text: type, text, center, size; `filter` by text or type |
 | `iphone_wait_for` | Wait until some text appears (page loaded, dialog shown); text inside input fields doesn't count. `timeout` defaults to 5 seconds, max 30 |
@@ -35,7 +35,7 @@ Only one device is controlled at a time; every other tool acts on it. With one d
 | Tool | What it does |
 |---|---|
 | `iphone_list_devices` | Every iPhone/iPad on USB: name, model, iOS version, UDID; marks the one being controlled and whether it has an auto-unlock passcode |
-| `iphone_select_device` | Switch to another device (UDID or name), remembered across restarts; `auto` goes back to automatic choice. WDA takes 10–60 s to start on the new device. Not possible when `IPHONE_UDID` is set |
+| `iphone_select_device` | Switch to another device (UDID or name), remembered across restarts; `auto` goes back to automatic choice. The new device is ready in seconds with native control, 10–60 s with WDA. Not possible when `IPHONE_UDID` is set |
 
 Details: [Several devices](./multi-device).
 
@@ -67,11 +67,19 @@ The tools under *Acting* accept `then`: it waits for the screen to settle and re
 
 The result says how long it waited, whether the page is probably still loading, and whether a dialog is in the way. Even without `then`, it warns when a system alert covers the screen.
 
+## Native control and WDA
+
+iOS 27 and later are controlled natively by default. The tools and their results are the same, so agents needn't care, with a few differences:
+
+- **Rows off the screen aren't listed:** scroll a long list to a row before finding or tapping it by text (WDA lists such rows but can't tap them).
+- **Text is always pasted:** `iphone_type_text` puts the text on the phone's pasteboard and pastes it; the daemon taps *Allow Paste*, reads the field back and restores the pasteboard at once.
+- **Coarser elements:** the accessibility service often makes one element of a whole row ("Wi-Fi, Derrors-5G"), so `iphone_list_elements` is shorter than with WDA; finding by contained text still works.
+
 ## When WDA is down: the HID fallback
 
-When WDA can't be reached, screenshots, taps, swipes and buttons go through CoreDevice HID, with these limits:
+For devices on WDA only. When WDA can't be reached, screenshots, taps, swipes and buttons go through CoreDevice HID, with these limits:
 
-- It needs iOS 27 or later. Older iOS has no such path, and actions fail while WDA restarts.
+- It needs iOS 27 or later (that is, a device with `ICTL_IOS_BACKEND=wda`). Older iOS has no such path, and actions fail while WDA restarts.
 - **Landscape:** before each touch the screen is captured again to check its orientation, and the daemon also needs a matching orientation from WDA in the last 30 seconds. Without one, for example right after a daemon restart, the touch is refused rather than guessed. Screenshots and buttons still work. Don't flip the device to the other side during an outage; wait for WDA to recover first.
 - **Screen size:** while WDA is down, taps and swipes return an error if there is no record of this device's size. Wait for WDA to come up once, or set [`SCREEN_W`/`SCREEN_H`](./configuration#advanced).
 - **No redo:** if a request already reached WDA and the connection then dropped or the response was incomplete, it doesn't fall back to HID, because the action may have happened and redoing it would tap or type twice. The tool returns an error; the agent should take a screenshot first.

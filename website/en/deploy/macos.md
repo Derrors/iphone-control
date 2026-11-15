@@ -9,8 +9,8 @@ Verified on a MacBook Pro (Apple M3 Pro) / macOS 26.6.2 with an iPhone 15 Pro Ma
 ## You need
 
 - An Apple Silicon Mac. The script installer requires Python 3 and OpenSSL 3 on PATH. Intel Macs have no prebuilt package and build from source (Xcode Command Line Tools and Rust 1.89+). Full Xcode is **not** needed
-- An iPhone or iPad on iOS 17+, connected with a cable that carries **data**
-- A free Apple ID (a dedicated one is recommended)
+- An iPhone or iPad, connected with a cable that carries **data**. iOS 27 or later is recommended (native control); iOS 17 and later work
+- On iOS 26 and earlier, a free Apple ID (a dedicated one is recommended)
 
 ## Install
 
@@ -57,7 +57,7 @@ Connect the phone with a cable, then:
 iphone-control
 ```
 
-The first run walks you through setup step by step: language, proxy, background service, pairing, Developer Mode, Apple ID, signing and installing WDA, auto-unlock and notifications (optional), and registering with Claude Code and Codex. What to do on the phone is in [Getting Started](../guide/getting-started#first-run). If the phone already trusts this Mac (from Finder), the pairing step just says it is paired. Once set up, running `iphone-control` again only shows the status.
+The first run walks you through setup step by step: language, proxy, background service, pairing, Developer Mode (and on iOS 26 and earlier, Apple ID and signing and installing WDA), auto-unlock and notifications (optional), and registering with Claude Code and Codex. What to do on the phone is in [Getting Started](../guide/getting-started#first-run). If the phone already trusts this Mac (from Finder), the pairing step just says it is paired. Once set up, running `iphone-control` again only shows the status.
 
 ### Doing it by hand
 
@@ -131,7 +131,7 @@ All of them keep your data and settings. To remove them too:
 rm -rf ~/.local/share/iphone-control ~/.config/iphone-control   # deletes the Apple ID session and signed WDA
 ```
 
-On the phone, delete the WebDriverAgent app; its profile under *VPN & Device Management* goes with it.
+If WDA was used, delete the WebDriverAgent app on the phone; its profile under *VPN & Device Management* goes with it.
 
 ## Known differences
 

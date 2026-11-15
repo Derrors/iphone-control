@@ -4,6 +4,8 @@ iphone-control 让 AI agent（例如 Claude）操作一台用数据线接在 Lin
 
 它以 [MCP](https://modelcontextprotocol.io)（Model Context Protocol）工具的形式提供能力，支持 MCP 的客户端（Claude Code、Claude Desktop、Cursor 等）都能直接用。
 
+核心是设备控制：一个常驻守护进程独占手机，不开浏览器的控制台也一直提供服务。控制台和远程接入都是可选的，见[控制台与远程使用](./remote)。
+
 ## 能用来做什么
 
 - 让 agent 在手机上完成任务：查信息、填表、改设置、玩游戏。
@@ -13,22 +15,23 @@ iphone-control 让 AI agent（例如 Claude）操作一台用数据线接在 Lin
 
 ## 怎么工作
 
-![架构：MCP 客户端经 stdio 调用 iphone-control mcp，再经 Unix socket 交给守护进程；守护进程经 USB 用 WebDriverAgent 操作 iPhone 或 iPad](/architecture-light.svg){.light-only}
-![架构：MCP 客户端经 stdio 调用 iphone-control mcp，再经 Unix socket 交给守护进程；守护进程经 USB 用 WebDriverAgent 操作 iPhone 或 iPad](/architecture-dark.svg){.dark-only}
+![架构：MCP 客户端经 stdio 调用 iphone-control mcp，再经 Unix socket 交给守护进程；守护进程经 USB 操作 iPhone 或 iPad，iOS 27 起用原生控制，更低的版本用 WebDriverAgent](/architecture-light.svg){.light-only}
+![架构：MCP 客户端经 stdio 调用 iphone-control mcp，再经 Unix socket 交给守护进程；守护进程经 USB 操作 iPhone 或 iPad，iOS 27 起用原生控制，更低的版本用 WebDriverAgent](/architecture-dark.svg){.dark-only}
 
-- **守护进程**常驻，独占手机：配对、挂载开发者镜像、建立隧道，在手机上运行 [WebDriverAgent](https://github.com/appium/WebDriverAgent)（WDA，苹果 XCTest 自动化框架上的代理），用它读界面、点击和输入。
+- **守护进程**常驻，独占手机：配对、挂载开发者镜像、建立隧道，然后按 iOS 版本选一条路线操作手机：
+  - **iOS 27 及以上：原生控制（默认）。** 读界面用系统的无障碍服务，点击、滑动、按键走 CoreDevice HID，启动 App 走 CoreDevice。手机上什么都不装，不用 Apple ID，几秒就绪。
+  - **iOS 17–26：WebDriverAgent。** 在手机上运行 [WebDriverAgent](https://github.com/appium/WebDriverAgent)（WDA，苹果 XCTest 自动化框架上的代理），用它读界面、点击和输入。WDA 用你的**免费 Apple ID** 签名，免费签名 7 天过期，守护进程会在到期前自动重签。这条路线继续维护。
 - **MCP 服务**由 AI 客户端按需拉起，只是把工具调用转给守护进程。
-- WDA 用你的**免费 Apple ID** 签名。免费签名 7 天过期，守护进程会在到期前自动重签。
-- WDA 不可用时（例如正在重启），点击、滑动、按键和截图改走 CoreDevice HID，照样能用（要 iOS 27 及以上）。
+- iOS 27 及以上改回用 WDA（`ICTL_IOS_BACKEND=wda`）时，WDA 不可用期间（例如正在重启）点击、滑动、按键和截图改走 CoreDevice HID，照样能用。
 
 ## 兼容性
 
 | | |
 |---|---|
 | 主机 | Linux，x86_64 或 arm64：一行命令安装、Homebrew 或 deb 包（Debian 12+、Ubuntu 22.04+），要系统的 usbmuxd；也可以用 Rust 1.89+ 从源码编译<br>macOS，Apple Silicon：一行命令安装或 Homebrew，也可以从源码编译，见 [macOS](../deploy/macos)<br>不支持 Windows |
-| 手机 | iPhone 或 iPad，iOS 17 及以上；HID 后备路线要 iOS 27 及以上 |
-| 已在真机验证 | iPhone 15 Pro Max，iOS 27.0.1（Linux、macOS）<br>iPhone 12 mini，iOS 26.4.1（Linux）<br>iPad mini 5，iOS 26.6.1（Linux） |
-| 账号 | 免费 Apple ID 即可，建议专门注册一个 |
+| 手机 | iPhone 或 iPad，iOS 17 及以上。**推荐 iOS 27 及以上**（原生控制）；iOS 17–26 经 WebDriverAgent |
+| 已在真机验证 | iPhone 15 Pro Max，iOS 27.2.1，原生控制（Linux）<br>iPhone 15 Pro Max，iOS 27.0.1，WDA（Linux、macOS）<br>iPhone 12 mini，iOS 26.4.1（Linux）<br>iPad mini 5，iOS 26.6.1（Linux） |
+| 账号 | iOS 27 及以上（原生控制）不需要；iOS 26 及以下要一个免费 Apple ID，建议专门注册一个 |
 
 其他机型和 iOS 版本应该也能用，但还没测过，欢迎[反馈](https://github.com/Derrors/iphone-control/issues)。
 
@@ -40,16 +43,17 @@ iphone-control 让 AI agent（例如 Claude）操作一台用数据线接在 Lin
 
 **需要你在手机上操作**
 
-- 不绕过任何 iOS 安全机制：信任电脑、打开开发者模式、信任开发者证书、启用 UI 自动化，都需要你在手机上亲自操作一次。
-- 手机重启后，第一次解锁（BFU）必须人工完成，还要再输一次密码允许 UI 自动化，这是 iOS 的要求。
+- 不绕过任何 iOS 安全机制：信任电脑、打开开发者模式，都需要你在手机上亲自操作一次；用 WDA 时还要信任开发者证书、启用 UI 自动化。
+- 手机重启后，第一次解锁（BFU）必须人工完成，这是 iOS 的要求；用 WDA 时还要再输一次密码允许 UI 自动化。
 
 **使用**
 
 - 一台主机可以接多台 iPhone/iPad，但同一时间只控制一台，见[多台设备](./multi-device)。不要让两份 iphone-control 或其他基于 usbmuxd 的工具连同一台。
 - 游戏、地图、视频这类界面没有元素树，agent 只能看截图按坐标操作。
-- HID 后备路线要 iOS 27 及以上；更早的 iOS 全部经 WebDriverAgent 操作，WDA 重启期间操作会失败。
-- 免费 Apple ID 的描述文件 7 天有效。重签是自动的，但 Apple ID 会话失效后要运行 `login` 重新登录。
-- 登录 Apple ID 默认用公共的第三方 anisette 服务，可以设 `ICTL_ANISETTE_URL` 换成自建服务，见[配置](./configuration)。
+- 原生控制（iOS 27 及以上）：屏幕外的列表行读不到，要先滑到才找得到；输入文字一律经剪贴板粘贴，守护进程会自动点「允许粘贴」，输完还原剪贴板。
+- iOS 26 及以下全部经 WebDriverAgent 操作，没有 HID 后备，WDA 重启期间操作会失败。
+- 用 WDA 时：免费 Apple ID 的描述文件 7 天有效。重签是自动的，但 Apple ID 会话失效后要运行 `login` 重新登录。
+- 用 WDA 时，登录 Apple ID 默认用公共的第三方 anisette 服务，可以设 `ICTL_ANISETTE_URL` 换成自建服务，见[配置](./configuration)。
 
 **macOS**
 

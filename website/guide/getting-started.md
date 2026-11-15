@@ -5,8 +5,8 @@
 ## 准备
 
 - 一台主机：Mac（Apple 芯片），或 Linux（x86_64、aarch64）
-- iPhone 或 iPad（iOS 17+）和能传数据的线
-- 一个免费 Apple ID（建议专门注册一个）
+- iPhone 或 iPad 和能传数据的线。**推荐 iOS 27 及以上**：原生控制，手机上什么都不装，不用 Apple ID；iOS 17–26 也能用，经 WebDriverAgent
+- iOS 26 及以下还要一个免费 Apple ID（建议专门注册一个），用来给 WebDriverAgent 签名
 - 主机能访问苹果服务器和 GitHub；国内网络一般要配代理（引导里会问）
 
 ::: warning 一部手机只接一份
@@ -77,6 +77,8 @@ iphone-control
 
 第一次运行时，它会在终端里一步步带你完成设置。已经做好的步骤会跳过；中途退出了，再运行 `iphone-control` 会接着做。它要在终端里交互运行。
 
+iOS 27 及以上的手机走原生控制，引导会跳过登录 Apple ID 和签名安装 WDA，下表标了「iOS 26 及以下」的步骤都不用做。
+
 | 步骤 | 你要做的 |
 |---|---|
 | 语言 | 选中文或 English |
@@ -85,9 +87,10 @@ iphone-control
 | 等待手机连接 | 解锁手机 |
 | 配对 | 手机上弹出「要信任此电脑吗？」时点「信任」，输入锁屏密码 |
 | 开发者模式 | 手机上：设置 → 隐私与安全性 → 开发者模式 → 打开 → 重新启动；重启解锁后在弹窗里点「打开」 |
-| 登录 Apple ID | 在终端里输入 Apple ID、密码和双重认证验证码 |
-| 签名安装 WDA | 保持手机解锁 |
-| 等待 WDA 启动 | 手机上：设置 → 通用 → VPN 与设备管理 → 信任你的 Apple ID（要联网）；如果弹出「为 XCTest 输入 iPhone 密码」，输入锁屏密码 |
+| 登录 Apple ID（iOS 26 及以下） | 在终端里输入 Apple ID、密码和双重认证验证码 |
+| 签名安装 WDA（iOS 26 及以下） | 保持手机解锁 |
+| 等待手机准备好（iOS 27 及以上） | 保持手机解锁，通常几秒到半分钟 |
+| 等待 WDA 启动（iOS 26 及以下） | 手机上：设置 → 通用 → VPN 与设备管理 → 信任你的 Apple ID（要联网）；如果弹出「为 XCTest 输入 iPhone 密码」，输入锁屏密码 |
 | 自动解锁（可选） | 要的话输入锁屏密码，见[自动解锁](./auto-unlock) |
 | 通知（可选） | 选 Bark 或 Telegram，填 key 或 token，会发一条测试通知，见[通知](./notifications) |
 | 注册 MCP | 找到 Claude Code 或 Codex 时，回车注册到它 |
@@ -120,7 +123,7 @@ iphone-control viewer token    # 另开一个终端：点开它打印的链接�
 ## 检查状态
 
 ```bash
-iphone-control status   # 当前状态、描述文件还剩多久、最近日志
+iphone-control status   # 当前状态、控制方式（原生或 WDA）、最近日志
 iphone-control doctor   # 逐层诊断，每项失败都给出修复办法
 ```
 
@@ -135,4 +138,4 @@ iphone-control doctor   # 逐层诊断，每项失败都给出修复办法
 | Homebrew | `brew services stop iphone-control`，再 `brew uninstall iphone-control` |
 | deb 包 | `systemctl --user disable --now iphone-control`，再 `sudo apt remove iphone-control` |
 
-数据目录 `~/.local/share/iphone-control`（Apple ID 会话、签名、自动解锁密码）会留着，不需要的话自己删除；手机上的 WebDriverAgent 在手机上删除。
+数据目录 `~/.local/share/iphone-control`（Apple ID 会话、签名、自动解锁密码）会留着，不需要的话自己删除；用过 WDA 的话，手机上的 WebDriverAgent 在手机上删除。

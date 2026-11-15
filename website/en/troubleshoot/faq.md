@@ -17,6 +17,8 @@ Messages are in Simplified Chinese by default, and in English with `IPHONE_CONTR
 | 未配对<br>Not paired | No pairing record | Run `setup --reconfigure`, pick *Phone*, and tap *Trust* on the phone |
 | 开发者模式未打开<br>Developer Mode is off | Developer Mode is off | *Settings → Privacy & Security → Developer Mode*. The toggle only appears after the phone has been seen by a developer tool; running `setup --reconfigure` and picking *Phone* takes care of that |
 | 手机锁屏，隧道建不起来<br>The phone is locked, the tunnel can't be opened | Not unlocked since the last reboot | Unlock it once by hand; the state stays until then and the daemon keeps retrying |
+| 正在准备手机（挂载开发者镜像、连接无障碍服务）<br>Preparing the phone (mounting the developer disk image, connecting to the accessibility service) | Native control (iOS 27 and later) getting ready | Wait, usually a few seconds to half a minute; keep the phone unlocked |
+| 准备手机失败，稍后重试：…<br>Preparing the phone failed, retrying later: … | Native control isn't ready | Read the error after the colon and run `doctor`; see [Native control doesn't get ready](#native-control) |
 | WDA 还没签名安装<br>WDA not signed and installed yet | WDA not installed | Run `sign` or `setup` |
 | 正在启动 WDA<br>Starting WDA | Starting WDA (up to about 2 minutes) | Wait. On iOS 27 and later, taps, swipes and screenshots already work through the HID fallback, but a landscape touch needs an orientation from WDA in the last 30 seconds or it is refused, and an unknown screen size returns an error; see [Tools](../guide/tools#when-wda-is-down-the-hid-fallback). On older iOS, wait for WDA |
 | WDA 卡在手机上的「Enable UI Automation」密码框<br>WDA is stuck at the “Enable UI Automation” passcode prompt | The phone asks for the passcode for "XCTest" | Enter the passcode on the phone. This happens after a reboot, and sometimes after the daemon is restarted several times in a row. The daemon retries every 60 seconds and notifies you once |
@@ -33,7 +35,17 @@ Messages are in Simplified Chinese by default, and in English with `IPHONE_CONTR
 - **Drops about once a minute while charging:** with *Settings → Battery → Charging → 80% Limit* on, the phone keeps starting and stopping charging near 80%, and each switch renegotiates USB-C power, which drops USB for 3–5 seconds. Set the limit to 100% on a phone used for automation.
 - **On a Mac:** usbmuxd is part of macOS; if `doctor` can't reach it, run `sudo launchctl kickstart -k system/com.apple.usbmuxd`. See [macOS](../deploy/macos).
 
+## Native control doesn't get ready {#native-control}
+
+iOS 27 and later are controlled natively by default, which needs only pairing, Developer Mode, the developer disk image and the accessibility service. When `status` keeps saying *Preparing the phone failed*:
+
+- **The disk image doesn't download:** it comes from GitHub; set a proxy if needed (`iphone-control setup --reconfigure`, pick *Proxy*).
+- **The phone is locked:** keep it unlocked while it gets ready.
+- **Still stuck:** run `doctor` to see which layer fails and [open an issue](https://github.com/Derrors/iphone-control/issues/new/choose). Meanwhile you can go back to WDA with `ICTL_IOS_BACKEND=wda` in `~/.config/iphone-control/env` and `iphone-control service restart` (needs an Apple ID; see the next section).
+
 ## WDA won't start
+
+For devices on WDA only: iOS 26 and earlier, or with `ICTL_IOS_BACKEND=wda`.
 
 - **"Untrusted developer":** after the first install, trust your Apple ID under *Settings → General → VPN & Device Management* (the phone needs internet).
 - <a id="cert"></a>**Signing certificate revoked:** `status` says `unexpected response` although the profile is still valid; tapping the WebDriverAgentRunner icon on the device says the app can't be verified.

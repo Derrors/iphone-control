@@ -15,7 +15,7 @@ iphone-control select auto                 # 改回自动选
 agent 用 `iphone_list_devices` 和 `iphone_select_device`，效果一样。
 
 - 只能选 USB 上接着的设备。先比 UDID，再比设备名；设备名包含这段文字且只有一台时也行，对上多台就报错，要用 UDID 指定。
-- 切换后 WDA 要 10~60 秒才起来，先用 `status`（或 `iphone_status`）确认就绪。没装过 WDA 的设备要先[安装](#给新设备安装)。
+- 切换后要等新设备就绪：原生控制（iOS 27 及以上）几秒，WDA 要 10~60 秒。先用 `status`（或 `iphone_status`）确认。iOS 26 及以下没装过 WDA 的设备要先[安装](#给新设备安装)。
 - 浏览器控制台 `iphone-control viewer` 也能切换，见[在控制台里切换](#control-page)。
 
 ## 在控制台里切换 {#control-page}
@@ -27,9 +27,10 @@ agent 用 `iphone_list_devices` 和 `iphone_select_device`，效果一样。
 - **新设备没就绪时**，画面区域会说明原因：
   - 没有连上设备：用数据线连上，确认数据线能传数据。
   - 还没配对或没开开发者模式：在终端运行 `iphone-control setup --reconfigure`，选「手机」。
+  - 正在准备手机（原生控制）：挂载开发者镜像、连接无障碍服务，通常几秒到半分钟。
   - 正在启动 WDA：通常 10~60 秒。
   - 设备重启后还没解锁过：在设备上手动解锁一次；首次启用 UI 自动化时在设备上输入锁屏密码。
-- **没装 WDA 的设备**：已登录 Apple ID 时，画面区域有「签名并安装 WDA」按钮，大约 1~2 分钟，期间保持手机解锁。没登录时，它会提示在终端运行 `iphone-control setup --reconfigure`，选「Apple ID」。
+- **没装 WDA 的设备**（iOS 26 及以下）：已登录 Apple ID 时，画面区域有「签名并安装 WDA」按钮，大约 1~2 分钟，期间保持手机解锁。没登录时，它会提示在终端运行 `iphone-control setup --reconfigure`，选「Apple ID」。
 - 同一时间只控制一台，不能并排看两部手机。
 - AI 任务执行中不能切换；设了 `IPHONE_UDID` 时也不能切换。
 

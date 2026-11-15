@@ -6,13 +6,13 @@ iphone-control 本质上是一个手机遥控器：能访问它的人，就能�
 
 ## 存了什么
 
-- **数据目录**里有 Apple ID 会话、开发签名私钥、配对记录，开启自动解锁时还有**明文**的锁屏密码，要像密码一样保管和备份。Apple ID 密码本身不保存。
+- **数据目录**里有配对记录，用 WDA 时还有 Apple ID 会话、开发签名私钥，开启自动解锁时还有**明文**的锁屏密码，要像密码一样保管和备份。Apple ID 密码本身不保存。
 - **控制接口**是权限 0600 的 Unix socket，能连上它就能操控手机：主机 root 和运行守护进程的那个用户。
 - **通知密钥**在设置文件 `~/.config/iphone-control/env` 里，权限 0600。
 
 ## 默认的保护
 
-- **不开网络端口。** WDA 经 usbmuxd 直连手机。`wda-bridge` 和实时画面 `viewer` 都要显式开启，默认只绑 127.0.0.1（`viewer --lan` 也对局域网开放，走 HTTPS），浏览器里的其他网页借不了它们操作手机。`wda-bridge` 没有登录，本机任何用户都能用，用完就停。`viewer` 和它同一个端口上的 MCP（`/mcp`）要令牌登录，本机也一样：控制台分不清本机的浏览器和经 frp、cloudflared 等反向代理转发进来的访问。令牌存在数据目录（0600），`viewer token` 显示、`--new` 换掉；可以加有名字的只读令牌（`viewer token add <名字> --read-only`），只能看不能操作。另一台机器上的 agent 只拿任务口令，只能为它的任务操作手机，不能暂停或确认自己的任务。`viewer --lan` 会把控制台开放给局域网，只接受局域网地址来的连接，局域网里走 HTTPS。
+- **不开网络端口。** 守护进程经 usbmuxd 直连手机。`wda-bridge` 和实时画面 `viewer` 都要显式开启，默认只绑 127.0.0.1（`viewer --lan` 也对局域网开放，走 HTTPS），浏览器里的其他网页借不了它们操作手机。`wda-bridge` 没有登录，本机任何用户都能用，用完就停。`viewer` 和它同一个端口上的 MCP（`/mcp`）要令牌登录，本机也一样：控制台分不清本机的浏览器和经 frp、cloudflared 等反向代理转发进来的访问。令牌存在数据目录（0600），`viewer token` 显示、`--new` 换掉；可以加有名字的只读令牌（`viewer token add <名字> --read-only`），只能看不能操作。另一台机器上的 agent 只拿任务口令，只能为它的任务操作手机，不能暂停或确认自己的任务。`viewer --lan` 会把控制台开放给局域网，只接受局域网地址来的连接，局域网里走 HTTPS。
 - **不用 root。** 守护进程以你的普通用户身份作为用户服务运行，安装脚本拒绝以 root 运行。
 - **自动解锁默认关闭**，输错一次即停用。
 - **开发者工具默认关闭**。
@@ -20,8 +20,8 @@ iphone-control 本质上是一个手机遥控器：能访问它的人，就能�
 
 ## 需要知道的风险
 
-- **anisette 服务。** 登录 Apple ID 默认用公共的第三方服务（`mac-ani.jkcoxson.com`）。它拿不到你的密码，但能看到你什么时候登录。介意的话自建 [anisette-v3-server](https://github.com/Dadoum/anisette-v3-server)，设 `ICTL_ANISETTE_URL`。
-- **用专门的 Apple ID。** 主机被入侵时，专门的账号能把影响限制住。
+- **anisette 服务（只有用 WDA 时）。** 登录 Apple ID 默认用公共的第三方服务（`mac-ani.jkcoxson.com`）。它拿不到你的密码，但能看到你什么时候登录。介意的话自建 [anisette-v3-server](https://github.com/Dadoum/anisette-v3-server)，设 `ICTL_ANISETTE_URL`。
+- **用专门的 Apple ID（只有用 WDA 时）。** iOS 27 及以上的原生控制不用 Apple ID。主机被入侵时，专门的账号能把影响限制住。
 - **agent 用你的手在操作。** 它能发消息、付款、改设置。服务端会要求 agent 在这类操作前先问你，但这只是指示，不是强制。
 - **开发者工具开着时风险更大。** `iphone_web_eval` 能在任意可检查的页面（含 Safari 标签页）执行 JavaScript，读 cookie 和 localStorage，以已登录身份发请求；`iphone_install_app` 接受运行守护进程的机器上的任意路径；系统日志和崩溃报告会进入 agent 的上下文，可能含隐私。开关 `IPHONE_CONTROL_DEV_TOOLS` 只决定 MCP 提不提供这些工具，不是权限边界。用完就关。
 

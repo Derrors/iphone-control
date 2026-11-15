@@ -9,8 +9,8 @@ iphone-control 也能直接跑在 Mac 上：用 macOS 自带的 usbmuxd，不需
 ## 需要
 
 - Apple Silicon 的 Mac。用脚本安装时，PATH 中需要有 Python 3 和 OpenSSL 3。Intel Mac 要从源码编译，需 Xcode 命令行工具和 Rust 1.89 以上。
-- 一部 iOS 17 以上的 iPhone 或 iPad，用能**传数据**的线连接
-- 一个免费 Apple ID（建议专门注册一个）
+- 一部 iPhone 或 iPad，用能**传数据**的线连接。推荐 iOS 27 及以上（原生控制）；iOS 17 起都能用
+- iOS 26 及以下还要一个免费 Apple ID（建议专门注册一个）
 
 ## 安装
 
@@ -57,7 +57,7 @@ iphone-control --version
 iphone-control
 ```
 
-第一次运行会一步步带你完成设置：语言、代理、后台服务、配对、开发者模式、Apple ID、签名安装 WDA、自动解锁和通知（可选）、注册到 Claude Code 和 Codex。手机上要做的事见[快速开始](../guide/getting-started#first-run)。如果这部手机已经在 Finder 里信任过这台 Mac，配对这一步会直接显示「已配对」。设置好以后再运行 `iphone-control` 只显示状态。
+第一次运行会一步步带你完成设置：语言、代理、后台服务、配对、开发者模式（iOS 26 及以下还有 Apple ID、签名安装 WDA）、自动解锁和通知（可选）、注册到 Claude Code 和 Codex。手机上要做的事见[快速开始](../guide/getting-started#first-run)。如果这部手机已经在 Finder 里信任过这台 Mac，配对这一步会直接显示「已配对」。设置好以后再运行 `iphone-control` 只显示状态。
 
 ### 手动做
 
@@ -131,7 +131,7 @@ iphone-control service restart
 rm -rf ~/.local/share/iphone-control ~/.config/iphone-control   # 会删掉 Apple ID 会话和签好的 WDA
 ```
 
-手机上删除 WebDriverAgent 这个 App，「VPN 与设备管理」里的描述文件会随它一起消失。
+用过 WDA 的话，在手机上删除 WebDriverAgent 这个 App，「VPN 与设备管理」里的描述文件会随它一起消失。
 
 ## 已知差异
 

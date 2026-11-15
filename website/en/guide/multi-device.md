@@ -15,7 +15,7 @@ iphone-control select auto              # back to automatic choice
 Agents use `iphone_list_devices` and `iphone_select_device`, which do the same.
 
 - Only devices connected over USB can be selected. It tries the UDID, then the device name, then a part of the name that matches exactly one device. If it matches several, you get an error and need the UDID.
-- WDA takes 10–60 seconds to start after switching; check with `status` (or `iphone_status`) that it's ready. A device that has never had WDA needs [installing](#install-on-a-new-device) first.
+- After switching, wait for the device to be ready: seconds with native control (iOS 27 and later), 10–60 seconds with WDA. Check with `status` (or `iphone_status`). A device on iOS 26 or earlier that has never had WDA needs [installing](#install-on-a-new-device) first.
 - The control page, `iphone-control viewer`, can switch too; see [Switching on the control page](#control-page).
 
 ## Switching on the control page {#control-page}
@@ -27,9 +27,10 @@ The device picker at the top of the `iphone-control viewer` page switches the co
 - **When the new device isn't ready**, the picture area says why:
   - Not connected: plug it in with a cable that carries data.
   - Not paired or Developer Mode off: run `iphone-control setup --reconfigure` in a terminal and pick Phone.
+  - Preparing the phone (native control): mounting the disk image and connecting to the accessibility service, usually a few seconds to half a minute.
   - WDA starting: usually 10–60 seconds.
   - Not unlocked since a restart: unlock it by hand once; the first time UI automation is enabled after a restart, enter the passcode on the device.
-- **A device without WDA:** with an Apple ID signed in, the picture area has a *Sign and install WDA* button. It takes about 1–2 minutes; keep the phone unlocked. Without an Apple ID, it tells you to run `iphone-control setup --reconfigure` and pick Apple ID.
+- **A device without WDA** (iOS 26 and earlier): with an Apple ID signed in, the picture area has a *Sign and install WDA* button. It takes about 1–2 minutes; keep the phone unlocked. Without an Apple ID, it tells you to run `iphone-control setup --reconfigure` and pick Apple ID.
 - Only one device is controlled at a time; you can't watch two phones side by side.
 - Switching is refused while an AI task runs, and when `IPHONE_UDID` pins a device.
 

@@ -1934,6 +1934,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "ictl-ax"
+version = "0.2.6"
+dependencies = [
+ "idevice",
+ "plist",
+ "thiserror 2.0.21",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "ictl-daemon"
 version = "0.2.6"
 dependencies = [
@@ -1962,6 +1973,7 @@ dependencies = [
 name = "ictl-device"
 version = "0.2.6"
 dependencies = [
+ "ictl-ax",
  "ictl-l10n",
  "ictl-webinspector",
  "idevice",
@@ -2273,6 +2285,7 @@ dependencies = [
  "flate2",
  "http",
  "http-body-util",
+ "ictl-ax",
  "ictl-daemon",
  "ictl-device",
  "ictl-l10n",

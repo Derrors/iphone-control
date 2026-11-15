@@ -40,6 +40,14 @@ enum Check {
         #[arg(long, default_value_t = 30)]
         restore_after: u64,
     },
+    /// 2c. 不经 WDA 读界面（remoteAXService，iOS 27 起）：打印用时、元素和 SpringBoard 盖在上面的东西，
+    /// 把转成的 WDA 式 XML 存到 `out`（含屏幕文字，用完删）。`watch` 秒内每次推送都再读一次
+    AxScreen {
+        #[arg(long)]
+        out: Option<PathBuf>,
+        #[arg(long, default_value_t = 0)]
+        watch: u64,
+    },
     /// 3. 截图：screencaptureservice PNG
     Screenshot { out: PathBuf },
     /// 4. 隧道稳定性：同一条隧道持续截图 N 分钟
@@ -291,6 +299,50 @@ pub async fn run(udid: Option<&str>, args: DebugArgs) -> anyhow::Result<()> {
             .await;
             t.close().await;
             println!("{}", r?);
+        }
+        Check::AxScreen { out, watch } => {
+            let mut t = device.open_tunnel().await?;
+            let r = async {
+                let t0 = Instant::now();
+                t.ax().await?;
+                println!("connected in {:.2}s", t0.elapsed().as_secs_f64());
+                let mut after = None;
+                let end = Instant::now() + Duration::from_secs(watch);
+                loop {
+                    let s =
+                        t.ax_screen(after, Duration::from_secs(if after.is_some() { watch.max(1) } else { 5 })).await?;
+                    let xml = ictl_ax::xml::to_xml(&s.app, &s.overlays, args.width, args.height);
+                    let labelled: Vec<&str> =
+                        s.app.iter().filter(|e| !e.label.is_empty()).map(|e| e.label.as_str()).take(6).collect();
+                    println!(
+                        "{:7.2}s app pid {} with {} elements ({} typed), {} over it: {} | {}",
+                        t0.elapsed().as_secs_f64(),
+                        s.app_pid,
+                        s.app.len(),
+                        s.app.iter().filter(|e| e.xc_type > 0).count(),
+                        s.overlays.len(),
+                        labelled.join(" / "),
+                        s.overlays
+                            .iter()
+                            .filter(|e| !e.label.is_empty())
+                            .map(|e| e.label.as_str())
+                            .take(6)
+                            .collect::<Vec<_>>()
+                            .join(" / "),
+                    );
+                    if let Some(p) = &out {
+                        std::fs::write(p, &xml)?;
+                    }
+                    if Instant::now() >= end {
+                        break;
+                    }
+                    after = Some(s.at);
+                }
+                Ok::<_, anyhow::Error>(())
+            }
+            .await;
+            t.close().await;
+            r?;
         }
         Check::Screenshot { out } => {
             let mut t = device.open_tunnel().await?;

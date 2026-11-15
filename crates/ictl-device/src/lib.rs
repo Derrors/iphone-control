@@ -12,6 +12,7 @@
 //! 不负责：WDA（见 `ictl-wda`）、状态机（见 `ictl-daemon`）。
 
 pub mod apps;
+pub mod ax;
 pub mod ddi;
 pub mod hid;
 mod media;
@@ -462,7 +463,7 @@ impl Device {
             let mut adapter = proxy.create_software_tunnel()?.to_async_handle();
             let stream = adapter.connect(rsd_port).await?;
             let handshake = RsdHandshake::new(stream).await?;
-            Ok(Tunnel { adapter, handshake, hid: None })
+            Ok(Tunnel { adapter, handshake, hid: None, ax: None, springboard: None })
         })
         .await
     }
@@ -601,6 +602,10 @@ pub struct Tunnel {
     adapter: AdapterHandle,
     handshake: RsdHandshake,
     hid: Option<HidSession>,
+    /// remoteAXService（[`ax`]），用时才开
+    ax: Option<ax::AxSession>,
+    /// SpringBoard 的进程号（[`ax`] 读盖在 App 上的弹窗用），每条隧道查一次
+    springboard: Option<i64>,
 }
 
 impl Tunnel {
@@ -668,7 +673,7 @@ impl Tunnel {
     /// 不粘，所以这里不还原：调用方等弹窗答完再用返回的 [`PendingRestore`] 调 [`Self::restore_pasteboard`]。
     /// 手机不确认按键，没有输入框获得焦点时什么也粘不上，结果要看屏幕
     pub async fn paste_text(&mut self, text: &str) -> Result<Option<PendingRestore>> {
-        let Tunnel { adapter, handshake, hid } = self;
+        let Tunnel { adapter, handshake, hid, .. } = self;
         let Some(hid) = hid.as_mut() else {
             return Err(DeviceError::InvalidInput(ictl_l10n::tr!("HID 会话没开", "The HID session isn't open").into()));
         };
@@ -814,6 +819,7 @@ impl Tunnel {
 
     /// 关掉隧道：先停 HID 的屏幕媒体流
     pub async fn close(mut self) {
+        self.close_ax().await;
         self.close_hid().await;
     }
 }

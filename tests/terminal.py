@@ -53,11 +53,15 @@ class Session:
     def expect(self, text):
         target = text.encode()
         deadline = time.monotonic() + 8
+        exited = None
         while target not in self.output and time.monotonic() < deadline:
             self.pump()
             if self.proc.poll() is not None:
-                self.pump(0)
-                break
+                # What the process wrote just before it exited can reach this side of the PTY a little later (macOS):
+                # one more read without waiting missed MENU_CANCELLED now and then
+                exited = exited or time.monotonic()
+                if time.monotonic() - exited > 1:
+                    break
         assert target in self.output, (text, self.output.decode(errors="replace"))
 
     def wait_for_raw(self):

@@ -4,12 +4,12 @@
   </a>
 
   <p align="center">
-    Let an AI agent operate a real iPhone or iPad plugged into a Linux machine or a Mac — one Rust binary, no Xcode, no paid developer account, no jailbreak.
+    Let an AI agent operate a real iPhone or iPad plugged into a Linux machine or a Mac, reliably and fast — one Rust binary, no Xcode, no paid developer account, no jailbreak, and from iOS 27 no Apple ID either.
   </p>
 
   <p align="center">
     <a href="https://github.com/Derrors/iphone-control/releases/latest"><img src="https://img.shields.io/github/v/release/Derrors/iphone-control?style=flat" alt="Release"></a>
-    <img src="https://img.shields.io/badge/iOS-17%2B-black?style=flat&logo=apple" alt="iOS">
+    <img src="https://img.shields.io/badge/iOS-27%2B%20recommended%20%C2%B7%2017%2B%20supported-black?style=flat&logo=apple" alt="iOS: 27+ recommended, 17+ supported">
     <img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS-0E7490?style=flat" alt="Platform: Linux | macOS">
     <img src="https://img.shields.io/badge/MCP-17%20tools-8A2BE2?style=flat" alt="MCP">
     <a href="Cargo.toml"><img src="https://img.shields.io/badge/Rust-1.89%2B-CE422B?style=flat&logo=rust&logoColor=white" alt="Rust"></a>
@@ -38,33 +38,63 @@
 
 AI agents can drive browsers and desktops, but a real iPhone is harder: Apple's automation tools need a Mac and Xcode, and the open-source alternatives come as separate pieces that each need their own setup, signing and babysitting.
 
-iphone-control does it all in **one Rust binary** on Linux or macOS, built on [idevice](https://github.com/jkcoxson/idevice), [Impactor](https://github.com/claration/impactor) and [WebDriverAgent](https://github.com/appium/WebDriverAgent). A long-running daemon owns the phone — tunnel, HID session, WebDriverAgent session — and exposes it to Claude Code or any MCP client. It succeeds [iphone-control-toolkit](https://github.com/Derrors/iphone-control-toolkit) and keeps its MCP tools compatible.
+iphone-control does it all in **one Rust binary** on Linux or macOS, built on [idevice](https://github.com/jkcoxson/idevice), [Impactor](https://github.com/claration/impactor) and [WebDriverAgent](https://github.com/appium/WebDriverAgent). It succeeds [iphone-control-toolkit](https://github.com/Derrors/iphone-control-toolkit) and keeps its MCP tools compatible.
+
+It has three layers, and device control is the core:
+
+| Layer | What it does | Needs the control page? |
+| --- | --- | --- |
+| **Device control** (core) | A long-running daemon owns the phone and serves the MCP tools; recovers from unplugging and reboots; pausing, taking over and confirming AI tasks | No |
+| **Access** | AI clients on this machine connect over stdio; other machines over HTTP MCP (`/mcp`) or `mcp --url` | Locally no; remotely the viewer service must run |
+| **Control page** (optional) | Watch the live screen in a browser, act on it, hand out AI tasks | It is the control page |
+
+Device control has two routes, picked by iOS version:
+
+- **iOS 27 and later: native control (default).** The screen is read through the system's accessibility service, taps, swipes and buttons go through HID, and apps launch through CoreDevice. Nothing is installed on the phone: no Apple ID, no signing, ready in seconds.
+- **iOS 17–26: WebDriverAgent.** Signed with a free Apple ID, installed on the phone and re-signed before the 7-day profile expires. This route stays maintained.
+
+> [!TIP]
+> **Use a device on iOS 27 or later if you can**, or update the phone to iOS 27: no Apple ID sign-in, no signing, no "Enable UI Automation" passcode after a reboot, and none of the expiring profiles, revoked certificates or stuck WebDriverAgent that come with it.
 
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="website/public/architecture-dark.svg">
-    <img src="website/public/architecture-light.svg" alt="Architecture: an MCP client talks to iphone-control mcp over stdio, which talks to the daemon over a Unix socket; the daemon drives the iPhone or iPad over USB through WebDriverAgent, with CoreDevice HID as fallback" width="900">
+    <img src="website/public/architecture-light.svg" alt="Architecture: an MCP client talks to iphone-control mcp over stdio, which talks to the daemon over a Unix socket; the daemon drives the iPhone or iPad over USB, natively on iOS 27 and later and through WebDriverAgent below that" width="900">
   </picture>
 </p>
 
 ## Features
 
 <p align="center">
-  <img src="docs/images/features.svg" alt="One binary, 17 MCP tools, fewer round trips, runs unattended, HID fallback, doctor and alerts" width="900">
+  <img src="docs/images/features.svg" alt="One binary, 17 MCP tools, fewer round trips, runs unattended, native on iOS 27+, doctor and alerts" width="900">
 </p>
+
+**Device control (core)**
 
 - **See and touch the screen**: screenshots with region zoom, tap, swipe, long-press, text input (including Chinese), hardware buttons
 - **Work with UI elements**: read the element tree, tap by text (on a part not covered by floating bars or the keyboard), launch and close apps, open URLs, wait for text to appear
-- **Fewer round trips**: any action can return the resulting screen once it has settled, flagging pages still loading and blocking alerts; `iphone_batch` runs up to 20 steps in one call
-- **Automatic fallback**: when WebDriverAgent is down, screenshots, taps, swipes and keys switch to Apple's CoreDevice HID service (iOS 27+)
-- **Runs unattended**: recovers from replugging, phone reboots and WebDriverAgent crashes; re-signs WebDriverAgent with a free Apple ID before the 7-day profile expires
-- **Alerts**: Telegram or Bark notifications when re-signing fails, the Apple ID session expires, the phone goes offline, or a passcode is needed after a reboot
+- **Fewer round trips**: any action can return the resulting screen once it has settled, say whether it changed, and flag pages still loading and blocking alerts; `iphone_batch` runs up to 20 steps in one call
+- **Runs unattended**: recovers from replugging, phone reboots and lost connections, and keeps serving with the control page closed; a stuck WebDriverAgent is restarted and re-signed before it expires
+- **A person stays in charge**: AI tasks can be paused, taken over or stopped at any time; paying, deleting or sending waits for your OK, and an agent can't approve its own task
+- **Several devices**: connect several iPhones and iPads and switch which one is controlled
 - **Optional auto-unlock**: every passcode digit is verified, and a wrong passcode disables auto-unlock after one attempt
-- **Diagnostics**: `doctor` checks every layer from USB to WebDriverAgent and tells you how to fix each failure
+- **Alerts**: Telegram or Bark notifications when the phone goes offline, a passcode is needed after a reboot, or re-signing fails
+- **Diagnostics**: `doctor` checks every layer from USB up and tells you how to fix each failure
+
+**Access**
+
+- **On this machine**: Claude Code, Codex or any MCP client over stdio; `task run` runs any agent platform in a task whose every step you can follow
+- **Remotely**: the viewer service serves HTTP MCP (`/mcp`) on its port, over HTTPS with a login token (read-only ones too) when opened to the network; `mcp --url` and `task --url` use a phone on another machine
+
+**Control page (optional)**
+
+- **Live screen**: on iOS 27 and later the phone's own video (about 60 fps), otherwise H.264; a low-bandwidth mode
+- **Act on it**: the mouse taps and drags like a finger; system alerts missing from the video are drawn on it and can be tapped
+- **Hand out tasks**: give a task to a local Claude Code or Codex, watch it work and take over at any time
 
 ## Quick Start
 
-You need an iPhone or iPad on iOS 17+ connected by a **data** cable, a free Apple ID (use a dedicated one), and an Apple Silicon Mac or a Linux machine.
+You need an iPhone or iPad (iOS 27+ recommended, iOS 17+ supported) connected by a **data** cable, and an Apple Silicon Mac or a Linux machine. On iOS 26 and earlier you also need a free Apple ID (use a dedicated one) to sign WebDriverAgent.
 
 **macOS or Linux, one command** (upstream example; for a fork, use the installer asset from its own signed release)
 
@@ -96,9 +126,9 @@ Connect the phone with the cable and run:
 iphone-control
 ```
 
-The first time, it walks you through setup in the terminal, one step at a time: language, proxy, the background service, pairing, Developer Mode, Apple ID, signing and installing WebDriverAgent, the optional auto-unlock and notifications, and registering with Claude Code and Codex. Do what it asks on the phone. Steps already done are skipped; afterwards, `iphone-control` just shows the status.
+The first time, it walks you through setup in the terminal, one step at a time: language, proxy, the background service, pairing, Developer Mode (and on iOS 26 and earlier, Apple ID and signing and installing WebDriverAgent), the optional auto-unlock and notifications, and registering with Claude Code and Codex. Do what it asks on the phone. Steps already done are skipped; afterwards, `iphone-control` just shows the status.
 
-Then open a new Claude Code or Codex session and ask, for example, *“Open Clock, switch to the stopwatch and start it.”* Or run `iphone-control viewer` for the control page in the browser (http://127.0.0.1:8200; log in with the link `iphone-control viewer token` prints), where you can act on the live screen and hand tasks to a local Claude Code or Codex; it works from the local network and other machines too, see [Viewer and Remote Use](https://derrors.github.io/iphone-control/en/guide/remote).
+Then open a new Claude Code or Codex session and ask, for example, *“Open Clock, switch to the stopwatch and start it.”* That is device control, complete; the control page is optional. To watch the phone in a browser, run `iphone-control viewer` for the control page in the browser (http://127.0.0.1:8200; log in with the link `iphone-control viewer token` prints), where you can act on the live screen and hand tasks to a local Claude Code or Codex; it works from the local network and other machines too, see [Viewer and Remote Use](https://derrors.github.io/iphone-control/en/guide/remote).
 
 More: [step-by-step guide](https://derrors.github.io/iphone-control/en/guide/getting-started) · [build from source](https://derrors.github.io/iphone-control/en/deploy/source) · [macOS guide](https://derrors.github.io/iphone-control/en/deploy/macos) · [other MCP clients](https://derrors.github.io/iphone-control/en/guide/mcp-clients).
 
@@ -137,15 +167,15 @@ Tool texts, results, CLI output and logs are in Simplified Chinese by default; s
 | `mcp [--url <viewer>]` | The MCP server; your AI client starts it. With `--url` it bridges to another machine's viewer |
 | `status` | Daemon state, time left on the signing profile, recent log |
 | `doctor` | Layer-by-layer health check with a fix for each failure |
-| `login` | Sign in to the Apple ID again when the session expires |
-| `sign` | Sign and install WebDriverAgent now |
-| `resign [--force]` | Re-sign WebDriverAgent if it expires soon (or now) |
+| `login` | Sign in to the Apple ID again when the session expires (WebDriverAgent devices only) |
+| `sign` | Sign and install WebDriverAgent now (likewise) |
+| `resign [--force]` | Re-sign WebDriverAgent if it expires soon (or now) (likewise) |
 | `passcode set\|clear` | Turn auto-unlock on or off for a device (passcodes are kept per device) |
 | `unlock-reset` | Turn auto-unlock back on after it was disabled |
 | `devices` / `select <UDID\|name\|auto>` | List connected devices / switch which one is controlled |
 | `notify-test [event]` | Send test notifications |
 | `mcp-config` | Print the command that registers the MCP server |
-| `wda-bridge [--port]` | Expose WebDriverAgent on 127.0.0.1 for other tools; stop it when done |
+| `wda-bridge [--port]` | Expose WebDriverAgent on 127.0.0.1 for other tools; stop it when done (WebDriverAgent devices only) |
 | `viewer [--port] [--lan]` | Control page on 127.0.0.1:8200, behind a login (`viewer token` shows the token and a link; read-only tokens too): live screen you can tap, swipe and type on, device panel, and AI tasks run by a local Claude Code or Codex. `--lan` opens it to the local network (HTTPS), and MCP over HTTP is on the same port (`/mcp`) |
 | `task run [--url <viewer>] -- <command>` | AI tasks for other agent platforms; with `--url` the phone is on another machine. `task list`, `pause`, `approve`… follow and control tasks |
 | `viewer token [add <name> [--read-only]\|list\|show <name>\|remove <name>]` | The viewer's login tokens: show the owner's, or add named and read-only ones |

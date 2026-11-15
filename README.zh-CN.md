@@ -66,7 +66,7 @@ iphone-control 在 Linux 或 macOS 上用**一个 Rust 二进制**把这些事�
 ## 功能特性
 
 <p align="center">
-  <img src="docs/images/features.zh-CN.svg" alt="一个二进制、17 个 MCP 工具、少走往返、无人值守、iOS 27 原生控制、诊断与通知" width="900">
+  <img src="docs/images/features.zh-CN.svg" alt="设备控制（核心）：iOS 27 原生控制、17 个 MCP 工具、少走往返、无人值守、人工把关、诊断与通知。接入：本机接入、远程接入。控制台（可选）" width="900">
 </p>
 
 **设备控制（核心）**

@@ -66,7 +66,7 @@ Device control has two routes, picked by iOS version:
 ## Features
 
 <p align="center">
-  <img src="docs/images/features.svg" alt="One binary, 17 MCP tools, fewer round trips, runs unattended, native on iOS 27+, doctor and alerts" width="900">
+  <img src="docs/images/features.svg" alt="Device control (core): native on iOS 27+, 17 MCP tools, fewer round trips, runs unattended, a person in charge, doctor and alerts. Access: on this machine, remotely. Control page (optional)" width="900">
 </p>
 
 **Device control (core)**

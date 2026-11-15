@@ -13,6 +13,7 @@ description = "iphone-control 命令行入口"
 ictl-l10n.workspace = true
 ictl-daemon.workspace = true
 ictl-device.workspace = true
+ictl-ax.workspace = true
 ictl-mcp.workspace = true
 ictl-sign.workspace = true
 ictl-wda = { workspace = true, optional = true }

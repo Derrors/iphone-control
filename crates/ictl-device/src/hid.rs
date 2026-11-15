@@ -196,6 +196,26 @@ impl HidSession {
         .await
     }
 
+    /// 长按：按下，按住 `seconds` 秒，抬起。按住时每 100 毫秒重报一次位置：只报一次的话，有的 App（微信）
+    /// 会当成轻点（iCTRL 的做法）
+    pub async fn long_press(&mut self, x: f64, y: f64, seconds: f64) -> Result<()> {
+        let (hx, hy) = self.hid_point((x, y));
+        let held = Duration::from_secs_f64(seconds.clamp(0.0, 60.0));
+        limit(ictl_l10n::tr!("HID 长按", "HID long press"), held + Duration::from_secs(10), async {
+            let end = tokio::time::Instant::now() + held;
+            self.touch.send_touchscreen(TOUCHSCREEN_STATE_CONTACT, hx, hy, None).await?;
+            self.contact = Some((hx, hy));
+            while tokio::time::Instant::now() < end {
+                tokio::time::sleep(Duration::from_millis(100).min(end - tokio::time::Instant::now())).await;
+                self.touch.send_touchscreen(TOUCHSCREEN_STATE_CONTACT, hx, hy, None).await?;
+            }
+            self.touch.send_touchscreen(TOUCHSCREEN_STATE_RELEASE, hx, hy, None).await?;
+            self.contact = None;
+            Ok(())
+        })
+        .await
+    }
+
     pub async fn press(&mut self, button: Button) -> Result<()> {
         let (page, code, hold) = button.usage();
         limit(ictl_l10n::tr!("HID 按键", "HID key press"), Duration::from_secs(10), async {

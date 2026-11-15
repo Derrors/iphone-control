@@ -128,3 +128,19 @@
 | 122 | 升级时运行新程序的 `--version` 偶尔失败：`Text file busy`（同一进程的其他线程 fork 时，新程序还以写方式打开） | 遇到 `ETXTBSY` 等 50 毫秒重试，最多 20 次 | 单测 `the_candidate_runs_once_it_is_no_longer_open_for_writing`（修复前稳定复现） |
 | 123 | iPad（iPadOS 26）重启后要输入密码启用 UI 自动化时，通知写的是「iPhone 需要输入锁屏密码」；所有通知标题都写死「iPhone」，多台设备时看不出是哪一台 | 标题用设备名（没有名字时用型号类别），密码提示按设备类别写系统弹窗的说法；离线通知用离线前记下的名字 | 单测 `a_notification_names_its_device`；真机 `notify-test pin`（控制 iPad，经本地假 Bark 截到标题） |
 | 124 | 切到另一台设备再切回 iPhone（iOS 27）后，WDA 卡在「Enable UI Automation」密码框期间，HID 后备路线的截图、按键都报「WDA 不可用,也不知道屏幕尺寸」：state.json 只记最后一台的尺寸 | 每台设备的尺寸按 UDID 记下（`screens`），`screen`/`screen_udid` 照旧写给旧版本 | 单测 `every_device_keeps_its_screen_size`；真机：iPhone 和 iPad 来回切换后，iPhone 的 WDA 还没起来时截图、按 Home |
+| 125 | 原生控制（iOS 27 不用 WDA）：手机只在切换 App 时推送元素树，App 内换页（设置 → 通用）读到的还是点击前的页面 | 每次读界面都自己走树（类型 4 + 每层一次发出类型 5） | 真机（`then=elements` 里有新页面的元素，「界面有变化」） |
+| 126 | 原生：HID 的屏幕媒体流开着时，锁屏键盘和系统密码框对无障碍是空的（任何会话都只读到应用元素），自动解锁报「调不出键盘」 | 读锁屏前先关 HID 会话，元素 0.1～0.7 秒后回来 | 真机（锁屏后任一操作） |
+| 127 | 原生：解锁后马上点击，被锁屏滑开的动画吞掉，界面不变 | 解锁后等 0.7 秒再操作 | 真机（锁屏后 `tap_element`，3/3） |
+| 128 | 原生：走树一个元素一次请求、一来一回约 40 毫秒，57 个元素 2.5 秒；滑动后等列表停下时还连带读 SpringBoard，读太慢，每次都报「还在滚动」 | 一层的请求一次发出、按答复里的元素对象配对；等列表停下只读 App | 真机计时（列元素约 0.2 秒；向上滑不再报还在动） |
+| 129 | 原生：SpringBoard 的提问（「…想从“dtpasteboardd”粘贴」、权限请求）没有 Alert 元素：按 Home 不拦、「允许粘贴」不点、输入中文失败 | 前台是 SpringBoard、元素不多、两个以上按钮、没有图标/键盘/密码栏/单元格时包一层 Alert | 单测 `a_question_springboard_asks_reads_as_an_alert` + 真机 |
+| 130 | 原生：按 Home 关掉主屏的长按菜单后马上启动 App，菜单动画结束时 App 又被送回主屏（3/3） | Home 按下后至少 0.6 秒才返回 | 真机（3/3 留在前台） |
+| 131 | 原生：结束 App 后马上打开链接，手机报「无法确定启动的应用的进程标识符」，报错是一串归档的字节 | 结束 App 等进程真的退出（最多 2 秒）；CoreDevice 的报错取出里面的说明文字 | 单测 `a_coredevice_error_says_what_it_says` + 真机 |
+| 132 | 原生：解锁沿用 WDA 的固定等待（唤醒 1 秒、上滑 1.5 秒），一次解锁约 8 秒 | 原生读锁屏只要约 0.1 秒：上滑后每 0.2 秒找键盘，唤醒等 0.5 秒；每位照旧读回核对（#4） | 单测 `a_screen_read_cheaply_finds_the_keypad_without_waiting_it_out` + 真机计时 |
+| 133 | 原生：网页（Safari）的文字读不到：网页元素在 WebKit WebContent 进程里，没有宿主视图 | 按进程列表认出 WebContent，元素原样放置 | 单测 + 真机（`wait_for` 网页文字 0.2～0.8 秒） |
+| 134 | 原生：每次截图都重新连截屏服务，新连接上第一个请求要多做一次握手（0.82 秒，同一连接上之后 0.30 秒）。截屏服务只认 `png`（idevice 的 `jpeg` 和其他十几个格式名都被拒），在隧道的 SYN 里通告 MSS 也没让 8 MB 的 PNG 变快 | 截屏服务的连接留在隧道上复用，失效就重连一次 | 真机计时（截图中位数 0.91 → 0.43 秒）；`debug shot-formats` |
+| 135 | 原生：按键盘「下一个键盘」按钮的值判断是英文键盘就直接按键：那个值是点了要切到的键盘，不是当前的；HID 按键走硬件键盘的输入法，屏幕上是英文键盘也照样组成拼音（「wifi」成了带下划线的「w i f i」），去掉空格的读回核对没拦住 | 一律粘贴 | 真机 |
+| 136 | 原生：SpringBoard 在前台时（锁屏、面容 ID 框）状态栏的按钮被算进「SpringBoard 的提问」，报出一个标题是时间的弹窗 | 判断提问、取标题都不算状态栏元素 | 单测 `a_question_springboard_asks_reads_as_an_alert` |
+| 137 | 后台准备好手机后唤醒的那轮巡检，正赶上请求占着设备锁就跳过了，切回 iPhone 要等下一轮（10 秒）才就绪 | 唤醒的一轮没跑成就隔 200 毫秒再来 | 真机（切到 iPad 再切回） |
+| 138 | 控制台页面脚本里同一函数重复声明变量（`list`），整页脚本跑不起来，停在「正在连接」；页面测试只抽单个函数，没发现 | 测试编译整页脚本 | 单测 `tests/viewer/syntax.test.mjs` |
+| 139 | 原生控制（没有 WDA）时，解不了 HEVC 的浏览器（Firefox、多数 Linux 上的 Chrome）没有画面：H.264 和 MJPEG 两路的源头都是 WDA 的 MJPEG，都 502。手机的视频转码时带 `-fflags nobuffer` 会丢掉开头，之后每帧都找不到参考帧 | `/video` 连不上 WDA 时把手机的 HEVC 交给 ffmpeg 转成 H.264（按点数尺寸裁掉补齐的边），HEVC 输入不带 `nobuffer` | 单测 `hevc_is_transcoded_with_the_padding_cut_off` + 无头 Chromium（不支持 HEVC）看到画面 |
+| 140 | 开着后台启动（`ICTL_WDA_DETACHED=1`）用过 WDA、再切回原生控制：之前后台启动的 WDA 一直在手机上运行，state.json 里也一直记着它。原来结束它用的 DVT `kill_app` 对 WDA 无效（WDA 模式下关掉开关时，随后用 XCTest 会话启动的 WDA 会顶替它，所以那条路看不出问题） | 原生准备手机时（开发者镜像好了之后）结束记下的那个 WDA；结束一律走 AppService 的 SIGKILL，等它从进程列表消失（最多 2 秒）再忘掉；结束不了就留着记录，下次准备时再试 | 真机（切 WDA 让后台 WDA 起来，再切回原生，看日志和 state.json） |

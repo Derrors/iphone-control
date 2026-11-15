@@ -99,7 +99,18 @@ impl Daemon {
             out.push(format!("   {l}"));
         }
 
-        out.push(ictl_l10n::tr!("== Apple ID 与签名", "== Apple ID and signing").into());
+        // 原生控制（iOS 27 起）不用 WDA：签名的事照样列出来（WDA 暂时还装着、照常重签），但不算问题
+        let native = self.native(g);
+        let fails_before_signing = fails;
+        out.push(if native {
+            ictl_l10n::tr!(
+                "== Apple ID 与签名(原生控制用不到,仅供参考)",
+                "== Apple ID and signing (not needed for native control, for reference)"
+            )
+            .into()
+        } else {
+            ictl_l10n::tr!("== Apple ID 与签名", "== Apple ID and signing").into()
+        });
         match self.account().selected_email().await {
             Ok(_) => out.push(ictl_l10n::tr!("✅ 已登录 Apple ID", "✅ Signed in to an Apple ID").into()),
             Err(_) => {
@@ -221,8 +232,31 @@ impl Daemon {
             out.push(ictl_l10n::trf!("   上次重签：{r}", "   Last re-sign: {r}"));
         }
 
-        out.push("== WDA".into());
+        if native {
+            fails = fails_before_signing;
+            out.push(ictl_l10n::tr!("== 原生控制", "== Native control").into());
+            match Box::pin(self.ax_read(g, crate::tools::AX_WAIT)).await {
+                Ok(_) => out.push(
+                    ictl_l10n::tr!(
+                        "✅ 无障碍服务可用（读界面、按名字点击不用 WDA；触摸、按键经 HID）",
+                        "✅ Accessibility service available (reading the screen and tapping by text without WDA; touches and keys through HID)"
+                    )
+                    .into(),
+                ),
+                Err(e) => {
+                    out.push(ictl_l10n::trf!(
+                        "❌ 读不了界面：{e}\n     → 等守护进程准备好(状态见上);一直不行就设 ICTL_IOS_BACKEND=wda 改回 WDA",
+                        "❌ Can't read the screen: {e}\n     → wait for the daemon to get the phone ready (state above); if it never does, set ICTL_IOS_BACKEND=wda to go back to WDA"
+                    ));
+                    fails += 1;
+                }
+            }
+        }
+        if !native {
+            out.push("== WDA".into());
+        }
         match self.wda(g) {
+            _ if native => {}
             Some(w) if w.ready().await.unwrap_or(false) => out.push(
                 ictl_l10n::tr!(
                     "✅ WDA 就绪（经 usbmuxd 直连；守护进程不监听端口，wda-bridge 运行时除外）",

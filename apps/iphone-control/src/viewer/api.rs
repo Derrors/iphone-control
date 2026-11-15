@@ -62,6 +62,7 @@ pub(super) fn state_of(s: &DeviceState) -> (&'static str, Option<String>) {
         DeviceState::NeedsSigning => ("NeedsSigning", None),
         DeviceState::WdaStarting { last_error } => ("WdaStarting", last_error.clone()),
         DeviceState::NeedsAutomationPin => ("NeedsAutomationPin", None),
+        DeviceState::Preparing { last_error } => ("Preparing", last_error.clone()),
         DeviceState::Ready => ("Ready", None),
     }
 }
@@ -132,7 +133,8 @@ pub(super) fn status_json(s: &protocol::StatusData, hid: bool) -> Value {
         "width": s.width,
         "height": s.height,
         // without WDA, screenshots, taps and keys go over CoreDevice HID (iOS 27 and later); otherwise nothing works
-        "route": if s.wda_ready { "wda" } else if hid { "hid" } else { "none" },
+        // driven natively (iOS 27 and later): no WDA at all, by design
+        "route": if s.native { "native" } else if s.wda_ready { "wda" } else if hid { "hid" } else { "none" },
     })
 }
 

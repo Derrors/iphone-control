@@ -40,8 +40,21 @@ enum Check {
         #[arg(long, default_value_t = 30)]
         restore_after: u64,
     },
+    /// 2c. 不经 WDA 读界面（remoteAXService，iOS 27 起）：打印用时、元素和 SpringBoard 盖在上面的东西，
+    /// 把转成的 WDA 式 XML 存到 `out`（含屏幕文字，用完删）。`watch` 秒内每次推送都再读一次
+    AxScreen {
+        #[arg(long)]
+        out: Option<PathBuf>,
+        #[arg(long, default_value_t = 0)]
+        watch: u64,
+        /// 每秒重新读一次（走一遍树），不等推送
+        #[arg(long)]
+        dump: bool,
+    },
     /// 3. 截图：screencaptureservice PNG
     Screenshot { out: PathBuf },
+    /// 3a. 截屏服务认哪些格式名（`requestedFormat`）：逐个试，打印大小、用时和文件头，或手机的报错
+    ShotFormats { formats: Vec<String> },
     /// 4. 隧道稳定性：同一条隧道持续截图 N 分钟
     Soak {
         #[arg(long, default_value_t = 30)]
@@ -291,6 +304,97 @@ pub async fn run(udid: Option<&str>, args: DebugArgs) -> anyhow::Result<()> {
             .await;
             t.close().await;
             println!("{}", r?);
+        }
+        Check::AxScreen { out, watch, dump } => {
+            let mut t = device.open_tunnel().await?;
+            let r = async {
+                let t0 = Instant::now();
+                t.ax().await?;
+                println!("connected in {:.2}s", t0.elapsed().as_secs_f64());
+                let mut after: Option<Instant> = None;
+                let end = Instant::now() + Duration::from_secs(watch);
+                loop {
+                    let s = match after {
+                        Some(_) if dump => {
+                            tokio::time::sleep(Duration::from_secs(1)).await;
+                            let asked = Instant::now();
+                            let s = t.ax_screen(Duration::from_secs(5), true).await?;
+                            println!("  read in {:.0} ms", asked.elapsed().as_secs_f64() * 1000.0);
+                            s
+                        }
+                        Some(at) => {
+                            let left = end.saturating_duration_since(Instant::now()).max(Duration::from_secs(1));
+                            if t.ax().await?.wait_push(at, left).await.is_none() {
+                                break;
+                            }
+                            t.ax_screen(Duration::from_secs(5), true).await?
+                        }
+                        None => t.ax_screen(Duration::from_secs(5), true).await?,
+                    };
+                    let xml = ictl_ax::xml::to_xml(
+                        &s.app,
+                        &s.overlays,
+                        args.width,
+                        args.height,
+                        &Default::default(),
+                        s.springboard_front,
+                    );
+                    let labelled: Vec<&str> =
+                        s.app.iter().filter(|e| !e.label.is_empty()).map(|e| e.label.as_str()).take(6).collect();
+                    println!(
+                        "{:7.2}s app pid {} with {} elements ({} typed), {} over it: {} | {}",
+                        t0.elapsed().as_secs_f64(),
+                        s.app_pid,
+                        s.app.len(),
+                        s.app.iter().filter(|e| e.xc_type > 0).count(),
+                        s.overlays.len(),
+                        labelled.join(" / "),
+                        s.overlays
+                            .iter()
+                            .filter(|e| !e.label.is_empty())
+                            .map(|e| e.label.as_str())
+                            .take(6)
+                            .collect::<Vec<_>>()
+                            .join(" / "),
+                    );
+                    if let Some(p) = &out {
+                        std::fs::write(p, &xml)?;
+                    }
+                    if Instant::now() >= end {
+                        break;
+                    }
+                    after = Some(s.at);
+                }
+                Ok::<_, anyhow::Error>(())
+            }
+            .await;
+            t.close().await;
+            r?;
+        }
+        Check::ShotFormats { formats } => {
+            let mut t = device.open_tunnel().await?;
+            for i in 0..3 {
+                let t0 = Instant::now();
+                let png = t.screenshot_png().await?;
+                println!(
+                    "png #{i} (kept connection after the first): {} bytes in {:.2}s",
+                    png.len(),
+                    t0.elapsed().as_secs_f64()
+                );
+            }
+            for f in formats {
+                let t0 = Instant::now();
+                match t.screenshot_as(&f).await {
+                    Ok(b) => println!(
+                        "{f}: {} bytes in {:.2}s, starts {:02x?}",
+                        b.len(),
+                        t0.elapsed().as_secs_f64(),
+                        &b[..b.len().min(4)]
+                    ),
+                    Err(e) => println!("{f}: {}", e.to_string().chars().take(200).collect::<String>()),
+                }
+            }
+            t.close().await;
         }
         Check::Screenshot { out } => {
             let mut t = device.open_tunnel().await?;

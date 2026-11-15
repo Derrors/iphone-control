@@ -371,6 +371,29 @@ pub(crate) struct PerDevice {
     /// 最近一个操作开始前的界面：操作做完、界面稳定时和它比，告诉调用方界面变没变（`Daemon::settle`）。
     /// 按名字点击会在点之前读树，用那棵树
     pub before_action: Option<crate::tools::Seen>,
+    /// 最近一个操作开始的时间：原生控制等界面稳定时，从这之后的推送算起
+    pub acted_at: Option<Instant>,
+    /// 原生控制：进程号 → Bundle ID（前台 App 由无障碍服务给进程号）
+    pub bundles: HashMap<i64, String>,
+    /// 原生控制：进程号 → 是不是网页内容进程（WebKit WebContent，网页的元素来自它）
+    pub web_pids: HashMap<i64, bool>,
+}
+
+/// What preparing a phone for native control gives: the developer disk image's version if it was mounted just now,
+/// and what became of the WDA launched in the background earlier (if one was recorded for it); failed, whether it was
+/// the mount itself
+pub(crate) type Prepared = std::result::Result<(Option<String>, Option<StoppedWda>), (DeviceError, bool)>;
+
+/// The WDA launched in the background earlier (by its pid), once it is no longer wanted (driven natively, or the
+/// background launch turned off)
+#[derive(Debug)]
+pub(crate) enum StoppedWda {
+    /// It was running and is gone now
+    Ended(u64),
+    /// It wasn't running (anymore)
+    NotRunning(u64),
+    /// It may still be running: why
+    Failed(u64, String),
 }
 
 pub(crate) struct Inner {
@@ -399,6 +422,10 @@ pub(crate) struct Inner {
     pub offline_target: Option<crate::notify::Target>,
     /// HID 会话最近一次使用的时间；空闲超过 [`crate::supervise::HID_IDLE`] 就关掉（它持有屏幕媒体流）
     pub hid_used: Option<Instant>,
+    /// 原生控制：无障碍会话最近一次使用的时间；空闲超过 [`crate::supervise::AX_IDLE`] 就关掉
+    pub ax_used: Option<Instant>,
+    /// 原生控制：后台挂开发者镜像（结果：挂上的版本，已挂载为 None；失败时带上「是不是挂载这一步」）
+    pub preparing: Option<JoinHandle<Prepared>>,
     /// Control pages watching the screen media stream (`screen.rs`): while there are any, the HID session (which owns
     /// the stream) stays open however long it is idle
     pub screen_viewers: usize,
@@ -464,7 +491,8 @@ pub(crate) async fn close_hid(g: &mut Inner) {
 pub(crate) async fn drop_tunnel(g: &mut Inner) {
     g.dev.touch_rotation = None;
     if let Some(t) = g.tunnel.take() {
-        t.close().await;
+        // boxed: the future holds the whole tunnel, and every tool that may drop it would carry that
+        Box::pin(t.close()).await;
     }
 }
 
@@ -487,6 +515,14 @@ pub(crate) fn wda_down(state: &DeviceState, info: Option<&DeviceInfo>) -> String
             "WDA unavailable (phone not connected); the daemon starts WDA once a device is plugged in"
         )
         .into();
+    }
+    // 原生控制（iOS 27 起不用 WDA）：只是还没准备好
+    if let DeviceState::Preparing { .. } = state {
+        return ictl_l10n::trf!(
+            "手机还没准备好({}),通常几秒到半分钟;截图、点击、滑动、按键可照常用",
+            "The phone isn't ready yet ({}), usually a few seconds to half a minute; screenshots, taps, swipes and buttons still work",
+            state.describe()
+        );
     }
     let fallback = if hid_supported(info) {
         ictl_l10n::tr!("截图/点击/滑动/按键可照常用", "screenshots/taps/swipes/buttons still work")
@@ -537,6 +573,8 @@ impl Daemon {
             offline_since: Some(now),
             offline_target: None,
             hid_used: None,
+            ax_used: None,
+            preparing: None,
             screen_viewers: 0,
             low_bandwidth_viewers: 0,
             elements_cache: None,
@@ -693,6 +731,9 @@ impl Daemon {
         if let Some(h) = g.starting.take() {
             h.abort();
         }
+        if let Some(h) = g.preparing.take() {
+            h.abort();
+        }
         if let Some(r) = g.runner.take() {
             r.stop();
         }
@@ -711,7 +752,8 @@ impl Daemon {
         device: &Device,
     ) -> Result<&'a mut Tunnel, DeviceError> {
         if g.tunnel.is_none() {
-            g.tunnel = Some(device.open_tunnel().await?);
+            // boxed: the tunnel's handshake is a large future (about 35 KB), and nearly every tool may open one
+            g.tunnel = Some(Box::pin(device.open_tunnel()).await?);
         }
         Ok(g.tunnel.as_mut().expect("刚建好"))
     }
@@ -900,10 +942,16 @@ impl Daemon {
                         "Can't tell which app is in front ({why}); this task is limited to some apps, so nothing was done. Take a screenshot and try again shortly"
                     ))
                 };
-                let Some(w) = self.wda(&mut g) else {
-                    return Err(unknown(ictl_l10n::tr!("WDA 不可用", "WDA unavailable").into()));
+                // the lock is let go before the user is asked (below)
+                let app = if self.wda(&mut g).is_none() && self.native(&g) {
+                    Box::pin(self.native_foreground(&mut g)).await.map_err(|e| unknown(e.to_string()))?
+                } else {
+                    let Some(w) = self.wda(&mut g) else {
+                        return Err(unknown(ictl_l10n::tr!("WDA 不可用", "WDA unavailable").into()));
+                    };
+                    w.active_app().await.map_err(|e| unknown(e.to_string()))?
                 };
-                Target::Foreground(w.active_app().await.map_err(|e| unknown(e.to_string()))?)
+                Target::Foreground(app)
             }
         };
         task.check_scope(&target, step, gone).await
@@ -1061,6 +1109,8 @@ impl Daemon {
             if acted {
                 // 这个操作之前读过的界面就是「操作前」；操作期间读的（按名字点击先读树）也是操作前，操作完都不再算
                 g.dev.before_action = g.dev.seen.take_fresh();
+                // 原生控制等界面稳定时，从这之后手机推来的树算起
+                g.dev.acted_at = Some(Instant::now());
             }
             // boxed, like the request in `handle`: two of its large state machine on the stack overflowed a test thread
             let r = Box::pin(self.dispatch(g, req, view, ctx.watched)).await;

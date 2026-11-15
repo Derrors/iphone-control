@@ -370,6 +370,9 @@ pub struct StatusData {
     /// The screen in points, as it is turned now
     pub width: Option<f64>,
     pub height: Option<f64>,
+    /// Driven natively (iOS 27 and later without WDA: remoteAXService, HID, CoreDevice)
+    #[serde(default)]
+    pub native: bool,
 }
 
 /// An element on screen: its type, the text it shows, and its box in points (top left, size)

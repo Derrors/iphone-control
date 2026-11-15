@@ -13,7 +13,12 @@ impl Daemon {
             g.dev.seen.saw_tree(&tree);
             return Ok(tree);
         }
-        let tree = self.require_wda(g)?.tree().await?;
+        let native = self.native(g);
+        let tree = match self.wda(g) {
+            Some(w) => w.tree().await?,
+            None if native => Box::pin(self.ax_tree(g, super::native::AX_WAIT)).await?,
+            None => self.require_wda(g)?.tree().await?,
+        };
         g.elements_cache = Some((Instant::now(), tree.clone()));
         g.dev.seen.saw_tree(&tree);
         Ok(tree)
@@ -29,9 +34,13 @@ impl Daemon {
     ) -> crate::error::Result<(String, Vec<ElementData>)> {
         if keep_locked {
             // only looking (a read-only viewer): the passcode isn't typed for it
-            if let Some(w) = self.wda(g)
-                && w.locked().await?
-            {
+            let native = self.native(g);
+            let locked = match self.wda(g) {
+                Some(w) => w.locked().await?,
+                None if native => self.native_locked(g).await?,
+                None => false,
+            };
+            if locked {
                 return Err(ictl_l10n::tr!(
                     "手机锁着：只看不操作时不会替你解锁",
                     "The phone is locked: it isn't unlocked for someone who only watches"
@@ -78,6 +87,9 @@ impl Daemon {
         let t0 = Instant::now();
         // 刚滑完读到的树：只作比较的起点，是不是真稳定还要看下一次读到的
         let seed = g.swiped_tree.take().filter(|(at, _)| at.elapsed() < SWIPED_TREE_FRESH).map(|(_, t)| t);
+        if self.wda(g).is_none() && self.native(g) {
+            return Box::pin(self.settle_native(g, t0, max)).await;
+        }
         let Some(w) = self.wda(g) else {
             tokio::time::sleep(max.min(Duration::from_millis(500))).await;
             return Ok(ictl_l10n::tr!("WDA 不可用,等了 0.5 秒", "WDA unavailable, waited 0.5 s").into());
@@ -107,6 +119,24 @@ impl Daemon {
         Ok(msg + &change + &note)
     }
 
+    /// [`Self::settle`] without WDA: the trees the phone pushes say when the screen has settled; a screen with few
+    /// elements (a game, a map) is judged by its picture, as through WDA
+    async fn settle_native(&self, g: &mut Inner, t0: Instant, max: Duration) -> crate::error::Result<String> {
+        let (msg, tree) = Box::pin(self.native_settle(g, max)).await?;
+        let note = alert_note(&tree);
+        // no word from it: a screen with few elements that stay the same (a game, a map), judged by the picture
+        if msg.is_empty() {
+            let left = max.saturating_sub(t0.elapsed()).max(Duration::from_millis(600));
+            let msg = self.settle_visually(g, Instant::now(), left).await?;
+            let change = self.change_note(g, None).await;
+            return Ok(msg + &change + &note);
+        }
+        let change = self.change_note(g, Some(&tree)).await;
+        g.dev.seen.saw_tree(&tree);
+        g.elements_cache = Some((Instant::now(), tree));
+        Ok(msg + &change + &note)
+    }
+
     /// 操作做完、界面稳定后，和操作前（[`PerDevice::before_action`](crate::core::PerDevice)）比有没有变化，
     /// 接在 settle 结果后面的说明。`tree`：稳定时读到的元素树（看画面判断稳定时为 None，用记下的画面指纹）。
     /// 操作前只截过图、没读过元素树时，补截一张图来比（约 0.3 秒）；操作前什么都没看过就不说
@@ -116,8 +146,7 @@ impl Daemon {
         if before.tree.as_ref().zip(tree).is_none()
             && before.thumb.is_some()
             && thumb.is_none()
-            && let Some(w) = self.wda(g)
-            && let Ok(png) = w.screenshot_png().await
+            && let Ok(png) = self.raw_png(g).await
             && let Ok(t) = thumbnail(png).await
         {
             g.dev.seen.saw_thumb(t.clone());
@@ -135,7 +164,7 @@ impl Daemon {
         let deadline = t0 + max;
         let mut prev: Option<Vec<u8>> = None;
         loop {
-            let png = self.require_wda(g)?.screenshot_png().await?;
+            let png = self.raw_png(g).await?;
             let cur = thumbnail(png).await?;
             // 最后一帧就是操作后的画面：和操作前比（[`Self::change_note`]），也是下一个操作的「操作前」
             g.dev.seen.saw_thumb(cur.clone());
@@ -172,13 +201,12 @@ impl Daemon {
 
     /// 隔一下截两张图，画面还在动就返回提醒，否则返回空串
     pub(super) async fn motion_note(&self, g: &mut Inner) -> String {
-        let Some(w) = self.wda(g) else { return String::new() };
         let mut thumbs = Vec::new();
         for i in 0..2 {
             if i > 0 {
                 tokio::time::sleep(Duration::from_millis(150)).await;
             }
-            let Ok(png) = w.screenshot_png().await else { return String::new() };
+            let Ok(png) = self.raw_png(g).await else { return String::new() };
             let Ok(t) = thumbnail(png).await else { return String::new() };
             thumbs.push(t);
         }
@@ -195,6 +223,9 @@ impl Daemon {
     /// 前台是 App 时只多一次约 0.13 秒的查询；在主屏上再多约 0.4 秒
     /// A system alert in front: the note for the agent, and the alert's own text
     pub(crate) async fn alert_check(&self, g: &mut Inner) -> crate::error::Result<(String, Option<String>)> {
+        if self.wda(g).is_none() && self.native(g) {
+            return Box::pin(self.native_alert(g)).await;
+        }
         let Some(w) = self.wda(g) else { return Ok((String::new(), None)) };
         if w.active_app().await? != SPRINGBOARD {
             return Ok((String::new(), None));
@@ -209,6 +240,9 @@ impl Daemon {
     pub(crate) async fn wait_for(&self, g: &mut Inner, text: &str, timeout: Duration) -> crate::error::Result<String> {
         self.ensure_unlocked(g).await?;
         let t0 = Instant::now();
+        if self.wda(g).is_none() && self.native(g) {
+            return Box::pin(self.native_wait_for(g, text, timeout)).await;
+        }
         let w = self.require_wda(g)?;
         // 轮询时不等界面空闲：页面还在加载、播放动画时每次读树也只要约 0.2 秒
         w.begin_polling().await?;

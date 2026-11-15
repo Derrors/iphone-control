@@ -54,6 +54,7 @@ MCP 服务由 AI 客户端拉起，注册时写进去的环境变量优先于设
 | `ICTL_ANISETTE_URL` | 自建 anisette 服务地址（默认用公共的第三方服务，见[安全与隐私](./security)） |
 | `ICTL_DDI_URL` | 开发者镜像的下载地址，默认社区维护的镜像仓库 |
 | `ICTL_DDI_DIR` | 自己从 Xcode 提取的开发者镜像目录。设了就不下载，也不会删里面的文件；缺文件时报错说明缺哪个。不设时用数据目录下的 `ddi/` 缓存，连续 3 次挂载失败后清掉重新下载 |
+| `ICTL_IOS_BACKEND` | iOS 27 及以上的手机怎么控制。`auto`（默认）和 `native`：原生，不用 WDA，经 HID 点按、无障碍服务读界面、剪贴板输入；`wda`：仍用 WDA。iOS 26 及以下总是用 WDA |
 | `ICTL_WDA_UNSIGNED` | 未签名 WDA 的路径。默认是数据目录的 `wda/WDA-unsigned.ipa`，第一次签名前下载。自己指定的路径不会下载 |
 | `SCREEN_W` / `SCREEN_H` | HID 后备路线换算坐标用的屏幕尺寸（点）：WDA 不可用、又没有这台设备的尺寸记录时才用，比如 WDA 从没连上过，或切到记录里没有尺寸的设备。不分设备，接多台时要小心 |
 | `ICTL_LOG` | 日志级别，例如 `info,ictl_wda::http=debug` 记录每个 WDA 请求的耗时 |

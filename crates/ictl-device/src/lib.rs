@@ -12,6 +12,8 @@
 //! 不负责：WDA（见 `ictl-wda`）、状态机（见 `ictl-daemon`）。
 
 pub mod apps;
+pub mod ax;
+mod coredevice;
 pub mod ddi;
 pub mod hid;
 mod media;
@@ -146,9 +148,30 @@ impl From<IdeviceError> for DeviceError {
             IdeviceError::PairingDialogResponsePending => Self::PairingPending,
             IdeviceError::UserDeniedPairing => Self::PairingDenied,
             IdeviceError::DeveloperModeNotEnabled => Self::DeveloperModeOff,
-            other => Self::Idevice(other.to_string()),
+            other => {
+                let s = other.to_string();
+                Self::Idevice(device_error_text(&s).unwrap_or(s))
+            }
         }
     }
+}
+
+/// What a CoreDevice error says, out of the archive it comes in: idevice gives the error dictionary as text, with
+/// `userInfoWithNSSecureCoding` as the bytes of an NSKeyedArchive holding `NSLocalizedDescription` («The process
+/// identifier of the launched application could not be determined. It may have already terminated.»). None when
+/// there is none
+fn device_error_text(s: &str) -> Option<String> {
+    let start = s.find("userInfoWithNSSecureCoding")?;
+    let rest = &s[start..];
+    let open = rest.find("Data([")? + "Data([".len();
+    let close = rest[open..].find("])")? + open;
+    let bytes: Vec<u8> =
+        rest[open..close].split(',').map(|n| n.trim().parse::<u8>()).collect::<std::result::Result<_, _>>().ok()?;
+    let v = plist::Value::from_reader(std::io::Cursor::new(bytes)).ok()?;
+    let objects = v.as_dictionary()?.get("$objects")?.as_array()?;
+    // the archive's strings: keys and class names have no spaces, a sentence does
+    let text: Vec<&str> = objects.iter().filter_map(|o| o.as_string()).filter(|t| t.contains(' ')).collect();
+    (!text.is_empty()).then(|| text.join(" "))
 }
 
 pub type Result<T> = std::result::Result<T, DeviceError>;
@@ -459,10 +482,19 @@ impl Device {
         limit(ictl_l10n::tr!("建隧道", "open the tunnel"), Duration::from_secs(30), async {
             let proxy = CoreDeviceProxy::connect(&*self.provider).await?;
             let rsd_port = proxy.tunnel_info().server_rsd_port;
+            tracing::debug!("CoreDeviceProxy tunnel: MTU {}", proxy.tunnel_info().mtu);
             let mut adapter = proxy.create_software_tunnel()?.to_async_handle();
             let stream = adapter.connect(rsd_port).await?;
             let handshake = RsdHandshake::new(stream).await?;
-            Ok(Tunnel { adapter, handshake, hid: None })
+            Ok(Tunnel {
+                adapter,
+                handshake,
+                hid: None,
+                ax: None,
+                springboard: None,
+                springboard_app: None,
+                screenshots: None,
+            })
         })
         .await
     }
@@ -601,6 +633,14 @@ pub struct Tunnel {
     adapter: AdapterHandle,
     handshake: RsdHandshake,
     hid: Option<HidSession>,
+    /// remoteAXService（[`ax`]），用时才开
+    ax: Option<ax::AxSession>,
+    /// SpringBoard 的进程号（[`ax`] 读盖在 App 上的弹窗用），每条隧道查一次
+    springboard: Option<i64>,
+    /// SpringBoard 的应用元素，每个无障碍会话问一次（每次读界面省一个请求）
+    springboard_app: Option<ictl_ax::ObjectRef>,
+    /// 截屏服务的连接，留着复用（[`Tunnel::screenshot_png`]）
+    screenshots: Option<ScreenCaptureServiceClient<Box<dyn idevice::ReadWrite>>>,
 }
 
 impl Tunnel {
@@ -627,10 +667,53 @@ impl Tunnel {
         .await
     }
 
+    /// The screen in the format the phone calls `format` (`requestedFormat`; idevice's "jpeg" is refused: «Cannot
+    /// initialize ScreenshotImageFormat from invalid String value jpeg»)
+    pub async fn screenshot_as(&mut self, format: &str) -> Result<Vec<u8>> {
+        limit(ictl_l10n::tr!("截图", "screenshot"), Duration::from_secs(30), async {
+            let port = self
+                .handshake
+                .services
+                .get("com.apple.coredevice.screencaptureservice")
+                .map(|s| s.port)
+                .ok_or_else(|| DeviceError::Idevice("the phone offers no screencaptureservice".into()))?;
+            let stream: Box<dyn idevice::ReadWrite> = Box::new(self.adapter.connect(port).await?);
+            let mut c = idevice::core_device::CoreDeviceServiceClient::new(stream).await?;
+            let mut req = plist::Dictionary::new();
+            req.insert("requestedFormat".into(), format.into());
+            let res = c
+                .invoke_with_plist_action(
+                    "com.apple.coredevice.feature.capturescreenshot",
+                    req,
+                    "com.apple.coredevice.action.capturescreenshot",
+                )
+                .await?;
+            match res.as_dictionary().and_then(|d| d.get("image")) {
+                Some(plist::Value::Data(image)) => Ok(image.clone()),
+                _ => Err(DeviceError::Idevice("the screenshot came without an image".into())),
+            }
+        })
+        .await
+    }
+
+    /// The screen as PNG, on the screen capture service's connection kept from the last time: the first request on
+    /// a new one does the service's handshake too (0.82 s against 0.30 s for the next ones on a simple screen). A
+    /// connection that fails is dropped and one new one tried
     pub async fn screenshot_png(&mut self) -> Result<Vec<u8>> {
         limit(ictl_l10n::tr!("截图", "screenshot"), Duration::from_secs(30), async {
-            let mut client = ScreenCaptureServiceClient::connect_rsd(&mut self.adapter, &mut self.handshake).await?;
-            Ok(client.take_screenshot(None, ImageFormat::Png).await?)
+            if let Some(c) = self.screenshots.as_mut() {
+                match c.take_screenshot(None, ImageFormat::Png).await {
+                    Ok(png) => return Ok(png),
+                    Err(e) => {
+                        tracing::debug!("screenshot on the kept connection failed, connecting again: {e}");
+                        self.screenshots = None;
+                    }
+                }
+            }
+            let mut c = ScreenCaptureServiceClient::connect_rsd(&mut self.adapter, &mut self.handshake).await?;
+            let png = c.take_screenshot(None, ImageFormat::Png).await?;
+            self.screenshots = Some(c);
+            Ok(png)
         })
         .await
     }
@@ -668,7 +751,7 @@ impl Tunnel {
     /// 不粘，所以这里不还原：调用方等弹窗答完再用返回的 [`PendingRestore`] 调 [`Self::restore_pasteboard`]。
     /// 手机不确认按键，没有输入框获得焦点时什么也粘不上，结果要看屏幕
     pub async fn paste_text(&mut self, text: &str) -> Result<Option<PendingRestore>> {
-        let Tunnel { adapter, handshake, hid } = self;
+        let Tunnel { adapter, handshake, hid, .. } = self;
         let Some(hid) = hid.as_mut() else {
             return Err(DeviceError::InvalidInput(ictl_l10n::tr!("HID 会话没开", "The HID session isn't open").into()));
         };
@@ -740,7 +823,8 @@ impl Tunnel {
     /// 停掉 HID 会话（含屏幕媒体流），隧道保留
     pub async fn close_hid(&mut self) {
         if let Some(h) = self.hid.take() {
-            let _ = tokio::time::timeout(Duration::from_secs(3), h.close()).await;
+            // boxed: the future holds the whole session, and callers that may close it would carry that
+            let _ = tokio::time::timeout(Duration::from_secs(3), Box::pin(h.close())).await;
         }
     }
 
@@ -800,20 +884,9 @@ impl Tunnel {
         .await
     }
 
-    /// 结束一个进程（DVT processcontrol `killPid:`，不等确认）
-    pub async fn kill(&mut self, pid: u64) -> Result<()> {
-        use idevice::dvt::{process_control::ProcessControlClient, remote_server::RemoteServerClient};
-        limit(ictl_l10n::tr!("结束进程", "kill a process"), Duration::from_secs(20), async {
-            let mut dvt: RemoteServerClient<Box<dyn idevice::ReadWrite>> =
-                RemoteServerClient::connect_rsd(&mut self.adapter, &mut self.handshake).await?;
-            ProcessControlClient::new(&mut dvt).await?.kill_app(pid).await?;
-            Ok(())
-        })
-        .await
-    }
-
     /// 关掉隧道：先停 HID 的屏幕媒体流
     pub async fn close(mut self) {
+        self.close_ax().await;
         self.close_hid().await;
     }
 }
@@ -895,5 +968,30 @@ mod tests {
   +-o AppleT8122USBXHCI@00000000  <class AppleT8122USBXHCI>
   | +-o Magic Keyboard@00100000  <class IOUSBHostDevice>";
         assert!(!ioreg_has_ios_device(without));
+    }
+
+    #[test]
+    fn a_coredevice_error_says_what_it_says() {
+        let mut d = plist::Dictionary::new();
+        d.insert("$version".into(), 100000u64.into());
+        d.insert("$archiver".into(), "NSKeyedArchiver".into());
+        d.insert(
+            "$objects".into(),
+            plist::Value::Array(vec![
+                "$null".into(),
+                "NSLocalizedDescription".into(),
+                "The process identifier of the launched application could not be determined.".into(),
+            ]),
+        );
+        let mut bytes = Vec::new();
+        plist::Value::Dictionary(d).to_writer_binary(&mut bytes).unwrap();
+        let s = format!(
+            "device returned an error: Dictionary({{\"userInfoWithNSSecureCoding\": Data({bytes:?}), \"code\": Integer(1)}})"
+        );
+        assert_eq!(
+            device_error_text(&s).as_deref(),
+            Some("The process identifier of the launched application could not be determined.")
+        );
+        assert_eq!(device_error_text("socket closed"), None);
     }
 }

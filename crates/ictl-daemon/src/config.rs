@@ -28,6 +28,33 @@ pub struct Config {
     pub notify: NotifyConfig,
     /// 实验（`ICTL_WDA_DETACHED=1`）：在后台启动 WDA、不持有 XCTest 会话（见 `docs/dev/wda-dependency-research.md`）
     pub wda_detached: bool,
+    /// iOS 27 及以上怎么控制（`ICTL_IOS_BACKEND`）
+    pub ios_backend: IosBackend,
+}
+
+/// iOS 27 及以上的手机怎么控制（`ICTL_IOS_BACKEND`）。iOS 26 及以下没有 HID，总是 WDA
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum IosBackend {
+    /// 原生（默认）
+    #[default]
+    Auto,
+    Native,
+    Wda,
+}
+
+impl IosBackend {
+    pub fn parse(v: Option<&str>) -> Self {
+        match v.map(|s| s.trim().to_ascii_lowercase()).as_deref() {
+            Some("wda") => Self::Wda,
+            Some("native") => Self::Native,
+            _ => Self::Auto,
+        }
+    }
+
+    /// Whether a phone is driven natively: iOS 27 and later (HID needs `dtuhidd`), unless `ICTL_IOS_BACKEND=wda`
+    pub fn drives_natively(self, info: Option<&ictl_device::DeviceInfo>) -> bool {
+        self != Self::Wda && info.is_some_and(|i| i.major_version() >= 27)
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -104,6 +131,7 @@ impl Config {
             },
             wda_detached: env(crate::protocol::env::WDA_DETACHED)
                 .is_some_and(|v| matches!(v.as_str(), "1" | "true" | "yes")),
+            ios_backend: IosBackend::parse(env(crate::protocol::env::IOS_BACKEND).as_deref()),
         }
     }
 

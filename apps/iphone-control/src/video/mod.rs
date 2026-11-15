@@ -29,6 +29,7 @@ mod ffmpeg;
 mod flv;
 mod mjpeg;
 mod sps;
+pub mod transcode;
 #[cfg(target_os = "macos")]
 mod vt;
 

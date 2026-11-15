@@ -6,6 +6,8 @@
 
 ## [Unreleased]
 
+## [0.2.6] - 2026-11-14
+
 ### 新增
 
 - 控制台画面的弱网模式：「设置」里的开关，适合外网或信号差时用。手机自己的视频（HEVC）按 2 Mbit/s 的码率上限向手机要（原来 6），流量约减一半，帧率不变（iPhone 主屏幕上滑动时 214 KB/s，原来 459–483）；画面静止时看不出区别，动起来时会有些糊块。每台手机只有一路这样的流，所以只要有一个在看它的页面开着，所有页面都一起降；第一个这样的页面来、最后一个走时流会重新开始（画面断开半秒左右）。H.264 只影响开它的页面（qp 26：689 KB/s，原来 1350）。
@@ -320,7 +322,8 @@
 - `setup`、`doctor`、`status`、`mcp-config`、`wda-bridge`、`notify-test` 命令。
 - Docker 镜像（非 privileged，linux/amd64、linux/arm64）；也可不用 Docker，从源码或预编译二进制以普通用户运行，附 systemd 用户服务。
 
-[Unreleased]: https://github.com/Derrors/iphone-control/compare/v0.2.5...HEAD
+[Unreleased]: https://github.com/Derrors/iphone-control/compare/v0.2.6...HEAD
+[0.2.6]: https://github.com/Derrors/iphone-control/compare/v0.2.5...v0.2.6
 [0.2.5]: https://github.com/Derrors/iphone-control/compare/v0.2.4...v0.2.5
 [0.2.4]: https://github.com/Derrors/iphone-control/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/Derrors/iphone-control/compare/v0.2.2...v0.2.3

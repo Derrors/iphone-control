@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format is based on 
 
 ## [Unreleased]
 
+## [0.2.6] - 2026-11-14
+
 ### Added
 
 - Low-bandwidth mode for the control page's picture: a switch in Settings, for use over the internet or a weak signal. The phone's own video (HEVC) is asked for with a 2 Mbit/s cap instead of 6, about half the traffic at the same frame rate (on an iPhone's home screen 214 KB/s instead of 459–483 while swiping); a still screen looks the same, moving content gets a little blocky. There is one such stream per phone, so while any page watching it has the mode on, all of them get it, and the stream starts again (the picture stops for about half a second) when the first such page comes and when the last one goes. The H.264 picture changes only for that page (qp 26: 689 KB/s instead of 1350).
@@ -322,7 +324,8 @@ First public release.
 - Docker image (single binary plus Debian's usbmuxd, not privileged) with a generated third-party license list, published to `ghcr.io/derrors/iphone-control` for linux/amd64 and linux/arm64.
 - Running without Docker, from source or from the prebuilt Linux binaries (x86_64, aarch64): as a regular user with the system usbmuxd, XDG data and socket paths, the unsigned WebDriverAgent downloaded and checksum-verified before the first signing, `mcp-config` printing a direct command, and a systemd user service.
 
-[Unreleased]: https://github.com/Derrors/iphone-control/compare/v0.2.5...HEAD
+[Unreleased]: https://github.com/Derrors/iphone-control/compare/v0.2.6...HEAD
+[0.2.6]: https://github.com/Derrors/iphone-control/compare/v0.2.5...v0.2.6
 [0.2.5]: https://github.com/Derrors/iphone-control/compare/v0.2.4...v0.2.5
 [0.2.4]: https://github.com/Derrors/iphone-control/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/Derrors/iphone-control/compare/v0.2.2...v0.2.3

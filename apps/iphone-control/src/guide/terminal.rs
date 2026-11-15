@@ -67,15 +67,16 @@ impl Drop for MenuSignals {
     }
 }
 
+/// The next byte, waiting until `deadline` at most. A byte already there is taken even after the deadline: the bytes
+/// of a key arrive together, and this process may be descheduled between two of them (a busy macOS CI runner took
+/// longer than [`SEQUENCE_WAIT`] between the `[` and the `B` of ↓, which then came out as the letter B)
 fn read_byte(input: &mut std::fs::File, deadline: Instant) -> io::Result<Option<u8>> {
     loop {
         if MENU_SIGNAL.load(Ordering::Relaxed) != 0 {
             return Err(io::ErrorKind::Interrupted.into());
         }
+        // zero past the deadline: select then only checks what is there
         let remaining = deadline.saturating_duration_since(Instant::now());
-        if remaining.is_zero() {
-            return Ok(None);
-        }
         // select works for terminal descriptors on macOS as well as Linux.
         let fd = input.as_raw_fd();
         if fd < 0 || fd as usize >= libc::FD_SETSIZE {
@@ -83,7 +84,7 @@ fn read_byte(input: &mut std::fs::File, deadline: Instant) -> io::Result<Option<
         }
         let mut timeout = libc::timeval {
             tv_sec: remaining.as_secs() as libc::time_t,
-            tv_usec: remaining.subsec_micros().max(1) as libc::suseconds_t,
+            tv_usec: remaining.subsec_micros() as libc::suseconds_t,
         };
         // SAFETY: fd is live and checked against FD_SETSIZE; the initialized
         // set and timeout remain valid for the duration of select.
@@ -655,5 +656,28 @@ mod tests {
             Err(error) if error.is::<Cancelled>() => println!("MENU_CANCELLED"),
             Err(error) => panic!("menu error: {error}"),
         }
+    }
+
+    /// A pipe: reading end as the menu's input, writing end
+    fn pipe() -> (std::fs::File, std::fs::File) {
+        use std::os::fd::FromRawFd;
+        let mut fds = [0; 2];
+        // SAFETY: pipe fills both descriptors, each owned by one File from here on
+        assert_eq!(unsafe { libc::pipe(fds.as_mut_ptr()) }, 0);
+        unsafe { (std::fs::File::from_raw_fd(fds[0]), std::fs::File::from_raw_fd(fds[1])) }
+    }
+
+    /// The rest of a key that is already there is read even when this process got to it after [`SEQUENCE_WAIT`]
+    #[test]
+    fn bytes_already_there_are_read_after_the_deadline() {
+        use std::io::Write;
+        let (mut input, mut keys) = pipe();
+        let past = Instant::now() - SEQUENCE_WAIT;
+        assert_eq!(read_byte(&mut input, past).unwrap(), None, "nothing there: no wait");
+        keys.write_all(b"\x1b[B").unwrap();
+        assert_eq!(read_byte(&mut input, past).unwrap(), Some(0x1b));
+        assert_eq!(read_byte(&mut input, past).unwrap(), Some(b'['));
+        assert_eq!(read_byte(&mut input, past).unwrap(), Some(b'B'));
+        assert_eq!(read_byte(&mut input, past).unwrap(), None);
     }
 }

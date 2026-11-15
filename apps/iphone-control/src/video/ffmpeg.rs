@@ -376,8 +376,8 @@ pub fn hevc_args(kind: &Kind, points: Option<(f64, f64)>, qp: u8, old: bool) -> 
         "32",
         "-analyzeduration",
         "0",
-        "-fflags",
-        "nobuffer",
+        // no `-fflags nobuffer` (as the JPEG input has): with it the HEVC input loses its start, and every frame
+        // after it misses its references
         "-flags",
         "low_delay",
     ]);
@@ -924,6 +924,7 @@ mod tests {
         let a = hevc_args(&Kind::X264, Some((932.0, 430.0)), 20, false).unwrap();
         let at = |flag: &str| a.iter().position(|x| x == flag).map(|i| a[i + 1].as_str());
         assert_eq!(at("-f"), Some("hevc"), "the input");
+        assert!(!a.iter().any(|x| x == "nobuffer"), "the HEVC input would lose its start");
         assert_eq!(at("-i"), Some("pipe:0"));
         // turned (landscape points) or not, the crop is portrait: 430 wide at the padded width's scale
         let vf = at("-vf").unwrap();

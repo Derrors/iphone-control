@@ -815,37 +815,48 @@ async fn status(socket: &Path) -> anyhow::Result<()> {
         (None, _) => {}
     }
     let p = &s.persisted;
-    println!("WDA       {}", p.wda_bundle.as_deref().unwrap_or(ictl_l10n::tr!("未签名", "not signed")));
-    match &s.device_profile {
-        ictl_daemon::core::DeviceProfile::Missing => {
-            println!(
-                "{}",
-                ictl_l10n::tr!(
-                    "描述文件  这台手机上没有装当前 Apple ID 签的 WDA（iphone-control setup）",
-                    "Profile   no WDA signed by the current Apple ID on this phone (iphone-control setup)"
-                )
+    if s.native {
+        // 原生控制用不到 WDA 和签名：不提示装 WDA（签名详情见 doctor）
+        println!(
+            "{}",
+            ictl_l10n::tr!(
+                "控制方式  原生（iOS 27 起不用 WDA；要改回 WDA，在 ~/.config/iphone-control/env 里设 ICTL_IOS_BACKEND=wda）",
+                "Control   native (no WDA from iOS 27; to go back to WDA, set ICTL_IOS_BACKEND=wda in ~/.config/iphone-control/env)"
             )
-        }
-        dp => {
-            if let Some(left) = dp.left(p) {
-                let whose = if matches!(dp, ictl_daemon::core::DeviceProfile::Expires(_)) {
-                    ictl_l10n::tr!("手机上的", "on the phone, ")
-                } else {
-                    ictl_l10n::tr!("上次签的", "last signed, ")
-                };
+        );
+    } else {
+        println!("WDA       {}", p.wda_bundle.as_deref().unwrap_or(ictl_l10n::tr!("未签名", "not signed")));
+        match &s.device_profile {
+            ictl_daemon::core::DeviceProfile::Missing => {
                 println!(
                     "{}",
-                    ictl_l10n::trf!(
-                        "描述文件  {whose}还剩 {} 小时",
-                        "Profile   {whose}{} hours left",
-                        left.as_secs() / 3600
+                    ictl_l10n::tr!(
+                        "描述文件  这台手机上没有装当前 Apple ID 签的 WDA（iphone-control setup）",
+                        "Profile   no WDA signed by the current Apple ID on this phone (iphone-control setup)"
                     )
-                );
+                )
+            }
+            dp => {
+                if let Some(left) = dp.left(p) {
+                    let whose = if matches!(dp, ictl_daemon::core::DeviceProfile::Expires(_)) {
+                        ictl_l10n::tr!("手机上的", "on the phone, ")
+                    } else {
+                        ictl_l10n::tr!("上次签的", "last signed, ")
+                    };
+                    println!(
+                        "{}",
+                        ictl_l10n::trf!(
+                            "描述文件  {whose}还剩 {} 小时",
+                            "Profile   {whose}{} hours left",
+                            left.as_secs() / 3600
+                        )
+                    );
+                }
             }
         }
-    }
-    if let Some(r) = p.last_resign_text() {
-        println!("{}", ictl_l10n::trf!("上次重签  {r}", "Re-signed {r}"));
+        if let Some(r) = p.last_resign_text() {
+            println!("{}", ictl_l10n::trf!("上次重签  {r}", "Re-signed {r}"));
+        }
     }
     let unlock = match (s.auto_unlock, s.unlock_disabled) {
         (_, true) => ictl_l10n::tr!(

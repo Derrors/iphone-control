@@ -57,6 +57,7 @@ impl Daemon {
     /// 配置了密码就在锁屏时自动解锁；没配置而手机锁着则报错（与 toolkit 一致）
     pub(crate) async fn ensure_unlocked(&self, g: &mut Inner) -> crate::error::Result<()> {
         let cfg = self.unlock_cfg(g.device.as_ref().map(|d| d.udid.as_str()));
+        let t0 = Instant::now();
         if let Some(left) = g.dev.last_lock.and_then(|t| LOCK_SETTLE.checked_sub(t.elapsed())) {
             tokio::time::sleep(left).await;
         }
@@ -67,7 +68,18 @@ impl Daemon {
             None => return Ok(()),
         };
         match r {
-            Ok(_) => Ok(()),
+            Ok(ictl_unlock::Outcome::Unlocked) => {
+                let took = t0.elapsed();
+                // the answer says so (`dispatch`), and the event log: the action took seconds longer than usual
+                g.dev.unlocked = Some(took);
+                self.log.log(&ictl_l10n::log_trf!(
+                    "已自动解锁(用时 {:.1} 秒)",
+                    "Unlocked automatically ({:.1} s)",
+                    took.as_secs_f64()
+                ));
+                Ok(())
+            }
+            Ok(ictl_unlock::Outcome::NotLocked) => Ok(()),
             Err(e @ (UnlockError::WrongPasscode | UnlockError::Uncertain(_))) => {
                 self.notify(g, Event::UnlockDisabled);
                 Err(ictl_l10n::trf!("{e},已推送通知", "{e}, notification sent").into())

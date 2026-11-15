@@ -2,353 +2,298 @@
 
 **English** | [简体中文](CHANGELOG.zh-CN.md)
 
-All notable changes to this project are documented here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses [Semantic Versioning](https://semver.org/) (while at 0.x, minor versions may contain breaking changes).
+What changed in each release, one line per change. Versions follow [Semantic Versioning](https://semver.org/); while at 0.x a minor version may break things, so read *Upgrade notes* first.
 
 ## [Unreleased]
 
-### Added
+### Upgrade notes
 
-- Phones on iOS 27 and later are driven without WebDriverAgent by default (native control): no Apple ID, no signing, no WDA; the daemon mounts the developer disk image, connects to the accessibility service (remoteAXService) and is ready, usually within seconds. The screen is read element by element from the accessibility service (types, text, values, ids and frames as WDA has them, so tapping by text, covered elements, system alerts and banners work as before); taps, swipes, long presses, buttons and Home go through HID; text is always pasted: “Allow Paste” is tapped, the field read back, and the pasteboard put back at once. Apps and links launch through CoreDevice, quitting sends SIGKILL, the lock state comes from lockdown, and auto-unlock follows the same rules as through WDA. When Home doesn't reach the home screen, a swipe up from the bottom edge does. `iphone-control setup` skips the Apple ID and signing for such a phone; `status`, `doctor` and the control page say “native”. To go back to WDA, set `ICTL_IOS_BACKEND=wda` in `~/.config/iphone-control/env`. A WDA already installed stays and is still re-signed. iOS 26 and earlier are unchanged. A WDA launched in the background (`ICTL_WDA_DETACHED`) while WDA was in use is ended when the phone is prepared (SIGKILL through CoreDevice AppService; DVT's `kill_app` leaves WDA running).
-- While WebDriverAgent is unavailable, `iphone_type_text` can enter Chinese and other text a US keyboard can't type: HID puts it on the phone's pasteboard (CoreDevice `pasteboardservice`, checked by reading it back) and presses Cmd-V, so the input method doesn't turn it into pinyin. iOS treats that text as coming from another app and asks “… would like to paste from dtpasteboardd” every time (iPhone 15 Pro Max, iOS 27.2.1, Notes); the answer says to take a screenshot and tap “Allow Paste”. Changing the pasteboard closes that prompt, so what was on it before is put back 45 s later (or before the next such paste, or when another device is chosen), and only if the pasted text is still there. Return isn't pressed with `submit`, since with the prompt up it would choose “Don't Allow Paste”. English letters and symbols are still typed as keys and don't touch the pasteboard.
-- An action with `then` says whether the screen changed: the screen after it settles is compared with what was read just before it (an element list, a screenshot, or the tree a tap by text reads before tapping). "The same as before" adds that the action may not have taken effect and to look before trying it again. Nothing is added when the screen wasn't looked at since the action before. On a phone (iPhone 15 Pro Max, iOS 27.2.1, Settings): a tap on an empty spot said "the same", opening General and going back said "changed".
+- Phones on iOS 27 and later switch to native control. To keep WebDriverAgent, set `ICTL_IOS_BACKEND=wda` in `~/.config/iphone-control/env` (#123).
+- Building from source needs Rust 1.89 (#119).
 
-### Changed
+### New
 
-- The daemon always launches WDA in the background and no longer holds an XCTest session: WDA starts on a locked phone too, keeps running across daemon restarts and updates, and is attached to again after switching devices and back. The experimental switch `ICTL_WDA_DETACHED` is gone; left in the settings file it does nothing (`=0` doesn't bring back the old way either). `iphone-control service stop` and `service uninstall` end it. See docs/decisions.md D18.
-- Building from source needs Rust 1.89 (was 1.88), for uuid 1.29.
-- Dependencies updated: rmcp 3.10.0, rcgen 0.14.10, console 0.16.6, sha2 0.11.1, uuid 1.29.2, zip 9.5.1, flate2 1.1.11, and 26 indirect ones within their compatible versions (rustls-webpki, mio, openssl, webpki-roots and others). rcgen keeps to ring only (its default would also build aws-lc). The vendored plume_core makes its signing request with rcgen 0.14 and apple-codesign uses dialoguer 0.12, so each of rcgen and console is built once instead of in two versions. x509-certificate stays at 0.24 and rsa at 0.9: apple-codesign and its dependencies use those, and a newer copy of ours would only be built beside them. The control page's self-made HTTPS certificate is still ECDSA P-256; one made before keeps working.
-- CI: actions/setup-node 7, dorny/paths-filter 4. Website: vue 3.5.45.
+- iOS 27 and later work without WebDriverAgent: no Apple ID, no signing, ready in seconds. iOS 26 and earlier are unchanged (#123).
+- Chinese and other non-ASCII text can be typed while WebDriverAgent is down. Tap "Allow Paste" when the phone asks (#118).
+- Actions with `then` say whether the screen changed, so an agent can tell when a tap did nothing (#121).
 
-### Fixed
+### Improvements
 
-- With WDA launched in the background (`ICTL_WDA_DETACHED`): `iphone-control service stop` and `service uninstall` now end the background WDA on the connected phones once the service is stopped, instead of leaving it running (`service restart` and updates still don't interrupt it). Each phone keeps its own background WDA across device switches, so switching back attaches to it instead of launching a new one.
-- An arrow key in the setup guide's menus (`iphone-control setup`) could come out as a letter on a busy machine: when the program was descheduled for more than 250 ms in the middle of reading the key, the rest of its bytes, though already there, were dropped and the last one taken as typed (↓ as "B"). Bytes already received are now always read.
-- A tap or swipe a minute or more after the last one no longer waits for the screen size to be measured again first: that takes WDA 0.95 s on an iPad mini 5 (iPadOS 26.7.3), where the first tap after a pause took 1.7 s instead of 0.9. The size is now measured again in the background while nobody acts (only Display Zoom changes it), and on rotation as before.
-- A control page whose H.264 or the phone's own video didn't show a first frame within 9 s (the viewer or daemon restarting, the encoder starting up) used MJPEG until it was reloaded; it now tries again after 30 s, 1 min and 2 min. A picture the viewer said isn't available still isn't tried again.
-- A swipe on the control page through WDA no longer waits for the list to stop before answering (reading the element tree again and again, up to 2.5 s): the person at the page sees it. On an iPad mini 5 a swipe took 3.1 s, now 1.6–2.3 s. Agents (MCP, CLI) still wait, so their next tap doesn't land on a moving list.
-- The way Home and locking work on each device is kept in `state.json` instead of only in memory. After the daemon restarted, or another device was controlled meanwhile, the first Home on a device where IOHID's Home doesn't work tried it, waited 2 s for the home screen and pressed again: 4.4 s instead of 0.8 on an iPad mini 5.
-- A tap, swipe, key or launch that WebDriverAgent didn't answer in time no longer carries on later. WDA handles requests one at a time and keeps going after we stop waiting, so an action queued behind a slow one could land on the screen long after it was reported as failed. The daemon now ends that WDA session at once (`DELETE /session`, which WDA 16.15.3 answers outside its queue and which drops what is still queued in it) and opens a new one for the next action. A read that times out keeps its session.
-- Reading the element tree of a screen with very many elements (long feeds and lists) no longer keeps taking as long. A read over 8 s, or one that times out, makes the next read ask WDA for a smaller snapshot (at most 150 children per element first, then half the depth and children, down to 12 levels and 60 children); a read under 1.5 s loosens it a step again. While the tree is cut short, `iphone_list_elements` and a `iphone_tap_element` that finds nothing say so.
-- A tap by text, an element list or `then=elements` with a notification banner at the top read SpringBoard's tree instead of the app's (seen on a phone with the "Device Hub" banner: a button in Notes wasn't found). WDA tells the app in front by what is under one point, which by default is 20% of the short side from the top left corner: (86, 86) on a 430-point iPhone, under the banner. It is now moved to half the short side from that corner, (215, 215), once per WDA start.
-- The HID fallback's paste (non-ASCII text while WebDriverAgent is unavailable) writes to the phone's pasteboard as local only. It wrote without source metadata, and then the phone's pasteboard daemon offers the write to the owner's other Apple devices through Universal Clipboard, so the text typed, and the old contents put back afterwards, could replace a Mac's clipboard too (as Pinky's notes on the service describe; not checked on a Mac here). It now names itself in the write's source metadata, as Xcode does. The phone still asks to "Allow Paste" in Notes.
+- Dependencies updated (#119).
+
+### Fixes
+
+- `service stop` and `service uninstall` also end a WDA launched in the background, and each phone keeps its own (#124).
+- Text pasted on the phone no longer reaches your Mac through Universal Clipboard (#122).
+- With a notification banner up, elements are read from the app instead of the banner (#121).
+- Arrow keys in setup menus no longer turn into letters on a busy machine (#120).
+- A tap or key that WDA didn't answer in time no longer lands on the screen later (#118).
+- Screens with very many elements read faster, and the result says when the list was cut short (#118).
+- The first tap after a pause no longer waits for the screen size to be measured (#110).
+- The control page retries H.264 or the phone's video after a slow start instead of staying on MJPEG (#109).
+- Swipes on the control page return sooner (#108).
+- The first Home after a daemon restart is no longer slow on some devices (#107).
 
 ## [0.2.6] - 2026-11-14
 
-### Added
+### New
 
-- Low-bandwidth mode for the control page's picture: a switch in Settings, for use over the internet or a weak signal. The phone's own video (HEVC) is asked for with a 2 Mbit/s cap instead of 6, about half the traffic at the same frame rate (on an iPhone's home screen 214 KB/s instead of 459–483 while swiping); a still screen looks the same, moving content gets a little blocky. There is one such stream per phone, so while any page watching it has the mode on, all of them get it, and the stream starts again (the picture stops for about half a second) when the first such page comes and when the last one goes. The H.264 picture changes only for that page (qp 26: 689 KB/s instead of 1350).
+- Low-bandwidth mode for the control page's picture, in Settings: about half the traffic (#104, #105).
 
-### Changed
+### Improvements
 
-- The control page's requests share a connection instead of opening one each (`Connection: keep-alive`). Over Wi-Fi a new connection and its TLS handshake cost two more round trips, for every tap, every check and each of the ten reports a second on the picture. With a 40 ms round trip a request from the page went from about 220 ms to 47 ms, and about 40 s on the page opened 19 connections instead of 763. A connection is kept only for a logged-in request, closes after 15 s of nothing, and isn't kept when fewer than 8 of the 32 places are free; streams (the picture, task events, `/mcp`) still have their own.
+- The control page reuses its connections, so taps and checks over Wi-Fi answer several times faster (#103).
 
-### Fixed
+### Fixes
 
-- A control page watching the phone's own video got no more frames, and wasn't closed, when the phone's media stream was stopped and started again (the daemon's side of each page held the stream's channel open); it now hears that the stream ended and reconnects.
-- Home on the control page is pressed at once: about 0.5 s instead of 1 s on an iPhone's home screen. The daemon first looked for a system alert that would stop Home working (0.8 s on the home screen), which the person at the page sees anyway; the page's requests now say someone is watching (`watched`), and for them the daemon looks only when the press didn't get to the home screen. Agents (MCP, CLI) are checked first as before.
-- Taps and Home presses on the control page no longer wait behind its background checks. While it shows the phone's own picture the page asks every few seconds whether a system alert is up, which on the home screen keeps WDA busy for about 0.8 s, and its status check takes the phone too: an action that came meanwhile waited for them. These checks now give way: they don't start within 4 s (the status: 1 s) of an action, nor while one waits, and one that runs is dropped when an action comes. With the page checking, a finger's press went from 775 ms to 25 ms at the 90th percentile, a Home press from 1.8 s to 1.3 s.
-- The phone's own picture (HEVC) on the control page no longer stops for half a second to a second now and then over Wi-Fi. A report from the page that came a few hundred milliseconds late made the picture skip to the next keyframe; frames now wait up to 400 ms for such a page, the allowance follows how much the link's round trip varies, and the page has two reports on the way at most instead of one. Under emulated Wi-Fi delays the longest stop went from 1.1 s to 0.1 s.
+- The phone's video on the control page no longer stutters over Wi-Fi (#100).
+- Taps and Home on the control page no longer wait behind the page's background checks (#101).
+- Home on the control page responds in about half the time (#102).
+- The control page picks up the phone's video again after the phone restarts its stream (#104).
 
 ## [0.2.5] - 2026-11-14
 
 ### Upgrade notes
 
-- `--url` (`mcp --url`, `task … --url`, `IPHONE_CONTROL_URL`) no longer takes `http://` for another machine, so the login token isn't sent in the clear: use `https://<address>:<port>` (with `--ca` for the self-signed certificate). `http://127.0.0.1` on this machine works as before.
-- A read-only token no longer has the phone unlocked for it: while the phone is locked, its element list says the phone is locked.
+- `--url` to another machine needs `https://` (with `--ca` for a self-signed certificate). `http://127.0.0.1` still works (#89).
+- A read-only token no longer unlocks the phone (#89).
 
-### Changed
+### Improvements
 
-- The control page's login page looks like the control page: its colours, light or dark as chosen there (or as the system), the same frosted card. The token field can show what was pasted, the `viewer token` command has a copy button, a wrong token is shown as an alert, and the page follows the language chosen on the control page, with a switch of its own.
-- The daemon is ready about 10 s sooner after it restarts or restarts WDA (1.4 s instead of 11 s on an iPhone): the outcome of starting WDA is taken as soon as it is there, not at the next check.
-- Waiting for the "Enable UI Automation" passcode, WDA is launched again every half minute instead of every three minutes. The prompt only comes up while WDA is being launched (for about 45 s, and not on every launch), so it is now on the phone most of the time instead of a quarter of it.
-- A stuck WDA is noticed after one unanswered request and a 5 s check, so a tool call waits about 35 s for the restart instead of 90 s.
-- Commands, MCP calls and the viewer wait (up to 10 s) for a daemon that is restarting instead of failing; a daemon that isn't running is still reported at once.
-- Too many wrong login tokens (20 in a minute) no longer lock out the right ones: a right token always gets in, and only wrong ones get 429. Before, anyone who could reach the page could cut off `mcp --url`, remote `task` commands and a remote task's agent.
-- `--url` takes `http://` only for this machine: tokens aren't sent in the clear to another one (use `https://`), and redirects aren't followed.
+- The login page matches the control page, with its own light/dark and language switches (#97).
+- Ready about 10 s sooner after the daemon or WDA restarts (#90).
+- While waiting for the "Enable UI Automation" passcode, the prompt is up on the phone most of the time (#90).
+- A stuck WDA is restarted after about 35 s instead of 90 s (#90).
+- Commands, MCP calls and the control page wait for a restarting daemon instead of failing (#90).
+- Too many wrong login tokens no longer lock out the right one (#89).
 
-### Fixed
+### Fixes
 
-- Without WDA, a device below iOS 27 (no HID fallback) is told so at once for taps, swipes and touches, like every other action, instead of an orientation error after a needless screenshot that suggested turning it to portrait.
-- A confirmation (`iphone_confirm`, or a step outside a task's apps) no longer cancels the user's pause or takeover: it is asked once the task runs again. Two at once are asked in turn; before, the first was counted as rejected and the second couldn't be answered.
-- A step the agent sent just before the user paused or took over no longer runs after it; a tap of the user's sent just before handing back no longer runs after that.
-- After the user handed back, the agent has to have actually seen the screen (a screenshot that worked) before acting.
-- A read-only token no longer makes the daemon unlock the phone (reading the elements of a locked phone now says it is locked).
-- Removing or replacing a login token now also ends the picture, task events, `/mcp` streams and task leases opened with it, within 5 s.
-- The control page's agent works in a private directory (under `$XDG_RUNTIME_DIR`, 0700) instead of one in `/tmp` that another user could make first and fill.
-- The viewer no longer stops accepting connections after an error such as running out of file descriptors; connections that never finish their request are dropped after 10 s (a machine on the network has at most 8 of them at a time); `GET /api/agent/tasks/events` no longer crashes the connection.
-- Task logs cut short by a power failure are removed instead of piling up.
+- Without WDA, devices below iOS 27 say at once that taps and swipes need it (#98).
+- A confirmation no longer undoes your pause or takeover, and two at once are asked in turn (#88).
+- A step the agent sent just before you paused, took over or handed back no longer runs after it (#88).
+- After you hand back, the agent has to look at the screen before acting (#88).
+- Removing or replacing a login token closes everything opened with it within 5 s (#89).
+- The control page's agent works in a private directory instead of `/tmp` (#89).
+- The control page keeps accepting connections after errors and drops stalled ones (#88).
+- Task logs cut short by a power failure are cleaned up (#88).
 
 ## [0.2.4] - 2026-11-14
 
 ### Upgrade notes
 
-- The control page (`iphone-control viewer`) and its `/mcp` now need a login, on this machine too. After upgrading, run `iphone-control viewer token` and open the link it prints; a browser stays logged in for 30 days. MCP clients connected to `/mcp` over HTTP need `Authorization: Bearer <token>` (`viewer token` prints the `claude mcp add` line). The CLI, `iphone-control mcp` over stdio and `task run` are unaffected.
-- With `--lan` (`IPHONE_CONTROL_VIEWER_LAN=1`) the page is HTTPS on the local network: open `https://<address>:<port>/` and check the certificate's fingerprint the first time (`iphone-control service status`).
+- The control page and its `/mcp` need a login. Run `iphone-control viewer token` and open the link it prints. HTTP MCP clients send `Authorization: Bearer <token>`. The CLI and stdio MCP are unaffected (#79).
+- With `--lan`, the page is HTTPS on the local network. Check the certificate fingerprint from `service status` the first time (#76).
+- `ICTL_AGENT_GATE` and `ICTL_AGENT_TOKEN` are replaced by `IPHONE_CONTROL_TASK_TOKEN` (#64).
 
-### Added
+### New
 
-- `iphone-control mcp --url https://<that machine>:8200` bridges stdio to another machine's viewer `/mcp`, so an MCP client that only starts a command can control the phone connected there. With a task's token only that is sent, otherwise the login from `IPHONE_CONTROL_VIEWER_TOKEN`; a command under `task run --url` has `IPHONE_CONTROL_URL` set, so a plain `iphone-control mcp` in it bridges by itself.
-- Every `task` subcommand takes `--url` (or `IPHONE_CONTROL_URL`): `list`, `events`, `pause`, `resume`, `takeover`, `handback`, `stop`, `approve` and `reject` work through another machine's viewer, with the login token in `IPHONE_CONTROL_VIEWER_TOKEN`.
-- Named login tokens, read-only ones among them: `iphone-control viewer token add <name> [--read-only]`, `list`, `show <name> [--new]`, `remove <name>`. A read-only token can watch the picture, the device's state and tasks; every action (taps, typing, starting, pausing or confirming tasks, switching devices, `/mcp`) is refused, and the page hides them. The task log records which token controlled it (`viewer:<name>`). Tokens moved to `viewer-tokens.json` and the earlier one became `owner`, so nobody logs in again after upgrading; adding, replacing and removing tokens takes effect at once, without restarting the viewer.
-- Tasks opened from another machine: `iphone-control task run --url https://<that machine>:8200 -- <command>` (the login token in `IPHONE_CONTROL_VIEWER_TOKEN`), or `POST /api/agent/tasks/open` directly, whose event stream is the lease. The agent on the other machine gets only the task's token: `/mcp` takes the token of an active task (header `Iphone-Control-Task-Token`), so it can act on the phone for that task but can't reach pausing or confirming, and can't approve itself.
-- The viewer and its `/mcp` need a login, from this machine too (the viewer can't tell a local browser from a visit forwarded by frp, cloudflared or another reverse proxy). The token is made on the first start and kept in `viewer-tokens.json` in the data directory (0600); `iphone-control viewer token` shows it with links that log in here and on the local network and the command to connect to the HTTP MCP, and `--new` replaces it. A browser stays logged in for 30 days; programs and MCP clients send `Authorization: Bearer <token>`. After too many wrong tokens (20 in a minute) wrong ones are answered with 429 for a minute. The CLI, `iphone-control mcp` (stdio) and `task run` use the local Unix socket and are unaffected.
-- MCP over HTTP: `/mcp` (Streamable HTTP) on the viewer's port serves the same tools as `iphone-control mcp`, for clients that only take a URL and for agents on another computer on the local network (`--lan`, over HTTPS), e.g. `claude mcp add --transport http iphone http://127.0.0.1:8200/mcp`. A task's agent sends the task's token in the `Iphone-Control-Task-Token` header. It needs the viewer's login, like the page; `--mcp off` (`IPHONE_CONTROL_VIEWER_MCP=off`) turns it off.
-- The viewer opened to the local network (`--lan`) now speaks HTTPS, on the same port: opened from another machine the picture can be H.264 or the phone's own HEVC instead of MJPEG, and traffic is encrypted. It uses a self-signed certificate made on this machine (kept in `viewer-tls/` in the data directory and reused); the browser warns the first time, so check the SHA-256 fingerprint shown at startup or by `service status` and go on. `--tls-cert`/`--tls-key` (`IPHONE_CONTROL_VIEWER_TLS_CERT`/`_KEY`) use a certificate of your own. `http://` from the network is redirected to `https://`; `http://127.0.0.1` on this machine works as before. `--tls off` (`IPHONE_CONTROL_VIEWER_TLS=off`) goes back to HTTP.
-- `iphone-control service viewer install` runs the viewer as a background service of its own that starts at login (`uninstall`, `start`, `stop`, `restart` too). It reads its port and whether it is open to the local network from the settings file (`IPHONE_CONTROL_VIEWER_PORT`, new; `IPHONE_CONTROL_VIEWER_LAN`; `IPHONE_CONTROL_VIEWER_LAN_HOSTS`, new) and keeps the installing shell's `PATH` to find `claude` and `codex`. Updates stop it and start it again; an automatic update waits while an AI task runs.
-- An AI task's agent can no longer pause, resume, take over, hand back or confirm its own task, so only a person answers out-of-scope steps and `iphone_confirm`. Control requests carrying the task's token (`IPHONE_CONTROL_TASK_TOKEN`) are refused, and so are those from an agent the control page or `task run` started, or any process it starts, even without the token or through the page's API. On macOS, calls through the page's API can't be traced to a process yet. Stopping a task is always allowed. The task's log records who controlled it (the page, the command line, the task's opener).
-- Navigate setup menus with arrow keys, confirm with Enter, or cancel with Esc. Number selection remains available, and basic terminals keep the line-by-line prompts.
-- Generate Bash, Zsh and Fish completion scripts with `iphone-control completions <shell>`, without starting the daemon or accessing a device.
-- `iphone-control viewer --lan` (or `IPHONE_CONTROL_VIEWER_LAN=1`) also opens the control page to the local network, on the same port, over HTTPS and behind the login (see above). It only accepts connections from local-network addresses and only answers to this machine's own names; `--lan-host` adds another name.
-- On the control page, a task can be limited to some apps before it starts (the App button next to the agent): in any other app each step waits for you, as with `task run --app`. The task card shows the scope, and running a task again keeps it.
-- AI tasks for any agent platform: `iphone-control task run -- <command>` runs a command in a task, and an `iphone-control mcp` it starts takes part (the control page shows its steps and can pause, take over, stop and confirm). `task list`, `task events`, `task pause`/`resume`/`takeover`/`handback`/`stop` and `task approve`/`reject` follow and steer tasks from the command line.
-- The control page picks up a task in progress: after a reload, and for tasks started elsewhere.
-- A task can be limited to some apps (`task run --app Settings`): in any other app, launching it, or opening a link that isn't a web page, each step waits for you to confirm; approving lets the task into that app.
+- AI tasks for any agent: `iphone-control task run -- <command>`, steered with `task list`, `events`, `pause`, `resume`, `takeover`, `handback`, `stop`, `approve` and `reject` (#64).
+- Limit a task to some apps with `task run --app` or the App button on the control page. Anywhere else, each step waits for you (#69, #70).
+- An agent can't pause, approve or otherwise control its own task (#75).
+- The control page picks up running tasks after a reload, including ones started elsewhere (#64).
+- `viewer --lan` opens the control page to the local network over HTTPS (#72, #76).
+- MCP over HTTP at `/mcp` on the control page's port (#77).
+- Named and read-only login tokens: `viewer token add <name> [--read-only]` (#80).
+- Use another machine's phone: `mcp --url` bridges to its `/mcp`, and `task … --url` runs and controls tasks there (#80, #82).
+- `service viewer install` runs the control page as a background service (#74).
+- Arrow-key setup menus, and shell completions with `iphone-control completions <shell>` (#71).
 
-### Changed
+### Improvements
 
-- On the control page the picture zooms only with the − and + buttons above it: pinching on a trackpad or touch screen, or Ctrl/⌘ + scroll, no longer zooms it (a drag easily turned into a zoom).
-- AI tasks are kept by the daemon instead of the control page. While a task runs, other clients (another MCP server, the command line) can look, but their actions and device switches are refused until the user takes over; the task stays on the device it started on. Tasks are logged in the data directory (`tasks/`, the last 50); one that was running when the daemon stopped shows as interrupted.
+- Tasks are kept by the daemon. While one runs, other clients can look but not act (#64).
+- The picture zooms only with its − / + buttons, not by pinching (#68).
 
-### Removed
+### Fixes
 
-- The `ICTL_AGENT_GATE` / `ICTL_AGENT_TOKEN` variables of the MCP server: a task's MCP server gets `IPHONE_CONTROL_TASK_TOKEN` instead.
-
-### Fixed
-
-- With several devices, every device's screen size is remembered: only the last one was, so after switching to another device and back, until WDA came up (say, stuck at the "Enable UI Automation" passcode prompt) the iOS 27 HID fallback didn't know the size, and screenshots, keys and taps failed with "the screen size is unknown".
-- Notification titles name the device: they always said "iPhone", also when an iPad needed its passcode, went offline or failed to re-sign, and with several devices you couldn't tell which. On an iPad the prompt is quoted as iOS shows it there ("Enter iPad passcode for XCTest"). `notify-test` samples use the controlled device.
-- Checking a new version during an update (running its `--version`) could fail now and then with "Text file busy": another thread started a process while the new program was still open for writing. It now waits a moment and tries again.
-- `task run`: a command that ended its task with `task finish` is no longer stopped on its way out with exit code 1. It now has 5 seconds to exit with its own code; if it is stopped after that, the exit code is 0 when the task completed.
-- Holding an arrow key in a setup menu keeps moving the selection without echoing key sequences into the menu.
-- AI task summaries on the control page are formatted: bold, lists, inline code and line breaks show as such instead of raw Markdown.
-- On iOS 27 and later, a system alert (a permission prompt such as "Allow Calendar to use your location?") that the live picture on the control page doesn't show is now drawn on the picture where it is, with its buttons; a button there taps it on the phone.
-- Locking no longer takes about 10 s every time on some iPhones (e.g. iPhone 15 Pro Max, iOS 27.0.1): pressing the power key via IOHID does nothing there, so the daemon remembers it per device and uses WDA's lock first (about 2 s).
-- Locking now works on iPads below iOS 27 (iPad mini 5, iPadOS 26.7.3: it never locked) and takes about 2 s instead of 10 s the first time on an iPhone 15 Pro Max: the power key via IOHID is now held 0.15 s instead of 0.1 s, which those devices ignored.
-- A WDA that still answers `/status` but no longer answers anything that goes through XCTest (foreground app, screenshots, elements, lock state all time out) is now noticed and restarted within about 30 s, also while tool calls keep the device busy (requests through XCTest stop waiting out their timeouts once three in a row went unanswered). Before, the daemon kept showing it as ready, and in background mode (`ICTL_WDA_DETACHED`) even a daemon restart attached to the stuck WDA again.
-- On devices below iOS 27, a lock that WDA could not carry out (neither the power key via IOHID nor WDA's own lock locked the screen) was reported as "WDA unavailable (just dropped)", although WDA was fine. It now says what each way of locking returned.
+- Locking takes about 2 s instead of 10 s on some iPhones, and now works on iPads below iOS 27 (#59, #63).
+- A WDA that still answers `/status` but nothing else is restarted within about 30 s (#60, #62).
+- A failed lock says what each way of locking did, instead of "WDA just dropped" (#61).
+- On iOS 27, system alerts missing from the phone's video are drawn on the picture and can be tapped (#67).
+- Task summaries on the control page are formatted instead of raw Markdown (#66).
+- Every connected device's screen size is remembered, not only the last one's (#86).
+- Notifications name the device instead of always saying "iPhone" (#85).
+- Updates no longer fail now and then with "Text file busy" (#81).
+- `task run` keeps the command's own exit code after `task finish` (#78).
+- Holding an arrow key in setup menus no longer prints escape codes (#73).
 
 ## [0.2.3] - 2026-11-13
 
 ### Upgrade notes
 
-- Upgrading from 0.2.2: its CLI has no bare `update` yet. For a managed service installed by the signed script, run `iphone-control update apply`; on Homebrew, `brew upgrade iphone-control`; on Debian / Ubuntu, download the `.deb` for your architecture from the release and install it with `sudo apt install ./<file>`. From 0.2.3 on, `iphone-control update` does it.
+- From 0.2.2, upgrade once by hand: `iphone-control update apply` (script install), `brew upgrade iphone-control`, or `sudo apt install ./<file>.deb`. After that, `iphone-control update` does it (#51).
+- `update rollback` is gone. A new version that doesn't start is still replaced by the old one automatically (#52).
 
-### Added
+### New
 
-- Run `iphone-control update` to check for a new stable release and install it through your managed service, Homebrew or Debian package. It reports when you already have the latest version. `update check` remains available for a check only.
-- `iphone-control update` says what it will do and asks before installing; `--yes` skips the question. After a Homebrew or Debian upgrade a running background service is restarted on the new version.
-- The Debian packages are signed by the publisher too; `iphone-control update` checks the signature before handing the package to APT through sudo. A package on hold in APT is reported with how to release it.
+- `iphone-control update` checks for and installs the new stable release, through the script's service, Homebrew or the `.deb`. It asks first, and `--yes` skips the question (#51, #52).
+- Debian packages are signed, and the signature is checked before installing (#52).
 
-### Removed
+### Fixes
 
-- `iphone-control update rollback` and the previous executable kept after an upgrade. A new version that doesn't start is still replaced by the old one automatically.
-- The rollback compatibility mark in release manifests: any newer signed stable release can be installed directly, without stopping at "manual migration required".
-
-### Fixed
-
-- With the control page open in a browser that can't decode HEVC (Firefox, Chrome on most Linux) or on a device below iOS 27, WDA is no longer killed by iOS every 1–2 minutes: the picture is taken at full size and turned upright on the page in landscape, so WDA passes on the screenshot the phone encodes in hardware instead of scaling, rotating and re-encoding every frame, which took more CPU than iOS allows.
-- Piping output into a program that exits early, such as `iphone-control status | head -1`, no longer crashes with "Broken pipe"; the command ends quietly like other command-line tools.
-- Touches on the control page respond faster again: a press no longer measures the screen size on WDA each time (about 0.1–0.2 s, new in 0.2.2); the size is measured on rotation and at most once a minute. Moving the mouse over the picture also keeps the touch session open, so the first press after a pause doesn't wait about 0.5 s for it to reopen.
+- WDA is no longer killed every 1–2 minutes while the control page shows H.264 or MJPEG (#55).
+- Touches on the control page respond quickly again (#54).
+- `iphone-control status | head -1` and similar no longer crash with "Broken pipe" (#53).
 
 ## [0.2.2] - 2026-11-12
 
 ### Upgrade notes
 
-- For a new script installation, use the `install.sh` asset from your publisher's signed GitHub Release. It requires Python 3 and OpenSSL 3. To migrate an older script installation, stop the service and uninstall it with the original installer, then run the new installer. For 0.2.0, use the original publisher's script at the `v0.2.0` tag and pass `--uninstall` with your original prefix. Your settings and device data are kept.
+- New script installs use `install.sh` from the signed GitHub Release and need Python 3 and OpenSSL 3. To move an older script install, uninstall it with its own script first. Settings and device data are kept (#44).
 
-### Added
+### New
 
-- Check for host software updates with `iphone-control update check` or **About & updates** in the viewer. A red dot marks a newer stable release from the build's publisher. Open the panel to see the version and copy the upgrade command for your installation when available.
-- User services installed from a signed release can upgrade with `iphone-control update apply` and roll back with `iphone-control update rollback`. They check for updates by default. Opt in with `iphone-control update policy auto-patch` to install signed patches while idle and restore the previous version if the daemon fails its health check.
-- A redesigned control page: a workspace that fits wide and narrow windows, frosted panels (solid with high contrast or reduced transparency), and the task input, executor and settings together at the foot of the sidebar. Devices show their product name (iPhone 15 Pro rather than `iPhone16,1`) in an iPhone or iPad frame, and the status bar tells apart waiting for a device, connecting, view only, live and disconnected.
+- Update checks: `iphone-control update check`, or *About & updates* on the control page (#44).
+- Script installs upgrade with `update apply`, and can install signed patches automatically with `update policy auto-patch` (#44).
+- A redesigned control page that fits wide and narrow windows, with device names and frames (#45).
 
-### Fixed
+### Fixes
 
-- Taps, swipes and live touch from the control page are bound to the device and picture you see: after a device switch, a rotation or a lost picture they are refused instead of landing at the old position. A brief WDA hiccup no longer resets the picture or lifts a finger mid-drag, and WDA builds without `/rotation` read the orientation from SpringBoard.
-- Picture connections from closed or frozen tabs are released, so many reconnects no longer use up the control page's connections.
+- Taps and touches are refused after a device switch, rotation or lost picture, instead of landing in the wrong place (#45).
+- Closed or frozen tabs release their picture connections (#45).
 
 ## [0.2.1] - 2026-11-12
 
-### Added
+### New
 
-- On iOS 27 and later the control page shows the phone's own hardware-encoded video (the CoreDevice screen media stream, HEVC): about 60 frames a second at native resolution, nothing encoded on this machine and no capturing by WDA; the picture turns with the screen. Browsers that can't decode HEVC (Firefox, Chrome on most Linux machines) and older iOS fall back to H.264 or MJPEG. `IPHONE_CONTROL_VIEWER_CODEC=device` uses only this stream.
-- The control page shows the picture as H.264 at about 1/15 of the traffic: on macOS with VideoToolbox called directly (the JPEG decoded by the hardware too), no ffmpeg needed; on Linux with ffmpeg installed, GPU encoding first (NVENC, VAAPI, QSV, V4L2, else x264); on a slow link the frame rate drops instead of the picture falling further behind. Without ffmpeg it stays MJPEG, now without repeated frames. Settings: `IPHONE_CONTROL_VIEWER_CODEC`, `IPHONE_CONTROL_VIEWER_QP`.
-- Experimental `ICTL_WDA_DETACHED=1`: WebDriverAgent is launched in the background without an XCTest session, so it also starts while the phone is locked and keeps running when the daemon restarts. See [WDA dependency research](docs/dev/wda-dependency-research.md).
+- On iOS 27 and later, the control page shows the phone's own video: HEVC, about 60 fps, native resolution (#42).
+- Elsewhere the picture is H.264 at about 1/15 of the traffic, hardware-encoded where possible (#42).
+- Experimental `ICTL_WDA_DETACHED=1` launches WDA in the background, even while the phone is locked (#41).
 
-### Fixed
+### Fixes
 
-- With the control page open, WDA is no longer killed by iOS every few minutes (iOS 27 and later): capturing the picture took WDA over a CPU core, iOS kills a process averaging more than 80 % over a minute, and the daemon restarted WDA, failing actions meanwhile. With the phone's own video WDA stays around 3 %. Below iOS 27 the picture still comes from WDA; close the control page when you aren't watching.
+- On iOS 27 and later, WDA is no longer killed every few minutes while the control page is open (#42).
 
 ## [0.2.0] - 2026-11-11
 
 ### Upgrade notes
 
-- Docker is no longer released: no image on ghcr, no `compose.yaml`. Move to the one-line `install.sh`, Homebrew or the `.deb` (see Added). Stop the container first (`docker compose down`) so it doesn't hold the phone.
-- Your data was in the container's volume (`./data` next to `compose.yaml`, owned by root). Before the first run, copy it to `~/.local/share/iphone-control` and make it yours (`sudo cp -a ./data ~/.local/share/iphone-control && sudo chown -R "$(id -un)": ~/.local/share/iphone-control`; see [Data and backups](https://derrors.github.io/iphone-control/en/deploy/backup)) to keep the Apple ID session, the signed WebDriverAgent and auto-unlock passcodes. Pairing records now live with the system usbmuxd, so the phone may ask you to trust the computer again.
-- Settings move from `.env` to `~/.config/iphone-control/env` (same `KEY=value` lines; mode 0600). The first-run guide writes it, or copy your values over and run `iphone-control service restart`.
-- `ICTL_MANAGE_USBMUXD` and `ICTL_USBMUXD_BIN` are gone: the daemon no longer starts usbmuxd. On Linux install the system one (`sudo apt install usbmuxd`; the `.deb` depends on it), and unmask it if you masked it for the container (`sudo systemctl unmask usbmuxd`).
-- Register the MCP server again: the old `docker exec` registration no longer works. The first-run guide does it, or run the command `iphone-control mcp-config` prints.
+- Docker is no longer released. Stop the container (`docker compose down`) and move to `install.sh`, Homebrew or the `.deb`.
+- To keep the Apple ID session, signed WDA and passcodes, copy the container's `./data` to `~/.local/share/iphone-control` first ([how](https://derrors.github.io/iphone-control/en/deploy/backup)). The phone may ask to trust the computer again.
+- Settings move from `.env` to `~/.config/iphone-control/env`.
+- The daemon no longer runs usbmuxd. On Linux, install the system one (`sudo apt install usbmuxd`), and unmask it if you masked it for the container.
+- Register the MCP server again: the first-run guide does it, or run the command `iphone-control mcp-config` prints.
 
-### Added
+### New
 
-- First-run guide: after installing, connect the phone and run `iphone-control`. The first time it walks you through setup in the terminal: language, proxy, the background service, pairing, Developer Mode, Apple ID, signing and installing WebDriverAgent, the optional auto-unlock passcode and notifications (Bark or Telegram, with a test message), and registering the MCP server with Claude Code and Codex. Steps already done are skipped; afterwards `iphone-control` shows the status and starts the service if it isn't running.
-- `iphone-control setup --reconfigure` redoes all of setup or one part: language, proxy, background service, Apple ID (sign in again and re-sign WebDriverAgent), phone, auto-unlock passcode, notifications or MCP registration.
-- `iphone-control service install|uninstall|start|stop|restart|status` manages the background service (launchd on macOS, a systemd user unit on Linux), whichever installed it: `install.sh`, `brew services` or the `.deb`.
-- Settings file `~/.config/iphone-control/env`: the service loads it, and so does every command (a variable already set in the environment wins). After editing it by hand, run `iphone-control service restart`.
-- `THIRD_PARTY_LICENSES.html` (licenses of all Rust dependencies) is in every release archive and in the `.deb`.
-- The control page follows the device the daemon controls: when it is switched elsewhere (another tab, `iphone-control select`, the MCP tool, or automatically after an unplug), the page notices within about 10 seconds, says so, and moves its picture and panels over. Actions carry the device the page shows and are refused, never sent to another phone, once the daemon controls a different one.
-- The control page says why a device has no picture (not connected, needs pairing or Developer Mode, WebDriverAgent starting or why it failed to start, needs unlocking), and offers a "Sign and install WDA" button for a device without WebDriverAgent when an Apple ID is signed in.
-- Recovery from a revoked signing certificate: a free Apple ID holds at most two certificates, and signing with it somewhere else (another machine, moving from Docker to a native install, another sideloading tool) creates one and revokes an old one, after which WDA signed with that certificate won't start on any device although its profile still looks valid. When a device now refuses to start WDA, the daemon checks whether that WDA was signed with this machine's certificate and whether this machine's certificate is still in the Apple ID's team, and re-signs the device automatically if not (at most once per device every 6 hours).
-- `doctor` shows both certificate checks; signing that creates or revokes a certificate is logged and notified (a new notification type `cert`, try it with `notify-test cert`).
-- Simpler installs: `curl -fsSL https://raw.githubusercontent.com/Derrors/iphone-control/main/install.sh | sh` on macOS (Apple Silicon) and Linux installs the release binary and runs the daemon as a per-user service (launchd on macOS, which had none before; systemd on Linux), and upgrades or uninstalls it again; `brew install derrors/tap/iphone-control` with `brew services start iphone-control`; and a `.deb` for Debian 12+ and Ubuntu 22.04+ (amd64, arm64) with a systemd user service, depending on usbmuxd. The release workflow builds the packages and updates the Homebrew tap.
-- AI tasks in the live viewer: type a task on the page and a local agent (Claude Code or Codex, picked on the page) carries it out on the phone through the MCP tools, while the page shows each step with what the agent says it is doing, the result and screenshots, and marks where it taps. Pause, resume, take over (act on the phone yourself) and hand back, or stop. Before paying, deleting, sending a message or changing account settings the agent asks on the page (`iphone_confirm`) and waits; a rejected step isn't done. The steps, holds and confirmations go through `iphone-control mcp` itself, so they work the same with either agent; the agent runs with only the phone tools (no shell or file tools for Claude Code, a read-only sandbox for Codex).
+- One-line installs: `install.sh` for macOS (Apple Silicon) and Linux, Homebrew, and a `.deb` for Debian 12+ / Ubuntu 22.04+, each with a background service.
+- First-run guide: run `iphone-control` after installing. `setup --reconfigure` redoes any part of it.
+- `iphone-control service install|uninstall|start|stop|restart|status`.
+- AI tasks on the control page: type a task and Claude Code or Codex does it on the phone. Pause, take over or stop it at any time, and it asks before paying, deleting or sending.
+- A revoked signing certificate is detected and the device re-signed automatically.
+- The control page follows device switches, explains why there is no picture, and can sign and install WDA.
 
-### Changed
+### Improvements
 
-- New viewer page: AI assistant, live screen with zoom, and a device panel with state and readiness checks, installed apps (launch, quit, open a URL) and on-screen elements (highlight on the picture, tap by name, wait for text). The device can be switched from the page, and the picture follows. While an AI task runs, manual actions are refused until you take over.
-- On iOS 27 and later the viewer's picture works like a touchscreen: pressing, moving and releasing the mouse moves a finger on the phone as you go (over CoreDevice HID), so a list scrolls while you drag, and the mouse wheel or trackpad scrolls the page under the pointer without holding the button. A tap round trip is about 20 ms instead of about 530 ms, and a drag no longer waits for the list to stop (1.8 to 3 s before). Older iOS versions keep whole gestures sent on release. While the viewer is used, the HID session's screen stream keeps the phone awake, until 30 seconds after the last touch.
-- The live picture runs at about 50 frames a second at 75% size (WDA's default was 10 at full size).
-- The viewer page is in English or Chinese: it follows `IPHONE_CONTROL_LANG`, and a button switches it. The daemon's messages and the AI task (instructions, tool results) use the page's language.
-- The viewer's task history shows one plain sentence per step (what the agent said it is doing, or a description of the action), without screenshots, tool names, parameters or raw results; a step that didn't work says so. Screenshots are no longer passed from the agent's tools to the viewer.
-- The viewer no longer draws marks for your own taps and swipes, and no longer shows a message for each successful manual action; errors are still shown.
-- The viewer serves more read-only JSON (`/api/daemon`, `/status`, `/devices`, `/apps`, `/elements`) and refuses reads that a browser marks as sent by another site (`Sec-Fetch-Site`), since reading elements can unlock the phone.
+- New control page: AI assistant, live screen with zoom, and a device panel with apps and elements. In English or Chinese.
+- On iOS 27 and later the picture works like a touchscreen: about 20 ms per tap instead of 530 ms.
+- The picture runs at about 50 fps.
 
-### Removed
+### Fixes
 
-- The Docker image (`ghcr.io/derrors/iphone-control`), `compose.yaml`, `docker/Dockerfile` and `.dockerignore`. A container can't reach the local Claude Code or Codex that the control page hands tasks to, and the native installs are simpler.
-- The daemon no longer starts or watches usbmuxd (`ICTL_MANAGE_USBMUXD`, `ICTL_USBMUXD_BIN`); the system usbmuxd is used on Linux and macOS.
-- `deploy/iphone-control.service`: `install.sh` and `iphone-control service install` write the unit now.
-- `iphone-control mcp-config --container`: `mcp-config` takes no arguments and prints a path that survives Homebrew upgrades.
-
-### Fixed
-
-- Control page: the mouse wheel works again on devices below iOS 27 (whole-gesture mode). It waited for a leftover scroll amount that never drains in that mode, so no swipe went out and later wheel events piled up.
-- Pressing Home right after an app comes to the front, while its transition is still running, was ignored by iPadOS for both ways of pressing (about one time in three on an iPad mini 5 / iPadOS 26.6.1). When neither brings back the home screen, Home is now pressed once more.
-- When WebDriverAgent fails to start with only `unexpected response`, the hint adds the second likely cause: if the developer is already trusted, the signing certificate may have changed; run `iphone-control sign` to re-sign the device. In that case the control page offers a "Re-sign and install WDA" button when an Apple ID is signed in.
-- In automatic mode the daemon, after a restart, goes on with the last device that was ready instead of whichever usbmuxd lists first (with an iPhone and an iPad connected, a restart could switch to a device whose WebDriverAgent can't start).
-- `iphone-control viewer` no longer exits when the daemon isn't up yet and several devices are connected: it starts anyway and the page follows once the daemon has picked a device.
-- Control page: on a device below iOS 27 without WebDriverAgent, the route shows "Unavailable" instead of the HID fallback (which needs iOS 27); an unknown lock state is no longer shown as "Unlocked"; when WebDriverAgent fails to start, the picture area shows why instead of "usually 10–60 seconds".
-- "WDA failed to start: WDA failed to start:" is no longer doubled in the log and the state.
-- `devices`, `select` and `doctor` on the command line also name `iphone-control select` / `iphone-control status`, not only the MCP tools; when the daemon can't be reached, the hint is `iphone-control service start`.
-- `lock` no longer takes about 10 seconds on newer iPhones: the power key is pressed for 0.1 s instead of held for 0.5 s, which an iPhone 18 Pro Max (iOS 27.2.1) ignored, so every lock fell through to WebDriverAgent's slower lock and logged a timeout.
-- `home` takes about 1.3 seconds instead of 3.7 on devices that ignore the IOHID Home event (iPhone 18 Pro Max, iOS 27.2.1): when only the XCTest press works, the daemon remembers that for the device and uses it first. Devices where only the IOHID press works (iPhone 12 mini) keep their order.
-- Taps and long presses no longer take about 26 seconds while something on screen keeps animating (seen tapping a search result in Settings with the keyboard up, iPhone 18 Pro Max, iOS 27.2.1): like swipes, they no longer wait for WebDriverAgent's animation cool-off. The result came back in about 1.4 seconds.
-- `iphone_web_targets` and `iphone_web_eval` say to turn on Settings → Safari → Advanced → Web Inspector when the phone closes the connection, instead of only showing a TLS error.
-- `iphone_app_logs` no longer returns Info lines, matching its description (some processes still send them on a stream without debug messages).
-- English device descriptions have a space before the parenthesis and after the comma: `name (model iOS version, UDID)`.
+- The mouse wheel works again on the control page below iOS 27.
+- `lock` and `home` are much faster on newer iPhones, and taps no longer take 26 s while something animates.
+- Home pressed during an app transition on iPad is retried.
+- After a restart, the daemon goes on with the last device that was ready.
+- `iphone-control viewer` starts even before the daemon has picked a device.
+- Clearer hints when WDA fails with `unexpected response`, Web Inspector is off, or the daemon can't be reached.
+- `iphone_app_logs` no longer returns Info lines.
 
 ## [0.1.5] - 2026-11-10
 
-### Added
+### New
 
-- English: `IPHONE_CONTROL_LANG=en` switches tool descriptions and results, CLI output and help, `status`/`doctor`, logs and notifications to English. The default stays Simplified Chinese, and older clients still get Chinese.
-- `iphone-control viewer [--port]`: watch and control the phone live in a browser (opt-in, 127.0.0.1:8200 by default). Other local users can reach the port, so stop it when done.
-- Developer tools, opt-in with `IPHONE_CONTROL_DEV_TOOLS=1`: `iphone_app_logs`, `iphone_crash_reports`, `iphone_install_app`, `iphone_uninstall_app`, `iphone_web_targets` and `iphone_web_eval`. Without the switch the tool list is unchanged.
+- English: `IPHONE_CONTROL_LANG=en` for tools, CLI, logs and notifications.
+- `iphone-control viewer`: watch and control the phone in a browser.
+- Developer tools, with `IPHONE_CONTROL_DEV_TOOLS=1`: app logs, crash reports, installing and uninstalling apps, and Safari's Web Inspector.
 
-### Fixed
+### Fixes
 
-- Scroll bars are dropped from element lists in every system language, not only Chinese and English.
-- `iphone_uninstall_app` only accepts a bundle ID or the full display name; empty, partial or ambiguous names are refused and the candidates are listed.
-- App installs and re-signing wait for each other instead of uploading to the phone at the same time.
-- A daemon that gets stuck exits by itself, so systemd or Docker can restart it.
-- Memory no longer grows while the HID fallback is in use.
-- `usbmuxd.log` is rotated when it gets too large.
+- Scroll bars are left out of element lists in every language.
+- `iphone_uninstall_app` refuses partial or ambiguous names.
+- App installs and re-signing no longer upload at the same time.
+- A stuck daemon exits so its service restarts it.
+- Memory no longer grows with the HID fallback, and `usbmuxd.log` is rotated.
 
 ## [0.1.4] - 2026-11-07
 
-### Security
+### Improvements
 
-- Updated the `zip` crate to 9.4.1 (from 8.6.0, and 2.6.1 in the vendored apple-codesign) for GHSA-m665-v7pm-7grj, GHSA-q7v9-x93c-xqv3, GHSA-hjqx-j4rw-g7xv, GHSA-9hj8-73fh-9963 and GHSA-8hxf-qr8p-62x4. iphone-control only unpacks the checksum-verified WebDriverAgent package from Appium, so the practical exposure was small.
-- The documentation site's build tooling uses vite 6.4.5 and esbuild 0.25 (development dependencies only; the published site was not affected).
+- `ICTL_DDI_DIR` is never written to; only the default cache is downloaded again after three failed mounts.
+- `debug` subcommands need `--features debug-cmds`.
 
-### Changed
+### Fixes
 
-- `ICTL_DDI_DIR` (a Developer Disk Image directory you extracted yourself) is never downloaded into or deleted from; missing files are reported by name. Only the default `ddi/` cache is cleared and downloaded again, and only after three failed *mounts* (tunnel errors no longer count).
-- The `debug` subcommands are no longer built by default; build with `--features debug-cmds` to get them.
-- Tool descriptions say that screenshots, `iphone_list_elements` and `iphone_wait_for` also unlock the phone when auto-unlock is configured, and that the HID fallback needs iOS 27.
-
-### Fixed
-
-- An action whose WebDriverAgent request was sent but whose connection then dropped, or whose response was incomplete, is no longer repeated over HID (a tap or text could happen twice). It now reports that the phone may already have done it.
-- Calls to usbmuxd, lockdown, AMFI, misagent and installation_proxy have time limits, so a phone or usbmuxd that accepts a connection but never answers can no longer hang the daemon.
-- Re-signing has an overall time limit (15 minutes) instead of staying "in progress" forever when Apple's servers or the install stall, and the Apple ID session check has one too. After the phone reconnects or another device is selected, re-signing is checked within a minute instead of waiting up to `RESIGN_CHECK_HOURS`. Finishing a re-sign for one device no longer tears down the session of a device selected meanwhile.
-- When the phone is locked before its first unlock and WDA can't start, `status` keeps showing that the phone needs unlocking and retries every 20 seconds, instead of flipping back to "starting" and retrying every 10 seconds.
-- A HID session that timed out while opening no longer leaves the screen media stream running on the phone (no auto-lock, icon stuck in the Dynamic Island).
-- Cancelling an MCP call stops it: the remaining `iphone_batch` steps don't run, and a request still waiting for the device is dropped.
-- `iphone_batch` stops if the controlled device changes while it runs (for example, the device is unplugged and another one is picked automatically).
-- A newly started WebDriverAgent is only considered ready after its test plan has started, so a stale WDA still answering on the phone can't make it look ready early.
-- `doctor` counts only iPhones, iPads and iPods as phones on USB; an Apple keyboard no longer passes the check.
-- The system-alert check after an action is no longer skipped when the tapped element's text happens to contain the words "系统弹窗".
-- Auto-unlock now also recognizes leftover WDA wait settings from an interrupted swipe or poll and restores the defaults.
-- iPad: when WebDriverAgent was started while the iPad was locked, it keeps reporting "not locked", and a dark Touch ID lock screen with notifications has no lock marker in the element tree. Auto-unlock used to trust WDA from then on and never unlock; such an ambiguous screen is now treated as possibly locked (unlocked automatically when a passcode is set, shown as "possibly locked" in `status`).
-- iPad: rows in the floating sidebar of iPadOS 26 apps such as Settings can be tapped by name again; the empty sidebar-sized containers behind the list were mistaken for something covering it.
-- When WDA drops between two health checks, errors say it just dropped instead of showing the state as "ready".
+- Security: `zip` updated to 9.4.1 for GHSA-m665-v7pm-7grj and related advisories. Exposure was small.
+- An action whose connection dropped is no longer repeated over HID.
+- Calls to the phone, usbmuxd and Apple have time limits, so the daemon can't hang on them.
+- Re-signing is checked within a minute after reconnecting or switching devices.
+- Cancelling an MCP call stops it, including the rest of an `iphone_batch`. A batch also stops if the device changes.
+- A timed-out HID session no longer leaves the screen stream running.
+- A stale WDA can't look ready early, and errors say when WDA just dropped.
+- iPad: auto-unlock works when WDA was started while locked, and sidebar rows can be tapped by name again.
+- `doctor` no longer counts an Apple keyboard as a phone.
 
 ## [0.1.3] - 2026-11-07
 
 ### Upgrade notes
 
-- Auto-unlock passcodes now belong to individual devices. Before upgrading, ensure the only connected device is the one whose passcode was saved by the old version; that legacy passcode is automatically assigned when exactly one device is connected. If its owner is uncertain, clear it with the old version's `passcode clear` before upgrading, then use `passcode set --device <UDID>` for each device. Back up the data directory first.
-- Device selection is shared by all clients. Explicit `select` choices survive daemon restarts; automatic selection keeps the current device only while the daemon runs and it remains connected.
-- Landscape HID fallback needs a matching WDA rotation sample no older than 30 seconds. Do not flip the device between landscape sides while WDA is unavailable; wait for WDA to recover before doing so.
+- Auto-unlock passcodes are now per device. Before upgrading, connect only the device whose passcode was saved, or clear it and set each one with `passcode set --device <UDID>`.
+- Device selection is shared by all clients, and `select` choices survive restarts.
+- In landscape without WDA, don't turn the device to the other landscape side.
 
-### Added
+### New
 
-- Choose which device to control when several iPhones/iPads are connected: new MCP tools `iphone_list_devices` and `iphone_select_device`, commands `devices` and `select`. The choice is saved in state.json and survives restarts; `select auto` goes back to automatic choice. `IPHONE_UDID`, when set, wins and switching is refused.
-- Auto-unlock passcodes are kept per device (`secrets/passcodes/<UDID>`); `passcode set/clear` accept `--device`. A passcode saved by an older version is assigned to the device when exactly one is connected over USB, and isn't used while several are.
+- Choose which device to control: `iphone_list_devices` and `iphone_select_device`, or `devices` and `select`.
+- Auto-unlock passcodes per device.
 
-### Fixed
+### Fixes
 
-- Screen dimensions now follow rotation, preventing stretched screenshots and filtered-out elements near the bottom. iPad landscape system UI coordinates are converted to screen coordinates, using the status bar position to distinguish the two landscape directions.
-- Auto-unlock on Touch ID devices now taps “Use Passcode” first; lock-screen detection and iPad delete-key positioning are handled, with numeric keypad layout validation before typing.
-- Read the current device's installed WDA provisioning profiles via misagent for `doctor`, `status` and automatic re-signing, rather than relying on another device's last signing record.
-- `setup` waits for the daemon to recognise the target device before signing and installing. Offline and pre-iOS-27 diagnostics are corrected; generic WDA launch errors include a first-install developer-trust troubleshooting hint.
-- `open_url` waits for a stable foreground app, reducing cold-start black screenshots and transient system services being reported as the target app.
-- HID fallback taps and swipes now map landscape coordinates back to the device's native portrait coordinate system. Saved dimensions and reused HID sessions are normalized to portrait. Every fallback touch checks a fresh screenshot; landscape touches need a matching WDA rotation sample no older than 30 seconds and are refused when it is unavailable, including after a daemon restart. Do not flip the device between landscape sides while WDA is unavailable: screenshot dimensions alone cannot detect a 180° change.
-- Without `IPHONE_UDID` and with several devices connected, a change in usbmuxd's list order silently switched control to another device (auto-unlock could type one device's passcode into another). The controlled device is now kept until it disconnects.
-- With `IPHONE_UDID` set to a device that isn't connected while another one is, usbmuxd was restarted every 30 seconds.
-- In the container, a second device plugged in while one was already connected was never picked up by usbmuxd (no udev, so no hotplug events), and usbmuxd wasn't restarted. The number of iPhones/iPads on USB is now compared with the number usbmuxd sees.
-- After switching devices, the previous device's app list cache and screen size were still used.
+- Screen size follows rotation: no stretched screenshots or missing elements, and iPad landscape coordinates are right.
+- HID fallback taps and swipes work in landscape, and are refused when the orientation is unknown.
+- Auto-unlock on Touch ID devices taps "Use Passcode" first and checks the keypad.
+- Control no longer jumps to another device when usbmuxd reorders its list.
+- `doctor`, `status` and re-signing read the current device's own WDA profiles.
+- `setup` waits for the device before signing, and `open_url` waits for the app before returning.
+- Switching devices no longer reuses the previous device's app list and screen size.
+- usbmuxd is no longer restarted every 30 s for a missing `IPHONE_UDID`, and a second device is picked up in the container.
 
 ## [0.1.2] - 2026-11-04
 
-### Added
+### New
 
-- Prebuilt macOS binary (Apple Silicon, macOS 11+) in Releases: `iphone-control-vX.Y.Z-macos-arm64.tar.gz`. It isn't notarized; see the macOS guide if Gatekeeper blocks it.
+- Prebuilt macOS binary (Apple Silicon, macOS 11+). It isn't notarized; see the macOS guide.
 
 ## [0.1.1] - 2026-11-04
 
-### Added
+### New
 
-- macOS (Apple Silicon) support: build from source and run as a regular user with the system usbmuxd; no Xcode needed. See the new macOS guide.
+- macOS (Apple Silicon) support, no Xcode needed.
 
-### Changed
+### Improvements
 
-- MCP tool descriptions now explain when to use each tool, what it returns and how it behaves; every parameter is documented and every tool carries MCP annotations. Tool names, parameters and results are unchanged.
-- Release binaries are named `iphone-control-vX.Y.Z-linux-<arch>.tar.gz`.
+- Tool descriptions explain when to use each tool and what it returns.
+- Release files are named `iphone-control-vX.Y.Z-linux-<arch>.tar.gz`.
 
-### Fixed
+### Fixes
 
-- `home` and `lock` had no effect on some phones (seen on an iPhone 12 mini, iOS 26.4.1), and auto-unlock couldn't wake a dark screen there.
-- After a disconnect of a few seconds, setups using the system usbmuxd (macOS, Linux source installs) got stuck on "bad device"; they now reconnect by themselves.
-- `doctor` on macOS no longer reports "no Apple device on USB", and its hints use macOS commands.
-- When auto-unlock can't bring up the passcode keypad, the message mentions StandBy, which hides the keypad.
+- `home`, `lock` and waking for auto-unlock work on phones such as the iPhone 12 mini.
+- Setups using the system usbmuxd reconnect after a short disconnect.
+- `doctor` works on macOS.
 
 ## [0.1.0] - 2026-11-02
 
 First public release.
 
-### Added
+### New
 
-- `iphone-control daemon`: one long-running process owns the phone — usbmuxd supervision (with a sysfs fallback for containers without udev), pairing and Developer Mode checks, Developer Disk Image download and mounting, a CoreDevice tunnel with a user-space TCP stack, WebDriverAgent launch and health checks, and a state machine that recovers from unplugging, usbmuxd restarts and phone reboots.
-- MCP server with 15 tools: status, screenshots with zoom-in regions, element lists, tap / tap by text, long press, swipe, typing (including Chinese), hardware buttons, app launch / terminate / list, URLs, `iphone_wait_for` and `iphone_batch`. Action tools accept `then` to return the screen after the action.
-- HID fallback for taps, swipes, buttons, ASCII typing and screenshots while WebDriverAgent is unavailable.
-- Signing of WebDriverAgent with a free Apple ID (two-factor and SMS login), including the `.xctest` bundle, a post-signing check, automatic re-signing before the 7-day profile expires, and a daily Apple ID session check.
-- Notifications through Bark and Telegram, with de-duplication.
-- Optional auto-unlock with strict safeguards (stops after one wrong attempt).
-- `setup` wizard, `doctor` diagnostics, `status`, `mcp-config`, `wda-bridge`, `notify-test`.
-- Docker image (single binary plus Debian's usbmuxd, not privileged) with a generated third-party license list, published to `ghcr.io/derrors/iphone-control` for linux/amd64 and linux/arm64.
-- Running without Docker, from source or from the prebuilt Linux binaries (x86_64, aarch64): as a regular user with the system usbmuxd, XDG data and socket paths, the unsigned WebDriverAgent downloaded and checksum-verified before the first signing, `mcp-config` printing a direct command, and a systemd user service.
+- A daemon that owns the phone: pairing, Developer Mode, disk image, tunnel and WebDriverAgent, recovering from unplugging and reboots.
+- MCP server with 15 tools: screenshots, elements, taps, swipes, typing (Chinese too), buttons, apps, URLs, waiting and batches.
+- HID fallback while WDA is down.
+- WDA signed with a free Apple ID and re-signed before it expires.
+- Bark and Telegram notifications, and optional auto-unlock.
+- `setup`, `doctor`, `status` and `mcp-config`.
+- Docker image and prebuilt Linux binaries.
 
 [Unreleased]: https://github.com/Derrors/iphone-control/compare/v0.2.6...HEAD
 [0.2.6]: https://github.com/Derrors/iphone-control/compare/v0.2.5...v0.2.6

@@ -132,7 +132,16 @@ Part 2 checks that a change doesn't break what already works; this part shows th
 - Keep them focused; describe what changed and why.
 - The tests above pass and are reported in the template ([Required tests](#required-tests)). Bug fixes and features without real-device results are not merged.
 - CI must pass: format, clippy with `-D warnings`, tests (on Linux and macOS), the MSRV check, gitleaks and the package checks (`.deb`, `install.sh`, the Homebrew formula).
-- User-visible changes get a line in [CHANGELOG.md](CHANGELOG.md) and [CHANGELOG.zh-CN.md](CHANGELOG.zh-CN.md) under *Unreleased* (a Chinese line is welcome but optional for outside contributors; maintainers add it before release).
+- User-visible changes get a line in [CHANGELOG.md](CHANGELOG.md) and [CHANGELOG.zh-CN.md](CHANGELOG.zh-CN.md) under *Unreleased* (a Chinese line is welcome but optional for outside contributors; maintainers add it before release). See [Changelog entries](#changelog-entries).
+
+### Changelog entries
+
+The changelog is the release notes, so write for someone deciding whether to upgrade:
+
+- One line, one sentence or two, ending with the pull request number: `- Swipes on the control page return sooner (#108).`
+- Say what the user sees or can now do, not how it works. Leave out causes, timeouts, endpoints and measurements; they belong in the pull request. A number stays only when it is the point ("about half the traffic").
+- Pick the section: *Upgrade notes* (something you must do or that stops working), *New*, *Improvements*, *Fixes* (*升级注意事项*, *新功能*, *改进*, *修复*). Leave out empty ones.
+- Internal changes (refactors, tests, CI, docs) get no line.
 
 ## Documentation site
 
@@ -140,7 +149,7 @@ The user guide at [derrors.github.io/iphone-control](https://derrors.github.io/i
 
 ## Releasing (maintainers)
 
-1. Move the *Unreleased* entries in [CHANGELOG.md](CHANGELOG.md) and [CHANGELOG.zh-CN.md](CHANGELOG.zh-CN.md) under `## [x.y.z] - YYYY-MM-DD` and update the compare links at the bottom. Both files need the section — the release notes are built from the two (English, then Chinese) and the workflow fails if either is missing. Keep entries short: one line per user-visible change, no implementation details.
+1. Move the *Unreleased* entries in [CHANGELOG.md](CHANGELOG.md) and [CHANGELOG.zh-CN.md](CHANGELOG.zh-CN.md) under `## [x.y.z] - YYYY-MM-DD` and update the compare links at the bottom. Both files need the section — the release notes are built from the two (English, then Chinese) and the workflow fails if either is missing. Check the entries against [Changelog entries](#changelog-entries).
 2. Set `version` in the root `Cargo.toml` (`[workspace.package]`) and run `cargo check --workspace` to update `Cargo.lock`.
 3. Configure the publisher and signing keys before tagging (any newer signed stable release can be installed from any version; there is no per-release upgrade path to set). Commit, tag `vx.y.z` and push the tag. The release workflow builds the Linux archives and Debian packages, creates the GitHub Release from both changelogs, then adds the Apple Silicon archive. Stable releases also publish the installer and signed platform manifests. If a tap is configured, the workflow updates its formula after signing all three archives. See the [release configuration](docs/dev/release-updates.md) and [release workflow](.github/workflows/release.yml).
 4. Update Glama: on glama.ai, the build steps under this server's *Admin → Dockerfile* pin the version. Change it and rebuild.

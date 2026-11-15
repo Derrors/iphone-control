@@ -419,7 +419,7 @@ mod tests {
         let down = |e: &str| e.contains("没有 HID 后备路线") || e.contains("no HID fallback");
         let tap = d.tap(&mut g, 20., 50., None).await.unwrap_err().to_string();
         assert!(down(&tap), "{tap}");
-        let swipe = d.swipe(&mut g, (20., 50.), (20., 300.), 0.3, None).await.unwrap_err().to_string();
+        let swipe = d.swipe(&mut g, (20., 50.), (20., 300.), 0.3, None, false).await.unwrap_err().to_string();
         assert!(down(&swipe), "{swipe}");
         // a finger: the same, and the page may still send the whole gesture once WDA is back
         match d.touch(&mut g, TouchPhase::Down, 20., 50., None).await {

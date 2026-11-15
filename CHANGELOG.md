@@ -8,6 +8,7 @@ All notable changes to this project are documented here. The format is based on 
 
 ### Fixed
 
+- A swipe on the control page through WDA no longer waits for the list to stop before answering (reading the element tree again and again, up to 2.5 s): the person at the page sees it. On an iPad mini 5 a swipe took 3.1 s, now 1.6–2.3 s. Agents (MCP, CLI) still wait, so their next tap doesn't land on a moving list.
 - The way Home and locking work on each device is kept in `state.json` instead of only in memory. After the daemon restarted, or another device was controlled meanwhile, the first Home on a device where IOHID's Home doesn't work tried it, waited 2 s for the home screen and pressed again: 4.4 s instead of 0.8 on an iPad mini 5.
 
 ## [0.2.6] - 2026-11-14

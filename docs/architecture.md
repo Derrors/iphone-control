@@ -111,7 +111,7 @@
 
 | crate | 职责 | 主要依赖 |
 |---|---|---|
-| `ictl-device` | `Device` 句柄：usbmux 发现与监听、lockdown、配对状态、开发者模式状态、隧道（`Tunnel`，持有 HID 会话和显示媒体流）、开发者镜像（含下载缓存）、截图、App 列表/启动/结束、安装 IPA、卸载、崩溃报告、系统日志流（`oslog`，开发者工具用）、打开 Web Inspector；所有设备调用都有时限 | `idevice`（锁上游 git 提交） |
+| `ictl-device` | `Device` 句柄：usbmux 发现与监听、lockdown、配对状态、开发者模式状态、隧道（`Tunnel`，持有 HID 会话和显示媒体流）、开发者镜像（含下载缓存）、截图、剪贴板（HID 粘贴中文等非 ASCII 文字）、App 列表/启动/结束、安装 IPA、卸载、崩溃报告、系统日志流（`oslog`，开发者工具用）、打开 Web Inspector；所有设备调用都有时限 | `idevice`（锁上游 git 提交） |
 | `ictl-wda` | `WdaRunner`（XCUITestService 启动/停止）、`WdaClient`（会话、点击、W3C actions、keys、source、screenshot、appium settings、锁屏核对）、经 usbmuxd 直连设备 8100 端口的 HTTP 传输（区分连不上和请求超时）、元素树解析（纯函数，可单测） | `idevice`（`xctest`）、`quick-xml` |
 | `ictl-webinspector` | Web Inspector 服务（`com.apple.webinspector`，经 lockdown）的客户端：列出可检查的网页和 WebView、在页面里执行 JavaScript（`Target` 域和旧版直接收命令两种都支持，Promise 用 `Runtime.awaitPromise` 等待）。纯协议，消息解析可单测 | `idevice`、`plist` |
 | `ictl-l10n` | 界面文字的语言：取当前语言，`tr!` / `trf!` / `log_tr!` / `log_trf!` 宏（每条文字在代码里原地写成中英一对，见 D12） | 无 |

@@ -113,6 +113,7 @@ impl Daemon {
                 )
             );
         }
+        self.restore_pasteboard(g, true).await;
         self.poll_start(g).await;
 
         let devices = match ictl_device::list_devices().await {

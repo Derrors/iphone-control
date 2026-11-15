@@ -285,7 +285,7 @@ fn standard_tools() -> Vec<Tool> {
             "iphone_status",
             ictl_l10n::tr!("查看手机和服务的状态:WDA(WebDriverAgent)是否就绪、是否锁屏、能否自动解锁、当前前台 App 的 Bundle ID、\
 屏幕尺寸(点)、守护进程状态。\n\n何时用:开始操作前确认手机可用;操作报错、怀疑 WDA 掉线或手机锁屏时排查。\
-WDA 不可用时会说明哪些功能受影响(读元素、按名字点击、启动 App、输入中文)。只读,不改变手机状态。", "Show the state of the phone and the service: whether WDA (WebDriverAgent) is ready, whether the phone is locked and can be auto-unlocked, the bundle ID of the foreground app, the screen size (points) and the daemon state.\n\nWhen to use: to check that the phone is usable before starting; to investigate when actions fail or WDA or the lock screen seem to be in the way. If WDA is unavailable it says which features are affected (reading elements, tapping by text, launching apps, typing non-ASCII text). Read-only, doesn't change the phone.")
+WDA 不可用时会说明哪些功能受影响(读元素、按名字点击、启动 App)。只读,不改变手机状态。", "Show the state of the phone and the service: whether WDA (WebDriverAgent) is ready, whether the phone is locked and can be auto-unlocked, the bundle ID of the foreground app, the screen size (points) and the daemon state.\n\nWhen to use: to check that the phone is usable before starting; to investigate when actions fail or WDA or the lock screen seem to be in the way. If WDA is unavailable it says which features are affected (reading elements, tapping by text, launching apps). Read-only, doesn't change the phone.")
                 .into(),
             schema(json!({}), &[]),
             looking(ictl_l10n::tr!("查看状态", "Show status")),
@@ -409,7 +409,7 @@ WDA 不可用时改用 CoreDevice HID(iOS 27 起;结果里注明「经 HID」)�
 何时用:搜索框、表单、聊天框等。要先点中输入框让键盘弹出;屏幕上没有键盘时报错,什么都不输。\
 回车可能会发送消息或提交表单,发送前先向用户确认。\n\n\
 行为:输完会读回输入框核对,少了结尾几个字会自动补上;对不上就报错,也不按回车。\
-WDA 不可用时改用 HID(iOS 27 起),只能输入美式键盘上的英文和符号。", "Type text into the focused text field (any language, including Chinese) at the cursor, without clearing what is already there. With submit=true it presses Return at the end.\n\nWhen to use: search boxes, forms, chat fields. Tap the field first so the keyboard comes up; with no keyboard on screen it fails and types nothing. Return may send a message or submit a form, so ask the user before sending.\n\nBehavior: it reads the field back afterwards; dropped trailing characters are typed again. If it still doesn't match, it reports an error and doesn't press Return. If WDA is unavailable it uses HID instead (iOS 27+), which can only type English letters and symbols of a US keyboard."),
+WDA 不可用时改用 HID(iOS 27 起):美式键盘上的英文和符号直接按键;中文等经剪贴板粘贴,手机会弹「允许粘贴」,要截图后点它才粘得进去(剪贴板 45 秒后还原)。", "Type text into the focused text field (any language, including Chinese) at the cursor, without clearing what is already there. With submit=true it presses Return at the end.\n\nWhen to use: search boxes, forms, chat fields. Tap the field first so the keyboard comes up; with no keyboard on screen it fails and types nothing. Return may send a message or submit a form, so ask the user before sending.\n\nBehavior: it reads the field back afterwards; dropped trailing characters are typed again. If it still doesn't match, it reports an error and doesn't press Return. If WDA is unavailable it uses HID instead (iOS 27+): English letters and symbols of a US keyboard are typed as keys, anything else is pasted through the pasteboard, and the phone asks to “Allow Paste”: take a screenshot and tap it to let the text in (the pasteboard is put back after 45 s)."),
                 ictl_l10n::tr!("已输入 4 个字符,并按了回车", "Typed 4 characters and pressed Return"),
                 true,
             ),

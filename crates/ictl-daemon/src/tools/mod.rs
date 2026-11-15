@@ -8,7 +8,9 @@ mod observe;
 use std::time::{Duration, Instant};
 
 use base64::Engine;
-use ictl_device::{AppInfo, Button, DeviceError, HidSession, Rotation, ScreenSize, apps, hid::ascii_to_usage};
+use ictl_device::{
+    AppInfo, Button, ClipboardRestore, DeviceError, HidSession, Rotation, ScreenSize, apps, hid::ascii_to_usage,
+};
 use ictl_unlock::UnlockError;
 use ictl_wda::client::SPRINGBOARD;
 use ictl_wda::elements::{self, TapPoint, Tree};
@@ -38,9 +40,11 @@ const SCROLL_SETTLE: Duration = Duration::from_millis(2500);
 /// 滑动时读到的树这么久之内还能当 settle 比较的起点
 const SWIPED_TREE_FRESH: Duration = Duration::from_secs(1);
 /// WDA 不可用时 status 里说明哪些功能用不了
-const NEEDS_WDA: &str = "读界面元素、按名字点击、启动 App、输入中文要等 WDA 恢复";
-const NEEDS_WDA_EN: &str =
-    "reading elements, tapping by text, launching apps and typing non-ASCII text wait until WDA is back";
+const NEEDS_WDA: &str =
+    "读界面元素、按名字点击、启动 App 要等 WDA 恢复；输入中文改经剪贴板粘贴，要点手机弹出的「允许粘贴」";
+const NEEDS_WDA_EN: &str = "reading elements, tapping by text and launching apps wait until WDA is back; non-ASCII text is pasted through the pasteboard instead, which needs a tap on the phone's “Allow Paste” prompt";
+/// HID 粘贴后过这么久还原剪贴板：留时间给调用方截图、点「允许粘贴」（Poki 等 45 秒）
+pub(crate) const PASTE_RESTORE_AFTER: Duration = Duration::from_secs(45);
 /// 按 Home 后最多等这么久，确认主屏到了前台（iPhone 12 mini 上 IOHID 的 Home 约 1.3～1.5 秒）
 const HOME_SETTLE: Duration = Duration::from_secs(2);
 /// 按电源键后最多等这么久，等 WDA 报锁屏（iPhone 12 mini 实测约 1 秒）

@@ -322,16 +322,95 @@ impl Daemon {
             }
         }
         let payload = if submit { format!("{text}\n") } else { text.to_owned() };
-        // 先检查，一个都不输；不打开 HID 会话
-        if let Some(c) = payload.chars().find(|c| ascii_to_usage(*c).is_none()) {
-            return Err(ictl_l10n::trf!(
-                "WDA 不可用,HID 只能输入美式键盘上的英文和符号,不能输入 {c:?}",
-                "WDA unavailable; HID can only type English letters and symbols of a US keyboard, not {c:?}"
-            )
-            .into());
+        // 美式键盘按得出来的直接按键，不动剪贴板
+        if payload.chars().all(|c| ascii_to_usage(c).is_some()) {
+            self.hid_do(g, move |h| Box::pin(async move { h.type_ascii(&payload).await })).await?;
+            return Ok(ictl_l10n::trf!("已输入 {n} 个字符(经 HID)", "Typed {n} characters (via HID)"));
         }
-        self.hid_do(g, move |h| Box::pin(async move { h.type_ascii(&payload).await })).await?;
-        Ok(ictl_l10n::trf!("已输入 {n} 个字符(经 HID)", "Typed {n} characters (via HID)"))
+        self.hid_paste(g, text, submit).await
+    }
+
+    /// HID 输入中文等按不出来的文字：经剪贴板粘贴（[`ictl_device::Tunnel::paste_text`]）。
+    ///
+    /// 手机会弹「允许粘贴」，WDA 不可用时读不到界面、点不了，交给调用方截图去点；剪贴板一改弹窗就消失，所以原来的内容
+    /// 先存在守护进程里，[`PASTE_RESTORE_AFTER`] 后由巡检写回（下一次粘贴前、换设备前也会写回，见 [`Daemon::restore_pasteboard`]）。
+    /// 弹窗还在时按回车会选中「不允许粘贴」，所以要回车也不按，让调用方粘上以后再按
+    async fn hid_paste(&self, g: &mut Inner, text: &str, submit: bool) -> crate::error::Result<String> {
+        let n = text.chars().count();
+        self.restore_pasteboard(g, false).await;
+        self.hid(g).await?;
+        let r = g.tunnel.as_mut().expect("hid() 刚建好隧道").paste_text(text).await;
+        g.hid_used = Some(Instant::now());
+        let pending = match r {
+            Ok(p) => p,
+            Err(e @ DeviceError::InvalidInput(_)) => return Err(e.into()),
+            Err(e) => {
+                drop_tunnel(g).await;
+                return Err(ictl_l10n::trf!("HID 粘贴失败:{e}", "HID paste failed: {e}").into());
+            }
+        };
+        let saved = pending.is_some();
+        g.dev.pending_paste = pending.map(|p| (Instant::now(), p));
+        let secs = PASTE_RESTORE_AFTER.as_secs();
+        let clipboard = if saved {
+            ictl_l10n::trf!(
+                "剪贴板原来的内容 {secs} 秒后还原,还原后这个弹窗会消失(那时还没点就要重新输入)",
+                "the pasteboard's old contents are put back in {secs} s, which closes that prompt (if it is still up then, type the text again)"
+            )
+        } else {
+            ictl_l10n::tr!(
+                "剪贴板原来的内容读不出来或不能原样写回,之后剪贴板里留着这段文字",
+                "the pasteboard's old contents couldn't be read or written back as they were, so it keeps this text"
+            )
+            .into()
+        };
+        let enter = if submit {
+            ictl_l10n::tr!(
+                "。没有按回车(弹窗还在时回车会选中「不允许粘贴」):粘上以后用 iphone_type_text 输入 \"\\n\" 按回车",
+                ". Return wasn't pressed (with the prompt up it would choose “Don't Allow Paste”): once the text is in, type \"\\n\" with iphone_type_text"
+            )
+        } else {
+            ""
+        };
+        Ok(ictl_l10n::trf!(
+            "已按 Cmd-V 粘贴 {n} 个字符(经 HID 和剪贴板;WDA 不可用,读不到界面)。手机会弹「…想从“dtpasteboardd”粘贴」:截图,点「允许粘贴」文字才会进去(点「不允许粘贴」就不粘),再截图确认;{clipboard}{enter}",
+            "Pressed Cmd-V to paste {n} characters (via HID and the pasteboard; WDA is unavailable, so the screen can't be read). The phone asks “… would like to paste from dtpasteboardd”: take a screenshot and tap “Allow Paste” to let the text in (“Don't Allow Paste” keeps it out), then check with another screenshot; {clipboard}{enter}"
+        ))
+    }
+
+    /// 把 HID 粘贴前存下的剪贴板写回去（[`Self::hid_paste`]）。`due_only`：只在粘贴过了 [`PASTE_RESTORE_AFTER`] 时写
+    /// （巡检用）。写回失败不重试：剪贴板不归我们管，留着粘贴的文字比反复改它好
+    pub(crate) async fn restore_pasteboard(&self, g: &mut Inner, due_only: bool) {
+        let Some((at, _)) = &g.dev.pending_paste else { return };
+        if due_only && at.elapsed() < PASTE_RESTORE_AFTER {
+            return;
+        }
+        let Some((_, p)) = g.dev.pending_paste.take() else { return };
+        let Some(device) = g.device.clone() else { return };
+        let r = match self.ensure_tunnel(g, &device).await {
+            Ok(t) => t.restore_pasteboard(p).await,
+            Err(e) => ClipboardRestore::Failed(e.to_string()),
+        };
+        match r {
+            ClipboardRestore::Restored => tracing::info!(
+                "{}",
+                ictl_l10n::log_tr!("HID 粘贴前的剪贴板已还原", "Pasteboard from before the HID paste restored")
+            ),
+            ClipboardRestore::ChangedMeanwhile => tracing::info!(
+                "{}",
+                ictl_l10n::log_tr!(
+                    "HID 粘贴后剪贴板被改过，没有还原",
+                    "The pasteboard changed after the HID paste; not restored"
+                )
+            ),
+            ClipboardRestore::Failed(e) => tracing::warn!(
+                "{}",
+                ictl_l10n::log_trf!(
+                    "还原 HID 粘贴前的剪贴板失败：{e}",
+                    "Restoring the pasteboard from before the HID paste failed: {e}"
+                )
+            ),
+        }
     }
 }
 

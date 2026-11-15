@@ -6,6 +6,10 @@ All notable changes to this project are documented here. The format is based on 
 
 ## [Unreleased]
 
+### Added
+
+- While WebDriverAgent is unavailable, `iphone_type_text` can enter Chinese and other text a US keyboard can't type: HID puts it on the phone's pasteboard (CoreDevice `pasteboardservice`, checked by reading it back) and presses Cmd-V, so the input method doesn't turn it into pinyin. iOS treats that text as coming from another app and asks “… would like to paste from dtpasteboardd” every time (iPhone 15 Pro Max, iOS 27.2.1, Notes); the answer says to take a screenshot and tap “Allow Paste”. Changing the pasteboard closes that prompt, so what was on it before is put back 45 s later (or before the next such paste, or when another device is chosen), and only if the pasted text is still there. Return isn't pressed with `submit`, since with the prompt up it would choose “Don't Allow Paste”. English letters and symbols are still typed as keys and don't touch the pasteboard.
+
 ### Fixed
 
 - A tap or swipe a minute or more after the last one no longer waits for the screen size to be measured again first: that takes WDA 0.95 s on an iPad mini 5 (iPadOS 26.7.3), where the first tap after a pause took 1.7 s instead of 0.9. The size is now measured again in the background while nobody acts (only Display Zoom changes it), and on rotation as before.

@@ -44,22 +44,6 @@ fn keyboard_up(tree: &Tree) -> bool {
     tree.elements.iter().any(|e| e.kind == "Keyboard") || tree.elements.iter().filter(|e| e.kind == "Key").count() >= 8
 }
 
-/// The keyboard's input mode, as its "next keyboard" button says it («简体拼音», "English (US)")
-fn keyboard_mode(tree: &Tree) -> Option<&str> {
-    tree.elements
-        .iter()
-        .find(|e| matches!(e.label.as_str(), "下一个键盘" | "下一個鍵盤" | "Next keyboard" | "Next Keyboard"))
-        .map(|e| e.value.as_str())
-        .filter(|v| !v.is_empty())
-}
-
-/// An input mode that takes keys as they are: English. Anything else (Pinyin, Zhuyin, Kana, Hangul and the
-/// like compose; other layouts may map keys elsewhere) is pasted
-fn types_keys_as_they_are(mode: &str) -> bool {
-    let m = mode.to_lowercase();
-    m.contains("english") || m.contains("英语") || m.contains("英文") || m.contains("英語")
-}
-
 /// The paste prompt's "Allow Paste" button ("“Notes” would like to paste from “dtpasteboardd”"), when it is up
 fn paste_allow(tree: &Tree) -> Option<(f64, f64)> {
     tree.alert().filter(|a| a.label.contains("dtpasteboardd"))?;
@@ -506,8 +490,10 @@ impl Daemon {
         .await
     }
 
-    /// Typing, natively: all text is pasted (keys on a Pinyin keyboard would be taken as pinyin), the paste prompt
-    /// answered, and the field read back before the pasteboard is put back and Return pressed
+    /// Typing, natively: all text is pasted, the paste prompt answered, and the field read back before the
+    /// pasteboard is put back and Return pressed. Not as keys: HID keys go through the hardware keyboard's input
+    /// source, which composed them as pinyin with the on-screen keyboard showing English («wifi» became marked
+    /// pinyin «w i f i»), and the "next keyboard" button names the keyboard it switches to, not the one shown
     pub(crate) async fn native_type(&self, g: &mut Inner, text: &str, submit: bool) -> crate::error::Result<String> {
         let n = text.chars().count();
         let before = self.ax_tree_app(g).await?;
@@ -520,31 +506,6 @@ impl Daemon {
         }
         let old = elements::field_values(&before.elements);
         let mut note = String::new();
-        // an English keyboard takes keys as they are: no paste, no prompt (Pinyin would compose them)
-        if !text.is_empty()
-            && keyboard_mode(&before).is_some_and(types_keys_as_they_are)
-            && text.chars().all(|c| ascii_to_usage(c).is_some())
-        {
-            let payload = if submit { format!("{text}\n") } else { text.to_owned() };
-            self.hid_do(g, move |h| Box::pin(async move { h.type_ascii(&payload).await })).await?;
-            if old.is_none() {
-                note += ictl_l10n::tr!(
-                    "(这是密码框,读不出内容,截图确认输进去了)",
-                    " (a password field: its contents can't be read back, check with a screenshot)"
-                );
-            } else if !submit && let Some(now) = self.native_field_shows(g, text).await? {
-                return Err(ictl_l10n::trf!(
-                    "按键输入了 {n} 个字符,但输入框里现在是「{now}」,和要输入的「{text}」对不上(可能被自动更正或吞掉了);截图确认后再处理",
-                    "Typed {n} characters as keys, but the field now contains “{now}”, which doesn't match “{text}” (autocorrected or swallowed); check with a screenshot before going on"
-                )
-                .into());
-            }
-            return Ok(ictl_l10n::trf!(
-                "已输入 {n} 个字符{note}{}",
-                "Typed {n} characters{note}{}",
-                if submit { ictl_l10n::tr!(",并按了回车", " and pressed Return") } else { "" }
-            ));
-        }
         if !text.is_empty() {
             let (typed, prompt) = self.native_paste(g, text, old.as_deref()).await?;
             if prompt {
@@ -580,22 +541,6 @@ impl Daemon {
             "Typed {n} characters{note}{}",
             if submit { ictl_l10n::tr!(",并按了回车", " and pressed Return") } else { "" }
         ))
-    }
-
-    /// After typing `text` as keys: None once a field shows it (within about a second; the tree may lag a key
-    /// behind), else what the field shows
-    async fn native_field_shows(&self, g: &mut Inner, text: &str) -> crate::error::Result<Option<String>> {
-        let deadline = Instant::now() + Duration::from_millis(1200);
-        loop {
-            let values = elements::field_values(&self.ax_tree_app(g).await?.elements).unwrap_or_default();
-            if values.is_empty() || super::input::typed_into(&values, text) {
-                return Ok(None);
-            }
-            if Instant::now() >= deadline {
-                return Ok(Some(values.into_iter().find(|v| !v.is_empty()).unwrap_or_default()));
-            }
-            tokio::time::sleep(Duration::from_millis(200)).await;
-        }
     }
 
     /// Pastes `text` and waits for it to show in a field (`old`: the fields' values before; None: a password field

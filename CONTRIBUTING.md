@@ -131,7 +131,7 @@ Part 2 checks that a change doesn't break what already works; this part shows th
 
 - Keep them focused; describe what changed and why.
 - The tests above pass and are reported in the template ([Required tests](#required-tests)). Bug fixes and features without real-device results are not merged.
-- CI must pass: format, clippy with `-D warnings`, tests (on Linux and macOS), the MSRV check, gitleaks and the package checks (`.deb`, `install.sh`, the Homebrew formula).
+- CI must pass: format, clippy with `-D warnings`, tests (on Linux and macOS), the MSRV check, gitleaks and the package checks (`.deb`, `install.sh`, the Homebrew formula). The terminal-menu PTY test is required on Linux; its macOS run (`macos-terminal`) is reported but not required, since busy macOS runners make its timing unreliable. If it fails, check whether the failure is real.
 - User-visible changes get a line in [CHANGELOG.md](CHANGELOG.md) and [CHANGELOG.zh-CN.md](CHANGELOG.zh-CN.md) under *Unreleased* (a Chinese line is welcome but optional for outside contributors; maintainers add it before release). See [Changelog entries](#changelog-entries).
 
 ### Changelog entries

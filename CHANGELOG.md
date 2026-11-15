@@ -6,6 +6,10 @@ What changed in each release, one line per change. Versions follow [Semantic Ver
 
 ## [Unreleased]
 
+### Improvements
+
+- An action that had to unlock the phone first says so, and how long it took (#135).
+
 ## [0.2.7] - 2026-11-15
 
 ### Upgrade notes

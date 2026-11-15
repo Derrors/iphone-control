@@ -2598,9 +2598,9 @@ function renderStatusPanel() {
   navigatorHTML('#nav-ids', ids.map(row => fact(row, true)).join(''));
 
   const error = S.statusErr || S.devicesErr;
-  const list = d?.state === 'Preparing' || s?.route === 'native' ? NATIVE_CHECKS : CHECKS;
-  const failAt = list.findIndex(check => check.fail.includes(d?.state));
-  const checks = d?.state === 'Ready' ? list : list.slice(0, failAt + 1);
+  const allChecks = d?.state === 'Preparing' || s?.route === 'native' ? NATIVE_CHECKS : CHECKS;
+  const failAt = allChecks.findIndex(check => check.fail.includes(d?.state));
+  const checks = d?.state === 'Ready' ? allChecks : allChecks.slice(0, failAt + 1);
   const rows = checks.map((c,i) => {
     const issue = i === failAt;
     const busy = issue && (d.state === 'WdaStarting' || d.state === 'Preparing');

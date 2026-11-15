@@ -5,9 +5,11 @@
 //!
 //! 读用 idevice 的 [`PasteboardServiceClient`]；写原来的内容要原样写回每一项、每一种类型，idevice 只提供写一段文字或一张
 //! 图片，所以写由本模块自己发 `SET`（字段和 idevice `pasteboard_service.rs` 相同）。每次读写各开一条连接：上一条连接上
-//! 晚到的 `PULL_REPLY` 不会被当成 `SET_REPLY`。剪贴板的内容不写日志。
+//! 晚到的 `PULL_REPLY` 不会被当成 `SET_REPLY`。写入都带 `sourceMetadata`，只写本机（见 [`set_message`]）。剪贴板的内容不写日志。
 
 use std::borrow::Cow;
+use std::sync::OnceLock;
+use std::sync::atomic::{AtomicI64, Ordering};
 
 use idevice::{
     IdeviceError, ReadWrite, RemoteXpcClient, RsdService,
@@ -80,7 +82,21 @@ pub(crate) fn text_items(text: &str) -> Vec<Item> {
     }]
 }
 
-/// `SET` 消息：用 `items` 替换整个通用剪贴板
+/// 写入方的标识（[`set_message`] 的 `sourceMetadata`）：每个进程一个
+fn writer_nonce() -> &'static str {
+    static NONCE: OnceLock<String> = OnceLock::new();
+    NONCE.get_or_init(|| format!("iphone-control-{}", uuid::Uuid::new_v4()))
+}
+
+/// 本进程第几次写剪贴板（[`set_message`] 的 `sourceMetadata`）
+static WRITES: AtomicI64 = AtomicI64::new(0);
+
+/// `SET` 消息：用 `items` 替换整个通用剪贴板。
+///
+/// 一定要带 `sourceMetadata`：手机上的 dtpasteboardd 只在有它时才按「只写本机」写入（UIPasteboard
+/// `setItemProviders:localOnly:expirationDate:`，Xcode 从电脑同步剪贴板也这样）。不带的话，写进去的内容会经「通用剪贴板」
+/// 提供给机主的其他苹果设备，把那边的剪贴板也换掉。字段同 Pinky（DIYgod/pinky `internal/driver/ios/pasteboard.go`，
+/// Apache-2.0）：写入方的 nonce、名字、递增的计数
 fn set_message(items: &[Item]) -> XPCObject {
     let items = items
         .iter()
@@ -101,7 +117,11 @@ fn set_message(items: &[Item]) -> XPCObject {
     msg.insert("command".into(), XPCObject::String("SET".into()));
     msg.insert("pasteboardName".into(), XPCObject::String(GENERAL_PASTEBOARD.into()));
     msg.insert("items".into(), XPCObject::Array(items));
-    msg.insert("sourceMetadata".into(), XPCObject::Null);
+    let mut source = Dictionary::new();
+    source.insert("nonce".into(), XPCObject::String(writer_nonce().into()));
+    source.insert("pasteboardName".into(), XPCObject::String("iphone-control".into()));
+    source.insert("changeCount".into(), XPCObject::Int64(WRITES.fetch_add(1, Ordering::Relaxed) + 1));
+    msg.insert("sourceMetadata".into(), XPCObject::Dictionary(source));
     XPCObject::Dictionary(msg)
 }
 
@@ -214,7 +234,11 @@ mod tests {
         let XPCObject::Dictionary(msg) = set_message(&text_items("你好")) else { panic!("not a dictionary") };
         assert!(matches!(&msg["command"], XPCObject::String(s) if s == "SET"));
         assert!(matches!(&msg["pasteboardName"], XPCObject::String(s) if s == "general"));
-        assert!(matches!(msg["sourceMetadata"], XPCObject::Null));
+        // 带 sourceMetadata 才只写本机，不经「通用剪贴板」同步到别的设备
+        let XPCObject::Dictionary(source) = &msg["sourceMetadata"] else { panic!("sourceMetadata") };
+        assert!(matches!(&source["nonce"], XPCObject::String(n) if n.starts_with("iphone-control-")));
+        assert!(matches!(&source["pasteboardName"], XPCObject::String(n) if n == "iphone-control"));
+        assert!(matches!(source["changeCount"], XPCObject::Int64(n) if n >= 1));
         let XPCObject::Array(items) = &msg["items"] else { panic!("items") };
         let XPCObject::Dictionary(item) = &items[0] else { panic!("item") };
         let XPCObject::Array(types) = &item["types"] else { panic!("types") };

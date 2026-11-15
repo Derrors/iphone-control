@@ -569,8 +569,9 @@ impl Daemon {
         let mut prompt = false;
         let wanted = text.trim();
         let typed = loop {
-            // the prompt brings SpringBoard to the front: the app in front alone tells both
-            let tree = self.ax_tree_app(g).await?;
+            // a whole read: the prompt brings SpringBoard to the front, but it may also come over the app (a read
+            // of the app alone missed it once in a regression run, and the paste never went in)
+            let tree = self.ax_tree(g, AX_WAIT).await?;
             if let Some((x, y)) = paste_allow(&tree) {
                 self.native_tap(g, x, y).await?;
                 prompt = true;

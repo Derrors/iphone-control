@@ -141,3 +141,5 @@
 | 135 | 原生：按键盘「下一个键盘」按钮的值判断是英文键盘就直接按键：那个值是点了要切到的键盘，不是当前的；HID 按键走硬件键盘的输入法，屏幕上是英文键盘也照样组成拼音（「wifi」成了带下划线的「w i f i」），去掉空格的读回核对没拦住 | 一律粘贴 | 真机 |
 | 136 | 原生：SpringBoard 在前台时（锁屏、面容 ID 框）状态栏的按钮被算进「SpringBoard 的提问」，报出一个标题是时间的弹窗 | 判断提问、取标题都不算状态栏元素 | 单测 `a_question_springboard_asks_reads_as_an_alert` |
 | 137 | 后台准备好手机后唤醒的那轮巡检，正赶上请求占着设备锁就跳过了，切回 iPhone 要等下一轮（10 秒）才就绪 | 唤醒的一轮没跑成就隔 200 毫秒再来 | 真机（切到 iPad 再切回） |
+| 138 | 控制台页面脚本里同一函数重复声明变量（`list`），整页脚本跑不起来，停在「正在连接」；页面测试只抽单个函数，没发现 | 测试编译整页脚本 | 单测 `tests/viewer/syntax.test.mjs` |
+| 139 | 原生控制（没有 WDA）时，解不了 HEVC 的浏览器（Firefox、多数 Linux 上的 Chrome）没有画面：H.264 和 MJPEG 两路的源头都是 WDA 的 MJPEG，都 502。手机的视频转码时带 `-fflags nobuffer` 会丢掉开头，之后每帧都找不到参考帧 | `/video` 连不上 WDA 时把手机的 HEVC 交给 ffmpeg 转成 H.264（按点数尺寸裁掉补齐的边），HEVC 输入不带 `nobuffer` | 单测 `hevc_is_transcoded_with_the_padding_cut_off` + 无头 Chromium（不支持 HEVC）看到画面 |

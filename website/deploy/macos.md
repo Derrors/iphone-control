@@ -8,7 +8,7 @@ iphone-control 也能直接跑在 Mac 上：用 macOS 自带的 usbmuxd，不需
 
 ## 需要
 
-- Apple Silicon 的 Mac。用脚本安装时，PATH 中需要有 Python 3 和 OpenSSL 3。Intel Mac 要从源码编译，需 Xcode 命令行工具和 Rust 1.88 以上。
+- Apple Silicon 的 Mac。用脚本安装时，PATH 中需要有 Python 3 和 OpenSSL 3。Intel Mac 要从源码编译，需 Xcode 命令行工具和 Rust 1.89 以上。
 - 一部 iOS 17 以上的 iPhone 或 iPad，用能**传数据**的线连接
 - 一个免费 Apple ID（建议专门注册一个）
 
@@ -35,7 +35,7 @@ brew services start iphone-control      # 守护进程常驻，登录后自动�
 
 ### 从源码编译（Intel Mac）
 
-需要 Xcode 命令行工具和 Rust 1.88 以上，M3 Pro 上约 2 分半：
+需要 Xcode 命令行工具和 Rust 1.89 以上，M3 Pro 上约 2 分半：
 
 ```bash
 xcode-select --install                                         # 已经装过会提示

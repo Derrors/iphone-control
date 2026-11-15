@@ -4,7 +4,7 @@ Usually you don't need this: the one-line installer, Homebrew and the .deb all i
 
 ## Requirements
 
-- Rust 1.88+ ([rustup](https://rustup.rs)) and a C compiler
+- Rust 1.89+ ([rustup](https://rustup.rs)) and a C compiler
 - On Linux, the system usbmuxd (udev starts it when the phone is plugged in). The daemon doesn't start usbmuxd itself
 
 ## Build and install

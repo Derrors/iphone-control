@@ -286,11 +286,9 @@ impl CertificateIdentity {
     ) -> Result<(Cert, RsaPrivateKey), Error> {
         let priv_key = RsaPrivateKey::new(&mut OsRng, 2048)?;
         let priv_key_der = priv_key.to_pkcs8_der()?;
-        let priv_key_pair = KeyPair::from_der(priv_key_der.as_bytes())?;
+        let priv_key_pair = KeyPair::from_pkcs8_der_and_sign_algo(&priv_key_der.as_bytes().into(), &PKCS_RSA_SHA256)?;
 
-        let mut params = rcgen::CertificateParams::new(vec![]);
-        params.alg = &PKCS_RSA_SHA256;
-        params.key_pair = Some(priv_key_pair);
+        let mut params = rcgen::CertificateParams::new(vec![])?;
 
         let dn = &mut params.distinguished_name;
         dn.push(DnType::CountryName, "US");
@@ -299,7 +297,7 @@ impl CertificateIdentity {
         dn.push(DnType::OrganizationName, "ORGNIZATION");
         dn.push(DnType::CommonName, "CN");
 
-        let cert_csr = rcgen::Certificate::from_params(params)?.serialize_request_pem()?;
+        let cert_csr = params.serialize_request(&priv_key_pair)?.pem()?;
 
         let cert_serial_numbers = certs
             .iter()

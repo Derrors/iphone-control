@@ -25,7 +25,7 @@ iphone-control 让 AI agent（例如 Claude）操作一台用数据线接在 Lin
 
 | | |
 |---|---|
-| 主机 | Linux，x86_64 或 arm64：一行命令安装、Homebrew 或 deb 包（Debian 12+、Ubuntu 22.04+），要系统的 usbmuxd；也可以用 Rust 1.88+ 从源码编译<br>macOS，Apple Silicon：一行命令安装或 Homebrew，也可以从源码编译，见 [macOS](../deploy/macos)<br>不支持 Windows |
+| 主机 | Linux，x86_64 或 arm64：一行命令安装、Homebrew 或 deb 包（Debian 12+、Ubuntu 22.04+），要系统的 usbmuxd；也可以用 Rust 1.89+ 从源码编译<br>macOS，Apple Silicon：一行命令安装或 Homebrew，也可以从源码编译，见 [macOS](../deploy/macos)<br>不支持 Windows |
 | 手机 | iPhone 或 iPad，iOS 17 及以上；HID 后备路线要 iOS 27 及以上 |
 | 已在真机验证 | iPhone 15 Pro Max，iOS 27.0.1（Linux、macOS）<br>iPhone 12 mini，iOS 26.4.1（Linux）<br>iPad mini 5，iOS 26.6.1（Linux） |
 | 账号 | 免费 Apple ID 即可，建议专门注册一个 |

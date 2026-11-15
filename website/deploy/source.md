@@ -4,7 +4,7 @@
 
 ## 准备
 
-- Rust 1.88 以上（[rustup](https://rustup.rs)）和 C 编译器
+- Rust 1.89 以上（[rustup](https://rustup.rs)）和 C 编译器
 - Linux 上要系统的 usbmuxd（它由 udev 在插上手机时拉起）。守护进程不会自己启动 usbmuxd
 
 ## 编译安装

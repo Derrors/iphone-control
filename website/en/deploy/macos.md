@@ -8,7 +8,7 @@ Verified on a MacBook Pro (Apple M3 Pro) / macOS 26.6.2 with an iPhone 15 Pro Ma
 
 ## You need
 
-- An Apple Silicon Mac. The script installer requires Python 3 and OpenSSL 3 on PATH. Intel Macs have no prebuilt package and build from source (Xcode Command Line Tools and Rust 1.88+). Full Xcode is **not** needed
+- An Apple Silicon Mac. The script installer requires Python 3 and OpenSSL 3 on PATH. Intel Macs have no prebuilt package and build from source (Xcode Command Line Tools and Rust 1.89+). Full Xcode is **not** needed
 - An iPhone or iPad on iOS 17+, connected with a cable that carries **data**
 - A free Apple ID (a dedicated one is recommended)
 
@@ -35,7 +35,7 @@ This service also reads `~/.config/iphone-control/env` and logs to `$(brew --pre
 
 ### Build from source (Intel Macs)
 
-You need the Xcode Command Line Tools and Rust 1.88+; about 2½ minutes on an M3 Pro:
+You need the Xcode Command Line Tools and Rust 1.89+; about 2½ minutes on an M3 Pro:
 
 ```bash
 xcode-select --install                                         # says so if already installed

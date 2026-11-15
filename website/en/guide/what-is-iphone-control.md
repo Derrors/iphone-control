@@ -25,7 +25,7 @@ It works as a set of [MCP](https://modelcontextprotocol.io) (Model Context Proto
 
 | | |
 |---|---|
-| Host | Linux, x86_64 or arm64: one-command install, Homebrew or a .deb (Debian 12+, Ubuntu 22.04+), with the system usbmuxd; or build from source with Rust 1.88+<br>macOS, Apple Silicon: one-command install or Homebrew, or build from source, see [macOS](../deploy/macos)<br>No Windows |
+| Host | Linux, x86_64 or arm64: one-command install, Homebrew or a .deb (Debian 12+, Ubuntu 22.04+), with the system usbmuxd; or build from source with Rust 1.89+<br>macOS, Apple Silicon: one-command install or Homebrew, or build from source, see [macOS](../deploy/macos)<br>No Windows |
 | Phone | iPhone or iPad, iOS 17 or later; the HID fallback needs iOS 27 or later |
 | Verified on | iPhone 15 Pro Max, iOS 27.0.1 (Linux, macOS)<br>iPhone 12 mini, iOS 26.4.1 (Linux)<br>iPad mini 5, iOS 26.6.1 (Linux) |
 | Account | A free Apple ID; a dedicated one is recommended |

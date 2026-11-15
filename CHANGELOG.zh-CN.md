@@ -10,6 +10,12 @@
 
 - WebDriverAgent 不可用时，`iphone_type_text` 也能输入中文等美式键盘按不出来的文字：经 HID 把它写进手机剪贴板（CoreDevice `pasteboardservice`，写完读回核对），再按 Cmd-V，输入法不会把它当成拼音。iOS 把这段文字当成别的 App 的，每次都会问「…想从“dtpasteboardd”粘贴」（iPhone 15 Pro Max、iOS 27.2.1 的备忘录实测）；结果里会提示截图后点「允许粘贴」。剪贴板一改这个弹窗就消失，所以原来的内容 45 秒后才写回（下一次这样粘贴前、换设备时也会写回），而且只在剪贴板里还是粘贴的那段文字时才写。带 `submit` 时不按回车：弹窗还在时回车会选中「不允许粘贴」。英文和符号仍然逐键输入，不动剪贴板。
 
+### 变更
+
+- 从源码编译需要 Rust 1.89（原来 1.88），因为 uuid 1.29 要求它。
+- 依赖升级：rmcp 3.10.0、rcgen 0.14.10、console 0.16.6、sha2 0.11.1、uuid 1.29.2、zip 9.5.1、flate2 1.1.11，以及 26 个间接依赖的兼容版本（rustls-webpki、mio、openssl、webpki-roots 等）。rcgen 只用 ring（它默认还会编 aws-lc）。vendor 里的 plume_core 生成签名请求改用 rcgen 0.14、apple-codesign 改用 dialoguer 0.12，rcgen 和 console 各只编一份，不再两个版本并存。x509-certificate 留在 0.24、rsa 留在 0.9：apple-codesign 和它的依赖用的是这两个版本，我们升了只会在旁边多编一份。控制台自己生成的 HTTPS 证书仍是 ECDSA P-256，以前生成的照常能用。
+- CI：actions/setup-node 7、dorny/paths-filter 4。网站：vue 3.5.45。
+
 ### 修复
 
 - 隔了一分钟以上的点按、滑动不再先等重新读屏幕尺寸：iPad mini 5（iPadOS 26.7.3）上 WDA 读一次要 0.95 秒，停一会儿后的第一次点按要 1.7 秒，平时 0.9 秒。尺寸现在在没人操作时于后台重读（只有「显示缩放」会改变它），转屏时照旧马上重读。

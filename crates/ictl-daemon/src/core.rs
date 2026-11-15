@@ -1361,8 +1361,8 @@ fn lane(req: &Request) -> Lane {
 }
 
 /// Says in a request's answer that the phone was unlocked for it first, and how long that took: on the first line,
-/// like the other notes about what was done. An action that had to unlock took seconds longer than usual (about 15 s
-/// on an iPad through WDA, 5 s natively), and nothing in the answer said why
+/// like the other notes about what was done. An action that had to unlock took seconds longer than usual (14-15 s
+/// on an iPad through WDA, 8-9 s natively on an iPhone), and nothing in the answer said why
 fn with_unlock_note(r: Response, unlocked: Option<Duration>) -> Response {
     let Some(took) = unlocked else { return r };
     let note = ictl_l10n::trf!(

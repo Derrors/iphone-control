@@ -435,6 +435,15 @@ pub struct Daemon {
     last_action: std::sync::Mutex<Option<Instant>>,
 }
 
+impl Daemon {
+    /// Whether an action was done in the last `within`, or one waits for the device lock: slow background requests
+    /// to WDA wait for a quiet moment ([`ictl_protocol::BACKGROUND`], the screen size in `sample_display`)
+    pub(crate) fn acting_now(&self, within: Duration) -> bool {
+        self.waiting.load(std::sync::atomic::Ordering::SeqCst) > 0
+            || self.last_action.lock().unwrap_or_else(|p| p.into_inner()).is_some_and(|t| t.elapsed() < within)
+    }
+}
+
 /// 停掉 HID 会话（屏幕媒体流），隧道保留。媒体流不停的话手机一直以为「配对的电脑」在看屏幕：
 /// 灵动岛常驻图标、不会自动锁屏，本进程退出、拔插数据线都清不掉（iOS 27 真机）
 pub(crate) async fn close_hid(g: &mut Inner) {
@@ -1422,6 +1431,10 @@ pub(crate) mod tests {
         assert!(matches!(r, Response::Text { data: Some(crate::protocol::Data::Status(_)), .. }), "{r:?}");
         // right after an action: not yet (the alert check waits longer than the status check)
         *d.last_action.lock().unwrap() = Some(Instant::now() - Duration::from_secs(2));
+        assert!(
+            d.acting_now(Duration::from_secs(3)) && !d.acting_now(Duration::from_secs(1)),
+            "slow requests wait too"
+        );
         assert!(!busy(&d.handle(Request::Status, Instant::now(), bg()).await), "status: 1 s after");
         assert!(busy(&d.handle(Request::AlertCheck, Instant::now(), bg()).await), "the alert check: 4 s after");
         assert!(

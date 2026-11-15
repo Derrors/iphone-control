@@ -8,6 +8,7 @@ All notable changes to this project are documented here. The format is based on 
 
 ### Fixed
 
+- A tap or swipe a minute or more after the last one no longer waits for the screen size to be measured again first: that takes WDA 0.95 s on an iPad mini 5 (iPadOS 26.7.3), where the first tap after a pause took 1.7 s instead of 0.9. The size is now measured again in the background while nobody acts (only Display Zoom changes it), and on rotation as before.
 - A control page whose H.264 or the phone's own video didn't show a first frame within 9 s (the viewer or daemon restarting, the encoder starting up) used MJPEG until it was reloaded; it now tries again after 30 s, 1 min and 2 min. A picture the viewer said isn't available still isn't tried again.
 - A swipe on the control page through WDA no longer waits for the list to stop before answering (reading the element tree again and again, up to 2.5 s): the person at the page sees it. On an iPad mini 5 a swipe took 3.1 s, now 1.6–2.3 s. Agents (MCP, CLI) still wait, so their next tap doesn't land on a moving list.
 - The way Home and locking work on each device is kept in `state.json` instead of only in memory. After the daemon restarted, or another device was controlled meanwhile, the first Home on a device where IOHID's Home doesn't work tried it, waited 2 s for the home screen and pressed again: 4.4 s instead of 0.8 on an iPad mini 5.

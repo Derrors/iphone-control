@@ -485,7 +485,7 @@ impl Device {
             let mut adapter = proxy.create_software_tunnel()?.to_async_handle();
             let stream = adapter.connect(rsd_port).await?;
             let handshake = RsdHandshake::new(stream).await?;
-            Ok(Tunnel { adapter, handshake, hid: None, ax: None, springboard: None })
+            Ok(Tunnel { adapter, handshake, hid: None, ax: None, springboard: None, springboard_app: None })
         })
         .await
     }
@@ -628,6 +628,8 @@ pub struct Tunnel {
     ax: Option<ax::AxSession>,
     /// SpringBoard 的进程号（[`ax`] 读盖在 App 上的弹窗用），每条隧道查一次
     springboard: Option<i64>,
+    /// SpringBoard 的应用元素，每个无障碍会话问一次（每次读界面省一个请求）
+    springboard_app: Option<ictl_ax::ObjectRef>,
 }
 
 impl Tunnel {

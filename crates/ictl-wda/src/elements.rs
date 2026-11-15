@@ -257,6 +257,31 @@ impl Tree {
             })
     }
 
+    /// [`Self::still_along`], judged on the elements both reads have: a list that scrolls moves cells in and out at its
+    /// edges, so the two lists differ while it moves and right after it stops. Matched by type, label and name, in
+    /// order of appearance; at least half of the smaller read (and 3) must match, and all of them stand still
+    pub fn still_along_common(&self, o: &Tree, vertical: bool, tol: i64) -> bool {
+        fn key(e: &Element) -> (&str, &str, &str) {
+            (e.kind.as_str(), e.label.as_str(), e.name.as_str())
+        }
+        let mut theirs: std::collections::HashMap<(&str, &str, &str), std::collections::VecDeque<&Element>> =
+            std::collections::HashMap::new();
+        for e in &o.elements {
+            theirs.entry(key(e)).or_default().push_back(e);
+        }
+        let mut matched = 0usize;
+        for a in &self.elements {
+            let Some(b) = theirs.get_mut(&key(a)).and_then(|q| q.pop_front()) else { continue };
+            let (pa, pb) = if vertical { (a.center.1, b.center.1) } else { (a.center.0, b.center.0) };
+            if (pa - pb).abs() > tol {
+                return false;
+            }
+            matched += 1;
+        }
+        let smaller = self.elements.len().min(o.elements.len());
+        matched >= 3 && matched * 2 >= smaller
+    }
+
     /// 弹窗（系统权限弹窗、App 自己的提示框）
     pub fn alert(&self) -> Option<&Element> {
         self.elements.iter().find(|e| e.kind == "Alert")
@@ -1362,5 +1387,33 @@ mod tests {
         assert_eq!(delete_key(&left, &pad), Some((618, 586)));
         assert_eq!(use_passcode_button(&parse(IPAD_TOUCHID_LEFT, o)), Some((512, 430)));
         assert_eq!(cover_sheet(IPAD_PIN_LEFT), CoverSheet::Locked);
+    }
+
+    #[test]
+    fn a_list_that_stopped_is_still_though_cells_came_and_went() {
+        let tree = |rows: &[(&str, i64)]| {
+            let cells: String = rows
+                .iter()
+                .map(|(l, y)| format!(r#"<XCUIElementTypeButton type="XCUIElementTypeButton" label="{l}" x="20" y="{y}" width="390" height="44"/>"#))
+                .collect();
+            parse_tree(
+                &format!(
+                    r#"<XCUIElementTypeApplication type="XCUIElementTypeApplication" label="A" x="0" y="0" width="430" height="932">{cells}</XCUIElementTypeApplication>"#
+                ),
+                View { screen: ScreenSize { width: 430.0, height: 932.0 }, orientation: None },
+            )
+        };
+        let a = tree(&[("通用", 100), ("辅助功能", 150), ("墙纸", 200), ("相机", 250), ("搜索", 300)]);
+        // one cell more at the bottom edge, the rest where they were: stopped
+        let b =
+            tree(&[("通用", 100), ("辅助功能", 150), ("墙纸", 200), ("相机", 250), ("搜索", 300), ("待机显示", 850)]);
+        assert!(b.still_along_common(&a, true, 3));
+        assert!(!b.still_along(&a, true, 3), "the strict check waits for the same list");
+        // still moving
+        let c = tree(&[("辅助功能", 120), ("墙纸", 170), ("相机", 220), ("搜索", 270), ("待机显示", 320)]);
+        assert!(!c.still_along_common(&a, true, 3));
+        // too little in common to tell
+        let d = tree(&[("墙纸", 200), ("x", 400), ("y", 450), ("z", 500), ("w", 550), ("v", 600)]);
+        assert!(!d.still_along_common(&a, true, 3));
     }
 }

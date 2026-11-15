@@ -56,6 +56,7 @@ impl Tunnel {
     pub async fn ax(&mut self) -> Result<&AxSession> {
         if !self.ax_open() {
             self.ax = None;
+            self.springboard_app = None;
             let port = self
                 .handshake
                 .services
@@ -75,6 +76,7 @@ impl Tunnel {
 
     /// Closes the session (the phone turns its accessibility runtime off for us)
     pub async fn close_ax(&mut self) {
+        self.springboard_app = None;
         if let Some(s) = self.ax.take() {
             s.close().await;
         }
@@ -99,27 +101,45 @@ impl Tunnel {
             app = frontmost(s, wait).await?;
             (elements, complete) = s.walk(app, WALK_LIMIT, WALK_BUDGET, 0).await?;
         }
-        let s = self.ax().await?;
         if !complete {
             tracing::debug!("remoteAXService: walk cut at {} elements", elements.len());
         }
         if elements.is_empty() {
             return Err(DeviceError::Timeout(ictl_l10n::tr!("没有读到界面元素", "no screen elements read").into()));
         }
-        let read_overlays = overlays;
-        let mut overlays = Vec::new();
-        if let Some(sb) = sb.filter(|sb| read_overlays && *sb != app.pid) {
-            match springboard_overlays(s, sb).await {
-                Ok(o) => overlays = o,
-                Err(e) => tracing::debug!("SpringBoard's elements: {e}"),
-            }
-        }
+        let overlays = if overlays { self.ax_overlays(app.pid).await } else { Vec::new() };
         Ok(AxScreen {
             app: elements,
             overlays,
             app_pid: app.pid,
             springboard_front: sb == Some(app.pid),
             at: Instant::now(),
+        })
+    }
+
+    /// What SpringBoard shows over the app of process `app_pid` (alerts, banners, its status bar); empty when
+    /// SpringBoard is that app, or can't be read
+    pub async fn ax_overlays(&mut self, app_pid: i64) -> Vec<Element> {
+        let Some(sb) = self.springboard_pid().await.filter(|sb| *sb != app_pid) else { return Vec::new() };
+        let r = async {
+            let root = match self.springboard_app {
+                Some(o) => o,
+                None => {
+                    let o = self.ax().await?.app_object(sb).await?;
+                    self.springboard_app = Some(o);
+                    o
+                }
+            };
+            let s = self.ax().await?;
+            Ok::<_, DeviceError>(
+                s.walk_children(root, OVERLAY_LIMIT, OVERLAY_BUDGET, ictl_ax::tree::trait_bit::STATUS_BAR).await?,
+            )
+        }
+        .await;
+        r.unwrap_or_else(|e| {
+            tracing::debug!("SpringBoard's elements: {e}");
+            self.springboard_app = None;
+            Vec::new()
         })
     }
 
@@ -145,12 +165,8 @@ impl Tunnel {
     }
 }
 
-/// SpringBoard's application element answers whichever app is in front: its children are the status bar's items
-/// and whatever it draws over the app (Pinky, DIYgod/pinky `springboard.go`)
-async fn springboard_overlays(s: &AxSession, pid: i64) -> Result<Vec<Element>> {
-    let app: ObjectRef = s.app_object(pid).await?;
-    Ok(s.walk_children(app, OVERLAY_LIMIT, OVERLAY_BUDGET, ictl_ax::tree::trait_bit::STATUS_BAR).await?)
-}
+// SpringBoard's application element answers whichever app is in front: its children are the status bar's items
+// and whatever it draws over the app (Pinky, DIYgod/pinky `springboard.go`); see `Tunnel::ax_overlays`
 
 /// The frontmost app's element, asked again for up to `wait` while the phone has none (between two apps)
 async fn frontmost(s: &AxSession, wait: Duration) -> Result<ObjectRef> {

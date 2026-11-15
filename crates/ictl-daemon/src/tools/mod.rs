@@ -324,6 +324,7 @@ impl Daemon {
         region: Option<(f64, f64, f64, f64)>,
     ) -> crate::error::Result<Response> {
         self.ensure_unlocked(g).await?;
+        let fetched = Instant::now();
         let wda_png = match self.wda(g) {
             Some(w) => w.screenshot_png().await.ok(),
             None => None,
@@ -350,11 +351,17 @@ impl Daemon {
         // 解码、缩放、JPEG 编码是 CPU 活（1290×2796），放到阻塞线程，不卡住主循环
         // 说明文字在阻塞线程里生成：带上这个请求的语言
         let lang = ictl_l10n::lang();
+        let (png_len, processed) = (png.len(), Instant::now());
+        let fetch_ms = processed.duration_since(fetched).as_millis();
         let (jpeg, caption, thumb) = tokio::task::spawn_blocking(move || {
             ictl_l10n::with_lang(lang, || imaging::answer(&png, screen, region, via))
         })
         .await
         .map_err(|e| ictl_l10n::trf!("图像处理任务异常：{e}", "Image processing task failed: {e}"))??;
+        tracing::debug!(
+            "screenshot via {via}: {png_len} bytes of PNG in {fetch_ms} ms, processed in {} ms",
+            processed.elapsed().as_millis()
+        );
         // 区域放大也记整屏：下一个操作做完后比的是整个画面
         g.dev.seen.saw_thumb(thumb);
         Ok(Response::Image { jpeg_base64: base64::engine::general_purpose::STANDARD.encode(jpeg), caption })

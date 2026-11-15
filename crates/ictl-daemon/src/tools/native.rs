@@ -16,8 +16,8 @@ use crate::config::IosBackend;
 /// A read of the screen waits at most this long for a tree (the first one of a session comes in about a second)
 pub(crate) const AX_WAIT: Duration = Duration::from_secs(5);
 /// After an action, the screen is first read this long after it started: an app reacts to a tap within about
-/// 0.1 s, a page slides in within about 0.35 s
-const REACT: Duration = Duration::from_millis(400);
+/// 0.1 s, a page slides in within about 0.35 s (the second read, which confirms, comes about 0.2 s later)
+const REACT: Duration = Duration::from_millis(300);
 /// After Cmd-V: how long for the text to show in the field, answering the paste prompt meanwhile
 const PASTE_WAIT: Duration = Duration::from_secs(5);
 /// How long an app may take to come to the front
@@ -42,6 +42,22 @@ fn native_for(backend: IosBackend, info: Option<&DeviceInfo>) -> bool {
 /// elements at times, then no Keyboard is made of them, `ictl_ax::xml`)
 fn keyboard_up(tree: &Tree) -> bool {
     tree.elements.iter().any(|e| e.kind == "Keyboard") || tree.elements.iter().filter(|e| e.kind == "Key").count() >= 8
+}
+
+/// The keyboard's input mode, as its "next keyboard" button says it («简体拼音», "English (US)")
+fn keyboard_mode(tree: &Tree) -> Option<&str> {
+    tree.elements
+        .iter()
+        .find(|e| matches!(e.label.as_str(), "下一个键盘" | "下一個鍵盤" | "Next keyboard" | "Next Keyboard"))
+        .map(|e| e.value.as_str())
+        .filter(|v| !v.is_empty())
+}
+
+/// An input mode that takes keys as they are: English. Anything else (Pinyin, Zhuyin, Kana, Hangul and the
+/// like compose; other layouts may map keys elsewhere) is pasted
+fn types_keys_as_they_are(mode: &str) -> bool {
+    let m = mode.to_lowercase();
+    m.contains("english") || m.contains("英语") || m.contains("英文") || m.contains("英語")
 }
 
 /// The paste prompt's "Allow Paste" button ("“Notes” would like to paste from “dtpasteboardd”"), when it is up
@@ -78,6 +94,17 @@ impl Daemon {
         wait: Duration,
         overlays: bool,
     ) -> crate::error::Result<(String, ScreenSize, i64)> {
+        let s = self.ax_snapshot(g, wait, overlays).await?;
+        self.ax_render(g, &s).await
+    }
+
+    /// One read of the screen as the phone gives it ([`Self::ax_read_with`] before it becomes XML)
+    async fn ax_snapshot(
+        &self,
+        g: &mut Inner,
+        wait: Duration,
+        overlays: bool,
+    ) -> crate::error::Result<ictl_device::ax::AxScreen> {
         let device = g.device.clone().ok_or(ictl_l10n::tr!("手机未连接", "Phone not connected"))?;
         let t = self
             .ensure_tunnel(g, &device)
@@ -88,7 +115,15 @@ impl Daemon {
             t.close_ax().await;
         }
         g.ax_used = Some(Instant::now());
-        let s = r.map_err(|e| ictl_l10n::trf!("读界面失败：{e}", "Reading the screen failed: {e}"))?;
+        Ok(r.map_err(|e| ictl_l10n::trf!("读界面失败：{e}", "Reading the screen failed: {e}"))?)
+    }
+
+    /// A read as WDA-style XML, the screen (as turned now) and the frontmost app's process
+    async fn ax_render(
+        &self,
+        g: &mut Inner,
+        s: &ictl_device::ax::AxScreen,
+    ) -> crate::error::Result<(String, ScreenSize, i64)> {
         // the application element covers the screen: its frame is the screen in points, as turned now
         let root = s.app.first().and_then(|e| e.frame).map(|f| ScreenSize { width: f.2, height: f.3 });
         let size = match root.filter(|r| r.width > 1.0 && r.height > 1.0) {
@@ -239,21 +274,24 @@ impl Daemon {
 
     /// Waits for the screen to settle after an action, as through WDA: the tree read again until two reads in a
     /// row are alike and nothing is loading, at most `max`. The first read waits a moment after the action (the
-    /// app's reaction, a page's slide in), or two reads of the old screen would count as settled
+    /// app's reaction, a page's slide in), or two reads of the old screen would count as settled. The reads meanwhile
+    /// are of the app alone; what SpringBoard shows over it is read once, for the tree returned
     pub(crate) async fn native_settle(&self, g: &mut Inner, max: Duration) -> crate::error::Result<(String, Tree)> {
         let t0 = Instant::now();
         if let Some(left) = g.dev.acted_at.and_then(|t| REACT.checked_sub(t.elapsed())) {
             tokio::time::sleep(left).await;
         }
-        let mut prev = self.ax_tree(g, AX_WAIT).await?;
+        let mut snap = self.ax_snapshot(g, AX_WAIT, false).await?;
+        let mut prev = self.snapshot_tree(g, &snap).await?;
         if prev.elements.len() < VISUAL_SETTLE_BELOW {
             // between two pages (a slide back) the tree can be nearly empty for a moment: once more
             tokio::time::sleep(Duration::from_millis(300)).await;
-            prev = self.ax_tree(g, AX_WAIT).await?;
+            snap = self.ax_snapshot(g, AX_WAIT, false).await?;
+            prev = self.snapshot_tree(g, &snap).await?;
         }
         if prev.elements.len() < VISUAL_SETTLE_BELOW {
             // too few elements to tell (a game, a map): the caller looks at the picture
-            return Ok((String::new(), prev));
+            return Ok((String::new(), self.with_overlays(g, snap).await?));
         }
         loop {
             if t0.elapsed() >= max {
@@ -270,17 +308,32 @@ impl Daemon {
                         max.as_secs_f64()
                     )
                 };
-                return Ok((msg, prev));
+                return Ok((msg, self.with_overlays(g, snap).await?));
             }
-            let cur = self.ax_tree(g, AX_WAIT).await?;
+            snap = self.ax_snapshot(g, AX_WAIT, false).await?;
+            let cur = self.snapshot_tree(g, &snap).await?;
             let same = cur.close_to(&prev, STILL_TOLERANCE);
             prev = cur;
             if same && !prev.loading {
+                let tree = self.with_overlays(g, snap).await?;
                 let msg =
                     ictl_l10n::trf!("界面已稳定({:.1} 秒)", "Screen settled ({:.1} s)", t0.elapsed().as_secs_f64());
-                return Ok((msg, prev));
+                return Ok((msg, tree));
             }
         }
+    }
+
+    async fn snapshot_tree(&self, g: &mut Inner, s: &ictl_device::ax::AxScreen) -> crate::error::Result<Tree> {
+        let (xml, size, _) = self.ax_render(g, s).await?;
+        Ok(elements::parse_tree(&xml, size))
+    }
+
+    /// `s`, a read of the app alone, with what SpringBoard shows over it, as a tree
+    async fn with_overlays(&self, g: &mut Inner, mut s: ictl_device::ax::AxScreen) -> crate::error::Result<Tree> {
+        if let Some(t) = g.tunnel.as_mut() {
+            s.overlays = t.ax_overlays(s.app_pid).await;
+        }
+        self.snapshot_tree(g, &s).await
     }
 
     /// The frontmost app's elements alone ([`Self::ax_read_with`])
@@ -300,7 +353,7 @@ impl Daemon {
         }
         while t0.elapsed() < SCROLL_SETTLE {
             let Ok(cur) = self.ax_tree_app(g).await else { return String::new() };
-            if cur.still_along(&prev, vertical, STILL_TOLERANCE) {
+            if cur.still_along_common(&prev, vertical, STILL_TOLERANCE) {
                 return String::new();
             }
             prev = cur;
@@ -450,7 +503,7 @@ impl Daemon {
     /// answered, and the field read back before the pasteboard is put back and Return pressed
     pub(crate) async fn native_type(&self, g: &mut Inner, text: &str, submit: bool) -> crate::error::Result<String> {
         let n = text.chars().count();
-        let before = self.ax_tree(g, AX_WAIT).await?;
+        let before = self.ax_tree_app(g).await?;
         if !keyboard_up(&before) {
             return Err(ictl_l10n::tr!(
                 "屏幕上没有键盘(没有输入框获得焦点),什么都没输;先点一下输入框,截图确认键盘出来了再输入",
@@ -460,6 +513,31 @@ impl Daemon {
         }
         let old = elements::field_values(&before.elements);
         let mut note = String::new();
+        // an English keyboard takes keys as they are: no paste, no prompt (Pinyin would compose them)
+        if !text.is_empty()
+            && keyboard_mode(&before).is_some_and(types_keys_as_they_are)
+            && text.chars().all(|c| ascii_to_usage(c).is_some())
+        {
+            let payload = if submit { format!("{text}\n") } else { text.to_owned() };
+            self.hid_do(g, move |h| Box::pin(async move { h.type_ascii(&payload).await })).await?;
+            if old.is_none() {
+                note += ictl_l10n::tr!(
+                    "(这是密码框,读不出内容,截图确认输进去了)",
+                    " (a password field: its contents can't be read back, check with a screenshot)"
+                );
+            } else if !submit && let Some(now) = self.native_field_shows(g, text).await? {
+                return Err(ictl_l10n::trf!(
+                    "按键输入了 {n} 个字符,但输入框里现在是「{now}」,和要输入的「{text}」对不上(可能被自动更正或吞掉了);截图确认后再处理",
+                    "Typed {n} characters as keys, but the field now contains “{now}”, which doesn't match “{text}” (autocorrected or swallowed); check with a screenshot before going on"
+                )
+                .into());
+            }
+            return Ok(ictl_l10n::trf!(
+                "已输入 {n} 个字符{note}{}",
+                "Typed {n} characters{note}{}",
+                if submit { ictl_l10n::tr!(",并按了回车", " and pressed Return") } else { "" }
+            ));
+        }
         if !text.is_empty() {
             let (typed, prompt) = self.native_paste(g, text, old.as_deref()).await?;
             if prompt {
@@ -497,6 +575,22 @@ impl Daemon {
         ))
     }
 
+    /// After typing `text` as keys: None once a field shows it (within about a second; the tree may lag a key
+    /// behind), else what the field shows
+    async fn native_field_shows(&self, g: &mut Inner, text: &str) -> crate::error::Result<Option<String>> {
+        let deadline = Instant::now() + Duration::from_millis(1200);
+        loop {
+            let values = elements::field_values(&self.ax_tree_app(g).await?.elements).unwrap_or_default();
+            if values.is_empty() || super::input::typed_into(&values, text) {
+                return Ok(None);
+            }
+            if Instant::now() >= deadline {
+                return Ok(Some(values.into_iter().find(|v| !v.is_empty()).unwrap_or_default()));
+            }
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+    }
+
     /// Pastes `text` and waits for it to show in a field (`old`: the fields' values before; None: a password field
     /// on screen). Returns whether it showed (None: can't be read) and whether the paste prompt was answered. The
     /// pasteboard is put back before returning
@@ -523,7 +617,8 @@ impl Daemon {
         let mut prompt = false;
         let wanted = text.trim();
         let typed = loop {
-            let tree = self.ax_tree(g, AX_WAIT).await?;
+            // the prompt brings SpringBoard to the front: the app in front alone tells both
+            let tree = self.ax_tree_app(g).await?;
             if let Some((x, y)) = paste_allow(&tree) {
                 self.native_tap(g, x, y).await?;
                 prompt = true;

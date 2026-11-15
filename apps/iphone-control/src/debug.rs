@@ -53,6 +53,8 @@ enum Check {
     },
     /// 3. 截图：screencaptureservice PNG
     Screenshot { out: PathBuf },
+    /// 3a. 截屏服务认哪些格式名（`requestedFormat`）：逐个试，打印大小、用时和文件头，或手机的报错
+    ShotFormats { formats: Vec<String> },
     /// 4. 隧道稳定性：同一条隧道持续截图 N 分钟
     Soak {
         #[arg(long, default_value_t = 30)]
@@ -368,6 +370,31 @@ pub async fn run(udid: Option<&str>, args: DebugArgs) -> anyhow::Result<()> {
             .await;
             t.close().await;
             r?;
+        }
+        Check::ShotFormats { formats } => {
+            let mut t = device.open_tunnel().await?;
+            for i in 0..3 {
+                let t0 = Instant::now();
+                let png = t.screenshot_png().await?;
+                println!(
+                    "png #{i} (kept connection after the first): {} bytes in {:.2}s",
+                    png.len(),
+                    t0.elapsed().as_secs_f64()
+                );
+            }
+            for f in formats {
+                let t0 = Instant::now();
+                match t.screenshot_as(&f).await {
+                    Ok(b) => println!(
+                        "{f}: {} bytes in {:.2}s, starts {:02x?}",
+                        b.len(),
+                        t0.elapsed().as_secs_f64(),
+                        &b[..b.len().min(4)]
+                    ),
+                    Err(e) => println!("{f}: {}", e.to_string().chars().take(200).collect::<String>()),
+                }
+            }
+            t.close().await;
         }
         Check::Screenshot { out } => {
             let mut t = device.open_tunnel().await?;

@@ -482,10 +482,19 @@ impl Device {
         limit(ictl_l10n::tr!("建隧道", "open the tunnel"), Duration::from_secs(30), async {
             let proxy = CoreDeviceProxy::connect(&*self.provider).await?;
             let rsd_port = proxy.tunnel_info().server_rsd_port;
+            tracing::debug!("CoreDeviceProxy tunnel: MTU {}", proxy.tunnel_info().mtu);
             let mut adapter = proxy.create_software_tunnel()?.to_async_handle();
             let stream = adapter.connect(rsd_port).await?;
             let handshake = RsdHandshake::new(stream).await?;
-            Ok(Tunnel { adapter, handshake, hid: None, ax: None, springboard: None, springboard_app: None })
+            Ok(Tunnel {
+                adapter,
+                handshake,
+                hid: None,
+                ax: None,
+                springboard: None,
+                springboard_app: None,
+                screenshots: None,
+            })
         })
         .await
     }
@@ -630,6 +639,8 @@ pub struct Tunnel {
     springboard: Option<i64>,
     /// SpringBoard 的应用元素，每个无障碍会话问一次（每次读界面省一个请求）
     springboard_app: Option<ictl_ax::ObjectRef>,
+    /// 截屏服务的连接，留着复用（[`Tunnel::screenshot_png`]）
+    screenshots: Option<ScreenCaptureServiceClient<Box<dyn idevice::ReadWrite>>>,
 }
 
 impl Tunnel {
@@ -656,10 +667,53 @@ impl Tunnel {
         .await
     }
 
+    /// The screen in the format the phone calls `format` (`requestedFormat`; idevice's "jpeg" is refused: «Cannot
+    /// initialize ScreenshotImageFormat from invalid String value jpeg»)
+    pub async fn screenshot_as(&mut self, format: &str) -> Result<Vec<u8>> {
+        limit(ictl_l10n::tr!("截图", "screenshot"), Duration::from_secs(30), async {
+            let port = self
+                .handshake
+                .services
+                .get("com.apple.coredevice.screencaptureservice")
+                .map(|s| s.port)
+                .ok_or_else(|| DeviceError::Idevice("the phone offers no screencaptureservice".into()))?;
+            let stream: Box<dyn idevice::ReadWrite> = Box::new(self.adapter.connect(port).await?);
+            let mut c = idevice::core_device::CoreDeviceServiceClient::new(stream).await?;
+            let mut req = plist::Dictionary::new();
+            req.insert("requestedFormat".into(), format.into());
+            let res = c
+                .invoke_with_plist_action(
+                    "com.apple.coredevice.feature.capturescreenshot",
+                    req,
+                    "com.apple.coredevice.action.capturescreenshot",
+                )
+                .await?;
+            match res.as_dictionary().and_then(|d| d.get("image")) {
+                Some(plist::Value::Data(image)) => Ok(image.clone()),
+                _ => Err(DeviceError::Idevice("the screenshot came without an image".into())),
+            }
+        })
+        .await
+    }
+
+    /// The screen as PNG, on the screen capture service's connection kept from the last time: the first request on
+    /// a new one does the service's handshake too (0.82 s against 0.30 s for the next ones on a simple screen). A
+    /// connection that fails is dropped and one new one tried
     pub async fn screenshot_png(&mut self) -> Result<Vec<u8>> {
         limit(ictl_l10n::tr!("截图", "screenshot"), Duration::from_secs(30), async {
-            let mut client = ScreenCaptureServiceClient::connect_rsd(&mut self.adapter, &mut self.handshake).await?;
-            Ok(client.take_screenshot(None, ImageFormat::Png).await?)
+            if let Some(c) = self.screenshots.as_mut() {
+                match c.take_screenshot(None, ImageFormat::Png).await {
+                    Ok(png) => return Ok(png),
+                    Err(e) => {
+                        tracing::debug!("screenshot on the kept connection failed, connecting again: {e}");
+                        self.screenshots = None;
+                    }
+                }
+            }
+            let mut c = ScreenCaptureServiceClient::connect_rsd(&mut self.adapter, &mut self.handshake).await?;
+            let png = c.take_screenshot(None, ImageFormat::Png).await?;
+            self.screenshots = Some(c);
+            Ok(png)
         })
         .await
     }

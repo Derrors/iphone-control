@@ -106,6 +106,11 @@ pub const TYPES: [&str; 83] = [
 /// The element's type name: the XCUIElementType, or, in a first pushed tree that lacks it, a guess from the traits
 pub fn kind(e: &Element) -> &'static str {
     if let Some(t) = usize::try_from(e.xc_type).ok().filter(|t| (1..TYPES.len()).contains(t)) {
+        // the lock screen's passcode field reads as a plain text field here; WDA calls it a secure one, which is
+        // what finds it when unlocking (`ictl_wda::elements::passcode_field`, `cover_sheet`)
+        if TYPES[t] == "TextField" && passcode_value(&e.value) {
+            return "SecureTextField";
+        }
         return TYPES[t];
     }
     let t = e.traits;
@@ -131,6 +136,13 @@ pub fn kind(e: &Element) -> &'static str {
     } else {
         "Other"
     }
+}
+
+/// A passcode field's value: 「共6位数，已输入2位」, "6-digit passcode, 2 entered" (two numbers, and the words for it)
+fn passcode_value(v: &str) -> bool {
+    let numbers = v.split(|c: char| !c.is_ascii_digit()).filter(|n| !n.is_empty()).count();
+    let lower = v.to_lowercase();
+    numbers == 2 && (v.contains("位") || lower.contains("passcode") || lower.contains("digit"))
 }
 
 /// At least this many one-character elements make a process the keyboard
@@ -421,5 +433,15 @@ mod tests {
         assert_eq!(kind(&e), "Switch");
         e.xc_type = 48;
         assert_eq!(kind(&e), "StaticText");
+    }
+
+    #[test]
+    fn the_lock_screen_passcode_field_reads_as_secure() {
+        let field = |value: &str| Element { xc_type: 49, value: value.into(), ..Default::default() };
+        assert_eq!(TYPES[49], "TextField");
+        assert_eq!(kind(&field("共6位数，已输入0位")), "SecureTextField");
+        assert_eq!(kind(&field("6-digit passcode, 2 entered")), "SecureTextField");
+        assert_eq!(kind(&field("2 杯咖啡 3 份")), "TextField");
+        assert_eq!(kind(&field("hello")), "TextField");
     }
 }

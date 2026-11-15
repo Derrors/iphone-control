@@ -146,10 +146,10 @@ iPad 上那次失败和启动方式无关：手机端 amfid 报 `AppleMobileFile
 
 开关在 `~/.config/iphone-control/env` 里设，重启服务后生效。代码：
 
-- `ictl-device`：`Tunnel::launch_in_background`（processcontrol，选项 `StartSuspendedKey: false`、`ActivateSuspended: true`、`KillExisting: true`，不带环境变量和参数）、`Tunnel::processes`（appservice `list_processes`）、`Tunnel::kill`（processcontrol `killPid:`）。
+- `ictl-device`：`Tunnel::launch_in_background`（processcontrol，选项 `StartSuspendedKey: false`、`ActivateSuspended: true`、`KillExisting: true`，不带环境变量和参数）、`Tunnel::processes`（appservice `list_processes`）。结束它用 `Tunnel::signal`（AppService 发 SIGKILL）；原来的 `Tunnel::kill`（processcontrol `killPid:`）结束不了 WDA，已删掉。
 - `ictl-wda`：`WdaRunner::attach` 只等 `/status` ready。这样得到的 runner 没有任务，`alive()` 总是 true，`detached()` 是 true；丢掉它不会结束手机上的 WDA。
 - `ictl-daemon`：`spawn_start` 挂好开发者镜像后，在同一条隧道上调 `prepare_detached`：
-  - 开关开着：`state.json` 里的 `detached_wda`（UDID + 进程号）对应的进程还在、可执行文件是 WebDriverAgentRunner，就**直接接上**（`/status` 等 15 秒）；否则在后台启动一个（会先结束已在运行的 WDA，包括 XCTest 会话启动的），等最多 120 秒。就绪后记下进程号；接上的那个不应答就忘掉它，下一次重新启动。
+  - 开关开着：`state.json` 里这台设备的记录（`detached_wdas`，按 UDID 记进程号；旧版本只认最近一条 `detached_wda`，照旧也写）对应的进程还在、可执行文件是 WebDriverAgentRunner，就**直接接上**（`/status` 等 15 秒）；否则在后台启动一个（会先结束已在运行的 WDA，包括 XCTest 会话启动的），等最多 120 秒。就绪后记下进程号；接上的那个不应答就忘掉它，下一次重新启动。
   - 开关关着：记录里的那个还在就先结束它，再照原来的方式启动。不然它一直占着 8100，新 runner 的 HTTP 服务起不来。
 - 健康检查不变：每 10 秒 `/status`，连续 3 次不应答就丢掉，重新启动。
 
@@ -168,11 +168,11 @@ iPad 上那次失败和启动方式无关：手机端 amfid 报 `AppleMobileFile
 
 - **「UI 自动化」密码框靠手机系统日志识别**，等待和输入后恢复已在手机重启后验证；一直不输、等满 60 秒的那条路还没亲眼看到（见 8.6 节）。
 - 证书被吊销时，手机没重启前签名校验有缓存，WDA 照样能起来；**重启后才起不来**。这对两种启动方式都一样。
-- 守护进程停了 WDA 还在跑（这正是想要的效果），所以 `service stop` 不会停掉 WDA。
+- 守护进程重启、升级时 WDA 照样跑（这正是想要的效果）。`iphone-control service stop`、`service uninstall` 停掉服务后会结束接着的手机上记下的后台 WDA（`detached::end_recorded`）；绕过它们停服务（`systemctl --user stop`、`brew services stop`）或者手机没接着时不会，记录留着，守护进程下次准备这台手机时处理（开关开着就接上，关着或走原生控制就结束）。
 - 只测了几分钟。还要做长时间运行、反复锁屏和熄屏、手机重启、拔插 USB 的测试。
 - 只在一台 iPhone、iOS 27.0.1 上验证过；iOS 17～26 和 iPad 都没测。
 - 接上旧进程时只按「进程号 + 可执行文件名」判断。手机重启后进程号恰好撞上另一个 WDA 进程的可能性很小；就算撞上了，`/status` 等不到也会重新启动。
-- 切换设备时，旧设备上的后台 WDA 继续跑，记录只留一台。
+- 切换设备时，旧设备上的后台 WDA 继续跑，每台设备各记一条：切回去直接接上，不重新启动。
 - 控制台画面（9100 MJPEG）和 `fast_stream`、`keep_stream_upright` 这些 appium settings 在接上旧进程时的表现没有专门测过。
 
 ### 8.6 识别「UI 自动化」密码框（2026-11-12）

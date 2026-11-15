@@ -298,6 +298,109 @@ pub fn args(kind: &Kind, w: u32, h: u32, qp: u8, old: bool) -> Vec<String> {
     a
 }
 
+/// The ffmpeg command line (without the program) that turns the phone's own HEVC video (Annex-B on stdin, the
+/// portrait framebuffer padded to multiples of 16) into H.264 in FLV with `kind`, for a page that can't decode HEVC
+/// while WDA's MJPEG isn't there ([`super::transcode`]). `points`: the screen in points, portrait; the padding is cut
+/// off by it (1328×2896 → 1290×2796 for 430×932 at ×3). `None` for the native encoder, which takes JPEG only
+pub fn hevc_args(kind: &Kind, points: Option<(f64, f64)>, qp: u8, old: bool) -> Option<Vec<String>> {
+    let qp_s = qp.to_string();
+    // the padding off, to even sizes (4:2:0); the scale is the padded width over the width in points, rounded
+    let crop = points.filter(|(w, h)| *w > 1.0 && *h > 1.0).map(|(w, h)| {
+        let (pw, ph) = (w.min(h).round(), w.max(h).round());
+        format!("crop=w='2*floor(min(iw,{pw}*round(iw/{pw}))/2)':h='2*floor(min(ih,{ph}*round(iw/{pw}))/2)':x=0:y=0,")
+    });
+    let crop = crop.unwrap_or_default();
+    let (input, filter, codec): (Vec<String>, String, Vec<String>) = match kind {
+        Kind::Native => return None,
+        Kind::Nvenc { .. } => (
+            Vec::new(),
+            format!("{crop}format=nv12"),
+            strings(&[
+                "-c:v",
+                "h264_nvenc",
+                "-preset",
+                "p4",
+                "-tune",
+                "ll",
+                "-rc",
+                "constqp",
+                "-qp",
+                &qp_s,
+                "-delay",
+                "0",
+                "-zerolatency",
+                "1",
+            ]),
+        ),
+        Kind::Vaapi { node, .. } => {
+            let mut codec = strings(&["-c:v", "h264_vaapi", "-rc_mode", "CQP", "-qp", &qp_s]);
+            if !old {
+                codec.extend(strings(&["-async_depth", "1"]));
+            }
+            (strings(&["-vaapi_device", &node.to_string_lossy()]), format!("{crop}format=nv12,hwupload"), codec)
+        }
+        Kind::Qsv => (
+            Vec::new(),
+            format!("{crop}format=nv12"),
+            strings(&["-c:v", "h264_qsv", "-global_quality", &qp_s, "-look_ahead", "0", "-async_depth", "1"]),
+        ),
+        Kind::V4l2m2m => {
+            (Vec::new(), format!("{crop}format=nv12"), strings(&["-c:v", "h264_v4l2m2m", "-b:v", &bitrate(qp)]))
+        }
+        Kind::VideoToolbox => (
+            Vec::new(),
+            format!("{crop}format=nv12"),
+            strings(&["-c:v", "h264_videotoolbox", "-realtime", "1", "-b:v", &bitrate(qp)]),
+        ),
+        Kind::X264 => (
+            Vec::new(),
+            format!("{crop}format=yuv420p"),
+            strings(&[
+                "-c:v",
+                "libx264",
+                "-preset",
+                "veryfast",
+                "-tune",
+                "zerolatency",
+                "-crf",
+                &qp.saturating_sub(1).to_string(),
+            ]),
+        ),
+    };
+    let mut a = strings(&[
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-nostats",
+        "-probesize",
+        "32",
+        "-analyzeduration",
+        "0",
+        "-fflags",
+        "nobuffer",
+        "-flags",
+        "low_delay",
+    ]);
+    a.extend(input);
+    a.extend(strings(&["-f", "hevc", "-i", "pipe:0", if old { "-vsync" } else { "-fps_mode" }, "passthrough", "-an"]));
+    a.extend(strings(&["-vf", filter.trim_end_matches(',')]));
+    a.extend(codec);
+    a.extend(strings(&[
+        "-bf",
+        "0",
+        "-g",
+        &GOP_FRAMES.to_string(),
+        "-f",
+        "flv",
+        "-flvflags",
+        "no_duration_filesize",
+        "-flush_packets",
+        "1",
+        "pipe:1",
+    ]));
+    Some(a)
+}
+
 fn strings(v: &[&str]) -> Vec<String> {
     v.iter().map(|s| (*s).to_owned()).collect()
 }
@@ -438,6 +541,27 @@ impl Encoders {
     pub fn start(&self, w: u32, h: u32, qp: u8) -> Result<Session, String> {
         let c = self.current().ok_or_else(|| ictl_l10n::tr!("没有可用的编码器", "no working encoder").to_owned())?;
         self.session(&self.list[c.index], (w, h), qp, c.kicks, c.index, None)
+    }
+
+    /// ffmpeg and its command line for transcoding the phone's own HEVC video with the encoder in use
+    /// ([`hevc_args`]); the native encoder (JPEG only) is replaced by VideoToolbox through ffmpeg. `Err` without
+    /// ffmpeg or a working encoder
+    pub fn hevc_command(
+        &self,
+        points: Option<(f64, f64)>,
+        qp: u8,
+    ) -> Result<(PathBuf, Vec<String>, &'static str), String> {
+        let c = self.current().ok_or_else(|| ictl_l10n::tr!("没有可用的编码器", "no working encoder").to_owned())?;
+        let ffmpeg = self.ffmpeg.clone().ok_or_else(|| {
+            ictl_l10n::tr!("没有 ffmpeg,转不了手机的 HEVC 画面", "no ffmpeg to transcode the phone's HEVC picture")
+                .to_owned()
+        })?;
+        let kind = match &self.list[c.index] {
+            Kind::Native => &Kind::VideoToolbox,
+            k => k,
+        };
+        let args = hevc_args(kind, points, qp, self.old).ok_or("no encoder for HEVC input")?;
+        Ok((ffmpeg, args, kind.label()))
     }
 
     /// The quantizer set for the picture (`IPHONE_CONTROL_VIEWER_QP`)
@@ -793,6 +917,35 @@ impl Process {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The phone's HEVC in, its padding cut off by the screen's points, H.264 in FLV out; none for the native encoder
+    #[test]
+    fn hevc_is_transcoded_with_the_padding_cut_off() {
+        let a = hevc_args(&Kind::X264, Some((932.0, 430.0)), 20, false).unwrap();
+        let at = |flag: &str| a.iter().position(|x| x == flag).map(|i| a[i + 1].as_str());
+        assert_eq!(at("-f"), Some("hevc"), "the input");
+        assert_eq!(at("-i"), Some("pipe:0"));
+        // turned (landscape points) or not, the crop is portrait: 430 wide at the padded width's scale
+        let vf = at("-vf").unwrap();
+        assert!(
+            vf.starts_with("crop=w='2*floor(min(iw,430*round(iw/430))/2)':h='2*floor(min(ih,932*round(iw/430))/2)'"),
+            "{vf}"
+        );
+        assert!(vf.ends_with("format=yuv420p"), "{vf}");
+        assert_eq!(a.last().map(String::as_str), Some("pipe:1"));
+        assert!(a.windows(2).any(|w| w == ["-f", "flv"]));
+        // without the screen's size: no crop
+        let vf = hevc_args(&Kind::Qsv, None, 20, false).unwrap();
+        assert!(vf.iter().any(|x| x == "format=nv12"));
+        let vaapi =
+            hevc_args(&Kind::Vaapi { node: "/dev/dri/renderD128".into(), hw_jpeg: true }, None, 20, false).unwrap();
+        assert!(vaapi.windows(2).any(|w| w == ["-vaapi_device", "/dev/dri/renderD128"]));
+        assert!(vaapi.iter().any(|x| x == "format=nv12,hwupload"));
+        assert!(hevc_args(&Kind::Native, None, 20, false).is_none(), "JPEG in only");
+        for k in [Kind::Nvenc { hw_jpeg: false }, Kind::V4l2m2m, Kind::VideoToolbox] {
+            assert!(hevc_args(&k, Some((430.0, 932.0)), 20, true).unwrap().iter().any(|x| x == "-vsync"), "old ffmpeg");
+        }
+    }
 
     #[test]
     fn versions_before_5_1_are_old() {

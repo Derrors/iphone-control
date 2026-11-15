@@ -697,6 +697,22 @@ async fn picture(mut client: Conn, ctx: &Ctx, req: &Head) -> anyhow::Result<()> 
     let connection = async { ictl_device::Device::find(Some(&udid)).await?.connect_port(MJPEG_PORT).await };
     let mut remote = match tokio::time::timeout(crate::video::STREAM_IDLE, connection).await {
         Ok(Ok(r)) => r,
+        // no WDA (iOS 27 driven natively, or WDA down): the phone's own HEVC video transcoded to H.264, for a page
+        // that can't decode HEVC
+        _ if ctx.device_video_allowed && video.is_some() => {
+            let Some(enc) = video else { unreachable!("checked") };
+            let (src, w) = match crate::video::device::open(&ctx.socket, &udid, low).await {
+                Ok(s) => s,
+                Err(e) => return reply(&mut client, 502, "text/plain; charset=utf-8", e.as_bytes()).await,
+            };
+            // the screen in points, to cut the video's padding off by
+            let points =
+                crate::client::snapshot(&ctx.socket).await.ok().and_then(|s| s.display).map(|d| (d.width, d.height));
+            let qp = if low { enc.qp().max(crate::video::LOW_BANDWIDTH_QP) } else { enc.qp() };
+            video_head(&mut client).await?;
+            crate::video::transcode::serve(enc, qp, points, ctx.acks.clone(), src, w, client).await;
+            return Ok(());
+        }
         _ => return reply(&mut client, 502, "text/plain", b"device feed unavailable").await,
     };
     tokio::time::timeout(crate::video::STREAM_IDLE, remote.write_all(b"GET / HTTP/1.1\r\nHost: localhost\r\n\r\n"))

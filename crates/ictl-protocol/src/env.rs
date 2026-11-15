@@ -50,7 +50,6 @@ pub const DDI_URL: &str = "ICTL_DDI_URL";
 pub const DDI_DIR: &str = "ICTL_DDI_DIR";
 pub const FFMPEG: &str = "ICTL_FFMPEG";
 pub const WDA_UNSIGNED: &str = "ICTL_WDA_UNSIGNED";
-pub const WDA_DETACHED: &str = "ICTL_WDA_DETACHED";
 /// How iOS 27 and later are driven: `auto` (the default: natively, without WDA), `native`, `wda`
 pub const IOS_BACKEND: &str = "ICTL_IOS_BACKEND";
 /// Read by `ictl_l10n` (below this crate), so its name is kept there
@@ -108,7 +107,6 @@ pub const ALL: &[Var] = &[
     var(DDI_DIR, Kind::Setting, true),
     var(FFMPEG, Kind::Setting, false),
     var(WDA_UNSIGNED, Kind::Setting, true),
-    var(WDA_DETACHED, Kind::Experiment, true),
     var(IOS_BACKEND, Kind::Setting, true),
     var(LANG, Kind::Setting, true),
     var(DEV_TOOLS, Kind::Setting, true),

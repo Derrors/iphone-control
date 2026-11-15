@@ -36,7 +36,7 @@ plist.workspace = true
 semver = "=1.0.28"
 tempfile = "=3.27.0"
 chrono = { version = "=0.4.45", default-features = false, features = ["std"] }
-flate2 = "=1.1.10"
+flate2 = "=1.1.11"
 ring = "=0.17.14"
 tar = { version = "=0.4.46", default-features = false }
 uuid.workspace = true

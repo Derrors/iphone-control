@@ -6,6 +6,10 @@ All notable changes to this project are documented here. The format is based on 
 
 ## [Unreleased]
 
+### Fixed
+
+- The way Home and locking work on each device is kept in `state.json` instead of only in memory. After the daemon restarted, or another device was controlled meanwhile, the first Home on a device where IOHID's Home doesn't work tried it, waited 2 s for the home screen and pressed again: 4.4 s instead of 0.8 on an iPad mini 5.
+
 ## [0.2.6] - 2026-11-14
 
 ### Added

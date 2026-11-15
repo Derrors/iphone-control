@@ -66,6 +66,27 @@ pub struct Persisted {
     /// 不重新启动；关掉实验开关后据此结束它（不然它一直占着 8100 端口，新 runner 的 HTTP 服务起不来）
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub detached_wda: Option<DetachedWda>,
+    /// Which way Home and locking work on each device, by UDID ([`Self::ways_for`]). Kept here, not only in memory:
+    /// after a restart or switching devices the first Home on an iPad mini 5 tried the way that doesn't work there,
+    /// waited 2 s for the home screen, then pressed again (4.4 s instead of 0.8)
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub button_ways: std::collections::BTreeMap<String, ButtonWays>,
+}
+
+/// Which way the buttons work on a device, learned when one way didn't and the other did. Unknown is `false` both
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ButtonWays {
+    /// Home through XCTest first: IOHID's didn't get to the home screen and XCTest's did (IOHID's Home hardly ever works
+    /// on an iPhone 18 Pro Max / iOS 27.2.1, nor from an app on an iPad mini 5 / iPadOS 26.7.3; an iPhone 12 mini is the
+    /// other way round). See `tools::keys::press_home`
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub home_via_xctest: bool,
+    /// Lock with WDA's `/wda/lock` first: the power key through IOHID didn't lock and WDA did. On an iPhone 15 Pro Max
+    /// (iOS 27.0.1) the power key doesn't work (the call hangs about 5 s, then 3 s more before falling back, about 10 s
+    /// a lock), `/wda/lock` takes about 2 s; an iPhone 18 Pro Max (iOS 27.2.1) is the other way round. See
+    /// `tools::keys::lock_order`
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub lock_via_wda: bool,
 }
 
 /// 后台启动的 WDA 进程
@@ -111,6 +132,26 @@ impl Persisted {
         self.screen_udid = Some(udid.to_owned());
         self.screens.insert(udid.to_owned(), size);
         changed
+    }
+
+    /// How the buttons work on `udid` (`None`: no device), as learned so far
+    pub fn ways_for(&self, udid: Option<&str>) -> ButtonWays {
+        udid.and_then(|u| self.button_ways.iter().find(|(k, _)| k.eq_ignore_ascii_case(u)).map(|(_, w)| *w))
+            .unwrap_or_default()
+    }
+
+    /// Changes what is known of `udid`'s buttons with `f`; whether anything changed (then save)
+    pub fn record_ways(&mut self, udid: &str, f: impl FnOnce(&mut ButtonWays)) -> bool {
+        let key =
+            self.button_ways.keys().find(|k| k.eq_ignore_ascii_case(udid)).cloned().unwrap_or_else(|| udid.to_owned());
+        let before = self.button_ways.get(&key).copied().unwrap_or_default();
+        let mut now = before;
+        f(&mut now);
+        if now == before {
+            return false;
+        }
+        self.button_ways.insert(key, now);
+        true
     }
 
     /// 记下这次重签的结果：新字段，加上旧版本认的中文整句
@@ -318,13 +359,6 @@ pub(crate) struct PerDevice {
     pub ddi_failures: u32,
     /// 最近一次经本进程锁屏的时间（自动解锁要等锁屏过渡走完，见 [`crate::tools::LOCK_SETTLE`]）
     pub last_lock: Option<Instant>,
-    /// 这台手机上 Home 先用 XCTest 的：上一次 IOHID 的没回到主屏、XCTest 的回到了（iPhone 18 Pro Max /
-    /// iOS 27.2.1 上 IOHID 的 Home 基本不起作用）。iPhone 12 mini 正相反，所以按设备记，见 `tools::keys::press_home`
-    pub home_via_xctest: bool,
-    /// 这台手机上锁屏先用 WDA 的 `/wda/lock`：上一次经 IOHID 短按电源键没锁上、WDA 的锁上了。iPhone 15 Pro Max
-    /// （iOS 27.0.1）上短按电源键不起作用（调用卡约 5 秒，再等 3 秒才退回，一次锁屏约 10 秒），`/wda/lock` 约 2 秒；
-    /// iPhone 18 Pro Max（iOS 27.2.1）正相反，所以按设备记，见 `tools::keys::lock_order`
-    pub lock_via_wda: bool,
     /// The orientation of the finger the web viewer is moving (`Request::Touch`), worked out when it touched down
     pub touch_rotation: Option<Rotation>,
     pub apps: HashMap<bool, Vec<AppInfo>>,

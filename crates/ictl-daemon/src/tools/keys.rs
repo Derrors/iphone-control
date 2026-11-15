@@ -22,7 +22,7 @@ impl Daemon {
             Button::VolumeDown => "volumeDown",
         };
         self.ensure_unlocked(g).await?;
-        let xctest_first = g.dev.home_via_xctest;
+        let xctest_first = ways(g).home_via_xctest;
         if let Some(w) = self.wda(g) {
             // Home 在系统弹窗（定位、通知权限等）挡着时不生效，WDA 却照样返回成功。弹窗属于 SpringBoard，
             // 看前台 App 发现不了，要单独查；按之前查（App 静止时约 0.4 秒，按下后动画中查要好几秒）
@@ -59,7 +59,7 @@ impl Daemon {
                 ));
             }
             if let Some(via_xctest) = home_worked {
-                g.dev.home_via_xctest = via_xctest;
+                self.learn(g, |w| w.home_via_xctest = via_xctest);
             }
             match r {
                 Ok(text) => return Ok(text),
@@ -72,7 +72,7 @@ impl Daemon {
     }
 
     pub(super) async fn lock_screen(&self, g: &mut Inner) -> crate::error::Result<String> {
-        let via_wda = g.dev.lock_via_wda;
+        let via_wda = ways(g).lock_via_wda;
         // Ok(way)：用 way 锁上了；Err：WDA 两种办法没锁上的原因（WDA 不可用时为空），退到 HID
         let outcome = match self.wda(g) {
             Some(w) => {
@@ -122,17 +122,30 @@ impl Daemon {
                     )
                 });
             }
-            g.dev.lock_via_wda = wda;
+            self.learn(g, |w| w.lock_via_wda = wda);
             return self.locked_now(g);
         }
         self.hid_do(g, |h| Box::pin(h.press(Button::Lock))).await?;
         self.locked_now(g)
     }
 
+    /// Records how a button works on the current device, in `state.json` ([`crate::core::Persisted::button_ways`])
+    fn learn(&self, g: &mut Inner, f: impl FnOnce(&mut crate::core::ButtonWays)) {
+        let Some(udid) = g.device.as_ref().map(|d| d.udid.clone()) else { return };
+        if g.persisted.record_ways(&udid, f) {
+            g.persisted.save(&self.cfg.state_file());
+        }
+    }
+
     pub(super) fn locked_now(&self, g: &mut Inner) -> crate::error::Result<String> {
         g.dev.last_lock = Some(Instant::now());
         Ok(ictl_l10n::tr!("已锁屏", "Locked").into())
     }
+}
+
+/// What is known of the current device's buttons ([`crate::core::Persisted::ways_for`])
+fn ways(g: &Inner) -> crate::core::ButtonWays {
+    g.persisted.ways_for(g.device.as_ref().map(|d| d.udid.as_str()))
 }
 
 /// 按 Home，等主屏真的到前台再说「已按」（紧接着查状态时前台不再是旧 App）。
@@ -205,7 +218,7 @@ pub(super) enum LockWay {
 }
 
 /// 先试哪种：默认先经 IOHID 短按电源键（iPhone 18 Pro Max 上 `/wda/lock` 按住 0.5 秒不认，很慢），
-/// 这台设备上记过 `lock_via_wda` 就先用 WDA 的（见 [`crate::core::PerDevice::lock_via_wda`]）。
+/// 这台设备上记过 `lock_via_wda` 就先用 WDA 的（见 [`crate::core::ButtonWays::lock_via_wda`]）。
 /// 先试的那种不灵，另一种照样会试，所以记错了（比如系统升级后）也只是慢一次
 pub(super) fn lock_order(via_wda: bool) -> [LockWay; 2] {
     if via_wda { [LockWay::Wda, LockWay::PowerKey] } else { [LockWay::PowerKey, LockWay::Wda] }

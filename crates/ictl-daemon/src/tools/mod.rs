@@ -376,7 +376,18 @@ mod tests {
     fn lock_order_follows_what_worked_on_this_device() {
         assert_eq!(lock_order(false), [LockWay::PowerKey, LockWay::Wda]);
         assert_eq!(lock_order(true), [LockWay::Wda, LockWay::PowerKey]);
-        assert!(!crate::core::PerDevice::default().lock_via_wda, "a new device starts with the power key");
+        let mut p = crate::core::Persisted::default();
+        assert!(!p.ways_for(Some("A")).lock_via_wda, "a new device starts with the power key");
+        assert!(p.record_ways("A", |w| w.lock_via_wda = true));
+        assert!(!p.record_ways("a", |w| w.lock_via_wda = true), "the same device, nothing new");
+        assert!(
+            p.ways_for(Some("a")).lock_via_wda && !p.ways_for(Some("B")).lock_via_wda && !p.ways_for(None).lock_via_wda
+        );
+        // kept in state.json; an older one without it reads as nothing known
+        let back: crate::core::Persisted = serde_json::from_str(&serde_json::to_string(&p).unwrap()).unwrap();
+        assert_eq!(back.ways_for(Some("A")), p.ways_for(Some("A")));
+        let old: crate::core::Persisted = serde_json::from_str(r#"{"team_id":null,"selected_udid":null}"#).unwrap();
+        assert!(old.button_ways.is_empty());
     }
 
     #[tokio::test]

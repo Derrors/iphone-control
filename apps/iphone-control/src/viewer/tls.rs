@@ -176,7 +176,7 @@ fn ensure_made(dir: &Path, names: &[String], now: u64) -> anyhow::Result<(Vec<u8
         }
     }
     let not_after = now + VALID_DAYS * DAY;
-    let mut p = rcgen::CertificateParams::new(all.clone());
+    let mut p = rcgen::CertificateParams::new(all.clone())?;
     let (y, m, d) = ymd(now.saturating_sub(DAY));
     p.not_before = rcgen::date_time_ymd(y, m, d);
     let (y, m, d) = ymd(not_after);
@@ -186,8 +186,10 @@ fn ensure_made(dir: &Path, names: &[String], now: u64) -> anyhow::Result<(Vec<u8
     p.extended_key_usages = vec![rcgen::ExtendedKeyUsagePurpose::ServerAuth];
     // a new certificate under the same name gets a new serial number (Firefox refuses a reused one)
     p.serial_number = Some(rcgen::SerialNumber::from(now.max(1)));
-    let cert = rcgen::Certificate::from_params(p)?;
-    let (c, k) = (cert.serialize_pem()?.into_bytes(), cert.serialize_private_key_pem().into_bytes());
+    // ECDSA P-256, the same key type rcgen 0.12 made
+    let key = rcgen::KeyPair::generate()?;
+    let cert = p.self_signed(&key)?;
+    let (c, k) = (cert.pem().into_bytes(), key.serialize_pem().into_bytes());
     write_private(dir, &key_f, &k)?;
     std::fs::write(&cert_f, &c)?;
     std::fs::write(&meta_f, serde_json::to_vec_pretty(&Made { names: all, not_after })?)?;

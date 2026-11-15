@@ -51,7 +51,7 @@ CI 已经确认项目在 macOS（Apple Silicon）上能编译、链接，单元�
 
 ```bash
 xcode-select --install            # 命令行工具：C 编译器、git（已装会提示）
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh   # Rust，1.88 以上即可
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh   # Rust，1.89 以上即可
 git clone https://github.com/Derrors/iphone-control && cd iphone-control
 cargo install --path apps/iphone-control --locked --features debug-cmds   # 装到 ~/.cargo/bin/iphone-control；第 2 步和第 4 步 D 的 debug 命令要这个 feature
 iphone-control --version

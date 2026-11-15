@@ -70,9 +70,17 @@ fn receipt_file(r: &Receipt, exe: &Path) -> Result<File> {
 }
 
 fn hash(mut file: File) -> Result<String> {
+    use std::io::Read;
+    // sha2 0.11's hasher isn't an io::Write any more (that moved to the digest-io crate): read in chunks
     let mut hasher = Sha256::new();
-    std::io::copy(&mut file, &mut hasher)?;
-    Ok(format!("{:x}", hasher.finalize()))
+    let mut buf = vec![0; 64 * 1024];
+    loop {
+        match file.read(&mut buf)? {
+            0 => break,
+            n => hasher.update(&buf[..n]),
+        }
+    }
+    Ok(super::hex(&hasher.finalize()))
 }
 
 pub fn digest(path: &Path) -> Result<String> {

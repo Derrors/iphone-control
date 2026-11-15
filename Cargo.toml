@@ -19,8 +19,8 @@ exclude = ["vendor"]
 [workspace.package]
 version = "0.2.6"
 edition = "2024"
-# rmcp 3.8 要求 1.88；Impactor/idevice 用 edition 2024
-rust-version = "1.88"
+# uuid 1.29 要求 1.89（rmcp 3.10、rcgen 0.14、sha2 0.11、zip 9.5 要求 1.88）；Impactor/idevice 用 edition 2024
+rust-version = "1.89"
 license = "MIT"
 publish = false
 repository = "https://github.com/Derrors/iphone-control"
@@ -51,7 +51,7 @@ idevice = { version = "=0.1.68", default-features = false, features = [
     "crashreportcopymobile",
 ] }
 # transport-streamable-http-server：控制台的 /mcp（MCP over HTTP）
-rmcp = { version = "=3.8.0", features = ["server", "transport-io", "transport-streamable-http-server"] }
+rmcp = { version = "=3.10.0", features = ["server", "transport-io", "transport-streamable-http-server"] }
 http = "=1.5.0"
 http-body-util = "=0.1.5"
 bytes = "=1.12.1"
@@ -61,12 +61,12 @@ reqwest = { version = "=0.13.5", default-features = false, features = ["form", "
 rustls = { version = "=0.23.46", default-features = false, features = ["ring"] }
 # 控制台的 HTTPS（viewer --lan）：两者已经在依赖树里（idevice、reqwest、plume_core），同样只用 ring
 tokio-rustls = { version = "=0.26.6", default-features = false, features = ["ring"] }
-rcgen = "=0.12.1"
+rcgen = { version = "=0.14.10", default-features = false, features = ["ring", "pem"] }
 quick-xml = "=0.42.0"
 image = { version = "=0.25.10", default-features = false, features = ["png", "jpeg"] }
 clap = { version = "=4.6.7", features = ["derive", "env"] }
 clap_complete = "=4.6.11"
-console = "=0.15.11"
+console = "=0.16.6"
 termion = "=4.0.6"
 serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = "=1.0.154"
@@ -76,14 +76,14 @@ tracing-subscriber = { version = "=0.3.23", features = ["env-filter"] }
 base64 = "=0.23.1"
 anyhow = "=1.0.104"
 plist = "=1.10.3"
-uuid = { version = "=1.26.1", features = ["v4"] }
+uuid = { version = "=1.29.2", features = ["v4"] }
 # 和 plume_core 同一份：比对证书和本机签名私钥的公钥（ictl-sign）
 rsa = "=0.9.10"
 x509-certificate = "=0.24.0"
-zip = { version = "=9.4.1", default-features = false, features = ["deflate"] }
+zip = { version = "=9.5.1", default-features = false, features = ["deflate"] }
 regex = "=1.13.1"
 libc = "=0.2.191"
-sha2 = "=0.10.9"
+sha2 = "=0.11.1"
 
 # vendored Impactor 组件（见 THIRD_PARTY.md）
 plume_core = { path = "vendor/plume_core" }

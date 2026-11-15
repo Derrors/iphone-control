@@ -13,7 +13,7 @@ Most of the code comments, design documents and commit messages in this reposito
 
 ## Building and testing without a phone
 
-You need Rust 1.88 or later (CI pins 1.99.1) and a C compiler. Everything except the device tests runs offline:
+You need Rust 1.89 or later (CI pins 1.99.1) and a C compiler. Everything except the device tests runs offline:
 
 ```bash
 # --all-features also builds the debug-cmds feature, as CI does

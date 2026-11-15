@@ -36,7 +36,7 @@ pub async fn ensure(dest: &Path) -> Result<(), String> {
         .bytes()
         .await
         .map_err(|e| ictl_l10n::trf!("下载 WDA 失败：{e}", "Downloading WDA failed: {e}"))?;
-    let got = format!("{:x}", Sha256::digest(&bytes));
+    let got: String = Sha256::digest(&bytes).iter().map(|b| format!("{b:02x}")).collect();
     if got != WDA_SHA256 {
         return Err(ictl_l10n::trf!(
             "下载的 WDA 校验和不对（{got}，应为 {WDA_SHA256}）",

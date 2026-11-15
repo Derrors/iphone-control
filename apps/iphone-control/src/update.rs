@@ -151,8 +151,13 @@ fn policy_file(repo: &str, exe: &Path, method: InstallMethod) -> PathBuf {
     // A verified keg is Cellar/formula/version/bin/iphone-control. Its formula
     // directory survives upgrades and still distinguishes separate installations.
     let installation = if method == InstallMethod::Homebrew { exe.ancestors().nth(3).unwrap_or(exe) } else { exe };
-    let id = Sha256::digest(installation.as_os_str().as_encoded_bytes());
-    crate::envfile::config_dir().join("updates").join(repo).join(format!("{id:x}.json"))
+    let id = hex(&Sha256::digest(installation.as_os_str().as_encoded_bytes()));
+    crate::envfile::config_dir().join("updates").join(repo).join(format!("{id}.json"))
+}
+
+/// Lowercase hex of a digest (sha2 0.11's output no longer formats with `{:x}`)
+pub(crate) fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 fn policy(repo: Option<&str>, exe: Option<&Path>, installation: &Installation) -> Result<Policy> {
@@ -629,6 +634,12 @@ impl fmt::Display for Report {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Same text as sha2 0.10's `{:x}`: the update policy file's name is made from it, a change would lose it
+    #[test]
+    fn digest_hex_is_lowercase_without_separators() {
+        assert_eq!(hex(&Sha256::digest(b"abc")), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+    }
 
     #[test]
     fn managed_guidance_explains_verification_before_installation() {

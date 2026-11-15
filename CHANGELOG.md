@@ -10,6 +10,12 @@ All notable changes to this project are documented here. The format is based on 
 
 - While WebDriverAgent is unavailable, `iphone_type_text` can enter Chinese and other text a US keyboard can't type: HID puts it on the phone's pasteboard (CoreDevice `pasteboardservice`, checked by reading it back) and presses Cmd-V, so the input method doesn't turn it into pinyin. iOS treats that text as coming from another app and asks “… would like to paste from dtpasteboardd” every time (iPhone 15 Pro Max, iOS 27.2.1, Notes); the answer says to take a screenshot and tap “Allow Paste”. Changing the pasteboard closes that prompt, so what was on it before is put back 45 s later (or before the next such paste, or when another device is chosen), and only if the pasted text is still there. Return isn't pressed with `submit`, since with the prompt up it would choose “Don't Allow Paste”. English letters and symbols are still typed as keys and don't touch the pasteboard.
 
+### Changed
+
+- Building from source needs Rust 1.89 (was 1.88), for uuid 1.29.
+- Dependencies updated: rmcp 3.10.0, rcgen 0.14.10, console 0.16.6, sha2 0.11.1, uuid 1.29.2, zip 9.5.1, flate2 1.1.11, and 26 indirect ones within their compatible versions (rustls-webpki, mio, openssl, webpki-roots and others). rcgen keeps to ring only (its default would also build aws-lc). The vendored plume_core makes its signing request with rcgen 0.14 and apple-codesign uses dialoguer 0.12, so each of rcgen and console is built once instead of in two versions. x509-certificate stays at 0.24 and rsa at 0.9: apple-codesign and its dependencies use those, and a newer copy of ours would only be built beside them. The control page's self-made HTTPS certificate is still ECDSA P-256; one made before keeps working.
+- CI: actions/setup-node 7, dorny/paths-filter 4. Website: vue 3.5.45.
+
 ### Fixed
 
 - A tap or swipe a minute or more after the last one no longer waits for the screen size to be measured again first: that takes WDA 0.95 s on an iPad mini 5 (iPadOS 26.7.3), where the first tap after a pause took 1.7 s instead of 0.9. The size is now measured again in the background while nobody acts (only Display Zoom changes it), and on rotation as before.

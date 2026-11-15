@@ -12,7 +12,7 @@
     <img src="https://img.shields.io/badge/iOS-17%2B-black?style=flat&logo=apple" alt="iOS">
     <img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS-0E7490?style=flat" alt="平台：Linux | macOS">
     <img src="https://img.shields.io/badge/MCP-17%20tools-8A2BE2?style=flat" alt="MCP">
-    <a href="Cargo.toml"><img src="https://img.shields.io/badge/Rust-1.88%2B-CE422B?style=flat&logo=rust&logoColor=white" alt="Rust"></a>
+    <a href="Cargo.toml"><img src="https://img.shields.io/badge/Rust-1.89%2B-CE422B?style=flat&logo=rust&logoColor=white" alt="Rust"></a>
     <a href="LICENSE"><img src="https://img.shields.io/github/license/Derrors/iphone-control?style=flat" alt="License"></a>
     <a href="https://m8ven.ai/mcp/derrors-iphone-control-1pcmse?s=readme"><img src="https://m8ven.ai/badge/mcp/derrors-iphone-control-1pcmse?variant=verified" alt="M8ven 已验证"></a>
   </p>

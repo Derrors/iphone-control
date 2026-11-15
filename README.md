@@ -59,7 +59,7 @@ Device control has two routes, picked by iOS version:
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="website/public/architecture-dark.svg">
-    <img src="website/public/architecture-light.svg" alt="Architecture: an MCP client talks to iphone-control mcp over stdio, which talks to the daemon over a Unix socket; the daemon drives the iPhone or iPad over USB, natively on iOS 27 and later and through WebDriverAgent below that" width="900">
+    <img src="website/public/architecture-light.svg" alt="Architecture: AI clients use iphone-control mcp over stdio, and the optional control page serves browsers and remote agents over HTTPS; both talk to the daemon over a Unix socket. The daemon is the core: it drives the iPhone or iPad over USB, natively on iOS 27 and later and through WebDriverAgent on iOS 17–26, and keeps running with the control page closed" width="900">
   </picture>
 </p>
 

@@ -59,7 +59,7 @@ iphone-control 在 Linux 或 macOS 上用**一个 Rust 二进制**把这些事�
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="website/public/architecture-dark.svg">
-    <img src="website/public/architecture-light.svg" alt="架构：MCP 客户端经 stdio 调用 iphone-control mcp，再经 Unix socket 交给守护进程；守护进程经 USB 操作 iPhone 或 iPad，iOS 27 起用原生控制，更低的版本用 WebDriverAgent" width="900">
+    <img src="website/public/architecture-light.svg" alt="架构：AI 客户端经 stdio 调用 iphone-control mcp，可选的控制台经 HTTPS 服务浏览器和远程 agent，两者都经 Unix socket 交给守护进程。守护进程是核心：经 USB 操作 iPhone 或 iPad，iOS 27 起用原生控制，iOS 17–26 用 WebDriverAgent，控制台关着也照常运行" width="900">
   </picture>
 </p>
 

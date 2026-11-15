@@ -15,8 +15,8 @@ iphone-control 让 AI agent（例如 Claude）操作一台用数据线接在 Lin
 
 ## 怎么工作
 
-![架构：MCP 客户端经 stdio 调用 iphone-control mcp，再经 Unix socket 交给守护进程；守护进程经 USB 操作 iPhone 或 iPad，iOS 27 起用原生控制，更低的版本用 WebDriverAgent](/architecture-light.svg){.light-only}
-![架构：MCP 客户端经 stdio 调用 iphone-control mcp，再经 Unix socket 交给守护进程；守护进程经 USB 操作 iPhone 或 iPad，iOS 27 起用原生控制，更低的版本用 WebDriverAgent](/architecture-dark.svg){.dark-only}
+![架构：AI 客户端经 stdio 调用 iphone-control mcp，可选的控制台经 HTTPS 服务浏览器和远程 agent，两者都经 Unix socket 交给守护进程。守护进程是核心：经 USB 操作 iPhone 或 iPad，iOS 27 起用原生控制，iOS 17–26 用 WebDriverAgent，控制台关着也照常运行](/architecture-light.svg){.light-only}
+![架构：AI 客户端经 stdio 调用 iphone-control mcp，可选的控制台经 HTTPS 服务浏览器和远程 agent，两者都经 Unix socket 交给守护进程。守护进程是核心：经 USB 操作 iPhone 或 iPad，iOS 27 起用原生控制，iOS 17–26 用 WebDriverAgent，控制台关着也照常运行](/architecture-dark.svg){.dark-only}
 
 - **守护进程**常驻，独占手机：配对、挂载开发者镜像、建立隧道，然后按 iOS 版本选一条路线操作手机：
   - **iOS 27 及以上：原生控制（默认）。** 读界面用系统的无障碍服务，点击、滑动、按键走 CoreDevice HID，启动 App 走 CoreDevice。手机上什么都不装，不用 Apple ID，几秒就绪。

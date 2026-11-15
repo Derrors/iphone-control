@@ -121,6 +121,14 @@ pub fn next_snapshot_level(level: usize, took: Option<Duration>) -> usize {
     }
 }
 
+/// WDA 判断前台 App 用的点（见 [`WdaClient::move_detection_point`]）：横竖屏都在屏幕里、在通知横幅和灵动岛底下。
+/// 取短边的一半，横竖都一样：竖屏在屏幕上部偏中间（430×932 的 iPhone 上是 (215, 215)，横幅最低到 125 左右），
+/// 横屏在中间偏左
+pub fn detection_point(screen: ScreenSize) -> (u32, u32) {
+    let half = (screen.width.min(screen.height) / 2.0).round() as u32;
+    (half, half)
+}
+
 /// 改变手机状态的请求：没有应答时要结束会话，免得它和排在它后面的请求过一阵才执行（见 [`WdaClient::in_session`]）。
 /// 读的请求（GET、`POST /elements` 找元素）不算：排在读后面的东西不会动手机，结束会话只会让下一次开会话也排到它后面
 fn acts(method: &str, path: &str) -> bool {
@@ -204,6 +212,8 @@ pub struct WdaClient<T> {
     snapshot_applied: Option<usize>,
     /// 上一次读到的元素树用的上限（[`Self::snapshot_note`]）
     snapshot_read: usize,
+    /// WDA 判断前台 App 的点已经挪过（[`Self::detection_point`]）。这个值在 WDA 进程里一直有效，换会话也不重置
+    detection_point_set: bool,
 }
 
 impl<T: Transport> WdaClient<T> {
@@ -222,6 +232,7 @@ impl<T: Transport> WdaClient<T> {
             snapshot_level: 0,
             snapshot_applied: None,
             snapshot_read: 0,
+            detection_point_set: false,
         }
     }
 
@@ -686,7 +697,29 @@ impl<T: Transport> WdaClient<T> {
     /// 元素树，带上「谁盖住谁」「有没有加载圈」等信息
     pub async fn tree(&mut self) -> Result<elements::Tree> {
         let view = self.view().await?;
+        self.move_detection_point(view.screen).await;
         Ok(elements::parse_tree(&self.source_xml().await?, view))
+    }
+
+    /// 把 WDA 判断前台 App 的点（appium setting `activeAppDetectionPoint`）挪到 [`detection_point`]，每个客户端做一次。
+    ///
+    /// WDA 读元素树、问前台 App 时，看屏幕上这个点下面的元素属于哪个进程。默认点在离左上角短边 20% 的地方
+    /// （WDA 16.15.3 `FBActiveAppDetectionPoint`，430 点宽的 iPhone 上是 (86, 86)），正好在通知横幅底下：横幅弹着时
+    /// 读到的是 SpringBoard 的树，按名字点 App 里的按钮就找不到（iPhone16,2 / iOS 27.2.1 的备忘录，「Device Hub」横幅）。
+    /// 设不上不影响读树，只是还用默认的点；连不上 WDA 时下次再试
+    async fn move_detection_point(&mut self, screen: ScreenSize) {
+        if self.detection_point_set {
+            return;
+        }
+        let (x, y) = detection_point(screen);
+        let body = json!({"settings": {"activeAppDetectionPoint": format!("{x},{y}")}});
+        match self.post("/appium/settings", body).await {
+            Ok(_) => self.detection_point_set = true,
+            Err(e) => {
+                tracing::debug!("activeAppDetectionPoint: {e}");
+                self.detection_point_set = !matches!(e, WdaError::Unavailable(_));
+            }
+        }
     }
 
     /// 点击：一个 W3C actions 单指手势（按下 50ms），期间把等待设置临时调小。真机计时（iOS 27）：
@@ -1596,5 +1629,35 @@ mod tests {
         assert_eq!(sent[5], "POST /session/A/appium/settings");
         assert_eq!(t.body(5)["settings"]["snapshotMaxChildren"], i32::MAX);
         assert_eq!(sent.len(), 8, "the last read needs no settings: {sent:?}");
+    }
+
+    #[test]
+    fn the_detection_point_is_below_banners_in_either_orientation() {
+        assert_eq!(detection_point(ScreenSize { width: 430.0, height: 932.0 }), (215, 215));
+        assert_eq!(detection_point(ScreenSize { width: 932.0, height: 430.0 }), (215, 215));
+        assert_eq!(detection_point(ScreenSize { width: 744.0, height: 1133.0 }), (372, 372));
+    }
+
+    /// 第一次读元素树时挪一次判断前台 App 的点，之后不再设
+    #[tokio::test]
+    async fn the_first_tree_read_moves_the_detection_point_once() {
+        let xml = r#"{"value":"<XCUIElementTypeApplication/>"}"#;
+        let t = Script::new(vec![
+            ok(r#"{"value":{"screenSize":{"width":430,"height":932}}}"#),
+            ok(r#"{"sessionId":"A"}"#),
+            ok(r#"{"value":"PORTRAIT"}"#),
+            ok(r#"{"value":null}"#),
+            ok(xml),
+            ok(r#"{"value":"PORTRAIT"}"#),
+            ok(xml),
+        ]);
+        let mut c = WdaClient::new(&t);
+        c.tree().await.unwrap();
+        c.tree().await.unwrap();
+        let sent = t.sent();
+        assert_eq!(sent[3], "POST /session/A/appium/settings", "{sent:?}");
+        assert_eq!(t.body(3)["settings"], json!({"activeAppDetectionPoint": "215,215"}));
+        assert_eq!(sent.len(), 7, "{sent:?}");
+        assert!(sent[6].starts_with("GET /source?"));
     }
 }

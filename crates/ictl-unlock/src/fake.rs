@@ -194,7 +194,12 @@ impl FakeLockScreen {
             ("GET", "/appium/settings") => json!({"waitForIdleTimeout": s.idle.0, "animationCoolOffTimeout": s.idle.1}),
             ("POST", "/appium/settings") => {
                 let b = &body.unwrap()["settings"];
-                s.idle = (b["waitForIdleTimeout"].as_f64().unwrap(), b["animationCoolOffTimeout"].as_f64().unwrap());
+                // other settings (the active app detection point) leave the wait settings as they are
+                if let (Some(idle), Some(cool)) =
+                    (b["waitForIdleTimeout"].as_f64(), b["animationCoolOffTimeout"].as_f64())
+                {
+                    s.idle = (idle, cool);
+                }
                 Value::Null
             }
             // iOS 27：Home 只唤醒/收起键，半截输入还在，键盘界面也还在（键隐藏但仍能按）

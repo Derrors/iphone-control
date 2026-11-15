@@ -57,8 +57,28 @@ pub const THUMB_H: u32 = 104;
 pub fn thumbnail(png: &[u8]) -> Result<Vec<u8>, String> {
     let img = image::load_from_memory(png)
         .map_err(|e| ictl_l10n::trf!("截图解码失败：{e}", "Decoding the screenshot failed: {e}"))?;
+    Ok(thumb_of(&img))
+}
+
+fn thumb_of(img: &DynamicImage) -> Vec<u8> {
     // 最近邻足够：只比较前后两帧，不看画质；比三角滤波快一个数量级
-    Ok(img.resize_exact(THUMB_W, THUMB_H, FilterType::Nearest).into_luma8().into_raw())
+    img.resize_exact(THUMB_W, THUMB_H, FilterType::Nearest).into_luma8().into_raw()
+}
+
+/// 截图工具的回答（整屏或区域放大，见 [`full_screen`]、[`region`]）和整屏的指纹，只解码一次。
+/// 指纹记下来，下一个操作做完后比较画面变没变
+pub fn answer(
+    png: &[u8],
+    screen: ScreenSize,
+    rect: Option<(f64, f64, f64, f64)>,
+    via: &str,
+) -> Result<(Vec<u8>, String, Vec<u8>), String> {
+    let img = decode(png)?;
+    let (jpeg, caption) = match rect {
+        None => full_screen_of(&img, screen, via)?,
+        Some(r) => region_of(&img, screen, r, via)?,
+    };
+    Ok((jpeg, caption, thumb_of(&img)))
 }
 
 /// 两个指纹的平均逐像素差（0～255）。尺寸不同算完全不同
@@ -118,7 +138,10 @@ pub fn thumb_motion(a: &[u8], b: &[u8]) -> Motion {
 
 /// 整屏缩放到点尺寸：图像像素即点坐标。返回 (jpeg, 说明文字)
 pub fn full_screen(png: &[u8], screen: ScreenSize, via: &str) -> Result<(Vec<u8>, String), String> {
-    let img = decode(png)?;
+    full_screen_of(&decode(png)?, screen, via)
+}
+
+fn full_screen_of(img: &DynamicImage, screen: ScreenSize, via: &str) -> Result<(Vec<u8>, String), String> {
     let (w, h) = oriented(img.width(), img.height(), screen);
     let out = jpeg(&img.resize_exact(w, h, filter_for((img.width(), img.height()), (w, h))), 80)?;
     Ok((
@@ -177,7 +200,15 @@ pub fn region(
     rect: (f64, f64, f64, f64),
     via: &str,
 ) -> Result<(Vec<u8>, String), String> {
-    let img = decode(png)?;
+    region_of(&decode(png)?, screen, rect, via)
+}
+
+fn region_of(
+    img: &DynamicImage,
+    screen: ScreenSize,
+    rect: (f64, f64, f64, f64),
+    via: &str,
+) -> Result<(Vec<u8>, String), String> {
     let p = plan_zoom(img.width(), img.height(), screen, rect.0, rect.1, rect.2, rect.3)?;
     let (cx, cy, cw, ch) = p.crop;
     let mut crop = img.crop_imm(cx, cy, cw, ch);

@@ -71,7 +71,7 @@ pub const BATCH_TOOLS: [&str; 11] = [
 fn then_props() -> Value {
     json!({
         "then": {"type": "string", "enum": ["none", "elements", "screenshot"], "default": "none",
-                 "description": ictl_l10n::tr!("操作后等界面稳定,再顺带返回界面:elements=元素列表(最多 80 个),screenshot=截图。省一次单独的调用", "After the action, wait for the screen to settle and return it: elements = element list (up to 80), screenshot = screenshot. Saves a separate call")},
+                 "description": ictl_l10n::tr!("操作后等界面稳定,再顺带返回界面:elements=元素列表(最多 80 个),screenshot=截图。省一次单独的调用。操作前看过界面(截图、读元素)时,还会说明和操作前相比界面变没变;没变说明操作可能没生效", "After the action, wait for the screen to settle and return it: elements = element list (up to 80), screenshot = screenshot. Saves a separate call. If the screen was looked at before the action (screenshot, element list), it also says whether the screen changed since; no change means the action may not have taken effect")},
         "then_filter": {"type": "string", "default": "", "description": ictl_l10n::tr!("then=elements 时只列包含这段文字的元素", "With then=elements: only list elements containing this text")},
         "then_region": {"type": "array", "items": {"type": "number"}, "minItems": 4, "maxItems": 4,
                         "description": ictl_l10n::tr!("then=screenshot 时只返回这块区域的放大图 [x, y, width, height](点),例如游戏棋盘", "With then=screenshot: only return this region, enlarged, as [x, y, width, height] (points), e.g. a game board")},

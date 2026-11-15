@@ -22,6 +22,7 @@ use crate::imaging::{self, fmt_g};
 use crate::notify::Event;
 use crate::protocol::{ALERT_BLOCKING, Response, TAP_MISSED, TouchPhase};
 use crate::protocol::{ElementData, StatusData};
+pub(crate) use observe::Seen;
 use observe::*;
 
 /// 锁屏后至少等这么久再自动解锁：锁屏过渡没走完就唤醒，WDA 第一下上滑卡约 16 秒后报 `point.x != INFINITY`
@@ -305,14 +306,13 @@ impl Daemon {
         // 解码、缩放、JPEG 编码是 CPU 活（1290×2796），放到阻塞线程，不卡住主循环
         // 说明文字在阻塞线程里生成：带上这个请求的语言
         let lang = ictl_l10n::lang();
-        let (jpeg, caption) = tokio::task::spawn_blocking(move || {
-            ictl_l10n::with_lang(lang, || match region {
-                None => imaging::full_screen(&png, screen, via),
-                Some(r) => imaging::region(&png, screen, r, via),
-            })
+        let (jpeg, caption, thumb) = tokio::task::spawn_blocking(move || {
+            ictl_l10n::with_lang(lang, || imaging::answer(&png, screen, region, via))
         })
         .await
         .map_err(|e| ictl_l10n::trf!("图像处理任务异常：{e}", "Image processing task failed: {e}"))??;
+        // 区域放大也记整屏：下一个操作做完后比的是整个画面
+        g.dev.seen.saw_thumb(thumb);
         Ok(Response::Image { jpeg_base64: base64::engine::general_purpose::STANDARD.encode(jpeg), caption })
     }
 }
@@ -364,6 +364,53 @@ mod tests {
     use super::input::*;
     use super::keys::*;
     use super::*;
+
+    /// 操作前后的界面：树比树，没有树比画面，什么都没有不说
+    #[test]
+    fn screen_change_is_judged_by_tree_then_picture() {
+        use super::observe::{Change, Seen, compare};
+        let tree = |label: &str, y: i64| {
+            let xml = format!(
+                r#"<XCUIElementTypeApplication type="XCUIElementTypeApplication" label="A" x="0" y="0" width="430" height="932"><XCUIElementTypeButton type="XCUIElementTypeButton" label="{label}" x="20" y="{y}" width="100" height="44"/></XCUIElementTypeApplication>"#
+            );
+            elements::parse_tree(
+                &xml,
+                elements::View { screen: ScreenSize { width: 430.0, height: 932.0 }, orientation: None },
+            )
+        };
+        let mut before = Seen::default();
+        before.saw_tree(&tree("确定", 100));
+        assert_eq!(compare(&before, Some(&tree("确定", 102)), None), Change::Same, "moved within the tolerance");
+        assert_eq!(compare(&before, Some(&tree("确定", 300)), None), Change::Changed);
+        assert_eq!(compare(&before, Some(&tree("取消", 100)), None), Change::Changed);
+        // no tree after (a game, a map): the picture, if one was taken before
+        assert_eq!(compare(&before, None, Some(&[0u8; 10])), Change::Unknown);
+        let n = (imaging::THUMB_W * imaging::THUMB_H) as usize;
+        let mut pic = Seen::default();
+        pic.saw_thumb(vec![200; n]);
+        assert_eq!(compare(&pic, None, Some(&vec![200; n])), Change::Same);
+        // one small area changed (a switch flipped): the mean hardly moves, the tile does
+        let mut flipped = vec![200u8; n];
+        for y in 0..8 {
+            for x in 0..8 {
+                flipped[y * imaging::THUMB_W as usize + x] = 40;
+            }
+        }
+        assert_eq!(compare(&pic, None, Some(&flipped)), Change::Changed);
+        assert_eq!(compare(&Seen::default(), Some(&tree("确定", 100)), None), Change::Unknown);
+        assert!(super::observe::change_text(Change::Unknown).is_empty());
+    }
+
+    /// 太久以前看过的界面不拿来比；拿走以后就没了
+    #[test]
+    fn seen_screens_are_taken_once() {
+        use super::observe::Seen;
+        let mut s = Seen::default();
+        assert!(s.take_fresh().is_none());
+        s.saw_thumb(vec![1]);
+        assert!(s.take_fresh().is_some());
+        assert!(s.take_fresh().is_none());
+    }
 
     /// 默认先短按电源键；记过这台设备上它不灵，就先用 WDA 的。两种都会试
     #[test]

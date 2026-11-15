@@ -42,6 +42,11 @@ pub trait Screen {
     async fn elements(&mut self) -> std::result::Result<Vec<elements::Element>, WdaError>;
     /// The passcode field's (total, entered) digits ([`WdaClient::passcode_field`])
     async fn passcode_field(&mut self) -> std::result::Result<Option<(u32, u32)>, WdaError>;
+    /// Reading the screen is cheap even while it animates: after the swipe up the keypad is looked for every 0.2 s
+    /// instead of waiting [`Timing::swipe_settle`] out. Not through WDA, whose queries wait for the animations (#3)
+    fn reads_cheaply(&self) -> bool {
+        false
+    }
 }
 
 impl<T: Transport> Screen for WdaClient<T> {
@@ -293,7 +298,20 @@ async fn unlock<D: Screen>(wda: &mut D, cfg: &UnlockConfig, code: &[u8]) -> Resu
             }
             Err(other) => return Err(other.into()),
         };
-        tokio::time::sleep(t.swipe_settle).await;
+        if wda.reads_cheaply() {
+            let deadline = tokio::time::Instant::now() + t.swipe_settle;
+            loop {
+                tokio::time::sleep(t.poll.min(Duration::from_millis(200))).await;
+                let els = wda.elements().await?;
+                if (elements::keypad(&els).is_some() && elements::passcode_field(&els).is_some())
+                    || tokio::time::Instant::now() >= deadline
+                {
+                    break;
+                }
+            }
+        } else {
+            tokio::time::sleep(t.swipe_settle).await;
+        }
         let check = wda.check_lock(None, false).await?;
         // 按过 Home、上滑之后还是认不出的锁屏样式界面：不算解开，接着找键盘（找不到就重来一轮）
         if !check.locked && !check.uncertain {
@@ -476,6 +494,57 @@ mod tests {
             poll: Duration::from_millis(1),
         };
         (UnlockConfig { passcode_file: dir.join("passcode"), disabled_flag: dir.join("UNLOCK-DISABLED"), timing }, dir)
+    }
+
+    #[tokio::test]
+    async fn a_screen_read_cheaply_finds_the_keypad_without_waiting_it_out() {
+        /// The fake WDA, read as cheaply as natively (`reads_cheaply`)
+        struct Cheap<'a, T: Transport>(&'a mut WdaClient<T>);
+        impl<T: Transport> Screen for Cheap<'_, T> {
+            async fn reports_locked(&mut self) -> std::result::Result<bool, WdaError> {
+                Screen::reports_locked(self.0).await
+            }
+            fn lock_state_trusted(&self) -> bool {
+                Screen::lock_state_trusted(self.0)
+            }
+            async fn check_lock(&mut self, r: Option<bool>, s: bool) -> std::result::Result<LockCheck, WdaError> {
+                Screen::check_lock(self.0, r, s).await
+            }
+            async fn quick_waits(&mut self) -> std::result::Result<Option<IdleSettings>, WdaError> {
+                Screen::quick_waits(self.0).await
+            }
+            async fn restore_waits(&mut self, to: IdleSettings) -> std::result::Result<(), WdaError> {
+                Screen::restore_waits(self.0, to).await
+            }
+            async fn press_home(&mut self, round: u32) -> std::result::Result<(), WdaError> {
+                Screen::press_home(self.0, round).await
+            }
+            async fn view(&mut self) -> std::result::Result<elements::View, WdaError> {
+                Screen::view(self.0).await
+            }
+            async fn swipe(&mut self, f: (f64, f64), t: (f64, f64), ms: u64) -> std::result::Result<(), WdaError> {
+                Screen::swipe(self.0, f, t, ms).await
+            }
+            async fn tap(&mut self, x: f64, y: f64, ms: u64) -> std::result::Result<(), WdaError> {
+                Screen::tap(self.0, x, y, ms).await
+            }
+            async fn elements(&mut self) -> std::result::Result<Vec<elements::Element>, WdaError> {
+                Screen::elements(self.0).await
+            }
+            async fn passcode_field(&mut self) -> std::result::Result<Option<(u32, u32)>, WdaError> {
+                Screen::passcode_field(self.0).await
+            }
+            fn reads_cheaply(&self) -> bool {
+                true
+            }
+        }
+        let fake = FakeLockScreen::new("123456");
+        let (cfg, dir) = cfg(Some("123456\n"));
+        let mut wda = WdaClient::new(&fake);
+        assert_eq!(ensure_unlocked(&mut Cheap(&mut wda), &cfg).await.unwrap(), Outcome::Unlocked);
+        assert!(!fake.state().locked);
+        assert!(!cfg.disabled_flag.exists());
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[tokio::test]

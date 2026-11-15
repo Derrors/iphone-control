@@ -22,6 +22,10 @@ const REACT: Duration = Duration::from_millis(400);
 const PASTE_WAIT: Duration = Duration::from_secs(5);
 /// How long an app may take to come to the front
 const LAUNCH_WAIT: Duration = Duration::from_secs(8);
+/// Home is answered no sooner than this after it was pressed: what it closes on the home screen animates meanwhile
+const HOME_ANIMATION: Duration = Duration::from_millis(600);
+/// After Home, how long the screen takes to wake before the swipe up (WDA's 1 s covers its slow queries)
+const NATIVE_WAKE_SETTLE: Duration = Duration::from_millis(500);
 /// After unlocking, the lock screen slides away for about half a second
 const UNLOCK_SETTLE: Duration = Duration::from_millis(700);
 /// The app's zoom-in takes about half a second; a tap during it is lost (the same as WDA's `LAUNCH_MIN`)
@@ -61,12 +65,23 @@ impl Daemon {
         g: &mut Inner,
         wait: Duration,
     ) -> crate::error::Result<(String, ScreenSize, i64)> {
+        self.ax_read_with(g, wait, true).await
+    }
+
+    /// [`Self::ax_read`], SpringBoard's elements over the app left out unless `overlays` (they don't tell whether a
+    /// list has stopped, and reading them takes as long again)
+    async fn ax_read_with(
+        &self,
+        g: &mut Inner,
+        wait: Duration,
+        overlays: bool,
+    ) -> crate::error::Result<(String, ScreenSize, i64)> {
         let device = g.device.clone().ok_or(ictl_l10n::tr!("手机未连接", "Phone not connected"))?;
         let t = self
             .ensure_tunnel(g, &device)
             .await
             .map_err(|e| ictl_l10n::trf!("读界面失败（建隧道）：{e}", "Reading the screen failed (tunnel): {e}"))?;
-        let r = t.ax_screen(wait).await;
+        let r = t.ax_screen(wait, overlays).await;
         if r.is_err() {
             t.close_ax().await;
         }
@@ -266,18 +281,24 @@ impl Daemon {
         }
     }
 
+    /// The frontmost app's elements alone ([`Self::ax_read_with`])
+    async fn ax_tree_app(&self, g: &mut Inner) -> crate::error::Result<Tree> {
+        let (xml, size, _) = self.ax_read_with(g, AX_WAIT, false).await?;
+        Ok(elements::parse_tree(&xml, size))
+    }
+
     /// After a swipe, waits for the list to stop (at most [`SCROLL_SETTLE`]): two reads in a row with the elements
     /// in the same place along the swipe. Says when it was still moving; a screen with few elements isn't waited for
     pub(crate) async fn native_scrolled(&self, g: &mut Inner, vertical: bool) -> String {
         let t0 = Instant::now();
-        let Ok(mut prev) = self.ax_tree(g, AX_WAIT).await else { return String::new() };
+
+        let Ok(mut prev) = self.ax_tree_app(g).await else { return String::new() };
         if prev.elements.len() < VISUAL_SETTLE_BELOW {
             return String::new();
         }
         while t0.elapsed() < SCROLL_SETTLE {
-            let Ok(cur) = self.ax_tree(g, AX_WAIT).await else { return String::new() };
+            let Ok(cur) = self.ax_tree_app(g).await else { return String::new() };
             if cur.still_along(&prev, vertical, STILL_TOLERANCE) {
-                g.swiped_tree = Some((Instant::now(), cur));
                 return String::new();
             }
             prev = cur;
@@ -339,8 +360,14 @@ impl Daemon {
                 blocking(&text)
             ));
         }
+        let pressed = Instant::now();
         self.hid_do(g, |h| Box::pin(h.press(Button::Home))).await?;
         if self.native_reached_home(g).await {
+            // already on the home screen (Home closed a menu, a folder): what it closes is still animating, and an
+            // app launched meanwhile was sent back to the home screen once it ended (3 times in 3)
+            if let Some(left) = HOME_ANIMATION.checked_sub(pressed.elapsed()) {
+                tokio::time::sleep(left).await;
+            }
             return Ok(ictl_l10n::tr!("已按 home", "Pressed home").into());
         }
         let s = self.screen(g).await?;
@@ -590,8 +617,14 @@ impl Daemon {
         g: &mut Inner,
         cfg: &ictl_unlock::UnlockConfig,
     ) -> ictl_unlock::Result<ictl_unlock::Outcome> {
+        // Home wakes a dark screen within about 0.3 s; the keypad is looked for as it comes (`reads_cheaply`)
+        let cfg = ictl_unlock::UnlockConfig {
+            passcode_file: cfg.passcode_file.clone(),
+            disabled_flag: cfg.disabled_flag.clone(),
+            timing: ictl_unlock::Timing { wake_settle: NATIVE_WAKE_SETTLE, ..cfg.timing },
+        };
         let mut screen = NativeScreen { d: self, g };
-        let r = Box::pin(ictl_unlock::ensure_unlocked(&mut screen, cfg)).await;
+        let r = Box::pin(ictl_unlock::ensure_unlocked(&mut screen, &cfg)).await;
         if matches!(r, Ok(ictl_unlock::Outcome::Unlocked)) {
             // the lock screen is still sliding away: a tap now is lost (a tap by text right after unlocking did
             // nothing on the phone)
@@ -693,6 +726,11 @@ impl Screen for NativeScreen<'_> {
 
     async fn passcode_field(&mut self) -> std::result::Result<Option<(u32, u32)>, WdaError> {
         Ok(elements::passcode_field(&self.elements().await?))
+    }
+
+    fn reads_cheaply(&self) -> bool {
+        // a read of the lock screen takes about 0.1 s
+        true
     }
 }
 

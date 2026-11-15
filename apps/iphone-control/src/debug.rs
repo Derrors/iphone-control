@@ -316,7 +316,7 @@ pub async fn run(udid: Option<&str>, args: DebugArgs) -> anyhow::Result<()> {
                         Some(_) if dump => {
                             tokio::time::sleep(Duration::from_secs(1)).await;
                             let asked = Instant::now();
-                            let s = t.ax_screen(Duration::from_secs(5)).await?;
+                            let s = t.ax_screen(Duration::from_secs(5), true).await?;
                             println!("  read in {:.0} ms", asked.elapsed().as_secs_f64() * 1000.0);
                             s
                         }
@@ -325,9 +325,9 @@ pub async fn run(udid: Option<&str>, args: DebugArgs) -> anyhow::Result<()> {
                             if t.ax().await?.wait_push(at, left).await.is_none() {
                                 break;
                             }
-                            t.ax_screen(Duration::from_secs(5)).await?
+                            t.ax_screen(Duration::from_secs(5), true).await?
                         }
-                        None => t.ax_screen(Duration::from_secs(5)).await?,
+                        None => t.ax_screen(Duration::from_secs(5), true).await?,
                     };
                     let xml = ictl_ax::xml::to_xml(
                         &s.app,

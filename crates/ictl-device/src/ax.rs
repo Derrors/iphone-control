@@ -80,10 +80,10 @@ impl Tunnel {
         }
     }
 
-    /// The screen's elements as they are now: a walk of the frontmost app's tree, and SpringBoard's elements over
-    /// the app. `wait` bounds a session's opening and the first request (an app that just came up builds its
+    /// The screen's elements as they are now: a walk of the frontmost app's tree, and (with `overlays`)
+    /// SpringBoard's elements over the app. `wait` bounds a session's opening and the first request (an app that just came up builds its
     /// accessibility tree first)
-    pub async fn ax_screen(&mut self, wait: Duration) -> Result<AxScreen> {
+    pub async fn ax_screen(&mut self, wait: Duration, overlays: bool) -> Result<AxScreen> {
         let sb = self.springboard_pid().await;
         let (mut app, (mut elements, mut complete)) = {
             let s = self.ax().await?;
@@ -106,8 +106,9 @@ impl Tunnel {
         if elements.is_empty() {
             return Err(DeviceError::Timeout(ictl_l10n::tr!("没有读到界面元素", "no screen elements read").into()));
         }
+        let read_overlays = overlays;
         let mut overlays = Vec::new();
-        if let Some(sb) = sb.filter(|sb| *sb != app.pid) {
+        if let Some(sb) = sb.filter(|sb| read_overlays && *sb != app.pid) {
             match springboard_overlays(s, sb).await {
                 Ok(o) => overlays = o,
                 Err(e) => tracing::debug!("SpringBoard's elements: {e}"),

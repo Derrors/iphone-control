@@ -2029,7 +2029,7 @@ function applyInfo(v) {
     highlight(null); marks.replaceChildren(); hoverDot = null;
     if (changed) {
       S.daemon = null; S.dstatus = null; S.apps = []; S.appsState = 'idle'; appNames.map = null; appNames.loading = false;
-      T.warm = 0; V.noDevice = false;
+      T.warm = 0; V.noDevice = false; V.devRetries = 0;
     }
   }
   const reconnect = feedId && (changed || S.display?.id !== display?.id);
@@ -2323,16 +2323,28 @@ function connect() {
   }
   firstFrameTimer = setTimeout(() => {
     if (epoch !== feedEpoch) return;
-    if (V.on && !V.got) {
-      if (dev) V.noDevice = true; else V.off = true;
-      connect();
-    } else feedError();
+    if (V.on && !V.got) { giveUpVideo(dev, false); connect(); }
+    else feedError();
   }, 9000);
   renderFeed(); renderChips();
 }
 /* ---------- H.264 画面：服务端用 ffmpeg 编码（硬件优先），这里用 WebCodecs 解码（浏览器自己选硬件）画到 canvas。
  * 消息：1 字节类型 + 4 字节长度 + 内容。0 是解码配置（JSON），1 关键帧，2 其他帧。
  * 这一页从没出过画面就失败（没有编码器、浏览器解不了）就改用 MJPEG，之后不再试 ---------- */
+/* 放弃这一路画面，改用下一种。服务端说走不通（404：没有编码器、手机不支持）就不再试；只是第一帧迟迟不来
+ * （viewer 或守护进程正在重启、编码器正在启动）的，过一阵再试：之前这样一次就永远停在 MJPEG。最多再试几次，
+ * 真走不通的不会一直断画面 */
+const VIDEO_RETRY_MS = [30000, 60000, 120000];
+function giveUpVideo(dev, permanent) {
+  if (dev) V.noDevice = true; else V.off = true;
+  if (permanent) return;
+  const n = dev ? (V.devRetries = (V.devRetries || 0) + 1) : (V.offRetries = (V.offRetries || 0) + 1);
+  if (n > VIDEO_RETRY_MS.length) return;
+  setTimeout(() => {
+    if (dev) V.noDevice = false; else V.off = false;
+    if (S.mode === 'live') connect();
+  }, VIDEO_RETRY_MS[n - 1]);
+}
 function stopVideo() {
   if (V.ctrl) V.ctrl.abort();
   V.ctrl = null; V.on = false; V.got = false; V.rate = null; V.stream = ''; V.recv = 0; V.acked = 0; V.acking = 0; V.reported = 0;
@@ -2347,7 +2359,7 @@ async function startVideo(q, dev) {
     const got = V.got;
     stopVideo();
     // 这一路从没出过画面就走不通：手机的视频走不通改用本机编码，本机编码也不行改用 MJPEG，之后不再试
-    if (permanent && !got) { if (dev) V.noDevice = true; else V.off = true; connect(); return; }
+    if (permanent && !got) { giveUpVideo(dev, true); connect(); return; }
     feedError();
   };
   const onFrame = f => {

@@ -438,6 +438,9 @@ pub(crate) struct PerDevice {
     pub before_action: Option<crate::tools::Seen>,
     /// 最近一个操作开始的时间：原生控制等界面稳定时，从这之后的推送算起
     pub acted_at: Option<Instant>,
+    /// How long the request being handled spent unlocking the phone first ([`Daemon::ensure_unlocked`]); taken by
+    /// [`Daemon::dispatch`], which says so in the answer
+    pub unlocked: Option<Duration>,
     /// 原生控制：进程号 → Bundle ID（前台 App 由无障碍服务给进程号）
     pub bundles: HashMap<i64, String>,
     /// 原生控制：进程号 → 是不是网页内容进程（WebKit WebContent，网页的元素来自它）
@@ -1188,6 +1191,7 @@ impl Daemon {
         let mut outcome = crate::protocol::Outcome::default();
         // the same facts as data, for programs (Response::Text.data)
         let mut data = None;
+        g.dev.unlocked = None;
         let r = match req {
             Request::Status => {
                 let (text, status) = self.status(g).await;
@@ -1199,7 +1203,8 @@ impl Daemon {
                 Err("screen_stream is a streaming request: open it with open_screen_stream".into())
             }
             Request::Screenshot { region } => {
-                return self.screenshot(g, region).await.unwrap_or_else(Response::error);
+                let r = self.screenshot(g, region).await.unwrap_or_else(Response::error);
+                return with_unlock_note(r, g.dev.unlocked.take());
             }
             Request::ListElements { filter, limit, max_age_ms, keep_locked } => self
                 .list_elements(g, &filter, limit, Duration::from_millis(max_age_ms), keep_locked)
@@ -1279,7 +1284,8 @@ impl Daemon {
             | Request::TaskNote { .. }
             | Request::TaskFinish { .. } => unreachable!("other lanes"),
         };
-        r.map(|t| Response::text_data(t, outcome, data)).unwrap_or_else(Response::error)
+        let r = r.map(|t| Response::text_data(t, outcome, data)).unwrap_or_else(Response::error);
+        with_unlock_note(r, g.dev.unlocked.take())
     }
 
     pub async fn shutdown(&self) {
@@ -1351,6 +1357,27 @@ fn lane(req: &Request) -> Lane {
         | Request::AppLogs { .. }
         | Request::CrashReports { .. }
         | Request::UninstallApp { .. } => Lane::Device,
+    }
+}
+
+/// Says in a request's answer that the phone was unlocked for it first, and how long that took: on the first line,
+/// like the other notes about what was done. An action that had to unlock took seconds longer than usual (14-15 s
+/// on an iPad through WDA, 8-9 s natively on an iPhone), and nothing in the answer said why
+fn with_unlock_note(r: Response, unlocked: Option<Duration>) -> Response {
+    let Some(took) = unlocked else { return r };
+    let note = ictl_l10n::trf!(
+        "(手机锁着,先自动解锁了,用时 {:.1} 秒)",
+        " (the phone was locked and was unlocked first, which took {:.1} s)",
+        took.as_secs_f64()
+    );
+    let add = |s: String| match s.split_once('\n') {
+        Some((first, rest)) => format!("{first}{note}\n{rest}"),
+        None => s + &note,
+    };
+    match r {
+        Response::Text { text, outcome, data } => Response::Text { text: add(text), outcome, data },
+        Response::Image { jpeg_base64, caption } => Response::Image { jpeg_base64, caption: add(caption) },
+        Response::Error { message, retry_as_gesture } => Response::Error { message: add(message), retry_as_gesture },
     }
 }
 
@@ -1831,5 +1858,32 @@ pub(crate) mod tests {
         std::fs::write(&p, b"{not json").unwrap();
         assert!(Persisted::load(&p).wda_bundle.is_none());
         std::fs::remove_file(&p).unwrap();
+    }
+
+    #[test]
+    fn an_unlock_first_is_said_on_the_answers_first_line() {
+        let took = Some(Duration::from_millis(14_100));
+        // an action with `then=elements`: the note goes on the action's line, the screen after it stays below
+        let r = with_unlock_note(
+            Response::text_with("已按 home\n--- 操作后的界面 ---\nButton \"设置\"", Default::default()),
+            took,
+        );
+        let Response::Text { text, outcome, .. } = &r else { panic!("{r:?}") };
+        let lines: Vec<_> = text.lines().collect();
+        assert!(lines[0].starts_with("已按 home") && lines[0].contains("14.1"), "{text}");
+        assert_eq!(lines[1..], ["--- 操作后的界面 ---", "Button \"设置\""]);
+        assert!(outcome.is_some());
+        // a screenshot's caption, and an action that failed after the unlock
+        let r = with_unlock_note(Response::Image { jpeg_base64: "x".into(), caption: "430x932".into() }, took);
+        assert!(
+            matches!(&r, Response::Image { caption, .. } if caption.starts_with("430x932") && caption.contains("14.1"))
+        );
+        let r = with_unlock_note(Response::error("没找到"), took);
+        assert!(
+            matches!(&r, Response::Error { message, .. } if message.starts_with("没找到") && message.contains("14.1"))
+        );
+        // no unlock: the answer as it was
+        let plain = Response::text_with("已按 home", Default::default());
+        assert_eq!(with_unlock_note(plain.clone(), None), plain);
     }
 }

@@ -196,9 +196,14 @@ impl Daemon {
                 "; this device has no auto-unlock passcode, so unlock it by hand when locked (run iphone-control passcode set while it is connected)"
             )
         };
+        let wait = if self.cfg.ios_backend.drives_natively(Some(&target)) {
+            ictl_l10n::tr!("原生控制几秒就绪", "native control is ready in seconds")
+        } else {
+            ictl_l10n::tr!("WDA 起来要 10~60 秒", "WDA takes 10-60 seconds to start")
+        };
         Ok(ictl_l10n::trf!(
-            "已切换到 {label},之后固定控制这台。状态:{};WDA 起来要 10~60 秒,先用 iphone-control status 或 iphone_status 确认就绪{pin}",
-            "Switched to {label}; it stays selected from now on. State: {}; WDA takes 10-60 seconds to start, check readiness with iphone-control status or iphone_status first{pin}",
+            "已切换到 {label},之后固定控制这台。状态:{};{wait},先用 iphone-control status 或 iphone_status 确认就绪{pin}",
+            "Switched to {label}; it stays selected from now on. State: {}; {wait}, check readiness with iphone-control status or iphone_status first{pin}",
             g.state.describe()
         ))
     }

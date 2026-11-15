@@ -20,6 +20,10 @@ pub(crate) const AX_WAIT: Duration = Duration::from_secs(5);
 const REACT: Duration = Duration::from_millis(300);
 /// After Cmd-V: how long for the text to show in the field, answering the paste prompt meanwhile
 const PASTE_WAIT: Duration = Duration::from_secs(5);
+/// After the paste prompt was answered, a field that already showed the text and doesn't change for this long took
+/// the paste as it was: the pasted text replaced the same text, selected (Spotlight keeps the last search selected).
+/// A paste shows in the field within about half a second of the answer
+const PASTE_SAME_SETTLE: Duration = Duration::from_millis(1500);
 /// How long an app may take to come to the front
 const LAUNCH_WAIT: Duration = Duration::from_secs(8);
 /// How long a killed app's processes may take to be gone
@@ -36,6 +40,31 @@ const LAUNCH_SETTLE: Duration = Duration::from_millis(800);
 /// See [`IosBackend::drives_natively`]
 fn native_for(backend: IosBackend, info: Option<&DeviceInfo>) -> bool {
     backend.drives_natively(info)
+}
+
+/// What a paste did, as far as the fields show
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Pasted {
+    /// A field changed and now holds the text
+    Typed,
+    /// A field held the text before and still does, unchanged: the paste replaced the same text, or didn't go in
+    Unchanged,
+    /// A password field is on screen: its value can't be read
+    Unreadable,
+    /// No field holds the text
+    Missing,
+}
+
+/// One read of the fields after a paste, against `old`, theirs before it (None: a password field)
+fn paste_seen(now: Option<&[String]>, old: Option<&[String]>, wanted: &str) -> Pasted {
+    let (Some(now), Some(old)) = (now, old) else { return Pasted::Unreadable };
+    if !now.iter().any(|v| v.contains(wanted)) {
+        Pasted::Missing
+    } else if now != old {
+        Pasted::Typed
+    } else {
+        Pasted::Unchanged
+    }
 }
 
 /// The on-screen keyboard is up: a Keyboard element, or its keys (the keyboard's process reads as the app's own
@@ -516,15 +545,21 @@ impl Daemon {
                 note += ictl_l10n::tr!("(已替你点了「允许粘贴」)", " (“Allow Paste” was tapped for you)");
             }
             match typed {
-                Some(true) => {}
-                // a password field: its value can't be read
-                None => {
+                Pasted::Typed => {}
+                Pasted::Unreadable => {
                     note += ictl_l10n::tr!(
                         "(这是密码框,读不出内容,截图确认输进去了)",
                         " (a password field: its contents can't be read back, check with a screenshot)"
                     )
                 }
-                Some(false) => {
+                // the same text, selected, replaced by the paste (a search field keeping the last search)
+                Pasted::Unchanged => {
+                    note += ictl_l10n::tr!(
+                        "(输入框里原来就是这段文字,粘贴后看不出变化,截图确认)",
+                        " (the field already held this text, so the paste shows no change; check with a screenshot)"
+                    )
+                }
+                Pasted::Missing => {
                     return Err(ictl_l10n::trf!(
                         "粘贴了 {n} 个字符,但 {} 秒内输入框里没有这段文字{};截图看看:输入框可能没有焦点,或 App 不接受粘贴",
                         "Pasted {n} characters, but the field didn't show the text within {} s{}; take a screenshot: the field may not have focus, or the app doesn't take pastes",
@@ -548,14 +583,14 @@ impl Daemon {
     }
 
     /// Pastes `text` and waits for it to show in a field (`old`: the fields' values before; None: a password field
-    /// on screen). Returns whether it showed (None: can't be read) and whether the paste prompt was answered. The
-    /// pasteboard is put back before returning
+    /// on screen). Returns what the fields show and whether the paste prompt was answered. The pasteboard is put
+    /// back before returning
     async fn native_paste(
         &self,
         g: &mut Inner,
         text: &str,
         old: Option<&[String]>,
-    ) -> crate::error::Result<(Option<bool>, bool)> {
+    ) -> crate::error::Result<(Pasted, bool)> {
         // a paste through the WDA-down path may still wait to be put back
         self.restore_pasteboard(g, false).await;
         self.hid(g).await?;
@@ -570,7 +605,8 @@ impl Daemon {
             }
         };
         let deadline = Instant::now() + PASTE_WAIT;
-        let mut prompt = false;
+        // when the paste prompt was last answered
+        let mut answered: Option<Instant> = None;
         let wanted = text.trim();
         let typed = loop {
             // a whole read: the prompt brings SpringBoard to the front, but it may also come over the app (a read
@@ -578,21 +614,23 @@ impl Daemon {
             let tree = self.ax_tree(g, AX_WAIT).await?;
             if let Some((x, y)) = paste_allow(&tree) {
                 self.native_tap(g, x, y).await?;
-                prompt = true;
+                answered = Some(Instant::now());
                 tokio::time::sleep(Duration::from_millis(300)).await;
                 continue;
             }
-            let now = elements::field_values(&tree.elements);
-            match (&now, old) {
-                (Some(now), Some(old)) if now.as_slice() != old && now.iter().any(|v| v.contains(wanted)) => {
-                    break Some(true);
-                }
-                (None, _) | (_, None) if Instant::now() >= deadline => break None,
-                _ if Instant::now() >= deadline => break Some(false),
+            let seen = paste_seen(elements::field_values(&tree.elements).as_deref(), old, wanted);
+            match seen {
+                Pasted::Typed => break seen,
+                // only once the prompt was answered: before that, the paste hasn't gone in yet
+                Pasted::Unchanged if answered.is_some_and(|t| t.elapsed() >= PASTE_SAME_SETTLE) => break seen,
+                // never asked: iOS asks for every paste of ours, so nothing may have been pasted at all
+                Pasted::Unchanged if Instant::now() >= deadline => break Pasted::Missing,
+                _ if Instant::now() >= deadline => break seen,
                 _ => {}
             }
             tokio::time::sleep(Duration::from_millis(250)).await;
         };
+        let prompt = answered.is_some();
         if let Some(p) = pending {
             let restored = match g.tunnel.as_mut() {
                 Some(t) => Box::pin(t.restore_pasteboard(p)).await,
@@ -833,5 +871,19 @@ mod tests {
         assert_eq!(paste_allow(&ours), Some((141.0, 526.0)));
         let other = elements::parse_tree(&xml("“备忘录”想从“微信”粘贴"), screen);
         assert_eq!(paste_allow(&other), None);
+    }
+
+    #[test]
+    fn a_paste_that_replaced_the_same_text_is_told_apart_from_one_that_missed() {
+        let v = |s: &[&str]| s.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        // into an empty field, and after text already there
+        assert_eq!(paste_seen(Some(&v(&["设置"])), Some(&v(&[""])), "设置"), Pasted::Typed);
+        assert_eq!(paste_seen(Some(&v(&["设置设置"])), Some(&v(&["设置"])), "设置"), Pasted::Typed);
+        // Spotlight's last search, selected, replaced by the same text: nothing changes
+        assert_eq!(paste_seen(Some(&v(&["设置"])), Some(&v(&["设置"])), "设置"), Pasted::Unchanged);
+        assert_eq!(paste_seen(Some(&v(&["时钟"])), Some(&v(&["时钟"])), "设置"), Pasted::Missing);
+        assert_eq!(paste_seen(Some(&v(&[""])), Some(&v(&[""])), "设置"), Pasted::Missing);
+        assert_eq!(paste_seen(None, Some(&v(&[""])), "设置"), Pasted::Unreadable);
+        assert_eq!(paste_seen(Some(&v(&["设置"])), None, "设置"), Pasted::Unreadable);
     }
 }

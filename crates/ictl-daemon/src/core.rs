@@ -396,6 +396,9 @@ pub struct Snapshot {
     /// 当前这台手机上的 WDA 描述文件
     #[serde(default)]
     pub device_profile: DeviceProfile,
+    /// 当前这台手机原生控制（iOS 27 起默认，不用 WDA）。旧的守护进程不报，当作 false
+    #[serde(default)]
+    pub native: bool,
     pub auto_unlock: bool,
     pub unlock_disabled: bool,
     pub notify_configured: bool,
@@ -649,6 +652,7 @@ impl Daemon {
             pinned_by_env: cfg.udid.is_some(),
             persisted: inner.persisted.clone(),
             device_profile: DeviceProfile::NotChecked,
+            native: false,
             auto_unlock: false,
             unlock_disabled: cfg.unlock_disabled_flag().exists(),
             notify_configured: cfg.notify.any(),
@@ -871,6 +875,7 @@ impl Daemon {
             pinned_by_env: self.cfg.udid.is_some(),
             persisted: g.persisted.clone(),
             device_profile: g.dev.device_profile.clone(),
+            native: self.native(g),
             auto_unlock: unlock.enabled(),
             unlock_disabled: unlock.disabled_by_failure(),
             notify_configured: self.cfg.notify.any(),

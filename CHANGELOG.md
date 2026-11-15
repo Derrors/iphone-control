@@ -23,6 +23,7 @@ What changed in each release, one line per change. Versions follow [Semantic Ver
 
 ### Fixes
 
+- `iphone-control status` on a phone under native control shows "native" instead of asking you to install WDA (#127).
 - `service stop` and `service uninstall` also end a WDA launched in the background, and each phone keeps its own (#124).
 - Text pasted on the phone no longer reaches your Mac through Universal Clipboard (#122).
 - With a notification banner up, elements are read from the app instead of the banner (#121).

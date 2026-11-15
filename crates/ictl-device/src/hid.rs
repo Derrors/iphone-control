@@ -103,6 +103,9 @@ pub fn ascii_to_usage(c: char) -> Option<(u64, bool)> {
 }
 
 const KEY_LEFT_SHIFT: u64 = 0xE1;
+/// 左 Command（HID usage Left GUI）
+const KEY_LEFT_GUI: u64 = 0xE3;
+const KEY_V: u64 = 0x19;
 
 pub struct HidSession {
     /// 设备竖放时的尺寸：HID 触摸坐标按竖放归一化
@@ -218,6 +221,24 @@ impl HidSession {
             .collect::<Result<_>>()?;
         let d = Duration::from_secs(10) + Duration::from_millis(50 * keys.len() as u64);
         limit(ictl_l10n::tr!("HID 输入", "HID typing"), d, self.send_keys(keys)).await
+    }
+
+    /// 按 Cmd-V（硬件键盘的粘贴）：按住 Cmd，按一下 V，松开 Cmd。手机不确认收到，粘没粘上只能看屏幕
+    /// （iPhone16,2 / iOS 27.2.1 实测会触发粘贴，见 [`crate::Tunnel::paste_text`]）
+    pub async fn paste_shortcut(&mut self) -> Result<()> {
+        limit(ictl_l10n::tr!("HID 粘贴", "HID paste"), Duration::from_secs(10), async {
+            self.indigo.send_keyboard(KEY_LEFT_GUI, ButtonState::Down).await?;
+            let r = async {
+                self.indigo.send_keyboard(KEY_V, ButtonState::Down).await?;
+                self.indigo.send_keyboard(KEY_V, ButtonState::Up).await
+            }
+            .await;
+            // V 没发出去也要松开 Cmd：一直按着的话，后面的按键都会变成快捷键
+            let up = self.indigo.send_keyboard(KEY_LEFT_GUI, ButtonState::Up).await;
+            r?;
+            Ok(up?)
+        })
+        .await
     }
 
     async fn send_keys(&mut self, keys: Vec<(u64, bool)>) -> Result<()> {

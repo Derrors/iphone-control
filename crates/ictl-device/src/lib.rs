@@ -6,6 +6,7 @@
 //! - 开发者镜像：`cryptexd::installed_ddi` / `install_ddi`（个性化 + TSS）；DDI 下载见 [`ddi`]
 //! - HID：universalhidservice（触摸）、indigo（按键、键盘）；**必须同时持有显示媒体流**（[`hid::HidSession`]）
 //! - 截图：CoreDevice screencaptureservice
+//! - 剪贴板：CoreDevice pasteboardservice，HID 粘贴非 ASCII 文字用（[`Tunnel::paste_text`]）
 //! - App：installation_proxy（列出时过滤 `SBAppTags` 含 `hidden` 的后台服务，见 [`apps`]）、安装 IPA
 //!
 //! 不负责：WDA（见 `ictl-wda`）、状态机（见 `ictl-daemon`）。
@@ -16,6 +17,7 @@ pub mod hid;
 mod media;
 mod models;
 pub mod oslog;
+mod pasteboard;
 
 use std::future::Future;
 use std::path::Path;
@@ -556,6 +558,40 @@ impl Device {
     }
 }
 
+/// [`Tunnel::restore_pasteboard`] 的结果
+#[derive(Debug, Clone, PartialEq)]
+pub enum ClipboardRestore {
+    /// 原来的内容已经写回
+    Restored,
+    /// 粘贴后剪贴板被别人改过：不覆盖，留着现在的内容
+    ChangedMeanwhile,
+    Failed(String),
+}
+
+/// [`Tunnel::paste_text`] 存下的原剪贴板，等粘贴弹窗答完再写回（[`Tunnel::restore_pasteboard`]）
+#[derive(Debug, Clone)]
+pub struct PendingRestore {
+    items: Vec<pasteboard::Item>,
+    /// 粘贴用的文字和写进去后的改动计数：剪贴板还是它，才说明期间没人改过
+    text: String,
+    change_count: Option<i64>,
+}
+
+async fn write_back(
+    adapter: &mut AdapterHandle,
+    handshake: &mut RsdHandshake,
+    items: &[pasteboard::Item],
+) -> ClipboardRestore {
+    match limit(ictl_l10n::tr!("还原剪贴板", "restore the pasteboard"), Duration::from_secs(10), async {
+        pasteboard::write(adapter, handshake, items).await
+    })
+    .await
+    {
+        Ok(()) => ClipboardRestore::Restored,
+        Err(e) => ClipboardRestore::Failed(e.to_string()),
+    }
+}
+
 /// 一条活着的隧道。HID、截图、cryptexd 都经它访问 RSD 服务；丢掉它隧道就断了。
 ///
 /// HID 会话归隧道所有：它持有屏幕媒体流，必须在隧道断开之前停掉，否则手机端一直挂着这个会话
@@ -619,6 +655,86 @@ impl Tunnel {
     /// The HID session if it is already open (no request to the phone)
     pub fn open_hid(&mut self) -> Option<&mut HidSession> {
         self.hid.as_mut()
+    }
+
+    /// 经剪贴板输入文字（HID 后备路线输入中文等非 ASCII 用），HID 会话要已经开着（[`Self::hid`]）：
+    ///
+    /// 1. 存下原来的剪贴板（读不出来、或有不能原样写回的内容时照样粘贴，只是不还原：返回 None）
+    /// 2. 写入 `text`，读回核对；对不上就不粘贴，报错
+    /// 3. 按 Cmd-V。整段一次粘贴，中文输入法不会把它当成拼音
+    ///
+    /// iOS 把经 `dtpasteboardd` 写入的内容当成别的 App 的，Cmd-V 也要用户确认：App 弹出「“备忘录”想从“dtpasteboardd”
+    /// 粘贴」，点「允许粘贴」才粘进去（iPhone16,2 / iOS 27.2.1 的备忘录，每次都弹）。剪贴板一改，这个弹窗就消失，什么也
+    /// 不粘，所以这里不还原：调用方等弹窗答完再用返回的 [`PendingRestore`] 调 [`Self::restore_pasteboard`]。
+    /// 手机不确认按键，没有输入框获得焦点时什么也粘不上，结果要看屏幕
+    pub async fn paste_text(&mut self, text: &str) -> Result<Option<PendingRestore>> {
+        let Tunnel { adapter, handshake, hid } = self;
+        let Some(hid) = hid.as_mut() else {
+            return Err(DeviceError::InvalidInput(ictl_l10n::tr!("HID 会话没开", "The HID session isn't open").into()));
+        };
+        if !pasteboard::supported(handshake) {
+            return Err(DeviceError::InvalidInput(
+                ictl_l10n::tr!(
+                    "手机没有提供剪贴板服务，HID 不能输入非 ASCII 文字",
+                    "The phone offers no pasteboard service, so HID can't type non-ASCII text"
+                )
+                .into(),
+            ));
+        }
+        // 读不出来不影响粘贴；连接卡住时别等太久
+        let saved = limit(ictl_l10n::tr!("读剪贴板", "read the pasteboard"), Duration::from_secs(5), async {
+            pasteboard::read(adapter, handshake).await
+        })
+        .await
+        .ok()
+        .and_then(|c| c.items);
+        let ours = pasteboard::text_items(text);
+        let written = limit(ictl_l10n::tr!("写剪贴板", "write the pasteboard"), Duration::from_secs(10), async {
+            pasteboard::write(adapter, handshake, &ours).await?;
+            pasteboard::read(adapter, handshake).await
+        })
+        .await
+        .map_err(|e| {
+            DeviceError::Idevice(ictl_l10n::trf!(
+                "文字写不进剪贴板，没有粘贴：{e}",
+                "The text couldn't be put on the pasteboard; nothing was pasted: {e}"
+            ))
+        })?;
+        if written.text.as_deref() != Some(text) {
+            // 还没粘贴，马上写回
+            if let Some(items) = &saved {
+                write_back(adapter, handshake, items).await;
+            }
+            return Err(DeviceError::Idevice(
+                ictl_l10n::tr!(
+                    "文字写进剪贴板后读回来对不上，没有粘贴",
+                    "The text read back from the pasteboard didn't match what was written; nothing was pasted"
+                )
+                .into(),
+            ));
+        }
+        hid.paste_shortcut().await.map_err(|e| {
+            DeviceError::Idevice(ictl_l10n::trf!(
+                "按 Cmd-V 失败（可能已经按下，先截图确认）：{e}",
+                "Pressing Cmd-V failed (it may have gone through; take a screenshot first): {e}"
+            ))
+        })?;
+        Ok(saved.map(|items| PendingRestore { items, text: text.to_owned(), change_count: written.change_count }))
+    }
+
+    /// 把 [`Self::paste_text`] 存下的原剪贴板写回去。剪贴板已经不是粘贴的那段文字（期间有人复制了别的）就不动它
+    pub async fn restore_pasteboard(&mut self, p: PendingRestore) -> ClipboardRestore {
+        let now = limit(ictl_l10n::tr!("读剪贴板", "read the pasteboard"), Duration::from_secs(5), async {
+            pasteboard::read(&mut self.adapter, &mut self.handshake).await
+        })
+        .await;
+        match now {
+            Ok(now) if now.text.as_deref() != Some(p.text.as_str()) || now.change_count != p.change_count => {
+                ClipboardRestore::ChangedMeanwhile
+            }
+            Ok(_) => write_back(&mut self.adapter, &mut self.handshake, &p.items).await,
+            Err(e) => ClipboardRestore::Failed(e.to_string()),
+        }
     }
 
     /// 停掉 HID 会话（含屏幕媒体流），隧道保留

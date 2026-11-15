@@ -48,7 +48,7 @@ WDA 自己只是沙盒里的普通 App，没有任何特权。**真正有权限�
 | 屏幕方向 | WDA 的旋转角 | `springboardservices::get_interface_orientation`（走 lockdown，不需要镜像） | 可行，还能分出 HID 现在分不出的 180° 翻转 |
 | 屏幕点尺寸 | `/wda/screen` | 截图像素除以机型缩放倍数 | 可行 |
 | 读元素树、按名字点、`wait_for`、等界面稳定、看弹窗 | 只走 WDA | remoteAXService（第 5 节） | 能用，但慢、不全 |
-| 输入中文 | `/wda/keys` | 没有。HID 只能按键 | 无替代（第 7 节有个可能的办法） |
+| 输入中文 | `/wda/keys` | HID 按 Cmd-V 粘贴：先经 CoreDevice `pasteboardservice` 写进剪贴板（`Tunnel::paste_text`） | 已有。App 每次都弹「想从“dtpasteboardd”粘贴」，要点「允许粘贴」；剪贴板一改弹窗就消失，所以 45 秒后才还原（iPhone16,2 / iOS 27.2.1 备忘录实测） |
 | 自动解锁 | 逐位核对密码栏的「已输入 N 位」 | AX 能读锁屏界面，读不读得到密码栏位数没测过 | 要重做 |
 | `open_url` | `/url` | 网页可以用 Web Inspector；跳到其他 App 的链接没有办法 | 部分替代 |
 | 控制台画面 | WDA 9100 端口的 MJPEG | 轮询截图，或 HID 会话的显示媒体流；镜像里还有 `com.apple.coredevice.dtremotedisplayd`，没看过 | 没验证 |

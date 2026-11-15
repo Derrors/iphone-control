@@ -30,6 +30,16 @@ enum Check {
     },
     /// 2. HID：媒体流 + universalhidservice tap，再按 Home（以截图对比为准，调用成功不代表生效）
     Hid { x: f64, y: f64 },
+    /// 2a. HID 键盘：逐键输入美式键盘按得出来的文字（先在手机上点中一个输入框，以截图为准）
+    Type { text: String },
+    /// 2b. HID 粘贴：存下剪贴板、写入文字、按 Cmd-V，等一会再还原剪贴板（先在手机上点中一个输入框；
+    /// 手机会弹「允许粘贴」，要在还原之前点掉，以截图为准）
+    Paste {
+        text: String,
+        /// 按完 Cmd-V 后等几秒还原剪贴板
+        #[arg(long, default_value_t = 30)]
+        restore_after: u64,
+    },
     /// 3. 截图：screencaptureservice PNG
     Screenshot { out: PathBuf },
     /// 4. 隧道稳定性：同一条隧道持续截图 N 分钟
@@ -245,6 +255,42 @@ pub async fn run(udid: Option<&str>, args: DebugArgs) -> anyhow::Result<()> {
                     "Done: confirm with a screenshot or by eye that it really worked"
                 )
             );
+        }
+        Check::Type { text } => {
+            let mut t = device.open_tunnel().await?;
+            let r = async {
+                let hid = t.hid(screen, ictl_device::FULL_BITRATE).await?;
+                hid.type_ascii(&text).await
+            }
+            .await;
+            t.close().await;
+            r?;
+            println!("{}", ictl_l10n::tr!("已发出按键", "Keys sent"));
+        }
+        Check::Paste { text, restore_after } => {
+            let mut t = device.open_tunnel().await?;
+            let r = async {
+                t.hid(screen, ictl_device::FULL_BITRATE).await?;
+                let pending = t.paste_text(&text).await?;
+                println!(
+                    "{}",
+                    ictl_l10n::trf!(
+                        "已按 Cmd-V：在手机上点「允许粘贴」，{restore_after} 秒后还原剪贴板",
+                        "Cmd-V pressed: tap “Allow Paste” on the phone; the pasteboard is restored in {restore_after} s"
+                    )
+                );
+                tokio::time::sleep(Duration::from_secs(restore_after)).await;
+                Ok::<_, ictl_device::DeviceError>(match pending {
+                    Some(p) => format!("{:?}", t.restore_pasteboard(p).await),
+                    None => {
+                        ictl_l10n::tr!("原来的剪贴板没存下，不还原", "The old pasteboard wasn't saved; not restored")
+                            .into()
+                    }
+                })
+            }
+            .await;
+            t.close().await;
+            println!("{}", r?);
         }
         Check::Screenshot { out } => {
             let mut t = device.open_tunnel().await?;

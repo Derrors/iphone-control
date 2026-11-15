@@ -6,12 +6,18 @@ All notable changes to this project are documented here. The format is based on 
 
 ## [Unreleased]
 
+### Added
+
+- While WebDriverAgent is unavailable, `iphone_type_text` can enter Chinese and other text a US keyboard can't type: HID puts it on the phone's pasteboard (CoreDevice `pasteboardservice`, checked by reading it back) and presses Cmd-V, so the input method doesn't turn it into pinyin. iOS treats that text as coming from another app and asks “… would like to paste from dtpasteboardd” every time (iPhone 15 Pro Max, iOS 27.2.1, Notes); the answer says to take a screenshot and tap “Allow Paste”. Changing the pasteboard closes that prompt, so what was on it before is put back 45 s later (or before the next such paste, or when another device is chosen), and only if the pasted text is still there. Return isn't pressed with `submit`, since with the prompt up it would choose “Don't Allow Paste”. English letters and symbols are still typed as keys and don't touch the pasteboard.
+
 ### Fixed
 
 - A tap or swipe a minute or more after the last one no longer waits for the screen size to be measured again first: that takes WDA 0.95 s on an iPad mini 5 (iPadOS 26.7.3), where the first tap after a pause took 1.7 s instead of 0.9. The size is now measured again in the background while nobody acts (only Display Zoom changes it), and on rotation as before.
 - A control page whose H.264 or the phone's own video didn't show a first frame within 9 s (the viewer or daemon restarting, the encoder starting up) used MJPEG until it was reloaded; it now tries again after 30 s, 1 min and 2 min. A picture the viewer said isn't available still isn't tried again.
 - A swipe on the control page through WDA no longer waits for the list to stop before answering (reading the element tree again and again, up to 2.5 s): the person at the page sees it. On an iPad mini 5 a swipe took 3.1 s, now 1.6–2.3 s. Agents (MCP, CLI) still wait, so their next tap doesn't land on a moving list.
 - The way Home and locking work on each device is kept in `state.json` instead of only in memory. After the daemon restarted, or another device was controlled meanwhile, the first Home on a device where IOHID's Home doesn't work tried it, waited 2 s for the home screen and pressed again: 4.4 s instead of 0.8 on an iPad mini 5.
+- A tap, swipe, key or launch that WebDriverAgent didn't answer in time no longer carries on later. WDA handles requests one at a time and keeps going after we stop waiting, so an action queued behind a slow one could land on the screen long after it was reported as failed. The daemon now ends that WDA session at once (`DELETE /session`, which WDA 16.15.3 answers outside its queue and which drops what is still queued in it) and opens a new one for the next action. A read that times out keeps its session.
+- Reading the element tree of a screen with very many elements (long feeds and lists) no longer keeps taking as long. A read over 8 s, or one that times out, makes the next read ask WDA for a smaller snapshot (at most 150 children per element first, then half the depth and children, down to 12 levels and 60 children); a read under 1.5 s loosens it a step again. While the tree is cut short, `iphone_list_elements` and a `iphone_tap_element` that finds nothing say so.
 
 ## [0.2.6] - 2026-11-14
 

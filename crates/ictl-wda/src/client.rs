@@ -80,6 +80,53 @@ impl IdleSettings {
     pub const NO_COOL_OFF: Self = Self { wait_for_idle_timeout: 1.0, animation_cool_off_timeout: 0.0 };
 }
 
+/// 读元素树时 WDA 快照的上限：appium settings 的 `snapshotMaxDepth`、`snapshotMaxChildren`，新会话重置成 WDA 的默认
+/// （50 层、子元素不限，WDA 16.15.3 `FBConfiguration resetSessionSettings`）。
+///
+/// 元素很多的界面（信息流、很长的列表）一次快照要很久，WDA 又在主线程上一个一个处理请求，后面的点击、截图都排在它后面。
+/// 读得慢（[`SLOW_SOURCE`]）或超时就收紧一级，读得快（[`FAST_SOURCE`]）就放宽一级（[`next_snapshot_level`]）。
+/// 先限子元素个数：长列表是宽不是深，只减层数没用；再把层数、子元素数各减一半，最少 12 层、60 个。
+/// 级别和数字参考 Poki 的 PokiCore（docs/ios-core.md「A tree that times out is read again shallower」）
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SnapshotLimits {
+    pub depth: u32,
+    /// None = 不限（WDA 的 `INT_MAX`）
+    pub children: Option<u32>,
+}
+
+/// 从不限到最紧，[`WdaClient`] 记的是下标
+pub const SNAPSHOT_LEVELS: [SnapshotLimits; 4] = [
+    SnapshotLimits { depth: 50, children: None },
+    SnapshotLimits { depth: 50, children: Some(150) },
+    SnapshotLimits { depth: 25, children: Some(75) },
+    SnapshotLimits { depth: 12, children: Some(60) },
+];
+/// 读一次元素树超过这么久就收紧一级。排除慢属性后平时 0.2～2 秒
+pub const SLOW_SOURCE: Duration = Duration::from_secs(8);
+/// 收紧过的读得比这快就放宽一级
+pub const FAST_SOURCE: Duration = Duration::from_millis(1500);
+/// 读元素树的时限：再长就算 WDA 卡住了（见 [`STALL_LIMIT`]）
+const SOURCE_TIMEOUT: Duration = Duration::from_secs(60);
+/// 结束会话（[`WdaClient::in_session`] 里动作没有应答时）的时限。WDA 不排队处理它，平时立刻应答
+const SESSION_DELETE_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// 读完一次元素树后下次用哪一级上限：`took` 为 None 表示超时
+pub fn next_snapshot_level(level: usize, took: Option<Duration>) -> usize {
+    let tightest = SNAPSHOT_LEVELS.len() - 1;
+    match took {
+        None => (level + 1).min(tightest),
+        Some(t) if t >= SLOW_SOURCE => (level + 1).min(tightest),
+        Some(t) if t < FAST_SOURCE => level.saturating_sub(1),
+        Some(_) => level,
+    }
+}
+
+/// 改变手机状态的请求：没有应答时要结束会话，免得它和排在它后面的请求过一阵才执行（见 [`WdaClient::in_session`]）。
+/// 读的请求（GET、`POST /elements` 找元素）不算：排在读后面的东西不会动手机，结束会话只会让下一次开会话也排到它后面
+fn acts(method: &str, path: &str) -> bool {
+    method != "GET" && !path.starts_with("/element")
+}
+
 /// Frames a second and size (percent) of WDA's MJPEG stream with [`WdaClient::fast_stream`].
 ///
 /// Full size, so WDA passes on the JPEG that testmanagerd encodes in hardware. Any other size makes WDA decode,
@@ -149,6 +196,14 @@ pub struct WdaClient<T> {
     fast_stream: bool,
     /// 经 XCTest 的请求（除 `/status` 外都是）连续几次没有应答，有应答就清零。工具调用和守护进程的探测都算
     unanswered: AtomicU32,
+    /// 下次读元素树用的上限，[`SNAPSHOT_LEVELS`] 的下标
+    snapshot_level: usize,
+    /// WDA 现在用的上限。None = 不知道：这个客户端还没开过会话、也没设过；开会话时 WDA 重置成不限（0）。
+    /// 不知道时按不限算，不为读树专门开会话：`ICTL_WDA_DETACHED` 下守护进程重启后接上的 WDA 若留着上一个客户端收紧的值，
+    /// 第一次开会话（第一次点击、改设置）就重置了
+    snapshot_applied: Option<usize>,
+    /// 上一次读到的元素树用的上限（[`Self::snapshot_note`]）
+    snapshot_read: usize,
 }
 
 impl<T: Transport> WdaClient<T> {
@@ -164,10 +219,25 @@ impl<T: Transport> WdaClient<T> {
             idle_current: None,
             fast_stream: false,
             unanswered: AtomicU32::new(0),
+            snapshot_level: 0,
+            snapshot_applied: None,
+            snapshot_read: 0,
         }
     }
 
     async fn call(&self, method: &str, path: &str, body: Option<Value>, timeout: Duration) -> Result<Value> {
+        self.call_or_abandon(method, path, body, timeout, None).await
+    }
+
+    /// [`Self::call`]；`abandon` 是会话号时，请求没有应答就先结束这个会话，再判断 WDA 是不是卡死了（见 [`Self::in_session`]）
+    async fn call_or_abandon(
+        &self,
+        method: &str,
+        path: &str,
+        body: Option<Value>,
+        timeout: Duration,
+        abandon: Option<&str>,
+    ) -> Result<Value> {
         // `/status` 不经 XCTest：WDA 半死时它照样应答，不能拿它算 WDA 还活着
         if path == "/status" {
             return self.send(method, path, body, timeout).await;
@@ -183,6 +253,9 @@ impl<T: Transport> WdaClient<T> {
         let r = self.send(method, path, body, timeout).await;
         match &r {
             Err(e) if e.no_answer() => {
+                if let Some(sid) = abandon {
+                    self.delete_session(sid).await;
+                }
                 let n = self.unanswered.fetch_add(1, Ordering::Relaxed) + 1;
                 // a long request went unanswered: one quick question tells a stuck WDA from a slow request, instead of
                 // waiting the full time twice more (a tool call took 90 s before the daemon could restart it)
@@ -262,6 +335,7 @@ impl<T: Transport> WdaClient<T> {
             .to_owned();
         self.session = Some(id.clone());
         self.idle_current = None;
+        self.snapshot_applied = Some(0);
         if self.fast_stream {
             // fixOrientation explicitly off: a WDA left running in the background (`ICTL_WDA_DETACHED`) keeps what an
             // older version set
@@ -278,7 +352,12 @@ impl<T: Transport> WdaClient<T> {
         Ok(id)
     }
 
-    /// 带会话的请求；会话失效时重建一次再试
+    /// 带会话的请求；会话失效时重建一次再试。
+    ///
+    /// 改变手机状态的请求（[`acts`]）没有应答时，马上结束这个会话（`DELETE /session/:id`，WDA 16.15.3 不排队处理它）：
+    /// WDA 在主线程上一个一个处理请求，我们不等了它还会接着做。排在慢请求后面的点击、滑动会在报了失败之后很久才落到屏幕上
+    /// （Poki 在真机上见过）。结束会话后，这个会话里还在排队的请求 WDA 直接回「会话不存在」，不再执行；正在执行的那个照样做完。
+    /// 下一个请求开新会话
     pub async fn in_session(
         &mut self,
         method: &str,
@@ -288,12 +367,33 @@ impl<T: Transport> WdaClient<T> {
     ) -> Result<Value> {
         for attempt in 0..2 {
             let sid = self.session_id().await?;
-            match self.call(method, &format!("/session/{sid}{path}"), body.clone(), timeout).await {
+            let abandon = acts(method, path).then_some(sid.as_str());
+            let r =
+                self.call_or_abandon(method, &format!("/session/{sid}{path}"), body.clone(), timeout, abandon).await;
+            match r {
                 Err(WdaError::Remote { kind, .. }) if attempt == 0 && kind.contains("session") => self.session = None,
+                Err(e) if abandon.is_some() && e.no_answer() => {
+                    self.forget_session();
+                    return Err(e);
+                }
                 other => return other.map(|mut v| v["value"].take()),
             }
         }
         unreachable!()
+    }
+
+    /// 结束会话，不管结果：结束不了的会话 WDA 下次开会话时也会结束它
+    async fn delete_session(&self, sid: &str) {
+        // send 而不是 call：WDA 卡死时也要发，也不算进卡死计数
+        if let Err(e) = self.send("DELETE", &format!("/session/{sid}"), None, SESSION_DELETE_TIMEOUT).await {
+            tracing::debug!("DELETE /session/{sid}: {e}");
+        }
+    }
+
+    /// 会话已经结束（或要当作结束）：下一个请求开新会话，WDA 那时把设置重置成默认
+    fn forget_session(&mut self) {
+        self.session = None;
+        self.idle_current = None;
     }
 
     async fn post(&mut self, path: &str, body: Value) -> Result<Value> {
@@ -498,7 +598,7 @@ impl<T: Transport> WdaClient<T> {
     }
 
     /// 前台是 SpringBoard 时看元素树是锁屏、通知中心还是普通界面，并带回元素树；前台是别的 App 就是普通界面
-    async fn cover_tree(&self) -> Result<(elements::CoverSheet, Option<String>)> {
+    async fn cover_tree(&mut self) -> Result<(elements::CoverSheet, Option<String>)> {
         if self.active_app().await? != SPRINGBOARD {
             return Ok((elements::CoverSheet::None, None));
         }
@@ -523,11 +623,60 @@ impl<T: Transport> WdaClient<T> {
         })
     }
 
-    /// 元素树 XML，排除可见性等慢属性（完整树 7～8 秒，排除后约 0.3 秒）
-    pub async fn source_xml(&self) -> Result<String> {
+    /// 元素树 XML，排除可见性等慢属性（完整树 7～8 秒，排除后约 0.3 秒）。读得慢就收紧快照上限（[`SnapshotLimits`]）
+    pub async fn source_xml(&mut self) -> Result<String> {
+        let level = self.snapshot_level;
+        if self.snapshot_applied.unwrap_or(0) != level {
+            let l = SNAPSHOT_LEVELS[level];
+            let body = json!({"settings": {
+                "snapshotMaxDepth": l.depth,
+                "snapshotMaxChildren": l.children.unwrap_or(i32::MAX as u32),
+            }});
+            // 设不上照样读，下次再设
+            match self.post("/appium/settings", body).await {
+                Ok(_) => self.snapshot_applied = Some(level),
+                Err(e) => tracing::debug!("snapshot limits: {e}"),
+            }
+        }
+        let applied = self.snapshot_applied.unwrap_or(0);
         let path = format!("/source?format=xml&excluded_attributes={}", elements::SOURCE_EXCLUDED);
-        let v = self.call("GET", &path, None, Duration::from_secs(60)).await?;
+        let t0 = Instant::now();
+        let r = self.call("GET", &path, None, SOURCE_TIMEOUT).await;
+        let took = match r {
+            Ok(_) => Some(t0.elapsed()),
+            Err(WdaError::Timeout(_)) => None,
+            Err(e) => return Err(e),
+        };
+        let next = next_snapshot_level(applied, took);
+        if next != applied {
+            tracing::info!(
+                "{}",
+                ictl_l10n::log_trf!(
+                    "读元素树{}，快照上限改为 {:?}",
+                    "Reading the element tree {}; snapshot limits now {:?}",
+                    took.map_or_else(
+                        || ictl_l10n::log_tr!("超时", "timed out").to_owned(),
+                        |t| ictl_l10n::log_trf!("用了 {:.1} 秒", "took {:.1} s", t.as_secs_f64())
+                    ),
+                    SNAPSHOT_LEVELS[next]
+                )
+            );
+        }
+        self.snapshot_level = next;
+        let v = r?;
+        self.snapshot_read = applied;
         Ok(v["value"].as_str().unwrap_or_default().to_owned())
+    }
+
+    /// 上一次读到的元素树受了快照上限（[`SnapshotLimits`]）的限制时，给人和 agent 看的说明
+    pub fn snapshot_note(&self) -> Option<String> {
+        let l = SNAPSHOT_LEVELS[self.snapshot_read];
+        let children = l.children?;
+        Some(ictl_l10n::trf!(
+            "(界面元素太多、读得慢,这次只读了 {} 层、每个元素最多 {children} 个子元素:长列表靠后的行、很深的元素可能没列出;读得快了会自动放宽)",
+            "(This screen has so many elements that reading them was slow, so this read went {} levels deep with at most {children} children per element: rows far down a long list or deeply nested elements may be missing; the limits loosen again once reads are fast)",
+            l.depth
+        ))
     }
 
     pub async fn elements(&mut self) -> Result<Vec<elements::Element>> {
@@ -1212,7 +1361,7 @@ mod tests {
     #[tokio::test]
     async fn source_request_excludes_slow_attributes() {
         let m = Mock::with(&[(200, r#"{"value":"<x/>"}"#)]);
-        let c = WdaClient::new(&m);
+        let mut c = WdaClient::new(&m);
         c.source_xml().await.unwrap();
         let path = m.seen.lock().unwrap()[0].1.clone();
         assert!(path.starts_with("/source?format=xml&excluded_attributes=visible,"), "{path}");
@@ -1296,5 +1445,156 @@ mod tests {
         let mut c = WdaClient::new(&m);
         assert!(!c.locked().await.unwrap());
         assert!(!c.lock_state_trusted);
+    }
+
+    /// 传输层给出的一个结果：状态码和响应体，或者超时之类的错误
+    type Reply = std::io::Result<(u16, Vec<u8>)>;
+
+    /// 按顺序给出预设结果（可以是超时），记下每个请求的方法、路径和请求体
+    #[derive(Default)]
+    struct Script {
+        replies: Mutex<VecDeque<Reply>>,
+        sent: Mutex<Vec<(String, String, Option<Value>)>>,
+    }
+
+    impl Script {
+        fn new(replies: Vec<Reply>) -> Self {
+            Self { replies: Mutex::new(replies.into()), ..Default::default() }
+        }
+
+        fn sent(&self) -> Vec<String> {
+            self.sent.lock().unwrap().iter().map(|(m, p, _)| format!("{m} {p}")).collect()
+        }
+
+        fn body(&self, i: usize) -> Value {
+            self.sent.lock().unwrap()[i].2.clone().expect("a body")
+        }
+    }
+
+    impl Transport for &Script {
+        async fn send(
+            &self,
+            method: &str,
+            path: &str,
+            body: Option<Vec<u8>>,
+            _: Duration,
+        ) -> std::io::Result<(u16, Vec<u8>)> {
+            let body = body.map(|b| serde_json::from_slice(&b).unwrap());
+            self.sent.lock().unwrap().push((method.into(), path.into(), body));
+            self.replies.lock().unwrap().pop_front().expect("unexpected request")
+        }
+    }
+
+    fn timed_out() -> Reply {
+        Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "t"))
+    }
+
+    fn ok(body: &str) -> Reply {
+        Ok((200, body.as_bytes().to_vec()))
+    }
+
+    /// 动作没有应答：先结束会话（WDA 不再执行这个会话里还在排队的请求），再问一次前台 App 判断是不是卡死；
+    /// 下一个动作开新会话
+    #[tokio::test]
+    async fn an_unanswered_action_ends_its_session() {
+        let t = Script::new(vec![
+            ok(r#"{"sessionId":"A"}"#),
+            timed_out(),
+            ok(r#"{"value":null}"#),
+            ok(r#"{"value":{}}"#),
+            ok(r#"{"sessionId":"B"}"#),
+            ok(r#"{"value":null}"#),
+        ]);
+        let mut c = WdaClient::new(&t);
+        assert!(matches!(c.press_button("home").await, Err(WdaError::Timeout(_))));
+        c.press_button("home").await.unwrap();
+        assert_eq!(
+            t.sent(),
+            [
+                "POST /session",
+                "POST /session/A/wda/pressButton",
+                "DELETE /session/A",
+                "GET /wda/activeAppInfo",
+                "POST /session",
+                "POST /session/B/wda/pressButton",
+            ]
+        );
+    }
+
+    /// 读没有应答不结束会话：排在读后面的不会动手机，结束了只会让下一次开会话也排到它后面
+    #[tokio::test]
+    async fn an_unanswered_read_keeps_its_session() {
+        let t = Script::new(vec![
+            ok(r#"{"sessionId":"A"}"#),
+            timed_out(),
+            ok(r#"{"value":{}}"#),
+            timed_out(),
+            ok(r#"{"value":{}}"#),
+            ok(r#"{"value":null}"#),
+        ]);
+        let mut c = WdaClient::new(&t);
+        assert!(c.alert_text().await.unwrap_err().no_answer());
+        assert!(c.keyboard_shown().await.unwrap_err().no_answer());
+        c.press_button("home").await.unwrap();
+        assert_eq!(
+            t.sent(),
+            [
+                "POST /session",
+                "GET /session/A/alert/text",
+                "GET /wda/activeAppInfo",
+                "POST /session/A/elements",
+                "GET /wda/activeAppInfo",
+                "POST /session/A/wda/pressButton",
+            ]
+        );
+    }
+
+    #[test]
+    fn snapshot_limits_tighten_when_slow_and_loosen_when_fast() {
+        let slow = Some(SLOW_SOURCE);
+        let fast = Some(Duration::from_millis(300));
+        let fair = Some(Duration::from_secs(3));
+        assert_eq!(next_snapshot_level(0, slow), 1);
+        assert_eq!(next_snapshot_level(1, None), 2);
+        assert_eq!(next_snapshot_level(3, None), 3, "never tighter than the last level");
+        assert_eq!(next_snapshot_level(2, fair), 2);
+        assert_eq!(next_snapshot_level(2, fast), 1);
+        assert_eq!(next_snapshot_level(0, fast), 0);
+        assert_eq!(next_snapshot_level(0, fair), 0);
+        // 先限子元素再减层数，都有下限
+        assert_eq!(SNAPSHOT_LEVELS[1], SnapshotLimits { depth: 50, children: Some(150) });
+        assert!(SNAPSHOT_LEVELS.windows(2).all(|w| w[1].depth <= w[0].depth));
+        assert_eq!(SNAPSHOT_LEVELS[3], SnapshotLimits { depth: 12, children: Some(60) });
+    }
+
+    /// 读树超时后下一次先设上限再读，读得快了再放宽；新会话里 WDA 是不限的，不为读树专门设
+    #[tokio::test]
+    async fn a_timed_out_tree_is_read_again_with_limits() {
+        let xml = r#"{"value":"<XCUIElementTypeApplication/>"}"#;
+        let t = Script::new(vec![
+            timed_out(),
+            ok(r#"{"value":{}}"#),
+            ok(r#"{"sessionId":"A"}"#),
+            ok(r#"{"value":null}"#),
+            ok(xml),
+            ok(r#"{"value":null}"#),
+            ok(xml),
+            ok(xml),
+        ]);
+        let mut c = WdaClient::new(&t);
+        assert!(matches!(c.source_xml().await, Err(WdaError::Timeout(_))));
+        assert_eq!(c.snapshot_note(), None, "nothing was read with limits yet");
+        assert_eq!(c.source_xml().await.unwrap(), "<XCUIElementTypeApplication/>");
+        assert!(c.snapshot_note().unwrap().contains("150"));
+        c.source_xml().await.unwrap();
+        assert_eq!(c.snapshot_note(), None);
+        c.source_xml().await.unwrap();
+        let sent = t.sent();
+        assert!(sent[0].starts_with("GET /source?"));
+        assert_eq!(sent[1..4], ["GET /wda/activeAppInfo", "POST /session", "POST /session/A/appium/settings"]);
+        assert_eq!(t.body(3)["settings"], json!({"snapshotMaxDepth": 50, "snapshotMaxChildren": 150}));
+        assert_eq!(sent[5], "POST /session/A/appium/settings");
+        assert_eq!(t.body(5)["settings"]["snapshotMaxChildren"], i32::MAX);
+        assert_eq!(sent.len(), 8, "the last read needs no settings: {sent:?}");
     }
 }

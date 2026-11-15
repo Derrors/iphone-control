@@ -364,6 +364,8 @@ pub(crate) struct PerDevice {
     pub apps: HashMap<bool, Vec<AppInfo>>,
     /// Log capture for `AppLogs` (developer tools), started by the first request
     pub log_capture: Option<crate::devtools::Capture>,
+    /// HID 粘贴前存下的剪贴板和粘贴的时间，等着写回（[`Daemon::restore_pasteboard`]）
+    pub pending_paste: Option<(Instant, ictl_device::PendingRestore)>,
 }
 
 pub(crate) struct Inner {
@@ -711,6 +713,10 @@ impl Daemon {
 
     /// 不再控制当前这台（断开、重新接入、换设备）：停掉它的会话，清掉关于它的一切
     pub(crate) async fn forget_device(&self, g: &mut Inner) {
+        // 还连着就先把 HID 粘贴前的剪贴板写回去：之后就没人管它了
+        if g.dev.pending_paste.is_some() && g.tunnel.is_some() {
+            self.restore_pasteboard(g, false).await;
+        }
         self.drop_session(g).await;
         g.dev = PerDevice::default();
     }

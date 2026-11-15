@@ -221,7 +221,7 @@ dependencies = [
  "widestring",
  "windows-sys 0.59.0",
  "x509",
- "x509-certificate",
+ "x509-certificate 0.24.0",
  "xml-rs",
  "yasna 0.5.2",
  "zeroize",
@@ -269,7 +269,7 @@ dependencies = [
  "signature",
  "thiserror 2.0.21",
  "url",
- "x509-certificate",
+ "x509-certificate 0.24.0",
  "xml-rs",
  "xz2",
 ]
@@ -1037,7 +1037,7 @@ dependencies = [
  "reqwest 0.12.28",
  "ring",
  "signature",
- "x509-certificate",
+ "x509-certificate 0.24.0",
 ]
 
 [[package]]
@@ -2017,7 +2017,7 @@ dependencies = [
  "thiserror 2.0.21",
  "tracing",
  "uuid",
- "x509-certificate",
+ "x509-certificate 0.25.0",
  "zip",
 ]
 
@@ -3259,7 +3259,7 @@ dependencies = [
  "thiserror 2.0.21",
  "tokio",
  "uuid",
- "x509-certificate",
+ "x509-certificate 0.24.0",
 ]
 
 [[package]]
@@ -5668,6 +5668,25 @@ dependencies = [
  "signature",
  "spki",
  "thiserror 1.0.69",
+ "zeroize",
+]
+
+[[package]]
+name = "x509-certificate"
+version = "0.25.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ca9eb9a0c822c67129d5b8fcc2806c6bc4f50496b420825069a440669bcfbf7f"
+dependencies = [
+ "bcder",
+ "bytes",
+ "chrono",
+ "der",
+ "hex",
+ "pem 3.0.6",
+ "ring",
+ "signature",
+ "spki",
+ "thiserror 2.0.21",
  "zeroize",
 ]
 

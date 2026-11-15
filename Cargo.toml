@@ -79,7 +79,7 @@ plist = "=1.10.3"
 uuid = { version = "=1.29.2", features = ["v4"] }
 # 和 plume_core 同一份：比对证书和本机签名私钥的公钥（ictl-sign）
 rsa = "=0.9.10"
-x509-certificate = "=0.24.0"
+x509-certificate = "=0.25.0"
 zip = { version = "=9.5.1", default-features = false, features = ["deflate"] }
 regex = "=1.13.1"
 libc = "=0.2.191"

@@ -22,6 +22,8 @@ const REACT: Duration = Duration::from_millis(400);
 const PASTE_WAIT: Duration = Duration::from_secs(5);
 /// How long an app may take to come to the front
 const LAUNCH_WAIT: Duration = Duration::from_secs(8);
+/// How long a killed app's processes may take to be gone
+const TERMINATE_WAIT: Duration = Duration::from_secs(2);
 /// Home is answered no sooner than this after it was pressed: what it closes on the home screen animates meanwhile
 const HOME_ANIMATION: Duration = Duration::from_millis(600);
 /// After Home, how long the screen takes to wake before the swipe up (WDA's 1 s covers its slow queries)
@@ -599,6 +601,16 @@ impl Daemon {
             .collect();
         for pid in &pids {
             self.ensure_tunnel(g, &device).await?.signal(*pid, 9).await?;
+        }
+        // gone before this says so: a launch right after one killed failed with «The process identifier of the
+        // launched application could not be determined. It may have already terminated.»
+        let deadline = Instant::now() + TERMINATE_WAIT;
+        while !pids.is_empty() && Instant::now() < deadline {
+            let procs = self.ensure_tunnel(g, &device).await?.processes().await?;
+            if !procs.iter().any(|(p, _)| pids.contains(p)) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
         }
         Ok(!pids.is_empty())
     }

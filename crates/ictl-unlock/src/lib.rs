@@ -72,7 +72,7 @@ impl<T: Transport> Screen for WdaClient<T> {
     async fn press_home(&mut self, round: u32) -> std::result::Result<(), WdaError> {
         // XCTest 的 home 和 IOHID 的 Home 轮流用：iPhone 12 mini（iOS 26.4.1）上 XCTest 的 home 点不亮熄灭的屏幕，
         // IOHID 的能；iOS 27 上一直用的是 XCTest 的，第一轮还是它
-        if round % 2 == 0 { self.press_button("home").await } else { self.press_home_hid().await }
+        if round.is_multiple_of(2) { self.press_button("home").await } else { self.press_home_hid().await }
     }
     async fn view(&mut self) -> std::result::Result<elements::View, WdaError> {
         WdaClient::view(self).await

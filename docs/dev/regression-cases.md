@@ -128,3 +128,12 @@
 | 122 | 升级时运行新程序的 `--version` 偶尔失败：`Text file busy`（同一进程的其他线程 fork 时，新程序还以写方式打开） | 遇到 `ETXTBSY` 等 50 毫秒重试，最多 20 次 | 单测 `the_candidate_runs_once_it_is_no_longer_open_for_writing`（修复前稳定复现） |
 | 123 | iPad（iPadOS 26）重启后要输入密码启用 UI 自动化时，通知写的是「iPhone 需要输入锁屏密码」；所有通知标题都写死「iPhone」，多台设备时看不出是哪一台 | 标题用设备名（没有名字时用型号类别），密码提示按设备类别写系统弹窗的说法；离线通知用离线前记下的名字 | 单测 `a_notification_names_its_device`；真机 `notify-test pin`（控制 iPad，经本地假 Bark 截到标题） |
 | 124 | 切到另一台设备再切回 iPhone（iOS 27）后，WDA 卡在「Enable UI Automation」密码框期间，HID 后备路线的截图、按键都报「WDA 不可用,也不知道屏幕尺寸」：state.json 只记最后一台的尺寸 | 每台设备的尺寸按 UDID 记下（`screens`），`screen`/`screen_udid` 照旧写给旧版本 | 单测 `every_device_keeps_its_screen_size`；真机：iPhone 和 iPad 来回切换后，iPhone 的 WDA 还没起来时截图、按 Home |
+| 125 | 原生控制（iOS 27 不用 WDA）：手机只在切换 App 时推送元素树，App 内换页（设置 → 通用）读到的还是点击前的页面 | 每次读界面都自己走树（类型 4 + 每层一次发出类型 5） | 真机（`then=elements` 里有新页面的元素，「界面有变化」） |
+| 126 | 原生：HID 的屏幕媒体流开着时，锁屏键盘和系统密码框对无障碍是空的（任何会话都只读到应用元素），自动解锁报「调不出键盘」 | 读锁屏前先关 HID 会话，元素 0.1～0.7 秒后回来 | 真机（锁屏后任一操作） |
+| 127 | 原生：解锁后马上点击，被锁屏滑开的动画吞掉，界面不变 | 解锁后等 0.7 秒再操作 | 真机（锁屏后 `tap_element`，3/3） |
+| 128 | 原生：走树一个元素一次请求、一来一回约 40 毫秒，57 个元素 2.5 秒；滑动后等列表停下时还连带读 SpringBoard，读太慢，每次都报「还在滚动」 | 一层的请求一次发出、按答复里的元素对象配对；等列表停下只读 App | 真机计时（列元素约 0.2 秒；向上滑不再报还在动） |
+| 129 | 原生：SpringBoard 的提问（「…想从“dtpasteboardd”粘贴」、权限请求）没有 Alert 元素：按 Home 不拦、「允许粘贴」不点、输入中文失败 | 前台是 SpringBoard、元素不多、两个以上按钮、没有图标/键盘/密码栏/单元格时包一层 Alert | 单测 `a_question_springboard_asks_reads_as_an_alert` + 真机 |
+| 130 | 原生：按 Home 关掉主屏的长按菜单后马上启动 App，菜单动画结束时 App 又被送回主屏（3/3） | Home 按下后至少 0.6 秒才返回 | 真机（3/3 留在前台） |
+| 131 | 原生：结束 App 后马上打开链接，手机报「无法确定启动的应用的进程标识符」，报错是一串归档的字节 | 结束 App 等进程真的退出（最多 2 秒）；CoreDevice 的报错取出里面的说明文字 | 单测 `a_coredevice_error_says_what_it_says` + 真机 |
+| 132 | 原生：解锁沿用 WDA 的固定等待（唤醒 1 秒、上滑 1.5 秒），一次解锁约 8 秒 | 原生读锁屏只要约 0.1 秒：上滑后每 0.2 秒找键盘，唤醒等 0.5 秒；每位照旧读回核对（#4） | 单测 `a_screen_read_cheaply_finds_the_keypad_without_waiting_it_out` + 真机计时 |
+| 133 | 原生：网页（Safari）的文字读不到：网页元素在 WebKit WebContent 进程里，没有宿主视图 | 按进程列表认出 WebContent，元素原样放置 | 单测 + 真机（`wait_for` 网页文字 0.2～0.8 秒） |

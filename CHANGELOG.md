@@ -23,6 +23,7 @@ What changed in each release, one line per change. Versions follow [Semantic Ver
 
 ### Fixes
 
+- Ctrl+C in setup menus is no longer ignored after a half-typed key on a busy machine (#131).
 - `iphone-control status` on a phone under native control shows "native" instead of asking you to install WDA (#127).
 - `service stop` and `service uninstall` also end a WDA launched in the background, and each phone keeps its own (#124).
 - Text pasted on the phone no longer reaches your Mac through Universal Clipboard (#122).

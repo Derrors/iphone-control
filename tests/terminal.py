@@ -121,7 +121,7 @@ def escape_with_separate_input_terminal(command, env):
             try:
                 output = b""
                 while b"Ctrl+C cancel" not in output:
-                    assert select.select([display], [], [], 5)[0], "split-terminal menu did not appear"
+                    assert select.select([display], [], [], 8)[0], "split-terminal menu did not appear"
                     output += os.read(display, 8192)
                 os.write(key_stream, b"\x1b")
                 assert proc.wait(timeout=3) == 0
@@ -336,20 +336,34 @@ def main():
                 session.close()
             # Send one byte at a time, well apart: a single write is not a
             # fragmented-input test. Every fragment stays within the 250ms budget.
+            # That holds only if this script itself isn't held up between the
+            # writes (a busy macOS runner stalled it past the budget, and ↓ came
+            # out as "B"): an attempt whose writes took longer proves nothing
+            # and is run again.
+            spread = 0.2
             for fragmented_env, keys, result in [(env, b"\x1b[B", 2),
                                                   (env, b"\x1bOB", 2),
                                                   (yes_env, "否".encode(), 0),
                                                   (yes_env, "不".encode(), 0)]:
-                session = Session(command, fragmented_env)
-                try:
-                    session.expect("Esc")
-                    for byte in keys:
-                        session.send(bytes([byte]))
-                        time.sleep(0.04)
-                    session.send(b"\r")
-                    session.finish(f"MENU_RESULT={result}")
-                finally:
-                    session.close()
+                took = []
+                while len(took) < 5:
+                    session = Session(command, fragmented_env)
+                    try:
+                        session.expect("Esc")
+                        started = time.monotonic()
+                        for i, byte in enumerate(keys):
+                            if i:
+                                time.sleep(0.04)
+                            session.send(bytes([byte]))
+                        took.append(time.monotonic() - started)
+                        session.send(b"\r")
+                        if took[-1] <= spread:
+                            session.finish(f"MENU_RESULT={result}")
+                            break
+                    finally:
+                        session.close()
+                else:
+                    raise AssertionError(f"could not send {keys!r} within {spread}s: took {took}")
             # A partial control sequence that times out is ignored, not Esc.
             session = Session(command, env)
             try:

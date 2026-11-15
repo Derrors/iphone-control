@@ -161,6 +161,11 @@ fn decode(bytes: &[u8]) -> Key {
     }
 }
 
+/// C0 controls and DEL: keys of their own (Enter, Ctrl+C, Backspace, Esc), never inside an escape sequence
+fn is_control(byte: u8) -> bool {
+    byte < 0x20 || byte == 0x7f
+}
+
 /// Returns `Ok(None)` when no byte arrives within the first-read window: the
 /// terminal is simply idle, so the caller can skip repainting an unchanged
 /// frame. A byte that arrives but forms an unknown/partial sequence still
@@ -195,6 +200,11 @@ fn read_key(input: &mut std::fs::File, utf8: &mut Vec<u8>, queued: &mut Option<u
     let mut bytes = vec![first];
     if first == 0x1b {
         let Some(second) = read_byte(input, deadline)? else { return Ok(Some(Key::Escape)) };
+        // Esc and then Ctrl+C, Enter and so on, read together because this process was late: two keys, not one
+        if is_control(second) {
+            *queued = Some(second);
+            return Ok(Some(Key::Escape));
+        }
         bytes.push(second);
         if matches!(second, b'[' | b'O') {
             let mut overflow = false;
@@ -202,6 +212,12 @@ fn read_key(input: &mut std::fs::File, utf8: &mut Vec<u8>, queued: &mut Option<u
                 let Some(next) = read_byte(input, deadline)? else {
                     return Ok(Some(Key::Unknown));
                 };
+                // A control character can't be part of the sequence: it is the next key, after a sequence that
+                // never finished. Taken into the sequence, a Ctrl+C there would be lost
+                if is_control(next) {
+                    *queued = Some(next);
+                    return Ok(Some(Key::Unknown));
+                }
                 if bytes.len() < 32 {
                     bytes.push(next);
                 } else {
@@ -679,5 +695,33 @@ mod tests {
         assert_eq!(read_byte(&mut input, past).unwrap(), Some(b'['));
         assert_eq!(read_byte(&mut input, past).unwrap(), Some(b'B'));
         assert_eq!(read_byte(&mut input, past).unwrap(), None);
+    }
+
+    /// Keys this process gets to late, all at once: an unfinished sequence or a lone Esc doesn't swallow the
+    /// control key typed after it
+    #[test]
+    fn a_control_key_after_an_unfinished_sequence_is_its_own_key() {
+        use std::io::Write;
+        for (typed, keys) in [
+            (&b"\x1b[\x03"[..], vec![Key::Unknown, Key::CtrlC]),
+            (b"\x1bO\x03", vec![Key::Unknown, Key::CtrlC]),
+            (b"\x1b[1\r", vec![Key::Unknown, Key::Enter]),
+            (b"\x1b\x03", vec![Key::Escape, Key::CtrlC]),
+            (b"\x1b\x1b", vec![Key::Escape, Key::Escape]),
+            // complete sequences and the key after them are read as before
+            (b"\x1b[B\r", vec![Key::ArrowDown, Key::Enter]),
+            (b"\x1b[5~\x03", vec![Key::PageUp, Key::CtrlC]),
+        ] {
+            let (mut input, mut writer) = pipe();
+            // the writing end stays open: a closed one would end the input after these bytes
+            writer.write_all(typed).unwrap();
+            let (mut utf8, mut queued) = (Vec::new(), None);
+            let mut read = Vec::new();
+            for _ in &keys {
+                read.push(read_key(&mut input, &mut utf8, &mut queued).unwrap().unwrap());
+            }
+            assert_eq!(read, keys, "{typed:?}");
+            assert_eq!(queued, None, "{typed:?}");
+        }
     }
 }

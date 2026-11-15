@@ -6,10 +6,13 @@ What changed in each release, one line per change. Versions follow [Semantic Ver
 
 ## [Unreleased]
 
+## [0.2.7] - 2026-11-15
+
 ### Upgrade notes
 
 - Phones on iOS 27 and later switch to native control. To keep WebDriverAgent, set `ICTL_IOS_BACKEND=wda` in `~/.config/iphone-control/env` (#123).
 - Building from source needs Rust 1.89 (#119).
+- `ICTL_WDA_DETACHED` is gone: WDA is always launched in the background now. Left in the settings file, it does nothing (#125).
 
 ### New
 
@@ -19,6 +22,7 @@ What changed in each release, one line per change. Versions follow [Semantic Ver
 
 ### Improvements
 
+- WDA starts on a locked phone too, and keeps running across daemon restarts and updates (#125).
 - Dependencies updated (#119).
 
 ### Fixes
@@ -297,7 +301,8 @@ First public release.
 - `setup`, `doctor`, `status` and `mcp-config`.
 - Docker image and prebuilt Linux binaries.
 
-[Unreleased]: https://github.com/Derrors/iphone-control/compare/v0.2.6...HEAD
+[Unreleased]: https://github.com/Derrors/iphone-control/compare/v0.2.7...HEAD
+[0.2.7]: https://github.com/Derrors/iphone-control/compare/v0.2.6...v0.2.7
 [0.2.6]: https://github.com/Derrors/iphone-control/compare/v0.2.5...v0.2.6
 [0.2.5]: https://github.com/Derrors/iphone-control/compare/v0.2.4...v0.2.5
 [0.2.4]: https://github.com/Derrors/iphone-control/compare/v0.2.3...v0.2.4

@@ -6,10 +6,13 @@
 
 ## [Unreleased]
 
+## [0.2.7] - 2026-11-15
+
 ### 升级注意事项
 
 - iOS 27 及以上的手机改用原生控制。想继续用 WebDriverAgent，在 `~/.config/iphone-control/env` 里设 `ICTL_IOS_BACKEND=wda`（#123）。
 - 从源码编译需要 Rust 1.89（#119）。
+- 去掉了 `ICTL_WDA_DETACHED`：WDA 现在总在后台启动，设置文件里留着这一项也不起作用（#125）。
 
 ### 新功能
 
@@ -19,6 +22,7 @@
 
 ### 改进
 
+- WDA 在锁屏时也能启动，守护进程重启、升级时它不跟着断（#125）。
 - 依赖升级（#119）。
 
 ### 修复
@@ -297,7 +301,8 @@
 - `setup`、`doctor`、`status`、`mcp-config`。
 - Docker 镜像和预编译的 Linux 二进制。
 
-[Unreleased]: https://github.com/Derrors/iphone-control/compare/v0.2.6...HEAD
+[Unreleased]: https://github.com/Derrors/iphone-control/compare/v0.2.7...HEAD
+[0.2.7]: https://github.com/Derrors/iphone-control/compare/v0.2.6...v0.2.7
 [0.2.6]: https://github.com/Derrors/iphone-control/compare/v0.2.5...v0.2.6
 [0.2.5]: https://github.com/Derrors/iphone-control/compare/v0.2.4...v0.2.5
 [0.2.4]: https://github.com/Derrors/iphone-control/compare/v0.2.3...v0.2.4

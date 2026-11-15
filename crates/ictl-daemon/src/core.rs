@@ -62,12 +62,12 @@ pub struct Persisted {
     /// 运行中选定要控制的设备（`iphone-control select`、`iphone_select_device`）；None 是自动选。
     /// 设了 `IPHONE_UDID` 时以它为准，这个不起作用
     pub selected_udid: Option<String>,
-    /// 实验（`ICTL_WDA_DETACHED`）：最近记下的那个后台启动的 WDA（哪台设备上的哪个进程）。只留给旧版本读
+    /// 后台启动的 WDA：最近记下的那个后台启动的 WDA（哪台设备上的哪个进程）。只留给旧版本读
     /// （降级后它据此接上或结束这一个）；新版本看 [`Self::detached_wdas`]，经 [`Self::detached_for`] 等读写
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub detached_wda: Option<DetachedWda>,
-    /// 实验（`ICTL_WDA_DETACHED`）：每台设备上后台启动的 WDA 的进程号，按 UDID。守护进程重启、切换设备再切回来时
-    /// 据此直接接上，不重新启动；关掉实验开关、改走原生控制、`service stop`/`uninstall` 时据此结束它（不然它一直
+    /// 每台设备上后台启动的 WDA 的进程号，按 UDID。守护进程重启、切换设备再切回来时
+    /// 据此直接接上，不重新启动；改走原生控制、`service stop`/`uninstall` 时据此结束它（不然它一直
     /// 占着 8100 端口，新 runner 的 HTTP 服务起不来）。见 [`crate::detached`]
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub detached_wdas: std::collections::BTreeMap<String, u64>,

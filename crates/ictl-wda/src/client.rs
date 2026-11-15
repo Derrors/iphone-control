@@ -142,7 +142,7 @@ fn acts(method: &str, path: &str) -> bool {
 /// (iOS 27.0.1), and iOS kills a process above 80 % over 60 s (`cpu_resource_fatal`), so with the picture open WDA
 /// was killed every 1.5–2.5 minutes. At 100 % it delivers the same ~34 fps there, with smaller frames
 /// (1290×2796, about 80 KB against 104 KB), and ran 15 minutes without being killed. Set explicitly: a WDA left
-/// running in the background (`ICTL_WDA_DETACHED`) keeps the value an older version set
+/// running in the background (the daemon launches it so) keeps the value an older version set
 const MJPEG_FPS: u32 = 60;
 const MJPEG_SCALE: u32 = 100;
 
@@ -207,7 +207,7 @@ pub struct WdaClient<T> {
     /// 下次读元素树用的上限，[`SNAPSHOT_LEVELS`] 的下标
     snapshot_level: usize,
     /// WDA 现在用的上限。None = 不知道：这个客户端还没开过会话、也没设过；开会话时 WDA 重置成不限（0）。
-    /// 不知道时按不限算，不为读树专门开会话：`ICTL_WDA_DETACHED` 下守护进程重启后接上的 WDA 若留着上一个客户端收紧的值，
+    /// 不知道时按不限算，不为读树专门开会话：守护进程重启后接上的后台 WDA 若留着上一个客户端收紧的值，
     /// 第一次开会话（第一次点击、改设置）就重置了
     snapshot_applied: Option<usize>,
     /// 上一次读到的元素树用的上限（[`Self::snapshot_note`]）
@@ -348,7 +348,7 @@ impl<T: Transport> WdaClient<T> {
         self.idle_current = None;
         self.snapshot_applied = Some(0);
         if self.fast_stream {
-            // fixOrientation explicitly off: a WDA left running in the background (`ICTL_WDA_DETACHED`) keeps what an
+            // fixOrientation explicitly off: a WDA left running in the background keeps what an
             // older version set
             let settings = json!({
                 "mjpegServerFramerate": MJPEG_FPS,

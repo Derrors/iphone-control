@@ -1,7 +1,7 @@
-//! The WDA launched in the background (`ICTL_WDA_DETACHED`), once it isn't used. It doesn't end with the daemon (that
-//! is the point: a restart or an update attaches to it again), so it is ended where it is no longer wanted: preparing
-//! a phone for native control, starting WDA with the switch turned off, and `iphone-control service stop` /
-//! `uninstall` ([`end_recorded`], with the daemon stopped). Each phone keeps its own (`Persisted::detached_wdas`):
+//! The WDA the daemon launches in the background (it holds no XCTest session), once it isn't used. It doesn't end
+//! with the daemon (that is the point: a restart or an update attaches to it again), so it is ended where it is no
+//! longer wanted: preparing a phone for native control, and `iphone-control service stop` / `uninstall`
+//! ([`end_recorded`], with the daemon stopped). Each phone keeps its own (`Persisted::detached_wdas`):
 //! switching to another device and back attaches to it again.
 
 use std::time::{Duration, Instant};

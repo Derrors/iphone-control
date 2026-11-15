@@ -4,7 +4,7 @@
 //! 就绪判定 = 本进程持有的 runner 任务还活着 **且** `/status` ready（手机上残留的 WDA 在 runner 退出后还会响应几十秒）。
 //! 启动时还要等新 runner 开始执行测试计划后才问 `/status`：在那之前应答的只可能是残留的旧 WDA。
 //!
-//! 实验（`ICTL_WDA_DETACHED=1`）：守护进程在后台启动 runner、不持有 XCTest 会话（见 `ictl_device::Tunnel::launch_in_background`），
+//! 后台启动：守护进程总在后台启动 runner、不持有 XCTest 会话（见 `ictl_device::Tunnel::launch_in_background`），
 //! 这里只用 [`WdaRunner::attach`] 等 `/status` ready。这样的 runner 不随主机进程退出，就绪判定只看 `/status`。
 
 use std::sync::{Arc, Mutex};

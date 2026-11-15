@@ -26,8 +26,6 @@ pub struct Config {
     /// 0 表示不提醒
     pub offline_alert: Duration,
     pub notify: NotifyConfig,
-    /// 实验（`ICTL_WDA_DETACHED=1`）：在后台启动 WDA、不持有 XCTest 会话（见 `docs/dev/wda-dependency-research.md`）
-    pub wda_detached: bool,
     /// iOS 27 及以上怎么控制（`ICTL_IOS_BACKEND`）
     pub ios_backend: IosBackend,
 }
@@ -129,8 +127,6 @@ impl Config {
                 bark_server: env(crate::protocol::env::BARK_SERVER).unwrap_or_else(|| "https://api.day.app".into()),
                 bark_key: env(crate::protocol::env::BARK_KEY),
             },
-            wda_detached: env(crate::protocol::env::WDA_DETACHED)
-                .is_some_and(|v| matches!(v.as_str(), "1" | "true" | "yes")),
             ios_backend: IosBackend::parse(env(crate::protocol::env::IOS_BACKEND).as_deref()),
         }
     }

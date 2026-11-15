@@ -14,6 +14,7 @@
 
 ### 变更
 
+- 守护进程总在后台启动 WDA、不再持有 XCTest 会话：手机锁着也能启动 WDA，守护进程重启、升级时 WDA 不中断，切换设备再切回来直接接上。原来的实验开关 `ICTL_WDA_DETACHED` 去掉了，设置文件里留着也不起作用（`=0` 也不能改回原来的方式）。`iphone-control service stop`、`service uninstall` 会结束它。见 docs/decisions.md D18。
 - 从源码编译需要 Rust 1.89（原来 1.88），因为 uuid 1.29 要求它。
 - 依赖升级：rmcp 3.10.0、rcgen 0.14.10、console 0.16.6、sha2 0.11.1、uuid 1.29.2、zip 9.5.1、flate2 1.1.11，以及 26 个间接依赖的兼容版本（rustls-webpki、mio、openssl、webpki-roots 等）。rcgen 只用 ring（它默认还会编 aws-lc）。vendor 里的 plume_core 生成签名请求改用 rcgen 0.14、apple-codesign 改用 dialoguer 0.12，rcgen 和 console 各只编一份，不再两个版本并存。x509-certificate 留在 0.24、rsa 留在 0.9：apple-codesign 和它的依赖用的是这两个版本，我们升了只会在旁边多编一份。控制台自己生成的 HTTPS 证书仍是 ECDSA P-256，以前生成的照常能用。
 - CI：actions/setup-node 7、dorny/paths-filter 4。网站：vue 3.5.45。

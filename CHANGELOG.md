@@ -14,6 +14,7 @@ All notable changes to this project are documented here. The format is based on 
 
 ### Changed
 
+- The daemon always launches WDA in the background and no longer holds an XCTest session: WDA starts on a locked phone too, keeps running across daemon restarts and updates, and is attached to again after switching devices and back. The experimental switch `ICTL_WDA_DETACHED` is gone; left in the settings file it does nothing (`=0` doesn't bring back the old way either). `iphone-control service stop` and `service uninstall` end it. See docs/decisions.md D18.
 - Building from source needs Rust 1.89 (was 1.88), for uuid 1.29.
 - Dependencies updated: rmcp 3.10.0, rcgen 0.14.10, console 0.16.6, sha2 0.11.1, uuid 1.29.2, zip 9.5.1, flate2 1.1.11, and 26 indirect ones within their compatible versions (rustls-webpki, mio, openssl, webpki-roots and others). rcgen keeps to ring only (its default would also build aws-lc). The vendored plume_core makes its signing request with rcgen 0.14 and apple-codesign uses dialoguer 0.12, so each of rcgen and console is built once instead of in two versions. x509-certificate stays at 0.24 and rsa at 0.9: apple-codesign and its dependencies use those, and a newer copy of ours would only be built beside them. The control page's self-made HTTPS certificate is still ECDSA P-256; one made before keeps working.
 - CI: actions/setup-node 7, dorny/paths-filter 4. Website: vue 3.5.45.

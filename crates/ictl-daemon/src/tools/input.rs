@@ -231,6 +231,7 @@ impl Daemon {
         to: (f64, f64),
         seconds: f64,
         view: Option<&str>,
+        watched: bool,
     ) -> crate::error::Result<String> {
         self.prepare_coordinates(g, view, true).await?;
         let desc = format!("({},{}) → ({},{})", fmt_g(from.0), fmt_g(from.1), fmt_g(to.0), fmt_g(to.1));
@@ -238,6 +239,12 @@ impl Daemon {
             match w.swipe_into_polling(from, to, (seconds * 1000.0) as u64).await {
                 // 滑动请求不等惯性滚动（等的话设置不对能卡十几秒），这里等列表停下再返回：
                 // 列表还在滚时下一次点击只会让它停住，点不到东西
+                // someone watches the screen ([`crate::protocol::WATCHED`]): they see when it stops
+                Ok(()) if watched => {
+                    w.end_polling().await;
+                    g.swiped_tree = None;
+                    return Ok(ictl_l10n::trf!("已滑动 {desc}", "Swiped {desc}"));
+                }
                 Ok(()) => {
                     let vertical = (to.1 - from.1).abs() >= (to.0 - from.0).abs();
                     let (note, tree) = wait_scrolled(w, vertical).await;

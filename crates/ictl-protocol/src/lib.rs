@@ -663,7 +663,8 @@ pub const LANG: &str = "lang";
 pub const BACKGROUND: &str = "background";
 /// Request key: someone watches the screen (the control page), so the daemon doesn't look before acting for what they
 /// see anyway. Pressing Home skips the alert lookup that comes first (0.8 s of a 1.3 s press on the home screen) and
-/// looks only when the press didn't get to the home screen
+/// looks only when the press didn't get to the home screen; a swipe through WDA doesn't wait for the list to stop (up
+/// to 2.5 s of reading the element tree again and again, 3.1 s for a swipe on an iPad mini 5)
 pub const WATCHED: &str = "watched";
 /// Request key of a [`Request::ScreenStream`]: the page is in low-bandwidth mode, so the phone's video is capped at a
 /// lower bitrate while it watches (for every page watching that phone: there is one stream). Older daemons ignore it
@@ -708,7 +709,8 @@ pub async fn call_watched(
     exchange_on(socket, req, timeout, expect_udid, None, Some(WATCHED)).await
 }
 
-/// Send a coordinate action only if this device and its measured geometry still match.
+/// Send a coordinate action only if this device and its measured geometry still match. Only the control page sends
+/// these, so they say someone watches the screen ([`WATCHED`])
 pub async fn call_in_view(
     socket: &std::path::Path,
     req: &Request,
@@ -716,7 +718,7 @@ pub async fn call_in_view(
     udid: &str,
     view: &str,
 ) -> std::io::Result<Response> {
-    exchange_on(socket, req, timeout, Some(udid), Some(view), None).await
+    exchange_on(socket, req, timeout, Some(udid), Some(view), Some(WATCHED)).await
 }
 
 async fn exchange_on(

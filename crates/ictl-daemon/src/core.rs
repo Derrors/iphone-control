@@ -1085,7 +1085,7 @@ impl Daemon {
                 })
             }
             Request::LongPress { x, y, seconds } => self.long_press(g, x, y, seconds, view).await,
-            Request::Swipe { from, to, seconds } => self.swipe(g, from, to, seconds, view).await,
+            Request::Swipe { from, to, seconds } => self.swipe(g, from, to, seconds, view, watched).await,
             Request::TypeText { text, submit } => self.type_text(g, &text, submit).await,
             Request::PressButton { button } => self.press_button(g, &button, watched).await,
             Request::Touch { phase, x, y } => {

@@ -469,7 +469,7 @@ impl Daemon {
                 .into());
             }
         }
-        Box::pin(self.ax_read(g, None, crate::tools::AX_WAIT)).await.map(|_| ()).map_err(|e| e.to_string())
+        Box::pin(self.ax_read(g, crate::tools::AX_WAIT)).await.map(|_| ()).map_err(|e| e.to_string())
     }
 
     /// A mount that failed may be a broken cache: after a few in a row it is downloaded again (`ICTL_DDI_DIR` is the

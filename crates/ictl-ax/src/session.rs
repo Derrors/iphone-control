@@ -180,6 +180,13 @@ async fn read_loop<S: AsyncRead + AsyncWrite + Unpin + Send>(
         // an NSData holding the archived response
         let Some(Obj::Data(inner)) = f.first_arg() else { continue };
         let Some(r) = archive::decode(&inner).ok().as_ref().and_then(Response::from_obj) else { continue };
+        tracing::debug!(
+            "remoteAXService: response to request type {}, notification {}, error {}, result {}",
+            r.request_type,
+            r.notification,
+            r.error,
+            describe(&r.result)
+        );
         if let Some(dump) = r.result.field("treeDump").and_then(Obj::as_array) {
             let kind = r.result.field("treeDumpType").and_then(Obj::as_str).unwrap_or("");
             if let Some(tree) = tree::from_dump(dump, kind) {
@@ -197,6 +204,19 @@ async fn read_loop<S: AsyncRead + AsyncWrite + Unpin + Send>(
     }
     waiter.lock().unwrap_or_else(|p| p.into_inner()).take();
     closed.send_replace(true);
+}
+
+/// A result's shape for the debug log: its class and field names (no screen text)
+fn describe(o: &Obj) -> String {
+    match o {
+        Obj::Object { class, fields } => {
+            format!("{class}{{{}}}", fields.iter().map(|(k, _)| k.as_str()).collect::<Vec<_>>().join(","))
+        }
+        Obj::Array(a) => format!("[{} items]", a.len()),
+        Obj::Dict(d) => format!("{{{} entries}}", d.len()),
+        Obj::Null => "null".into(),
+        _ => "scalar".into(),
+    }
 }
 
 impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> Session<S> {
@@ -285,28 +305,60 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> Session<S> {
         Ok(self.request(request::ATTRIBUTES, Some(object), &[("attributes", list)]).await?.result)
     }
 
-    /// The elements under `root`, depth first, at most `limit` of them (one request each). The root itself is not
-    /// included; the walked elements' `parent` indexes point into the returned list (None for the root's children).
-    /// Elements with any of the traits `prune` are listed, but not walked into
-    pub async fn walk_children(&self, root: ObjectRef, limit: usize, prune: u64) -> Result<Vec<Element>> {
-        let root_attrs = self.attributes(root).await?;
-        let (_, kids) = tree::element(Some(root), &root_attrs, None, 0);
-        let mut stack: Vec<(ObjectRef, Option<usize>, usize)> = kids.into_iter().rev().map(|k| (k, None, 1)).collect();
+    /// `root` and the elements under it, depth first in reading order, each with [`attr::WALK`] (one request each, a
+    /// few milliseconds over USB): at most `limit` of them, within `budget`. Elements with any of the traits `prune`
+    /// are listed, but not walked into. Also says whether the walk got to the end.
+    ///
+    /// This is how the screen is read: the phone pushes a tree by itself only when the frontmost app changes (and on
+    /// connecting), not when an app changes its own screen (iPhone 15 Pro Max, iOS 27.2.1, 2026-11-15; Pinky reads
+    /// the same way, DIYgod/pinky `rax.go`). Asking for a tree dump (request type 11) closes the connection
+    pub async fn walk(
+        &self,
+        root: ObjectRef,
+        limit: usize,
+        budget: Duration,
+        prune: u64,
+    ) -> Result<(Vec<Element>, bool)> {
+        let deadline = Instant::now() + budget;
+        let mut stack = vec![(root, None, 0usize)];
+        let mut seen = std::collections::HashSet::new();
         let mut out = Vec::new();
         while let Some((o, parent, depth)) = stack.pop() {
-            if out.len() >= limit || depth > 30 {
-                break;
+            if out.len() >= limit || Instant::now() >= deadline {
+                return Ok((out, false));
+            }
+            if depth > 40 || !seen.insert((o.pid, o.id)) {
+                continue;
             }
             let a = self.attributes(o).await?;
             let (e, kids) = tree::element(Some(o), &a, parent, depth);
-            let walk_into = e.traits & prune == 0;
+            let walk_into = depth == 0 || e.traits & prune == 0;
             out.push(e);
             let idx = out.len() - 1;
             for k in kids.into_iter().rev().filter(|_| walk_into) {
                 stack.push((k, Some(idx), depth + 1));
             }
         }
-        Ok(out)
+        Ok((out, true))
+    }
+
+    /// The elements under `root` as [`Self::walk`] reads them, without the root: the `parent` indexes point into the
+    /// returned list (None for the root's children)
+    pub async fn walk_children(
+        &self,
+        root: ObjectRef,
+        limit: usize,
+        budget: Duration,
+        prune: u64,
+    ) -> Result<Vec<Element>> {
+        let (mut els, _) = self.walk(root, limit + 1, budget, prune).await?;
+        if !els.is_empty() {
+            els.remove(0);
+        }
+        for e in &mut els {
+            e.parent = e.parent.and_then(|p| p.checked_sub(1));
+        }
+        Ok(els)
     }
 
     /// Tells the phone this client no longer needs accessibility (it then closes the connection)

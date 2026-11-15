@@ -283,15 +283,13 @@ impl Daemon {
         if !native {
             return Ok(ictl_l10n::trf!("已滑动 {desc}(经 HID)", "Swiped {desc} (via HID)"));
         }
-        // as through WDA: a list still scrolling only stops at the next tap; the pushed trees say when it stopped
-        let note = if watched || matches!(Box::pin(self.native_quiet(g, SCROLL_SETTLE)).await, Ok(true) | Err(_)) {
+        // as through WDA: a list still scrolling only stops at the next tap; someone watching sees when it stops
+        g.swiped_tree = None;
+        let note = if watched {
             String::new()
         } else {
-            ictl_l10n::trf!(
-                "({:.1} 秒后列表还在动,可能还在滚动)",
-                " (the list was still moving after {:.1} s, it may still be scrolling)",
-                SCROLL_SETTLE.as_secs_f64()
-            )
+            let vertical = (to.1 - from.1).abs() >= (to.0 - from.0).abs();
+            Box::pin(self.native_scrolled(g, vertical)).await
         };
         Ok(ictl_l10n::trf!("已滑动 {desc}{note}", "Swiped {desc}{note}"))
     }

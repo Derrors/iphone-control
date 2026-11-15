@@ -15,10 +15,9 @@ use crate::config::IosBackend;
 
 /// A read of the screen waits at most this long for a tree (the first one of a session comes in about a second)
 pub(crate) const AX_WAIT: Duration = Duration::from_secs(5);
-/// After an action, the screen counts as unchanged when nothing is pushed within this long
-const FIRST_PUSH: Duration = Duration::from_millis(1500);
-/// No push for this long: the screen has settled
-const QUIET: Duration = Duration::from_millis(600);
+/// After an action, the screen is first read this long after it started: an app reacts to a tap within about
+/// 0.1 s, a page slides in within about 0.35 s
+const REACT: Duration = Duration::from_millis(400);
 /// After Cmd-V: how long for the text to show in the field, answering the paste prompt meanwhile
 const PASTE_WAIT: Duration = Duration::from_secs(5);
 /// How long an app may take to come to the front
@@ -46,13 +45,12 @@ impl Daemon {
         native_for(self.cfg.ios_backend, g.info.as_ref())
     }
 
-    /// One read of the screen through remoteAXService, as WDA-style XML: the last tree the phone pushed, or with
-    /// `after` the first one pushed after it, and SpringBoard's elements over the app. Returns the XML, the screen
-    /// (as turned now) and the frontmost app's process
+    /// One read of the screen through remoteAXService, as WDA-style XML: the frontmost app's tree as it is now and
+    /// SpringBoard's elements over the app. Returns the XML, the screen (as turned now) and the frontmost app's
+    /// process
     pub(crate) async fn ax_read(
         &self,
         g: &mut Inner,
-        after: Option<Instant>,
         wait: Duration,
     ) -> crate::error::Result<(String, ScreenSize, i64)> {
         let device = g.device.clone().ok_or(ictl_l10n::tr!("手机未连接", "Phone not connected"))?;
@@ -60,7 +58,7 @@ impl Daemon {
             .ensure_tunnel(g, &device)
             .await
             .map_err(|e| ictl_l10n::trf!("读界面失败（建隧道）：{e}", "Reading the screen failed (tunnel): {e}"))?;
-        let r = t.ax_screen(after, wait).await;
+        let r = t.ax_screen(wait).await;
         if r.is_err() {
             t.close_ax().await;
         }
@@ -83,19 +81,21 @@ impl Daemon {
     }
 
     /// The screen's elements through remoteAXService (see [`Self::ax_read`])
-    pub(crate) async fn ax_tree(
-        &self,
-        g: &mut Inner,
-        after: Option<Instant>,
-        wait: Duration,
-    ) -> crate::error::Result<Tree> {
-        let (xml, size, _) = self.ax_read(g, after, wait).await?;
+    pub(crate) async fn ax_tree(&self, g: &mut Inner, wait: Duration) -> crate::error::Result<Tree> {
+        let (xml, size, _) = self.ax_read(g, wait).await?;
         Ok(elements::parse_tree(&xml, size))
     }
 
-    /// The frontmost app's bundle ID
+    /// The frontmost app's bundle ID (one request, no walk)
     pub(crate) async fn native_foreground(&self, g: &mut Inner) -> crate::error::Result<String> {
-        let (_, _, pid) = self.ax_read(g, None, AX_WAIT).await?;
+        let device = g.device.clone().ok_or(ictl_l10n::tr!("手机未连接", "Phone not connected"))?;
+        let t = self.ensure_tunnel(g, &device).await?;
+        let r = t.ax_frontmost_pid(AX_WAIT).await;
+        if r.is_err() {
+            t.close_ax().await;
+        }
+        g.ax_used = Some(Instant::now());
+        let pid = r.map_err(|e| ictl_l10n::trf!("读前台 App 失败：{e}", "Reading the foreground app failed: {e}"))?;
         self.bundle_of_pid(g, pid).await
     }
 
@@ -174,63 +174,71 @@ impl Daemon {
         Box::pin(g.device.as_ref()?.interface_rotation()).await.ok().flatten()
     }
 
-    /// Waits for the screen to settle after an action: the first tree pushed after it started (none within
-    /// [`FIRST_PUSH`]: nothing changed), then until nothing more is pushed for [`QUIET`]
+    /// Waits for the screen to settle after an action, as through WDA: the tree read again until two reads in a
+    /// row are alike and nothing is loading, at most `max`. The first read waits a moment after the action (the
+    /// app's reaction, a page's slide in), or two reads of the old screen would count as settled
     pub(crate) async fn native_settle(&self, g: &mut Inner, max: Duration) -> crate::error::Result<(String, Tree)> {
         let t0 = Instant::now();
-        let settled = self.native_quiet(g, max).await?;
-        let tree = self.ax_tree(g, None, AX_WAIT).await?;
-        let msg = if !settled {
-            ictl_l10n::trf!(
-                "{:.1} 秒内界面一直在变(可能有动画),按最后的状态返回",
-                "The screen kept changing for {:.1} s (perhaps an animation), returning the last state",
-                max.as_secs_f64()
-            )
-        } else if tree.loading {
-            ictl_l10n::trf!(
-                "界面已稳定({:.1} 秒),但页面还在加载(有加载圈);要等结果出来用 iphone_wait_for",
-                "Screen settled ({:.1} s), but the page is still loading (spinner shown); to wait for the result use iphone_wait_for",
-                t0.elapsed().as_secs_f64()
-            )
-        } else {
-            ictl_l10n::trf!("界面已稳定({:.1} 秒)", "Screen settled ({:.1} s)", t0.elapsed().as_secs_f64())
-        };
-        Ok((msg, tree))
-    }
-
-    /// Waits, at most `max`, until the phone pushes no more trees: from the first one pushed after the last action
-    /// started (none within [`FIRST_PUSH`]: nothing changed) until none comes for [`QUIET`]. False when it kept
-    /// pushing till `max`
-    pub(crate) async fn native_quiet(&self, g: &mut Inner, max: Duration) -> crate::error::Result<bool> {
-        let t0 = Instant::now();
-        let since = g.dev.acted_at.unwrap_or(t0);
-        let device = g.device.clone().ok_or(ictl_l10n::tr!("手机未连接", "Phone not connected"))?;
-        let deadline = t0 + max;
-        let t = self.ensure_tunnel(g, &device).await?;
-        let r = async {
-            let s = t.ax().await?;
-            let mut last = s.wait_push(since, FIRST_PUSH.min(max)).await.map(|p| p.at);
-            while let Some(at) = last {
-                let left = deadline.saturating_duration_since(Instant::now());
-                if left.is_zero() {
-                    return Ok(false);
-                }
-                match s.wait_push(at, QUIET.min(left)).await {
-                    Some(p) if p.at > at => last = Some(p.at),
-                    _ => break,
-                }
+        if let Some(left) = g.dev.acted_at.and_then(|t| REACT.checked_sub(t.elapsed())) {
+            tokio::time::sleep(left).await;
+        }
+        let mut prev = self.ax_tree(g, AX_WAIT).await?;
+        if prev.elements.len() < VISUAL_SETTLE_BELOW {
+            // too few elements to tell (a game, a map): the caller looks at the picture
+            return Ok((String::new(), prev));
+        }
+        loop {
+            if t0.elapsed() >= max {
+                let msg = if prev.loading {
+                    ictl_l10n::trf!(
+                        "{:.1} 秒内页面一直在加载(有加载圈),按最后的状态返回;要等结果出来用 iphone_wait_for",
+                        "The page kept loading for {:.1} s (spinner shown), returning the last state; to wait for the result use iphone_wait_for",
+                        max.as_secs_f64()
+                    )
+                } else {
+                    ictl_l10n::trf!(
+                        "{:.1} 秒内界面一直在变(可能有动画),按最后的状态返回",
+                        "The screen kept changing for {:.1} s (perhaps an animation), returning the last state",
+                        max.as_secs_f64()
+                    )
+                };
+                return Ok((msg, prev));
             }
-            Ok::<_, DeviceError>(true)
+            let cur = self.ax_tree(g, AX_WAIT).await?;
+            let same = cur.close_to(&prev, STILL_TOLERANCE);
+            prev = cur;
+            if same && !prev.loading {
+                let msg =
+                    ictl_l10n::trf!("界面已稳定({:.1} 秒)", "Screen settled ({:.1} s)", t0.elapsed().as_secs_f64());
+                return Ok((msg, prev));
+            }
         }
-        .await;
-        if r.is_err() {
-            t.close_ax().await;
-        }
-        g.ax_used = Some(Instant::now());
-        Ok(r?)
     }
 
-    /// Text appearing on screen, natively: the trees the phone pushes are read as they come
+    /// After a swipe, waits for the list to stop (at most [`SCROLL_SETTLE`]): two reads in a row with the elements
+    /// in the same place along the swipe. Says when it was still moving; a screen with few elements isn't waited for
+    pub(crate) async fn native_scrolled(&self, g: &mut Inner, vertical: bool) -> String {
+        let t0 = Instant::now();
+        let Ok(mut prev) = self.ax_tree(g, AX_WAIT).await else { return String::new() };
+        if prev.elements.len() < VISUAL_SETTLE_BELOW {
+            return String::new();
+        }
+        while t0.elapsed() < SCROLL_SETTLE {
+            let Ok(cur) = self.ax_tree(g, AX_WAIT).await else { return String::new() };
+            if cur.still_along(&prev, vertical, STILL_TOLERANCE) {
+                g.swiped_tree = Some((Instant::now(), cur));
+                return String::new();
+            }
+            prev = cur;
+        }
+        ictl_l10n::trf!(
+            "({:.1} 秒后列表还在动,可能还在滚动)",
+            " (the list was still moving after {:.1} s, it may still be scrolling)",
+            SCROLL_SETTLE.as_secs_f64()
+        )
+    }
+
+    /// Text appearing on screen, natively: the tree read again every 0.3 s
     pub(crate) async fn native_wait_for(
         &self,
         g: &mut Inner,
@@ -239,7 +247,7 @@ impl Daemon {
     ) -> crate::error::Result<String> {
         let t0 = Instant::now();
         loop {
-            let tree = self.ax_tree(g, None, AX_WAIT).await?;
+            let tree = self.ax_tree(g, AX_WAIT).await?;
             // 不算输入框里的字：刚输入的搜索词不能算「结果出来了」
             if let Some(e) = elements::find_shown(&tree.elements, text).first() {
                 return Ok(ictl_l10n::trf!(
@@ -263,7 +271,7 @@ impl Daemon {
 
     /// A system alert over the screen, natively: SpringBoard's elements are part of every read
     pub(crate) async fn native_alert(&self, g: &mut Inner) -> crate::error::Result<(String, Option<String>)> {
-        let tree = self.ax_tree(g, None, AX_WAIT).await?;
+        let tree = self.ax_tree(g, AX_WAIT).await?;
         Ok(match tree.alert().map(|a| a.label.clone()).filter(|l| !l.is_empty()) {
             Some(text) => (alert_msg(&text), Some(text)),
             None => (String::new(), None),
@@ -362,7 +370,7 @@ impl Daemon {
     /// answered, and the field read back before the pasteboard is put back and Return pressed
     pub(crate) async fn native_type(&self, g: &mut Inner, text: &str, submit: bool) -> crate::error::Result<String> {
         let n = text.chars().count();
-        let before = self.ax_tree(g, None, AX_WAIT).await?;
+        let before = self.ax_tree(g, AX_WAIT).await?;
         if !before.elements.iter().any(|e| e.kind == "Keyboard") {
             return Err(ictl_l10n::tr!(
                 "屏幕上没有键盘(没有输入框获得焦点),什么都没输;先点一下输入框,截图确认键盘出来了再输入",
@@ -435,7 +443,7 @@ impl Daemon {
         let mut prompt = false;
         let wanted = text.trim();
         let typed = loop {
-            let tree = self.ax_tree(g, None, AX_WAIT).await?;
+            let tree = self.ax_tree(g, AX_WAIT).await?;
             if let Some((x, y)) = paste_allow(&tree) {
                 self.native_tap(g, x, y).await?;
                 prompt = true;
@@ -483,7 +491,7 @@ impl Daemon {
         self.ensure_tunnel(g, &device).await?.launch_foreground(bundle_id, url).await?;
         loop {
             tokio::time::sleep(Duration::from_millis(300)).await;
-            let (xml, size, pid) = self.ax_read(g, None, AX_WAIT).await?;
+            let (xml, size, pid) = self.ax_read(g, AX_WAIT).await?;
             let tree = elements::parse_tree(&xml, size);
             if let Some(a) = tree.alert().filter(|a| !a.label.is_empty()) {
                 return Ok(ictl_wda::Launch::Blocked(a.label.clone()));
@@ -559,11 +567,8 @@ impl Screen for NativeScreen<'_> {
 
     async fn check_lock(&mut self, _reported: Option<bool>, _strict: bool) -> std::result::Result<LockCheck, WdaError> {
         let locked = self.d.native_locked(self.g).await.map_err(|e| WdaError::Unavailable(e.to_string()))?;
-        let tree = if locked {
-            self.d.ax_read(self.g, None, Duration::from_secs(3)).await.ok().map(|(x, _, _)| x)
-        } else {
-            None
-        };
+        let tree =
+            if locked { self.d.ax_read(self.g, Duration::from_secs(3)).await.ok().map(|(x, _, _)| x) } else { None };
         Ok(LockCheck { locked, uncertain: false, tree })
     }
 
@@ -602,7 +607,7 @@ impl Screen for NativeScreen<'_> {
     }
 
     async fn elements(&mut self) -> std::result::Result<Vec<elements::Element>, WdaError> {
-        Ok(self.d.ax_tree(self.g, None, Duration::from_secs(3)).await.map_err(step)?.elements)
+        Ok(self.d.ax_tree(self.g, Duration::from_secs(3)).await.map_err(step)?.elements)
     }
 
     async fn passcode_field(&mut self) -> std::result::Result<Option<(u32, u32)>, WdaError> {

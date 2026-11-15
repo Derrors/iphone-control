@@ -16,7 +16,7 @@ impl Daemon {
         let native = self.native(g);
         let tree = match self.wda(g) {
             Some(w) => w.tree().await?,
-            None if native => Box::pin(self.ax_tree(g, None, super::native::AX_WAIT)).await?,
+            None if native => Box::pin(self.ax_tree(g, super::native::AX_WAIT)).await?,
             None => self.require_wda(g)?.tree().await?,
         };
         g.elements_cache = Some((Instant::now(), tree.clone()));

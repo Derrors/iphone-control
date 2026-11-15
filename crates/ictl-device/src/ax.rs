@@ -12,10 +12,12 @@ pub type AxSession = ictl_ax::Session<Box<dyn ReadWrite>>;
 
 /// The handshake answers in tens of milliseconds over USB
 const CONNECT_WAIT: Duration = Duration::from_secs(8);
-/// A first tree after a change lacks the element types; the complete one follows within about half a second
-const COMPLETE_WAIT: Duration = Duration::from_millis(900);
+/// A walk of the app reads at most this many elements, within this long (Pinky's bounds over USB)
+const WALK_LIMIT: usize = 400;
+const WALK_BUDGET: Duration = Duration::from_secs(4);
 /// At most this many of SpringBoard's elements are read over the app (the status bar and what covers the app)
 const OVERLAY_LIMIT: usize = 80;
+const OVERLAY_BUDGET: Duration = Duration::from_secs(2);
 
 impl From<ictl_ax::AxError> for DeviceError {
     fn from(e: ictl_ax::AxError) -> Self {
@@ -76,38 +78,34 @@ impl Tunnel {
         }
     }
 
-    /// The screen's elements: the last tree the phone pushed, or, with `after`, the first one pushed after it
-    /// (waiting up to `wait`); and SpringBoard's elements over the app
-    pub async fn ax_screen(&mut self, after: Option<Instant>, wait: Duration) -> Result<AxScreen> {
+    /// The screen's elements as they are now: a walk of the frontmost app's tree, and SpringBoard's elements over
+    /// the app. `wait` bounds a session's opening and the first request (an app that just came up builds its
+    /// accessibility tree first)
+    pub async fn ax_screen(&mut self, wait: Duration) -> Result<AxScreen> {
         let sb = self.springboard_pid().await;
         let s = self.ax().await?;
-        let pushed = match after {
-            Some(t) => s.wait_push(t, wait).await,
-            None => match s.latest() {
-                // a first tree: give the complete one a moment
-                Some(p) if p.tree.initial => s.wait_push(p.at, COMPLETE_WAIT).await.or(Some(p)),
-                Some(p) => Some(p),
-                // a session opened just now: the phone pushes the screen within about a second
-                None => {
-                    let long_ago = Instant::now().checked_sub(Duration::from_secs(3600)).unwrap_or_else(Instant::now);
-                    s.wait_push(long_ago, wait).await
-                }
-            },
-        };
-        let p = pushed.ok_or(DeviceError::Timeout(ictl_l10n::trf!(
-            "{} 秒内没有收到界面元素",
-            "no screen elements within {} s",
-            wait.as_secs_f64()
-        )))?;
-        let app_pid = p.tree.app_pid();
+        let app = frontmost(s, wait).await?;
+        let (elements, complete) = s.walk(app, WALK_LIMIT, WALK_BUDGET, 0).await?;
+        if !complete {
+            tracing::debug!("remoteAXService: walk cut at {} elements", elements.len());
+        }
+        if elements.is_empty() {
+            return Err(DeviceError::Timeout(ictl_l10n::tr!("没有读到界面元素", "no screen elements read").into()));
+        }
         let mut overlays = Vec::new();
-        if let Some(sb) = sb.filter(|sb| *sb != app_pid) {
+        if let Some(sb) = sb.filter(|sb| *sb != app.pid) {
             match springboard_overlays(s, sb).await {
                 Ok(o) => overlays = o,
                 Err(e) => tracing::debug!("SpringBoard's elements: {e}"),
             }
         }
-        Ok(AxScreen { app: p.tree.elements.clone(), overlays, app_pid, at: p.at })
+        Ok(AxScreen { app: elements, overlays, app_pid: app.pid, at: Instant::now() })
+    }
+
+    /// The frontmost app's process (one request, no walk)
+    pub async fn ax_frontmost_pid(&mut self, wait: Duration) -> Result<i64> {
+        let s = self.ax().await?;
+        Ok(frontmost(s, wait).await?.pid)
     }
 
     /// SpringBoard's process, found once per tunnel
@@ -130,5 +128,20 @@ impl Tunnel {
 /// and whatever it draws over the app (Pinky, DIYgod/pinky `springboard.go`)
 async fn springboard_overlays(s: &AxSession, pid: i64) -> Result<Vec<Element>> {
     let app: ObjectRef = s.app_object(pid).await?;
-    Ok(s.walk_children(app, OVERLAY_LIMIT, ictl_ax::tree::trait_bit::STATUS_BAR).await?)
+    Ok(s.walk_children(app, OVERLAY_LIMIT, OVERLAY_BUDGET, ictl_ax::tree::trait_bit::STATUS_BAR).await?)
+}
+
+/// The frontmost app's element, asked again for up to `wait` while the phone has none (between two apps)
+async fn frontmost(s: &AxSession, wait: Duration) -> Result<ObjectRef> {
+    let deadline = Instant::now() + wait;
+    loop {
+        match s.frontmost_app().await {
+            Ok(app) => return Ok(app),
+            Err(ictl_ax::AxError::Protocol(e)) if Instant::now() < deadline => {
+                tracing::debug!("remoteAXService: no frontmost app yet: {e}");
+                tokio::time::sleep(Duration::from_millis(200)).await;
+            }
+            Err(e) => return Err(e.into()),
+        }
+    }
 }

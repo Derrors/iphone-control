@@ -84,6 +84,8 @@
         │ 是
   开发者模式已开？ ──────────── 否 ─▶ DeveloperModeOff（只在未就绪时检查）
         │ 是
+  iOS 27 起且没设 ICTL_IOS_BACKEND=wda？ ── 是 ─▶ 原生控制（见下）
+        │ 否
   WDA 签名安装过？ ──────────── 否 ─▶ NeedsSigning（iphone-control sign）
         │ 是
   本进程 runner 存活且 /status ready？ ── 是 ─▶ Ready
@@ -96,6 +98,19 @@
         ├─「Enable UI Automation」超时 ─────────▶ NeedsAutomationPin（推送通知，每次只等 25 秒、5 秒后再启动，不指数退避）
         └─ 镜像或 WDA 其它失败 ─────────────────▶ WdaStarting { last_error }，按退避重试
 ```
+
+原生控制（iOS 27 起默认，`tools/native.rs`，方案见 [ios27-native.md](dev/ios27-native.md)）不签名、不启动 WDA：
+
+```
+  Preparing：后台任务 开隧道 → 查/挂开发者镜像 → 关隧道（结果由下一轮巡检收）
+        ├─ 成功 → 镜像是刚挂上的就丢掉旧隧道（建隧道时手机列出的服务里还没有无障碍服务）
+        │         → 连 remoteAXService、读一次界面 ── 成功 ─▶ Ready
+        │                                          └ 失败 ─▶ Preparing { last_error }，按退避重试
+        ├─ 隧道报 PasswordProtected ──────────▶ NeedsUnlock
+        └─ 镜像失败 ───────────────────────────▶ Preparing { last_error }，按退避重试
+```
+
+各工具在 WDA 不在、设备走原生时改走 `native.rs`：读界面每次都向 remoteAXService 走一遍前台 App 的树（类型 4 + 每个元素一次类型 5，最多 400 个、4 秒），再读 SpringBoard 盖在上面的元素，转成 WDA `/source` 风格的 XML 交给 `ictl_wda::elements::parse_tree`，按名字找、遮挡、弹窗、密码栏的逻辑都复用。手机只在前台 App 变化时主动推送树，App 内换页不推，所以不靠推送。等稳定和 WDA 一样轮询（连续两次一样），操作后先等 0.4 秒。触摸、按键经 HID；输入一律粘贴；启动 App、打开链接经 CoreDevice AppService；锁屏状态问 lockdown（`PasswordProtected`，要建会话）；自动解锁经 `ictl_unlock::Screen` 用同一套规则。无障碍会话归 `Tunnel`，空闲 60 秒关闭。
 
 要点（每一条都来自 toolkit 实际踩过的坑）：
 

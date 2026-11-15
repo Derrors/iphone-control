@@ -235,7 +235,7 @@ impl Daemon {
         if native {
             fails = fails_before_signing;
             out.push(ictl_l10n::tr!("== 原生控制", "== Native control").into());
-            match Box::pin(self.ax_read(g, None, crate::tools::AX_WAIT)).await {
+            match Box::pin(self.ax_read(g, crate::tools::AX_WAIT)).await {
                 Ok(_) => out.push(
                     ictl_l10n::tr!(
                         "✅ 无障碍服务可用（读界面、按名字点击不用 WDA；触摸、按键经 HID）",

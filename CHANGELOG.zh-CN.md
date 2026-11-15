@@ -8,6 +8,7 @@
 
 ### 新增
 
+- iOS 27 起的手机默认不用 WebDriverAgent（原生控制）：不登录 Apple ID、不签名、不装 WDA，守护进程只挂开发者镜像、连上无障碍服务（remoteAXService）就就绪，通常几秒。读界面逐个元素向无障碍服务读（类型、文字、值、id、位置和 WDA 的一致，按名字点击、遮挡判断、系统弹窗、通知横幅照常），点击、滑动、长按、按键和 Home 经 HID，输入文字一律走剪贴板粘贴：自动点「允许粘贴」、读回输入框核对后马上还原剪贴板。启动 App、打开链接经 CoreDevice，结束 App 发 SIGKILL，锁屏状态问 lockdown；自动解锁的规则和经 WDA 时一样。按 Home 没回到主屏幕时改从屏幕底部上滑。`iphone-control setup` 对这样的手机跳过 Apple ID 和签名；`status`、`doctor` 和控制台显示「原生」。要改回 WDA，在 `~/.config/iphone-control/env` 里设 `ICTL_IOS_BACKEND=wda`。已经装着的 WDA 留着，照常自动重签。iOS 26 及以下不变。
 - WebDriverAgent 不可用时，`iphone_type_text` 也能输入中文等美式键盘按不出来的文字：经 HID 把它写进手机剪贴板（CoreDevice `pasteboardservice`，写完读回核对），再按 Cmd-V，输入法不会把它当成拼音。iOS 把这段文字当成别的 App 的，每次都会问「…想从“dtpasteboardd”粘贴」（iPhone 15 Pro Max、iOS 27.2.1 的备忘录实测）；结果里会提示截图后点「允许粘贴」。剪贴板一改这个弹窗就消失，所以原来的内容 45 秒后才写回（下一次这样粘贴前、换设备时也会写回），而且只在剪贴板里还是粘贴的那段文字时才写。带 `submit` 时不按回车：弹窗还在时回车会选中「不允许粘贴」。英文和符号仍然逐键输入，不动剪贴板。
 - 带 `then` 的操作会说明界面变没变：界面稳定后，和操作前刚读过的界面（元素列表、截图，或按名字点击之前读的元素树）比较。没变时提醒操作可能没生效、先看清再决定要不要重做。上一个操作之后没看过界面就不说。真机（iPhone 15 Pro Max、iOS 27.2.1 的设置）：点空白处说「一样」，打开「通用」、点返回都说「有变化」。
 

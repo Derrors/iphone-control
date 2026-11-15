@@ -47,6 +47,9 @@ enum Check {
         out: Option<PathBuf>,
         #[arg(long, default_value_t = 0)]
         watch: u64,
+        /// 每秒重新读一次（走一遍树），不等推送
+        #[arg(long)]
+        dump: bool,
     },
     /// 3. 截图：screencaptureservice PNG
     Screenshot { out: PathBuf },
@@ -300,17 +303,32 @@ pub async fn run(udid: Option<&str>, args: DebugArgs) -> anyhow::Result<()> {
             t.close().await;
             println!("{}", r?);
         }
-        Check::AxScreen { out, watch } => {
+        Check::AxScreen { out, watch, dump } => {
             let mut t = device.open_tunnel().await?;
             let r = async {
                 let t0 = Instant::now();
                 t.ax().await?;
                 println!("connected in {:.2}s", t0.elapsed().as_secs_f64());
-                let mut after = None;
+                let mut after: Option<Instant> = None;
                 let end = Instant::now() + Duration::from_secs(watch);
                 loop {
-                    let s =
-                        t.ax_screen(after, Duration::from_secs(if after.is_some() { watch.max(1) } else { 5 })).await?;
+                    let s = match after {
+                        Some(_) if dump => {
+                            tokio::time::sleep(Duration::from_secs(1)).await;
+                            let asked = Instant::now();
+                            let s = t.ax_screen(Duration::from_secs(5)).await?;
+                            println!("  read in {:.0} ms", asked.elapsed().as_secs_f64() * 1000.0);
+                            s
+                        }
+                        Some(at) => {
+                            let left = end.saturating_duration_since(Instant::now()).max(Duration::from_secs(1));
+                            if t.ax().await?.wait_push(at, left).await.is_none() {
+                                break;
+                            }
+                            t.ax_screen(Duration::from_secs(5)).await?
+                        }
+                        None => t.ax_screen(Duration::from_secs(5)).await?,
+                    };
                     let xml = ictl_ax::xml::to_xml(&s.app, &s.overlays, args.width, args.height);
                     let labelled: Vec<&str> =
                         s.app.iter().filter(|e| !e.label.is_empty()).map(|e| e.label.as_str()).take(6).collect();

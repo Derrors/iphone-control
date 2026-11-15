@@ -93,6 +93,9 @@ impl Device {
     pub async fn passcode_locked(&self) -> Result<bool> {
         limit(ictl_l10n::tr!("查锁屏状态", "check the lock state"), Duration::from_secs(5), async {
             let mut lockdown = LockdownClient::connect(&*self.provider).await?;
+            // asked without a session, lockdown answers "this request was prohibited"
+            let pairing = idevice::provider::IdeviceProvider::get_pairing_file(&*self.provider).await?;
+            lockdown.start_session(&pairing).await?;
             let v = lockdown.get_value(Some("PasswordProtected"), None).await?;
             v.as_boolean().ok_or_else(|| DeviceError::Idevice(format!("PasswordProtected: {v:?}")))
         })

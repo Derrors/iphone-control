@@ -1,10 +1,11 @@
 # 方案：iOS 27 上不用 WDA（草案）
 
-2026-11-15。状态：待决定。相关：[wda-dependency-research.md](wda-dependency-research.md)（WDA 依赖调研）、分支 `spike/ax-service-2` 的 `docs/dev/ax-spike-results.md`（remoteAXService 三轮实验）。
+2026-11-15。状态：已在分支 `feat/ios27-native` 实现（默认原生），真机验证中。相关：[wda-dependency-research.md](wda-dependency-research.md)（WDA 依赖调研）、分支 `spike/ax-service-2` 的 `docs/dev/ax-spike-results.md`（remoteAXService 三轮实验）。
 
 ## 1. 为什么现在提
 
-- 实验第三轮（iPhone 15 Pro Max，iOS 27.2.1）：主机按 Xcode 的方式回答 remoteAXService 的握手后，**WDA 被杀掉、只订阅一次，界面每变一次手机都主动推送完整的元素树**。前两轮「没有 WDA 不推送」是探针没回答握手造成的。
+- 实验第三轮（iPhone 15 Pro Max，iOS 27.2.1）：主机按 Xcode 的方式回答 remoteAXService 的握手后，没有 WDA 也能读到完整的元素树。前两轮「没有 WDA 读不到」是探针没回答握手造成的。
+  - **更正（实现后真机复测）**：手机只在**前台 App 变化时**（以及刚连上时）主动推送整棵树；App 自己换页（设置里点进「关于本机」再返回）不推。所以读界面一律自己「走一遍」：请求类型 4 拿前台 App，再逐个元素请求类型 5 的属性（和 Pinky 一样，最多 400 个、4 秒）。主动请求整棵树（类型 11，不带参数）会让手机直接断开连接。
 - 点击、按键、Home 早已经能走 HID（iOS 27 的 `dtuhidd`），截图能走 screencaptureservice，输入中文能走剪贴板粘贴（#118、#122）。读界面是最后一块。
 - [Pinky](https://github.com/DIYgod/pinky)（Apache-2.0）在 iOS 27 上已经这样做：手机上什么都不装，README 写「除了双指缩放都能用」（iPhone 13 mini，iOS 27.0.1）。下文标「Pinky」的做法都出自它的代码和 `docs/notes/ios.md`。
 
@@ -22,16 +23,16 @@
 | 能力 | 现在（WDA） | 不用 WDA 时 | 状态 |
 |---|---|---|---|
 | 截图 | `/screenshot` 约 0.4 秒 | CoreDevice screencaptureservice（已是后备），约 0.5 秒 | 已验证 |
-| 读元素（`list_elements`、`then=elements`） | `/source` XML | remoteAXService 推送的树：类型（属性 61，和 WDA 类型名一致）、文字 33/3、值 53、id 25、位置 21、点击点 1、traits 77、可用 27、子元素 8 | 推送已验证；字段对照已验证（设置、主屏）；解析要用 Rust 重写 |
+| 读元素（`list_elements`、`then=elements`） | `/source` XML | remoteAXService 逐个元素读（走树），字段和推送的树一样：类型（属性 61，和 WDA 类型名一致）、文字 33/3、值 53、id 25、位置 21、点击点 1、traits 77、可用 27、子元素 8 | 已实现；字段对照已验证（设置、主屏） |
 | 跨进程元素（小组件等） | WDA 原始坐标也是相对的，`parse_tree` 已换算 | traits 第 34 位标出宿主视图，加上宿主的位置（Pinky `observe_rax.go`） | Pinky |
 | 系统弹窗、通知横幅、权限请求 | `/alert/text`、SpringBoard 的树 | 另读 SpringBoard 应用元素（请求类型 1，带它的 pid）：子元素里除了状态栏（有专门的 trait 位）就是盖在 App 上的东西（Pinky `springboard.go`） | Pinky |
 | 点击、长按、滑动 | W3C actions | HID（已有后备）。按名字点用 AX 的点击点 | 已验证 |
-| 等界面稳定、界面变没变 | 轮询 `/source` | 等推送：最后一次推送后若干毫秒没有新推送就算稳定；一次变化先推一棵「初始树」，再推一棵属性更全的，要等第二棵 | 推送已验证；判定规则待调 |
+| 等界面稳定、界面变没变 | 轮询 `/source` | 和 WDA 一样轮询：连续两次读到的树一样、没有加载圈就算稳定；操作后先等 0.4 秒再读第一次（推送靠不住，见第 1 节的更正） | 已实现 |
 | 输入文字 | `/wda/keys` | 全部走剪贴板粘贴（拼音键盘下按 ASCII 键会变成拼音输入，已见过）；读回输入框（AX 的值）核对 | 粘贴已验证 |
 | 「允许粘贴」弹窗 | 不会出现 | 用 AX 在 SpringBoard 的元素里找到弹窗，点「允许粘贴」，等输入框的值变了再还原剪贴板（不再需要 Agent 去点、等 45 秒） | 弹窗出现已验证（备忘录）；自动点待做。Pinky 在设置的搜索框里没遇到弹窗 |
 | 键盘在不在、哪个输入框有焦点 | 找 `XCUIElementTypeKeyboard` | 树里的 Keyboard 类型元素；应用的焦点元素（属性 19）、`isFocused`（28） | Pinky |
 | Home、电源、音量 | XCTest 按键 / IOHID | HID（已有） | 已验证 |
-| 启动 App、等到前台 | `/wda/apps/launch` | CoreDevice AppService `launch_application`；前台 App 看推送树的进程，或请求类型 4（frontmost app） | 启动已有；前台判断待做 |
+| 启动 App、等到前台 | `/wda/apps/launch` | CoreDevice AppService `launch_application`；前台 App 用请求类型 4（frontmost app） | 启动已有；前台判断待做 |
 | 结束 App | `/wda/apps/terminate` | AppService 发信号（已在实验里用过 SIGKILL） | 已验证 |
 | 打开链接（`open_url`） | `/url` | AppService 启动目标 App 时带 `payloadURL`（同 `devicectl --payload-url`），先查清这个链接由哪个 App 打开 | Pinky |
 | 锁屏状态 | `/wda/locked` + 树核对 | lockdown 的 `PasswordProtected`（Pinky：iOS 27 的镜像没实现 CoreDevice getlockstate）；屏幕亮不亮看 CoreDevice 显示信息里的背光状态 | Pinky |
@@ -46,9 +47,9 @@
 
 - **会话**：DTX 连接 `com.apple.accessibility.axAuditDaemon.remoteAXService`；握手 `_notifyOfPublishedCapabilities:` → `deviceAPIVersion`（等答复）→ `clientNeedsAccessibility: true`；回答 `hostAPIVersion = 7`；手机每条要回执的消息都回空回执。idevice 的 `RemoteServerClient` 遇到解不开的消息会退出，探针是自己读帧，正式代码沿用这个做法或给 idevice 提补丁（idevice 的 AI.md 要求 PR 描述由作者亲手写）。
 - **解码**：两层 NSKeyedArchive → `AXPTranslatorResponse`。引入 `ns-keyed-archive` crate（idevice 已经依赖它）。只解我们用的字段，未知字段忽略；解码是纯函数，用脱敏后的真机数据做测试夹具。
-- **请求**（推送不够时）：类型 1（某进程的应用元素，读 SpringBoard 用）、2/5（属性）、4（前台 App）、11（整棵树）。一次只发一个请求。
+- **请求**：类型 1（某进程的应用元素，读 SpringBoard 用）、2/5（属性）、4（前台 App）。一次只发一个请求。类型 11（整棵树）不带参数会让手机断开连接，不用。
 - **转换**：输出现在的 `ictl_wda::elements::Tree`/`Element`（类型名、文字、值、中心点、大小），这样 `find`、遮挡判断、`describe`、`close_to` 都能复用。为此把 `Tree`/`Element` 和与 WDA 无关的逻辑从 `ictl-wda` 挪到一个两边都依赖的地方（`ictl-protocol` 或新的 `ictl-ui`）。
-- **会话归属**：和 HID 会话一样归 `Tunnel` 所有、常驻复用；保存最近一次推送的树和时间，读元素直接取（几乎零延迟），等稳定就等下一次推送。连接断了就重建，不重放操作。
+- **会话归属**：和 HID 会话一样归 `Tunnel` 所有、常驻复用（空闲 60 秒关掉）。每次读界面都走一遍树，不用推送的树（推送只在前台 App 变化时才来）。连接断了就重建，不重放操作。
 
 ### 4.2 守护进程：按设备选「后端」
 
@@ -68,7 +69,7 @@
 
 - 元素粒度不同：AX 把一行合成一个元素（「Wi-Fi、Derrors-5G」），WDA 还列出里面的文字和箭头。按包含文字查找都找得到；`list_elements` 的输出会变短。
 - 屏幕外的行 AX 不列：长列表要先滑到才找得到（WDA 会列出但点不到，影响不大）。
-- 时间：推送的树在变化后约 0.3 秒先来通知、1～2 秒内来完整的树（WDA 在时测的；没有 WDA 时要用常驻 HID 会话重测）。
+- 时间：推送的树在变化后约 0.3 秒先来通知、1～2 秒内来完整的树（WDA 在时测的；没有 WDA 时要用常驻 HID 会话重测）。 **更正**：没有 WDA 时 App 内换页不推送，见第 1 节。
 - 粘贴弹窗由守护进程自己点掉，`type_text` 的结果不再要求 Agent 去点。
 
 ## 6. 风险
@@ -76,7 +77,7 @@
 | 风险 | 对策 |
 |---|---|
 | 协议和属性编号没公开，iOS 更新可能变 | 握手失败或解码不出必需字段时，这台设备自动退回 WDA（装了的话）或报清楚原因；每个 iOS 大版本发布后跑一遍回归 |
-| 推送漏了、来晚了 | 读元素时推送太旧就主动发一次整树请求（类型 11）；等稳定有上限 |
+| 推送漏了、来晚了 | 不靠推送：每次读界面都走树（类型 4 + 类型 5），有 400 个元素、4 秒的上限 |
 | 无障碍运行时打开后影响手机（耗电、App 行为） | 只在有人用设备时保持会话，空闲关掉（和 HID 会话一样 30 秒） |
 | 系统弹窗读不全 | SpringBoard 那一读失败时回到截图；先在常见弹窗（权限、粘贴、提醒事项到期）上验证 |
 | 解锁失败把密码输错 | 沿用现有的停用标记；每一位之前确认还锁着；只试一次 |

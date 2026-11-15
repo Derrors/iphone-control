@@ -188,7 +188,7 @@ dependencies = [
  "once_cell",
  "p12",
  "p256",
- "pem",
+ "pem 3.0.6",
  "pkcs1",
  "pkcs8",
  "plist",
@@ -223,7 +223,7 @@ dependencies = [
  "x509",
  "x509-certificate",
  "xml-rs",
- "yasna",
+ "yasna 0.5.2",
  "zeroize",
  "zip",
  "zip_structs",
@@ -489,6 +489,15 @@ checksum = "b593e5aeaf7992d388c08a9831c921cd703718064b3e50ba8e6d666d6cf86ca7"
 dependencies = [
  "bytes",
  "smallvec",
+]
+
+[[package]]
+name = "bit-vec"
+version = "0.9.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b71798fca2c1fe1086445a7258a4bc81e6e49dcd24c8d0dd9a1e57395b603f51"
+dependencies = [
+ "serde",
 ]
 
 [[package]]
@@ -1022,7 +1031,7 @@ dependencies = [
  "bytes",
  "chrono",
  "hex",
- "pem",
+ "pem 3.0.6",
  "reqwest 0.12.28",
  "ring",
  "signature",
@@ -2302,7 +2311,7 @@ dependencies = [
  "ictl-wda",
  "libc",
  "plist",
- "rcgen",
+ "rcgen 0.14.10",
  "reqwest 0.13.5",
  "ring",
  "rustls",
@@ -2988,7 +2997,7 @@ dependencies = [
  "lazy_static",
  "rc2",
  "sha1",
- "yasna",
+ "yasna 0.5.2",
 ]
 
 [[package]]
@@ -3110,6 +3119,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1d30c53c26bc5b31a98cd02d20f25a7c8567146caf63ed593a9d87b2775291be"
 dependencies = [
  "base64 0.22.1",
+ "serde_core",
+]
+
+[[package]]
+name = "pem"
+version = "4.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d354a98a3d1251555de99e8fdd8afda05573c31b82f59063a7b0a29b5527f120"
+dependencies = [
+ "base64 0.23.1",
  "serde_core",
 ]
 
@@ -3261,11 +3280,11 @@ dependencies = [
  "omnisette",
  "p12-keystore",
  "pbkdf2 0.13.0",
- "pem",
+ "pem 3.0.6",
  "pem-rfc7468",
  "plist",
  "rand 0.8.8",
- "rcgen",
+ "rcgen 0.12.1",
  "regex",
  "reqwest 0.13.5",
  "rsa",
@@ -3644,10 +3663,24 @@ version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "48406db8ac1f3cbc7dcdb56ec355343817958a356ff430259bb07baf7607e1e1"
 dependencies = [
- "pem",
+ "pem 3.0.6",
  "ring",
  "time",
- "yasna",
+ "yasna 0.5.2",
+]
+
+[[package]]
+name = "rcgen"
+version = "0.14.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8774e05a7d0de114588e6a28fe7e71694b82614ed569d86d8b389dfbc98b8ad8"
+dependencies = [
+ "pem 4.0.0",
+ "ring",
+ "rustls-pki-types",
+ "time",
+ "x509-parser",
+ "yasna 0.6.0",
 ]
 
 [[package]]
@@ -5679,7 +5712,7 @@ dependencies = [
  "chrono",
  "der",
  "hex",
- "pem",
+ "pem 3.0.6",
  "ring",
  "signature",
  "spki",
@@ -5699,6 +5732,7 @@ dependencies = [
  "lazy_static",
  "nom",
  "oid-registry 0.8.1",
+ "ring",
  "rusticata-macros",
  "thiserror 2.0.21",
  "time",
@@ -5731,6 +5765,16 @@ version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e17bb3549cc1321ae1296b9cdc2698e2b6cb1992adfa19a8c72e5b7a738f44cd"
 dependencies = [
+ "time",
+]
+
+[[package]]
+name = "yasna"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b5f6765e852b9b4dc8e2a76843e4d64d1cea8e79bcde0b6901aea8e7c7f08282"
+dependencies = [
+ "bit-vec",
  "time",
 ]
 

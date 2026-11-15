@@ -884,18 +884,6 @@ impl Tunnel {
         .await
     }
 
-    /// 结束一个进程（DVT processcontrol `killPid:`，不等确认）
-    pub async fn kill(&mut self, pid: u64) -> Result<()> {
-        use idevice::dvt::{process_control::ProcessControlClient, remote_server::RemoteServerClient};
-        limit(ictl_l10n::tr!("结束进程", "kill a process"), Duration::from_secs(20), async {
-            let mut dvt: RemoteServerClient<Box<dyn idevice::ReadWrite>> =
-                RemoteServerClient::connect_rsd(&mut self.adapter, &mut self.handshake).await?;
-            ProcessControlClient::new(&mut dvt).await?.kill_app(pid).await?;
-            Ok(())
-        })
-        .await
-    }
-
     /// 关掉隧道：先停 HID 的屏幕媒体流
     pub async fn close(mut self) {
         self.close_ax().await;

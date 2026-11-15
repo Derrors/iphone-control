@@ -6,7 +6,7 @@ use std::time::{Duration, Instant, UNIX_EPOCH};
 use ictl_device::{Device, DeviceError, LogStream, Rotation, ScreenSize, Tunnel, UsbDevice};
 use ictl_wda::{WdaClient, WdaError, WdaRunner, http::DeviceTransport};
 
-use crate::core::{Daemon, DetachedWda, DeviceProfile, Inner, close_hid, drop_tunnel};
+use crate::core::{Daemon, DetachedWda, DeviceProfile, Inner, StoppedWda, close_hid, drop_tunnel};
 use crate::machine::DeviceState;
 use crate::notify::Event;
 
@@ -393,8 +393,11 @@ impl Daemon {
                 Err((DeviceError::Idevice(ictl_l10n::trf!("准备任务异常：{e}", "Preparing task failed: {e}")), false))
             });
             match r {
-                Ok(mounted) => {
+                Ok((mounted, stopped)) => {
                     g.dev.ddi_failures = 0;
+                    if let Some(s) = stopped {
+                        self.detached_stopped(g, s);
+                    }
                     if let Some(v) = mounted {
                         self.log.log(&ictl_l10n::log_trf!("开发者镜像已挂载 {v}", "Developer disk image mounted {v}"));
                         // a tunnel opened before the image was mounted doesn't list the accessibility service
@@ -443,15 +446,48 @@ impl Daemon {
             self.set_state(g, DeviceState::Preparing { last_error: None });
         }
         let (cache, url, user_dir) = (self.cfg.ddi_cache(), self.cfg.ddi_url.clone(), self.cfg.ddi_dir.clone());
+        // a WDA launched in the background before (WDA control earlier): not wanted now, ended once the image is up
+        // (AppService needs it)
+        let known = g.persisted.detached_wda.as_ref().filter(|d| d.udid == device.udid).map(|d| d.pid);
         let Ok(lease) = crate::maintenance::shared() else { return };
         let wake = self.wake.clone();
         g.preparing = Some(tokio::task::spawn_local(then_wake(wake, async move {
             let _lease = lease;
             let mut t = device.open_tunnel().await.map_err(|e| (e, false))?;
             let r = ensure_ddi(&mut t, &cache, &url, user_dir.as_deref()).await;
+            let stopped = match (&r, known) {
+                (Ok(_), Some(pid)) => Some(stop_detached(&mut t, pid).await),
+                _ => None,
+            };
             t.close().await;
-            r
+            r.map(|m| (m, stopped))
         })));
+    }
+
+    /// What became of the WDA launched in the background earlier, on a phone driven natively: forgotten once it is
+    /// gone; one that may still run stays recorded (tried again the next time the phone is prepared)
+    fn detached_stopped(&self, g: &mut Inner, s: StoppedWda) {
+        let pid = match s {
+            StoppedWda::Ended(pid) => {
+                self.log.log(&ictl_l10n::log_trf!(
+                    "已结束之前后台启动的 WDA（进程 {pid}）：原生控制不用它",
+                    "Stopped the WDA launched in the background earlier (pid {pid}): native control doesn't use it"
+                ));
+                pid
+            }
+            StoppedWda::NotRunning(pid) => pid,
+            StoppedWda::Failed(pid, e) => {
+                self.log.log(&ictl_l10n::log_trf!(
+                    "结束之前后台启动的 WDA（进程 {pid}）失败：{e}",
+                    "Stopping the WDA launched in the background earlier (pid {pid}) failed: {e}"
+                ));
+                return;
+            }
+        };
+        if g.persisted.detached_wda.as_ref().is_some_and(|d| d.pid == pid) {
+            g.persisted.detached_wda = None;
+            g.persisted.save(&self.cfg.state_file());
+        }
     }
 
     /// The accessibility service answers and the screen can be read (which records its size)
@@ -1037,29 +1073,55 @@ async fn prepare_detached(
     known: Option<u64>,
     bundle: &str,
 ) -> Result<Option<Detached>, DeviceError> {
-    fn is_wda(procs: &[(u64, String)], pid: u64) -> bool {
-        procs.iter().any(|(p, path)| *p == pid && path.contains("WebDriverAgentRunner"))
-    }
     match (detached, known) {
         (true, Some(pid)) if is_wda(&t.processes().await?, pid) => Ok(Some(Detached::Adopted(pid))),
         (true, _) => Ok(Some(Detached::Launched(t.launch_in_background(bundle).await?))),
         (false, Some(pid)) => {
-            if is_wda(&t.processes().await.unwrap_or_default(), pid) {
-                tracing::info!(
+            match stop_detached(t, pid).await {
+                StoppedWda::Ended(_) => tracing::info!(
                     "{}",
                     ictl_l10n::log_trf!(
-                        "结束之前后台启动的 WDA（进程 {pid}）",
-                        "Stopping the WDA launched in the background earlier (pid {pid})"
+                        "已结束之前后台启动的 WDA（进程 {pid}）",
+                        "Stopped the WDA launched in the background earlier (pid {pid})"
                     )
-                );
-                if let Err(e) = t.kill(pid).await {
-                    tracing::warn!("kill {pid}: {e}");
-                }
-                tokio::time::sleep(Duration::from_secs(1)).await;
+                ),
+                StoppedWda::NotRunning(_) => {}
+                StoppedWda::Failed(_, e) => tracing::warn!("stopping the background WDA (pid {pid}): {e}"),
             }
             Ok(None)
         }
         (false, None) => Ok(None),
+    }
+}
+
+/// Whether process `pid` in the phone's process list is WDA
+fn is_wda(procs: &[(u64, String)], pid: u64) -> bool {
+    procs.iter().any(|(p, path)| *p == pid && path.contains("WebDriverAgentRunner"))
+}
+
+/// Ends the WDA launched in the background earlier (`pid`) if it still runs: SIGKILL through AppService (DVT's
+/// `kill_app` leaves WDA running), then waits up to 2 s for it to leave the process list
+async fn stop_detached(t: &mut Tunnel, pid: u64) -> StoppedWda {
+    match t.processes().await {
+        Ok(p) if !is_wda(&p, pid) => return StoppedWda::NotRunning(pid),
+        Ok(_) => {}
+        Err(e) => return StoppedWda::Failed(pid, e.to_string()),
+    }
+    if let Err(e) = t.signal(pid, 9).await {
+        return StoppedWda::Failed(pid, e.to_string());
+    }
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        if t.processes().await.is_ok_and(|p| !is_wda(&p, pid)) {
+            return StoppedWda::Ended(pid);
+        }
+        if Instant::now() >= deadline {
+            return StoppedWda::Failed(
+                pid,
+                ictl_l10n::tr!("发了 SIGKILL，2 秒后还在运行", "still running 2 s after SIGKILL").to_string(),
+            );
+        }
     }
 }
 

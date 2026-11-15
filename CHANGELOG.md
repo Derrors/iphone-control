@@ -20,6 +20,7 @@ All notable changes to this project are documented here. The format is based on 
 
 ### Fixed
 
+- A WebDriverAgent launched in the background no longer keeps running on the phone once it isn't used: with the background launch (`ICTL_WDA_DETACHED`) turned off, the one launched before was ended with DVT's `kill_app`, which leaves WDA running; it now gets SIGKILL (CoreDevice AppService) and is forgotten once it's gone from the process list. Native control ends it too when it prepares the phone.
 - An arrow key in the setup guide's menus (`iphone-control setup`) could come out as a letter on a busy machine: when the program was descheduled for more than 250 ms in the middle of reading the key, the rest of its bytes, though already there, were dropped and the last one taken as typed (↓ as "B"). Bytes already received are now always read.
 - A tap or swipe a minute or more after the last one no longer waits for the screen size to be measured again first: that takes WDA 0.95 s on an iPad mini 5 (iPadOS 26.7.3), where the first tap after a pause took 1.7 s instead of 0.9. The size is now measured again in the background while nobody acts (only Display Zoom changes it), and on rotation as before.
 - A control page whose H.264 or the phone's own video didn't show a first frame within 9 s (the viewer or daemon restarting, the encoder starting up) used MJPEG until it was reloaded; it now tries again after 30 s, 1 min and 2 min. A picture the viewer said isn't available still isn't tried again.

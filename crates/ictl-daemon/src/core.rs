@@ -379,9 +379,22 @@ pub(crate) struct PerDevice {
     pub web_pids: HashMap<i64, bool>,
 }
 
-/// What preparing a phone for native control gives: the developer disk image's version if it was mounted just now;
-/// failed, whether it was the mount itself
-pub(crate) type Prepared = std::result::Result<Option<String>, (DeviceError, bool)>;
+/// What preparing a phone for native control gives: the developer disk image's version if it was mounted just now,
+/// and what became of the WDA launched in the background earlier (if one was recorded for it); failed, whether it was
+/// the mount itself
+pub(crate) type Prepared = std::result::Result<(Option<String>, Option<StoppedWda>), (DeviceError, bool)>;
+
+/// The WDA launched in the background earlier (by its pid), once it is no longer wanted (driven natively, or the
+/// background launch turned off)
+#[derive(Debug)]
+pub(crate) enum StoppedWda {
+    /// It was running and is gone now
+    Ended(u64),
+    /// It wasn't running (anymore)
+    NotRunning(u64),
+    /// It may still be running: why
+    Failed(u64, String),
+}
 
 pub(crate) struct Inner {
     pub persisted: Persisted,

@@ -143,3 +143,4 @@
 | 137 | 后台准备好手机后唤醒的那轮巡检，正赶上请求占着设备锁就跳过了，切回 iPhone 要等下一轮（10 秒）才就绪 | 唤醒的一轮没跑成就隔 200 毫秒再来 | 真机（切到 iPad 再切回） |
 | 138 | 控制台页面脚本里同一函数重复声明变量（`list`），整页脚本跑不起来，停在「正在连接」；页面测试只抽单个函数，没发现 | 测试编译整页脚本 | 单测 `tests/viewer/syntax.test.mjs` |
 | 139 | 原生控制（没有 WDA）时，解不了 HEVC 的浏览器（Firefox、多数 Linux 上的 Chrome）没有画面：H.264 和 MJPEG 两路的源头都是 WDA 的 MJPEG，都 502。手机的视频转码时带 `-fflags nobuffer` 会丢掉开头，之后每帧都找不到参考帧 | `/video` 连不上 WDA 时把手机的 HEVC 交给 ffmpeg 转成 H.264（按点数尺寸裁掉补齐的边），HEVC 输入不带 `nobuffer` | 单测 `hevc_is_transcoded_with_the_padding_cut_off` + 无头 Chromium（不支持 HEVC）看到画面 |
+| 140 | 开着后台启动（`ICTL_WDA_DETACHED=1`）用过 WDA、再切回原生控制：之前后台启动的 WDA 一直在手机上运行，state.json 里也一直记着它。关掉后台启动开关时的清理用的是 DVT 的 `kill_app`，对 WDA 无效 | 原生准备手机时（开发者镜像好了之后）结束记下的那个 WDA；结束一律走 AppService 的 SIGKILL，等它从进程列表消失（最多 2 秒）再忘掉；结束不了就留着记录，下次准备时再试 | 真机（切 WDA 让后台 WDA 起来，再切回原生，看日志和 state.json） |

@@ -52,7 +52,16 @@ impl Daemon {
         } else {
             String::new()
         };
-        Ok((if lines.is_empty() { no_elements_text(filter, els.len()) } else { lines.join("\n") } + &more, data))
+        let limited = self.snapshot_note(g);
+        Ok((
+            if lines.is_empty() { no_elements_text(filter, els.len()) } else { lines.join("\n") } + &more + &limited,
+            data,
+        ))
+    }
+
+    /// 上一次读的元素树受了快照上限的限制时，接在结果后面的说明（含换行）；没有限制时为空
+    pub(super) fn snapshot_note(&self, g: &mut Inner) -> String {
+        self.wda(g).and_then(|w| w.snapshot_note()).map(|n| format!("\n{n}")).unwrap_or_default()
     }
 
     /// 等界面稳定，最多等 `max`：

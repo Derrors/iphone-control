@@ -155,10 +155,11 @@ impl Daemon {
         let tree = self.tree(g, max_age).await?;
         let matches = elements::find(&tree.elements, text);
         if matches.is_empty() {
+            let limited = self.snapshot_note(g);
             return Ok((
                 ictl_l10n::trf!(
-                    "{}包含 \"{text}\" 的元素,先用 iphone_list_elements 或截图看看屏幕",
-                    "{}: no element contains \"{text}\"; look at the screen with iphone_list_elements or a screenshot first",
+                    "{}包含 \"{text}\" 的元素,先用 iphone_list_elements 或截图看看屏幕{limited}",
+                    "{}: no element contains \"{text}\"; look at the screen with iphone_list_elements or a screenshot first{limited}",
                     tap_missed_prefixes()[0]
                 ),
                 true,

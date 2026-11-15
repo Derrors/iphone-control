@@ -8,7 +8,7 @@
 
 ### 新增
 
-- iOS 27 起的手机默认不用 WebDriverAgent（原生控制）：不登录 Apple ID、不签名、不装 WDA，守护进程只挂开发者镜像、连上无障碍服务（remoteAXService）就就绪，通常几秒。读界面逐个元素向无障碍服务读（类型、文字、值、id、位置和 WDA 的一致，按名字点击、遮挡判断、系统弹窗、通知横幅照常），点击、滑动、长按、按键和 Home 经 HID，输入文字一律走剪贴板粘贴：自动点「允许粘贴」、读回输入框核对后马上还原剪贴板。启动 App、打开链接经 CoreDevice，结束 App 发 SIGKILL，锁屏状态问 lockdown；自动解锁的规则和经 WDA 时一样。按 Home 没回到主屏幕时改从屏幕底部上滑。`iphone-control setup` 对这样的手机跳过 Apple ID 和签名；`status`、`doctor` 和控制台显示「原生」。要改回 WDA，在 `~/.config/iphone-control/env` 里设 `ICTL_IOS_BACKEND=wda`。已经装着的 WDA 留着，照常自动重签。iOS 26 及以下不变。
+- iOS 27 起的手机默认不用 WebDriverAgent（原生控制）：不登录 Apple ID、不签名、不装 WDA，守护进程只挂开发者镜像、连上无障碍服务（remoteAXService）就就绪，通常几秒。读界面逐个元素向无障碍服务读（类型、文字、值、id、位置和 WDA 的一致，按名字点击、遮挡判断、系统弹窗、通知横幅照常），点击、滑动、长按、按键和 Home 经 HID，输入文字一律走剪贴板粘贴：自动点「允许粘贴」、读回输入框核对后马上还原剪贴板。启动 App、打开链接经 CoreDevice，结束 App 发 SIGKILL，锁屏状态问 lockdown；自动解锁的规则和经 WDA 时一样。按 Home 没回到主屏幕时改从屏幕底部上滑。`iphone-control setup` 对这样的手机跳过 Apple ID 和签名；`status`、`doctor` 和控制台显示「原生」。要改回 WDA，在 `~/.config/iphone-control/env` 里设 `ICTL_IOS_BACKEND=wda`。已经装着的 WDA 留着，照常自动重签。iOS 26 及以下不变。之前用 WDA 时后台启动（`ICTL_WDA_DETACHED`）的 WDA，在准备手机时会被结束（CoreDevice AppService 发 SIGKILL，DVT 的 `kill_app` 结束不了 WDA）。
 - WebDriverAgent 不可用时，`iphone_type_text` 也能输入中文等美式键盘按不出来的文字：经 HID 把它写进手机剪贴板（CoreDevice `pasteboardservice`，写完读回核对），再按 Cmd-V，输入法不会把它当成拼音。iOS 把这段文字当成别的 App 的，每次都会问「…想从“dtpasteboardd”粘贴」（iPhone 15 Pro Max、iOS 27.2.1 的备忘录实测）；结果里会提示截图后点「允许粘贴」。剪贴板一改这个弹窗就消失，所以原来的内容 45 秒后才写回（下一次这样粘贴前、换设备时也会写回），而且只在剪贴板里还是粘贴的那段文字时才写。带 `submit` 时不按回车：弹窗还在时回车会选中「不允许粘贴」。英文和符号仍然逐键输入，不动剪贴板。
 - 带 `then` 的操作会说明界面变没变：界面稳定后，和操作前刚读过的界面（元素列表、截图，或按名字点击之前读的元素树）比较。没变时提醒操作可能没生效、先看清再决定要不要重做。上一个操作之后没看过界面就不说。真机（iPhone 15 Pro Max、iOS 27.2.1 的设置）：点空白处说「一样」，打开「通用」、点返回都说「有变化」。
 
@@ -20,7 +20,6 @@
 
 ### 修复
 
-- 后台启动的 WDA 不再用不着了还留在手机上运行：关掉后台启动（`ICTL_WDA_DETACHED`）后，之前后台启动的那个原本用 DVT 的 `kill_app` 结束，对 WDA 无效，现在改发 SIGKILL（CoreDevice AppService），等它从进程列表消失再忘掉；原生控制准备手机时也会结束它。
 - 引导（`iphone-control setup`）菜单里的方向键在机器很忙时可能变成字母：读按键读到一半，程序被挂起超过 250 毫秒，后面已经到了的字节会被丢掉，最后一个当成输入的字符（↓ 变成「B」）。现在已经收到的字节一定会读。
 - 隔了一分钟以上的点按、滑动不再先等重新读屏幕尺寸：iPad mini 5（iPadOS 26.7.3）上 WDA 读一次要 0.95 秒，停一会儿后的第一次点按要 1.7 秒，平时 0.9 秒。尺寸现在在没人操作时于后台重读（只有「显示缩放」会改变它），转屏时照旧马上重读。
 - 控制台页面的 H.264 或手机自己的视频 9 秒内没出第一帧时（控制台服务或守护进程正在重启、编码器正在启动），原来一直用 MJPEG 直到刷新页面；现在 30 秒、1 分钟、2 分钟后各再试一次。控制台服务明确说不可用的画面仍然不再试。

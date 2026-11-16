@@ -4,7 +4,7 @@
 //! The handshake matters: the phone asks the host `hostAPIVersion` and wants every message acknowledged. A host
 //! that doesn't answer still gets a first tree but no more pushes once WebDriverAgent isn't running (our rounds 1
 //! and 2, `docs/dev/ios27-native.md`). Answering as Xcode does (7), acknowledging, and waiting for
-//! `deviceAPIVersion` before `clientNeedsAccessibility:` is what Pinky does (DIYgod/pinky `rax.go`, Apache-2.0).
+//! `deviceAPIVersion` before `clientNeedsAccessibility:` keeps it answering without WDA (round 3).
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -385,8 +385,8 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> Session<S> {
     /// any of the traits `prune` are listed, but not walked into. Also says whether the walk got to the end.
     ///
     /// This is how the screen is read: the phone pushes a tree by itself only when the frontmost app changes (and on
-    /// connecting), not when an app changes its own screen (iPhone 15 Pro Max, iOS 27.2.1, 2026-11-15; Pinky reads
-    /// the same way, DIYgod/pinky `rax.go`). Asking for a tree dump (request type 11) closes the connection
+    /// connecting), not when an app changes its own screen (iPhone 15 Pro Max, iOS 27.2.1, 2026-11-15).
+    /// Asking for a tree dump (request type 11) closes the connection
     pub async fn walk(
         &self,
         root: ObjectRef,

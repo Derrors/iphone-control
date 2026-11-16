@@ -24,7 +24,7 @@ impl RsdService for AppService {
 }
 
 /// The launch request (`com.apple.coredevice.feature.launchapplication`), with `url` as the payload URL when given
-/// (as `devicectl device process launch --payload-url`; the same fields as Pinky's `launchInput`)
+/// (as `devicectl device process launch --payload-url`)
 pub(crate) fn launch_request(bundle_id: &str, url: Option<&str>) -> Dictionary {
     let mut platform = Vec::new();
     // an empty dictionary into memory: cannot fail

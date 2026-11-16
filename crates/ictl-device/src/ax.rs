@@ -12,7 +12,7 @@ pub type AxSession = ictl_ax::Session<Box<dyn ReadWrite>>;
 
 /// The handshake answers in tens of milliseconds over USB
 const CONNECT_WAIT: Duration = Duration::from_secs(8);
-/// A walk of the app reads at most this many elements, within this long (Pinky's bounds over USB)
+/// A walk of the app reads at most this many elements, within this long
 const WALK_LIMIT: usize = 400;
 const WALK_BUDGET: Duration = Duration::from_secs(4);
 /// At most this many of SpringBoard's elements are read over the app (the status bar and what covers the app)
@@ -166,7 +166,7 @@ impl Tunnel {
 }
 
 // SpringBoard's application element answers whichever app is in front: its children are the status bar's items
-// and whatever it draws over the app (Pinky, DIYgod/pinky `springboard.go`); see `Tunnel::ax_overlays`
+// and whatever it draws over the app; see `Tunnel::ax_overlays`
 
 /// The frontmost app's element, asked again for up to `wait` while the phone has none (between two apps)
 async fn frontmost(s: &AxSession, wait: Duration) -> Result<ObjectRef> {

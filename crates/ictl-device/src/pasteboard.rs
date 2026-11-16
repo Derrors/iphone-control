@@ -95,8 +95,7 @@ static WRITES: AtomicI64 = AtomicI64::new(0);
 ///
 /// 一定要带 `sourceMetadata`：手机上的 dtpasteboardd 只在有它时才按「只写本机」写入（UIPasteboard
 /// `setItemProviders:localOnly:expirationDate:`，Xcode 从电脑同步剪贴板也这样）。不带的话，写进去的内容会经「通用剪贴板」
-/// 提供给机主的其他苹果设备，把那边的剪贴板也换掉。字段同 Pinky（DIYgod/pinky `internal/driver/ios/pasteboard.go`，
-/// Apache-2.0）：写入方的 nonce、名字、递增的计数
+/// 提供给机主的其他苹果设备，把那边的剪贴板也换掉。字段：写入方的 nonce、名字、递增的计数
 fn set_message(items: &[Item]) -> XPCObject {
     let items = items
         .iter()

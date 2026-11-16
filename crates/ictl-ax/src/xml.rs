@@ -6,7 +6,6 @@
 //! hosting them, which carries [`trait_bit::REMOTE_HOST`] and comes right before them; they are moved to screen
 //! points by that host. Those without a host (home screen widgets) can't be placed and are left out. A process
 //! whose elements are mostly single characters is the on-screen keyboard: it becomes one `Keyboard` element.
-//! The same rules as Pinky (DIYgod/pinky `observe_rax.go`, Apache-2.0).
 
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write;
@@ -192,8 +191,7 @@ fn place(els: &[Element], keyboard: &HashSet<i64>, web: &HashSet<i64>) -> Vec<Op
             Some((dx, dy)) => out.push(Some((x + dx, y + dy, w, h))),
             // the keyboard is kept (it marks the keyboard as shown) even when its keys can't be placed
             None if keyboard.contains(&e.pid()) => out.push(Some((0.0, 0.0, 0.0, 0.0))),
-            // a page (WebKit's web content process) is listed without a host, in screen points (Pinky
-            // `webcontent.go`)
+            // a page (WebKit's web content process) is listed without a host, in screen points
             None if web.contains(&e.pid()) => out.push(Some((x, y, w, h))),
             None => out.push(None),
         }

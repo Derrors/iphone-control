@@ -1,8 +1,7 @@
 //! Elements as remoteAXService describes them, and the trees the phone pushes.
 //!
-//! Attribute numbers are AccessibilityPlatformTranslation's, as iOS 27 answers them (not public; the same numbers
-//! as Pinky, DIYgod/pinky `internal/driver/ios/rax.go`, Apache-2.0, and our own round of experiments,
-//! `docs/dev/ios27-native.md`).
+//! Attribute numbers are AccessibilityPlatformTranslation's, as iOS 27 answers them (not public; found in our own
+//! rounds of experiments, `docs/dev/ios27-native.md`).
 
 use std::collections::{HashMap, HashSet};
 

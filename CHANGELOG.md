@@ -22,6 +22,7 @@ What changed in each release, one line per change. Versions follow [Semantic Ver
 ### Fixes
 
 - Native control (iOS 27): the floating search bar at the bottom of Settings counts as covering the rows under it, as it does through WDA. Tapping a row under it by text taps its visible part instead of opening the search.
+- Launching a system app for the first time no longer hangs for 60 seconds behind its privacy notice and restarts WDA; it returns at once and says the notice is in the way.
 - `iphone_tap_element` that found nothing to tap no longer says, with `then`, that "the action may not have taken effect"; it also returns the screen without waiting for it to settle.
 - A WDA probe that answers, even with an error, resets the timeout count instead of accumulating unrelated slow requests into a stall. Recovery logs state the reason, and timeout logs include the endpoint and elapsed time.
 

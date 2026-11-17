@@ -12,6 +12,8 @@ What changed in each release, one line per change. Versions follow [Semantic Ver
 
 ### Fixes
 
+- Launching a system app for the first time no longer hangs for 60 seconds behind its privacy notice and restarts WDA; it returns at once and says the notice is in the way.
+
 - A WDA probe that answers, even with an error, resets the timeout count instead of accumulating unrelated slow requests into a stall. Recovery logs state the reason, and timeout logs include the endpoint and elapsed time.
 
 ## [0.2.7] - 2026-11-15

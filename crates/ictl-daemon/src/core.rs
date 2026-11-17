@@ -1509,12 +1509,18 @@ fn check_request(req: &Request) -> Result<(), String> {
     }
     let seconds = match req {
         Request::LongPress { seconds, .. } => *seconds,
-        // 按住加移动一共多久：HID 两段都要逐个发采样
         Request::Swipe { seconds, hold, .. } => {
             if !hold.is_finite() || *hold < 0.0 {
                 return Err(ictl_l10n::trf!("hold 要是不小于 0 的秒数", "hold must be a number of seconds, 0 or more"));
             }
-            seconds + hold
+            // 按住加移动一共多久：HID 两段都要逐个发采样。seconds 自己的范围下面照常查，负数不能靠 hold 凑过去
+            if seconds.is_finite() && *seconds >= 0.0 && seconds + hold > MAX_GESTURE_SECONDS {
+                return Err(ictl_l10n::trf!(
+                    "seconds 加 hold 不能超过 {MAX_GESTURE_SECONDS} 秒",
+                    "seconds plus hold must be at most {MAX_GESTURE_SECONDS} s"
+                ));
+            }
+            *seconds
         }
         _ => return Ok(()),
     };
@@ -1861,7 +1867,11 @@ pub(crate) mod tests {
         let held = |s, h| Request::Swipe { from: (0.0, 0.0), to: (1.0, 1.0), seconds: s, hold: h };
         assert!(check_request(&held(0.7, 0.6)).is_ok());
         assert!(check_request(&held(5.0, 5.0)).is_ok());
-        assert!(check_request(&held(5.0, 5.5)).is_err());
+        let too_long = check_request(&held(5.0, 5.5)).unwrap_err();
+        assert!(too_long.contains("hold"), "{too_long}");
+        // a negative seconds isn't made up for by the hold
+        assert!(check_request(&held(-0.5, 1.0)).is_err());
+        assert!(check_request(&held(0.3, 20.0)).is_err());
         assert!(check_request(&held(0.7, -0.1)).is_err());
         assert!(check_request(&held(0.7, f64::NAN)).is_err());
         assert!(check_request(&swipe(1e6)).is_err());

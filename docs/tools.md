@@ -88,6 +88,8 @@ The tools under *Acting* and `iphone_batch` accept the following options. `iphon
 
 "Settled" means two consecutive element trees match and no loading spinner is shown. On screens with few elements (games, maps) it compares screenshots instead. The result says how long it waited, whether something is probably still loading, and whether a dialog is in the way.
 
+If the screen was looked at before the action (a screenshot, the element list, or the previous action's `then`), the result also says whether the screen changed. When exactly the same action (same tool and parameters) leaves the screen unchanged again, from the second time on it says how many times in a row this has happened and to try something else instead, so an agent going round in circles is told so. A different action, different parameters or a changed screen start the count again.
+
 Without `then`, the result still warns when a system alert covers the screen, because taps and swipes would land on the alert.
 
 ## Batches: `iphone_batch`

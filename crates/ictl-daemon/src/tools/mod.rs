@@ -24,8 +24,8 @@ use crate::notify::Event;
 use crate::protocol::{ALERT_BLOCKING, Response, TAP_MISSED, TouchPhase};
 use crate::protocol::{ElementData, StatusData};
 pub(crate) use native::AX_WAIT;
-pub(crate) use observe::Seen;
 use observe::*;
+pub(crate) use observe::{Repeats, Seen};
 
 /// 锁屏后至少等这么久再自动解锁：锁屏过渡没走完就唤醒，WDA 第一下上滑卡约 16 秒后报 `point.x != INFINITY`
 pub(crate) const LOCK_SETTLE: Duration = Duration::from_secs(3);
@@ -482,6 +482,35 @@ mod tests {
         assert_eq!(compare(&pic, None, Some(&flipped)), Change::Changed);
         assert_eq!(compare(&Seen::default(), Some(&tree("确定", 100)), None), Change::Unknown);
         assert!(super::observe::change_text(Change::Unknown).is_empty());
+    }
+
+    /// 同一个操作原样重做、界面还是没变，从第二次起说是第几次；换了操作、参数不同、界面变了都重新数，
+    /// 没法比（操作前没看过界面）的那次不数也不清零
+    #[test]
+    fn the_same_action_leaving_the_screen_unchanged_is_counted() {
+        use super::observe::{Change, Repeats, repeat_text};
+        use crate::protocol::Request;
+        let tap = |x| Request::Tap { x, y: 640.0 };
+        let mut r = Repeats::default();
+        let mut run = |req: &Request, c| {
+            r.start(req);
+            r.settled(c)
+        };
+        assert_eq!(run(&tap(232.0), Change::Same), 1);
+        assert_eq!(run(&tap(232.0), Change::Same), 2);
+        assert_eq!(run(&tap(232.0), Change::Unknown), 0);
+        assert_eq!(run(&tap(232.0), Change::Same), 3);
+        // another point is another action
+        assert_eq!(run(&tap(100.0), Change::Same), 1);
+        assert_eq!(run(&tap(100.0), Change::Changed), 0);
+        assert_eq!(run(&tap(100.0), Change::Same), 1);
+        // something else in between starts the count again
+        assert_eq!(run(&Request::PressButton { button: "home".into() }, Change::Unknown), 0);
+        assert_eq!(run(&tap(100.0), Change::Same), 1);
+        // a settle without an action counts nothing
+        assert_eq!(r.settled(Change::Same), 0);
+        assert!(repeat_text(0).is_empty() && repeat_text(1).is_empty());
+        assert!(repeat_text(3).contains('3'));
     }
 
     /// 太久以前看过的界面不拿来比；拿走以后就没了

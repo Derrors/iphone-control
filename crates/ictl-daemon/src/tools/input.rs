@@ -1,6 +1,7 @@
 //! Acting at a point or on an element: taps, touches, long presses, swipes, typing
 
 use super::*;
+use crate::protocol::MAX_TAP_COUNT;
 
 /// 一次滑动（[`Daemon::swipe`]）：从 `from` 用 `seconds` 秒移到 `to`；`hold` 秒大于 0 时先在起点按住再移动
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -46,34 +47,106 @@ impl Daemon {
         Ok(rotation)
     }
 
-    pub(crate) async fn tap(&self, g: &mut Inner, x: f64, y: f64, view: Option<&str>) -> crate::error::Result<String> {
+    /// 点击 `count` 下（1 = 普通点击）。连点时 WDA 发一个手势（[`WdaClient::multi_tap`]），HID 在同一个会话里连发
+    pub(crate) async fn tap(
+        &self,
+        g: &mut Inner,
+        x: f64,
+        y: f64,
+        count: u32,
+        view: Option<&str>,
+    ) -> crate::error::Result<String> {
+        if !(1..=MAX_TAP_COUNT).contains(&count) {
+            return Err(ictl_l10n::trf!(
+                "count 要是 1 到 {MAX_TAP_COUNT} 的整数",
+                "count must be a whole number from 1 to {MAX_TAP_COUNT}"
+            )
+            .into());
+        }
         self.prepare_coordinates(g, view, true).await?;
         let pos = format!("({},{})", fmt_g(x), fmt_g(y));
+        let times = if count > 1 { ictl_l10n::trf!(",连点 {count} 下", ", {count} times") } else { String::new() };
         if let Some(w) = self.wda(g) {
             // 只有连不上才退到 HID；超时说明请求已发出，再用 HID 做一遍可能点两次
-            match w.tap(x, y).await {
-                Ok(()) => return Ok(ictl_l10n::trf!("已点击 {pos}", "Tapped {pos}")),
+            let r = if count > 1 { w.multi_tap(x, y, count).await } else { w.tap(x, y).await };
+            match r {
+                Ok(()) => return Ok(ictl_l10n::trf!("已点击 {pos}{times}", "Tapped {pos}{times}")),
                 Err(WdaError::Unavailable(_)) if view.is_none() => {}
                 Err(e) => return Err(e.into()),
             }
         }
         // natively HID is the way, not a fallback: the page's view was checked above as through WDA
-        if self.native(g) {
-            Box::pin(self.native_tap(g, x, y)).await?;
-            return Ok(ictl_l10n::trf!("已点击 {pos}", "Tapped {pos}"));
-        }
-        if view.is_some() {
+        let native = self.native(g);
+        if !native && view.is_some() {
             return Err(wda_down(&g.state, g.info.as_ref()).into());
         }
         let rot = self.hid_touch_rotation(g).await?;
         self.hid_do(g, move |h| {
             Box::pin(async move {
                 h.rotation = rot;
-                h.tap(x, y).await
+                for i in 0..count {
+                    if i > 0 {
+                        tokio::time::sleep(Duration::from_millis(ictl_wda::MULTI_TAP_GAP_MS)).await;
+                    }
+                    h.tap(x, y).await?;
+                }
+                Ok(())
             })
         })
         .await?;
-        Ok(ictl_l10n::trf!("已点击 {pos}(经 HID)", "Tapped {pos} (via HID)"))
+        if native {
+            return Ok(ictl_l10n::trf!("已点击 {pos}{times}", "Tapped {pos}{times}"));
+        }
+        Ok(ictl_l10n::trf!("已点击 {pos}{times}(经 HID)", "Tapped {pos}{times} (via HID)"))
+    }
+
+    /// 依次点几个点（`iphone_batch` 的 `one_gesture`）：WDA 发一个手势（[`WdaClient::tap_sequence`]），HID 在同一个会话里连发。
+    /// 和 [`Self::tap`] 一样只有连不上 WDA 才退到 HID
+    pub(crate) async fn tap_sequence(&self, g: &mut Inner, points: &[(f64, f64)]) -> crate::error::Result<String> {
+        if points.is_empty() || points.len() > crate::protocol::MAX_SEQUENCE_POINTS {
+            return Err(ictl_l10n::trf!(
+                "一个手势要点 1 到 {} 个点",
+                "a gesture takes 1 to {} points",
+                crate::protocol::MAX_SEQUENCE_POINTS
+            )
+            .into());
+        }
+        self.prepare_coordinates(g, None, true).await?;
+        let n = points.len();
+        let list: Vec<String> = points.iter().map(|(x, y)| format!("({},{})", fmt_g(*x), fmt_g(*y))).collect();
+        let list = list.join(" ");
+        if let Some(w) = self.wda(g) {
+            match w.tap_sequence(points).await {
+                Ok(()) => {
+                    return Ok(ictl_l10n::trf!(
+                        "在一个手势里依次点了 {n} 个点:{list}",
+                        "Tapped {n} points in one gesture: {list}"
+                    ));
+                }
+                Err(WdaError::Unavailable(_)) => {}
+                Err(e) => return Err(e.into()),
+            }
+        }
+        let native = self.native(g);
+        let rot = self.hid_touch_rotation(g).await?;
+        let pts = points.to_vec();
+        self.hid_do(g, move |h| {
+            Box::pin(async move {
+                h.rotation = rot;
+                for (i, (x, y)) in pts.into_iter().enumerate() {
+                    if i > 0 {
+                        tokio::time::sleep(Duration::from_millis(ictl_wda::SEQUENCE_GAP_MS)).await;
+                    }
+                    h.tap(x, y).await?;
+                }
+                Ok(())
+            })
+        })
+        .await?;
+        if native {
+            return Ok(ictl_l10n::trf!("依次点了 {n} 个点:{list}", "Tapped {n} points: {list}"));
+        }
+        Ok(ictl_l10n::trf!("依次点了 {n} 个点(经 HID):{list}", "Tapped {n} points (via HID): {list}"))
     }
 
     /// Follow the viewer pointer with one HID report per call. The first event prepares the device.

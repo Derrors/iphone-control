@@ -18,7 +18,7 @@ Coordinates are in **points**, the same unit as the pixels of a full-screen `iph
 
 | Tool | Parameters | Notes |
 |---|---|---|
-| `iphone_tap` | `x`, `y` | For targets without text (icons, games, maps); falls back to HID when WDA is down |
+| `iphone_tap` | `x`, `y`, `count` (default 1, max 10) | For targets without text (icons, games, maps); falls back to HID when WDA is down. `count` taps the same point that many times in one gesture, about 0.1 s apart: 2 is a double tap (also turns on Caps Lock on the keyboard's Shift key); for hidden entries that need several taps in a short time, which separate calls or `iphone_batch` are too slow for |
 | `iphone_tap_element` | `text`, `index` (default 0) | Exact label or name first, then substring. If the element's center is covered (floating toolbar, keyboard, overlay), taps an uncovered part of it; if it is fully covered, does not tap and says so |
 | `iphone_long_press` | `x`, `y`, `seconds` (default 1, max 10) | Holds one finger still, then lifts: context menus, home-screen quick actions, text selection |
 | `iphone_swipe` | `from_x`, `from_y`, `to_x`, `to_y`, `seconds` (default 0.3, max 10), `hold` (default 0) | Returns after the list has stopped scrolling (up to 2.5 s). Swipe up (`from_y` > `to_y`) to see content further down. `hold` holds the finger still at the start for that many seconds before moving, to drag things that have to be long-pressed first (home-screen icons, reorderable rows); about 0.6 works, under 0.5 usually doesn't pick anything up. `seconds` + `hold` is at most 10 |
@@ -95,6 +95,8 @@ Without `then`, the result still warns when a system alert covers the screen, be
 `steps` is a list of up to 20 objects, each `{"tool": <name>, ...parameters}`. Allowed tools: `iphone_tap`, `iphone_tap_element`, `iphone_long_press`, `iphone_swipe`, `iphone_type_text`, `iphone_press_button`, `iphone_launch_app`, `iphone_terminate_app`, `iphone_open_url`, `iphone_wait_for`, and `{"tool": "wait", "seconds": n}` (n ≤ 5).
 
 Steps run in order. The batch stops at the first error or the first `iphone_tap_element` that finds nothing, and reports which step it stopped at. `then` applies once, after the last step. `reuse_elements: true` lets `iphone_tap_element` reuse the element tree from the last 10 seconds; use it only when the steps don't change the layout (for example pressing keys on the same keypad).
+
+`one_gesture: true` is for a batch made only of `iphone_tap` steps: the points are tapped one after another in a single WDA gesture, one finger per point, about 0.04 s apart, with no wait for the interface in between. Use it to press keys on one keyboard when a field doesn't take `iphone_type_text` (some in-app web views only take key taps): on an iPhone 12 mini, 7 digit keys took 1.9 s instead of 3.6 s, 20 took 4.6 s instead of 9.6 s. Nothing is checked between the taps, so check the result afterwards with `then` or a screenshot. Any other kind of step in the batch is an error and nothing runs. Without WDA it falls back to tapping the points one by one.
 
 If the MCP client cancels the call, the remaining steps don't run; a request still queued for the device is dropped too. If no device was selected and the controlled device changes during a batch (for example it was unplugged and another one took over), the batch stops with an error.
 

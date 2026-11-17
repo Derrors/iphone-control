@@ -1213,7 +1213,8 @@ impl Daemon {
                     data = Some(crate::protocol::Data::Elements { elements });
                     text
                 }),
-            Request::Tap { x, y } => self.tap(g, x, y, view).await,
+            Request::Tap { x, y, count } => self.tap(g, x, y, count, view).await,
+            Request::TapSequence { points } => self.tap_sequence(g, &points).await,
             Request::TapElement { text, index, max_age_ms } => {
                 self.tap_element(g, &text, index, Duration::from_millis(max_age_ms)).await.map(|(t, missed)| {
                     outcome.tapped_nothing = missed;
@@ -1339,6 +1340,7 @@ fn lane(req: &Request) -> Lane {
         | Request::Screenshot { .. }
         | Request::ListElements { .. }
         | Request::Tap { .. }
+        | Request::TapSequence { .. }
         | Request::TapElement { .. }
         | Request::LongPress { .. }
         | Request::Swipe { .. }
@@ -1700,7 +1702,7 @@ pub(crate) mod tests {
     async fn coordinate_from_a_previous_view_is_rejected_before_dispatch() {
         let (d, dir) = test_daemon("previous-view");
         let ctx = CallCtx { expect_view: Some("old-view".into()), ..Default::default() };
-        let r = d.handle(Request::Tap { x: 3.0, y: 4.0 }, Instant::now(), ctx).await;
+        let r = d.handle(Request::Tap { x: 3.0, y: 4.0, count: 1 }, Instant::now(), ctx).await;
         assert!(matches!(r, Response::Error { message, retry_as_gesture: false } if message.contains("画面")));
         std::fs::remove_dir_all(dir).unwrap();
     }

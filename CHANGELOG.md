@@ -8,6 +8,8 @@ What changed in each release, one line per change. Versions follow [Semantic Ver
 
 ### New
 
+- `iphone_tap` takes `count` (1–10): the taps go in one gesture, about 0.1 s apart, so a double tap or several quick taps work; separate calls are about 0.5 s apart. An older daemon ignores it and taps once.
+- `iphone_batch` takes `one_gesture`: a batch of coordinate taps runs as one gesture, about twice as fast for pressing keys on a keyboard.
 - `iphone_swipe` takes `hold`: hold still at the start before moving, to drag home-screen icons and other things that need a long press first. An older daemon ignores it and swipes as before.
 
 ### Improvements

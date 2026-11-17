@@ -553,7 +553,7 @@ mod tests {
         g.info = Some(ictl_device::DeviceInfo { product_version: "26.7.3".into(), ..Default::default() });
         g.state = crate::machine::DeviceState::WdaStarting { last_error: None };
         let down = |e: &str| e.contains("没有 HID 后备路线") || e.contains("no HID fallback");
-        let tap = d.tap(&mut g, 20., 50., None).await.unwrap_err().to_string();
+        let tap = d.tap(&mut g, 20., 50., 1, None).await.unwrap_err().to_string();
         assert!(down(&tap), "{tap}");
         let swipe = d
             .swipe(&mut g, Stroke { from: (20., 50.), to: (20., 300.), seconds: 0.3, hold: 0.0 }, None, false)

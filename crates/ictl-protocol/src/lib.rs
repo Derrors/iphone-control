@@ -47,6 +47,19 @@ fn is_zero(v: &f64) -> bool {
     *v == 0.0
 }
 
+/// [`Request::Tap`] 一次最多连点几下
+pub const MAX_TAP_COUNT: u32 = 10;
+
+fn one() -> u32 {
+    1
+}
+
+fn is_one(n: &u32) -> bool {
+    *n == 1
+}
+/// [`Request::TapSequence`] 一个手势最多点几个点（同 `iphone_batch` 最多几步）
+pub const MAX_SEQUENCE_POINTS: usize = 20;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TouchPhase {
@@ -84,6 +97,13 @@ pub enum Request {
     Tap {
         x: f64,
         y: f64,
+        /// 在这一点连点几下（一个手势），1 = 普通点击。旧版本客户端不带，按 1；为 1 时不写进请求，旧版本守护进程照常认
+        #[serde(default = "one", skip_serializing_if = "is_one")]
+        count: u32,
+    },
+    /// 依次点几个点，一个手势（`iphone_batch` 的 `one_gesture`）：同一个键盘上连按。旧版本守护进程不认识，报错，不会只点一部分
+    TapSequence {
+        points: Vec<(f64, f64)>,
     },
     TapElement {
         text: String,
@@ -424,6 +444,7 @@ impl Request {
         match self {
             Self::Tap { .. }
             | Self::TapElement { .. }
+            | Self::TapSequence { .. }
             | Self::LongPress { .. }
             | Self::Swipe { .. }
             | Self::TypeText { .. }
@@ -879,6 +900,16 @@ pub async fn task_list(socket: &std::path::Path) -> Result<Vec<TaskInfo>, String
 mod tests {
     use super::*;
 
+    /// 不带 count 的点击（旧版本客户端）按 1 下；count 为 1 时不写进请求，旧版本守护进程收到的和以前一样
+    #[test]
+    fn a_tap_without_count_is_one_tap_on_the_wire() {
+        let old: Request = serde_json::from_str(r#"{"op":"tap","x":1.0,"y":2.0}"#).unwrap();
+        assert_eq!(old, Request::Tap { x: 1.0, y: 2.0, count: 1 });
+        assert_eq!(serde_json::to_string(&old).unwrap(), r#"{"op":"tap","x":1.0,"y":2.0}"#);
+        let five = Request::Tap { x: 1.0, y: 2.0, count: 5 };
+        assert_eq!(serde_json::to_string(&five).unwrap(), r#"{"op":"tap","x":1.0,"y":2.0,"count":5}"#);
+    }
+
     /// A daemon that is restarting (it left the marker just now) is waited for; one that isn't running is reported
     /// at once
     #[tokio::test]
@@ -918,6 +949,10 @@ mod tests {
         let r = Request::Swipe { from: (1.0, 2.0), to: (3.0, 4.0), seconds: 0.7, hold: 0.6 };
         let s = serde_json::to_string(&r).unwrap();
         assert!(s.ends_with(r#""hold":0.6}"#), "{s}");
+        assert_eq!(serde_json::from_str::<Request>(&s).unwrap(), r);
+        let r = Request::TapSequence { points: vec![(60.0, 548.0), (23.0, 548.0)] };
+        let s = serde_json::to_string(&r).unwrap();
+        assert_eq!(s, r#"{"op":"tap_sequence","points":[[60.0,548.0],[23.0,548.0]]}"#);
         assert_eq!(serde_json::from_str::<Request>(&s).unwrap(), r);
         let e: Response = serde_json::from_str(r#"{"kind":"error","message":"x"}"#).unwrap();
         assert_eq!(e, Response::error("x"));

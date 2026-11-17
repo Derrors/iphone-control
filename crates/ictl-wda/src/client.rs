@@ -237,6 +237,9 @@ const MJPEG_SCALE: u32 = 100;
 
 /// 主屏、锁屏、系统弹窗所属的进程
 pub const SPRINGBOARD: &str = "com.apple.springboard";
+/// 系统 App 第一次打开前的隐私说明页（「欢迎使用“备忘录”… 接受并继续」）。它在自己的进程里，盖在要启动的 App 上面，
+/// 点了它的按钮 App 才会到前台
+pub const PRIVACY_SHEET: &str = "com.apple.PDUIApp";
 /// IOHID 消费者页（Consumer）
 const HID_PAGE_CONSUMER: u32 = 0x0C;
 /// 消费者页里的电源键
@@ -262,6 +265,12 @@ pub enum Launch {
     Blocked(String),
     /// 8 秒内没到前台，也没有弹窗
     Slow,
+}
+
+/// WDA 不认识这个路径（旧版本没有的接口）时的报错，同 [`WdaClient::interface_rotation`]
+fn unknown_route(kind: &str, message: &str) -> bool {
+    matches!(kind, "unknown command" | "unknown method" | "unsupported operation")
+        || (kind == "http" && matches!(message, "404" | "405"))
 }
 
 /// [`WdaClient::check_lock`] 的结果
@@ -1002,8 +1011,19 @@ impl<T: Transport> WdaClient<T> {
     /// 等待期间查前台出错不算失败（启动命令已经成功了）
     pub async fn launch_app(&mut self, bundle_id: &str) -> Result<Launch> {
         let started = tokio::time::Instant::now();
-        self.in_session("POST", "/wda/apps/launch", Some(json!({"bundleId": bundle_id})), Duration::from_secs(60))
-            .await?;
+        // 不经 XCTest 启动（LSApplicationWorkspace），发出就返回，到没到前台由下面自己查。`/wda/apps/launch` 要等 XCTest
+        // 看到 App 在前台：系统 App 第一次打开时隐私说明页盖在上面，它就一直等到 60 秒超时，WDA 也被判卡死重启
+        // （iPhone 12 mini，iOS 26.4.1，「备忘录」「提醒事项」都是 65 秒）。这时它回「failed to launch」，说明页已经出来了
+        let body = json!({"bundleId": bundle_id});
+        match self.call("POST", "/wda/apps/launchUnattached", Some(body.clone()), DEFAULT_TIMEOUT).await {
+            Ok(_) => {}
+            Err(WdaError::Remote { message, .. }) if message.contains("failed to launch") => {}
+            // older WDA without the route: launch as before
+            Err(WdaError::Remote { kind, message }) if unknown_route(&kind, &message) => {
+                self.in_session("POST", "/wda/apps/launch", Some(body), Duration::from_secs(60)).await?;
+            }
+            Err(e) => return Err(e),
+        }
         let t0 = tokio::time::Instant::now();
         let deadline = t0 + Duration::from_secs(8);
         let mut foreground = false;
@@ -1012,6 +1032,15 @@ impl<T: Transport> WdaClient<T> {
                 Ok(a) if a == bundle_id => {
                     foreground = true;
                     break;
+                }
+                Ok(a) if a == PRIVACY_SHEET => {
+                    return Ok(Launch::Blocked(
+                        ictl_l10n::tr!(
+                            "第一次打开时的隐私说明页(点「继续」或「接受并继续」后才进入 App)",
+                            "the privacy notice shown on first launch (tap Continue or Accept & Continue to get into the app)"
+                        )
+                        .into(),
+                    ));
                 }
                 // 系统弹窗（权限请求）挡着时前台一直是 SpringBoard，原来要白等满 8 秒。
                 // 刚启动的一瞬间前台也还是 SpringBoard，过 1 秒还是才去查弹窗（查一次约 0.4 秒）
@@ -1315,6 +1344,45 @@ mod tests {
         let a = body(3);
         let steps = a["actions"][0]["actions"].as_array().unwrap();
         assert_eq!(steps.iter().filter(|s| s["type"] == "pointerDown").count(), 1);
+    }
+
+    /// 启动不经 XCTest（`launchUnattached`），发出就返回；系统 App 第一次打开时它回 failed to launch，前台是隐私说明页，
+    /// 马上报被挡住，不再等 60 秒
+    #[tokio::test]
+    async fn a_first_launch_privacy_notice_is_reported_at_once() {
+        let fail = r#"{"value":{"error":"unknown error","message":"LSApplicationWorkspace failed to launch app"}}"#;
+        let m = Mock::with(&[(500, fail), (200, r#"{"value":{"bundleId":"com.apple.PDUIApp"}}"#)]);
+        let mut w = WdaClient::new(&m);
+        let t0 = std::time::Instant::now();
+        let r = w.launch_app("com.apple.mobilenotes").await.unwrap();
+        assert!(matches!(r, Launch::Blocked(ref t) if !t.is_empty()), "{r:?}");
+        assert!(t0.elapsed() < Duration::from_secs(1));
+        let seen = m.seen.lock().unwrap();
+        assert_eq!(seen[0].1, "/wda/apps/launchUnattached");
+        assert!(seen.iter().all(|(_, p, _)| !p.ends_with("/wda/apps/launch")));
+    }
+
+    /// 旧版 WDA 没有 launchUnattached：照旧经会话启动
+    #[tokio::test]
+    async fn an_older_wda_without_unattached_launch_launches_as_before() {
+        let m = Mock::with(&[
+            (404, r#"{"value":{"error":"unknown command","message":"Unhandled endpoint"}}"#),
+            (200, r#"{"sessionId":"A"}"#),
+            (200, r#"{"value":null}"#),
+            (200, r#"{"value":{"bundleId":"com.apple.PDUIApp"}}"#),
+        ]);
+        let mut w = WdaClient::new(&m);
+        assert!(matches!(w.launch_app("com.apple.mobilenotes").await.unwrap(), Launch::Blocked(_)));
+        let seen = m.seen.lock().unwrap();
+        assert_eq!(seen[2].1, "/session/A/wda/apps/launch");
+    }
+
+    /// 别的错误照样报出来，不当成启动了
+    #[tokio::test]
+    async fn other_launch_errors_are_errors() {
+        let m = Mock::with(&[(500, r#"{"value":{"error":"invalid argument","message":"bad bundle"}}"#)]);
+        let mut w = WdaClient::new(&m);
+        assert!(matches!(w.launch_app("x").await, Err(WdaError::Remote { .. })));
     }
 
     /// 依次点几个点：每个点一根手指，第 k 根先空等前面的点按完；各手指的节拍数对得上，按下抬起一个接一个、不重叠

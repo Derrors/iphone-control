@@ -7,7 +7,7 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use ictl_protocol::{self as protocol, Request, Response};
+use ictl_protocol::{self as protocol, MAX_TAP_COUNT, Request, Response};
 use rmcp::{
     ErrorData, RoleServer, ServerHandler, ServiceExt,
     model::{
@@ -329,12 +329,20 @@ WDA 不可用时会说明哪些功能受影响(读元素、按名字点击、启
                 ictl_l10n::tr!("点击屏幕上的一个坐标(单位是点,与 iphone_screenshot 全屏图的像素一致,左上角为原点)。\n\n\
 何时用:目标没有文字(图标、图片)、在游戏或地图里,或 iphone_list_elements 里找不到它时。\
 带文字的按钮、列表项优先用 iphone_tap_element,界面布局变了也点得准。按住用 iphone_long_press,滚动用 iphone_swipe。\n\n\
-行为:单指按下约 0.05 秒后抬起,点一次。不检查坐标上是什么,点之前先截图确认位置。\
-WDA 不可用时改用 CoreDevice HID(iOS 27 起;结果里注明「经 HID」)。", "Tap a point on the screen (in points, the same as the pixels of a full-screen iphone_screenshot, origin at the top left).\n\nWhen to use: the target has no text (icon, image), is in a game or map, or can't be found with iphone_list_elements. For buttons and list items with text prefer iphone_tap_element, which keeps working when the layout changes. Use iphone_long_press to hold and iphone_swipe to scroll.\n\nBehavior: one finger down for about 0.05 s, then up; a single tap. It doesn't check what is at that point, so look at a screenshot first. If WDA is unavailable it uses CoreDevice HID instead (iOS 27+; the result says “via HID”)."),
+行为:单指按下约 0.05 秒后抬起,点一次(count 大于 1 时在同一点连点)。不检查坐标上是什么,点之前先截图确认位置。\
+WDA 不可用时改用 CoreDevice HID(iOS 27 起;结果里注明「经 HID」)。", "Tap a point on the screen (in points, the same as the pixels of a full-screen iphone_screenshot, origin at the top left).\n\nWhen to use: the target has no text (icon, image), is in a game or map, or can't be found with iphone_list_elements. For buttons and list items with text prefer iphone_tap_element, which keeps working when the layout changes. Use iphone_long_press to hold and iphone_swipe to scroll.\n\nBehavior: one finger down for about 0.05 s, then up; a single tap (several at the same point with count above 1). It doesn't check what is at that point, so look at a screenshot first. If WDA is unavailable it uses CoreDevice HID instead (iOS 27+; the result says “via HID”)."),
                 ictl_l10n::tr!("已点击 (120,300)", "Tapped (120,300)"),
                 true,
             ),
-            schema(with_then(json!({"x": num(ictl_l10n::tr!("x(点)", "x (points)")), "y": num(ictl_l10n::tr!("y(点)", "y (points)"))})), &["x", "y"]),
+            schema(
+                with_then(json!({
+                    "x": num(ictl_l10n::tr!("x(点)", "x (points)")),
+                    "y": num(ictl_l10n::tr!("y(点)", "y (points)")),
+                    "count": {"type": "integer", "default": 1, "minimum": 1, "maximum": MAX_TAP_COUNT,
+                        "description": ictl_l10n::tr!("在这一点连点几下,一个手势里点完(每下间隔约 0.1 秒):2 是双击;也用于要在短时间内连点几下的入口。分开调用赶不上这类时间窗", "how many times to tap this point, all in one gesture (about 0.1 s apart): 2 is a double tap; also for entries that need several taps in a short time, which separate calls are too slow for")}
+                })),
+                &["x", "y"],
+            ),
             acting(ictl_l10n::tr!("点击坐标", "Tap point"), true, false),
         ),
         t(
@@ -604,6 +612,16 @@ impl Args<'_> {
             }),
         }
     }
+    /// 连点次数：不给是 1，给了要是 1 到 [`MAX_TAP_COUNT`] 的整数
+    fn count(&self, k: &str) -> Result<u32, String> {
+        match self.u_or(k, 1)? {
+            n @ 1.. if n <= MAX_TAP_COUNT as usize => Ok(n as u32),
+            _ => Err(ictl_l10n::trf!(
+                "参数 {k} 要是 1 到 {MAX_TAP_COUNT} 的整数",
+                "parameter {k} must be a whole number from 1 to {MAX_TAP_COUNT}"
+            )),
+        }
+    }
     fn b_or(&self, k: &str, d: bool) -> Result<bool, String> {
         match self.get(k) {
             None => Ok(d),
@@ -641,7 +659,7 @@ pub fn to_request(name: &str, args: &Map<String, Value>) -> Result<Request, Stri
             max_age_ms: 0,
             keep_locked: false,
         },
-        "iphone_tap" => Request::Tap { x: a.f("x")?, y: a.f("y")? },
+        "iphone_tap" => Request::Tap { x: a.f("x")?, y: a.f("y")?, count: a.count("count")? },
         "iphone_tap_element" => Request::TapElement { text: a.s("text")?, index: a.u_or("index", 0)?, max_age_ms: 0 },
         "iphone_long_press" => Request::LongPress { x: a.f("x")?, y: a.f("y")?, seconds: a.f_or("seconds", 1.0)? },
         "iphone_swipe" => Request::Swipe {
@@ -1201,6 +1219,21 @@ mod tests {
             }
         });
         with_lang(Lang::Zh, || assert!(has_cjk(instructions())));
+    }
+
+    /// iphone_tap 不带 count 是点一下；count 要是 1 到 MAX_TAP_COUNT 的整数，给错了报错、不点，不悄悄改成 1
+    #[test]
+    fn tap_count_defaults_to_one_and_rejects_out_of_range() {
+        let tap = |v: Value| to_request("iphone_tap", &args(v));
+        assert_eq!(tap(json!({"x": 1, "y": 2})), Ok(Request::Tap { x: 1.0, y: 2.0, count: 1 }));
+        assert_eq!(tap(json!({"x": 1, "y": 2, "count": 5})), Ok(Request::Tap { x: 1.0, y: 2.0, count: 5 }));
+        for bad in [json!(0), json!(11), json!(2.5), json!(-1), json!("two")] {
+            assert!(tap(json!({"x": 1, "y": 2, "count": bad})).is_err(), "{bad}");
+        }
+        // a batch step takes it too
+        let steps = batch_steps(&args(json!({"steps": [{"tool": "iphone_tap", "x": 1, "y": 2, "count": 2}]})));
+        let req = Request::Tap { x: 1.0, y: 2.0, count: 2 };
+        assert_eq!(steps, Ok(vec![Step::Request { tool: "iphone_tap".into(), req }]));
     }
 
     #[test]

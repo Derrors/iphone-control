@@ -1333,7 +1333,7 @@ fn action(name: &str, b: &Value) -> Option<Request> {
     let num = |k: &str| b.get(k).and_then(Value::as_f64).filter(|v| v.is_finite());
     let text = |k: &str| b.get(k).and_then(Value::as_str).map(str::to_owned);
     Some(match name {
-        "tap" => Request::Tap { x: num("x")?, y: num("y")? },
+        "tap" => Request::Tap { x: num("x")?, y: num("y")?, count: 1 },
         "long_press" => Request::LongPress { x: num("x")?, y: num("y")?, seconds: num("seconds")?.clamp(0.3, 5.0) },
         "swipe" => Request::Swipe {
             from: (num("x1")?, num("y1")?),
@@ -2010,7 +2010,7 @@ mod tests {
 
     #[test]
     fn page_actions_map_to_daemon_requests() {
-        assert_eq!(action("tap", &json!({"x": 10.0, "y": 20.5})), Some(Request::Tap { x: 10.0, y: 20.5 }));
+        assert_eq!(action("tap", &json!({"x": 10.0, "y": 20.5})), Some(Request::Tap { x: 10.0, y: 20.5, count: 1 }));
         assert_eq!(
             action("swipe", &json!({"x1": 1, "y1": 2, "x2": 3, "y2": 4, "seconds": 9})),
             Some(Request::Swipe { from: (1.0, 2.0), to: (3.0, 4.0), seconds: 3.0 })

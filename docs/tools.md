@@ -18,7 +18,7 @@ Coordinates are in **points**, the same unit as the pixels of a full-screen `iph
 
 | Tool | Parameters | Notes |
 |---|---|---|
-| `iphone_tap` | `x`, `y` | For targets without text (icons, games, maps); falls back to HID when WDA is down |
+| `iphone_tap` | `x`, `y`, `count` (default 1, max 10) | For targets without text (icons, games, maps); falls back to HID when WDA is down. `count` taps the same point that many times in one gesture, about 0.1 s apart: 2 is a double tap (also turns on Caps Lock on the keyboard's Shift key); for hidden entries that need several taps in a short time, which separate calls or `iphone_batch` are too slow for |
 | `iphone_tap_element` | `text`, `index` (default 0) | Exact label or name first, then substring. If the element's center is covered (floating toolbar, keyboard, overlay), taps an uncovered part of it; if it is fully covered, does not tap and says so |
 | `iphone_long_press` | `x`, `y`, `seconds` (default 1, max 10) | Holds one finger still, then lifts: context menus, home-screen quick actions, text selection |
 | `iphone_swipe` | `from_x`, `from_y`, `to_x`, `to_y`, `seconds` (default 0.3, max 10) | Returns after the list has stopped scrolling (up to 2.5 s). Swipe up (`from_y` > `to_y`) to see content further down |

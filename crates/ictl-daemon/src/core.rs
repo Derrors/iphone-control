@@ -1221,7 +1221,9 @@ impl Daemon {
                 })
             }
             Request::LongPress { x, y, seconds } => self.long_press(g, x, y, seconds, view).await,
-            Request::Swipe { from, to, seconds } => self.swipe(g, from, to, seconds, view, watched).await,
+            Request::Swipe { from, to, seconds, hold } => {
+                self.swipe(g, crate::tools::Stroke { from, to, seconds, hold }, view, watched).await
+            }
             Request::TypeText { text, submit } => self.type_text(g, &text, submit).await,
             Request::PressButton { button } => self.press_button(g, &button, watched).await,
             Request::Touch { phase, x, y } => {
@@ -1504,7 +1506,14 @@ fn check_request(req: &Request) -> Result<(), String> {
         _ => {}
     }
     let seconds = match req {
-        Request::LongPress { seconds, .. } | Request::Swipe { seconds, .. } => *seconds,
+        Request::LongPress { seconds, .. } => *seconds,
+        // 按住加移动一共多久：HID 两段都要逐个发采样
+        Request::Swipe { seconds, hold, .. } => {
+            if !hold.is_finite() || *hold < 0.0 {
+                return Err(ictl_l10n::trf!("hold 要是不小于 0 的秒数", "hold must be a number of seconds, 0 or more"));
+            }
+            seconds + hold
+        }
         _ => return Ok(()),
     };
     if !seconds.is_finite() || !(0.0..=MAX_GESTURE_SECONDS).contains(&seconds) {
@@ -1844,8 +1853,15 @@ pub(crate) mod tests {
 
     #[test]
     fn gesture_seconds_are_bounded() {
-        let swipe = |s| Request::Swipe { from: (0.0, 0.0), to: (1.0, 1.0), seconds: s };
+        let swipe = |s| Request::Swipe { from: (0.0, 0.0), to: (1.0, 1.0), seconds: s, hold: 0.0 };
         assert!(check_request(&swipe(0.3)).is_ok());
+        // a held drag counts the hold too, and the hold can't be negative
+        let held = |s, h| Request::Swipe { from: (0.0, 0.0), to: (1.0, 1.0), seconds: s, hold: h };
+        assert!(check_request(&held(0.7, 0.6)).is_ok());
+        assert!(check_request(&held(5.0, 5.0)).is_ok());
+        assert!(check_request(&held(5.0, 5.5)).is_err());
+        assert!(check_request(&held(0.7, -0.1)).is_err());
+        assert!(check_request(&held(0.7, f64::NAN)).is_err());
         assert!(check_request(&swipe(1e6)).is_err());
         assert!(check_request(&swipe(-1.0)).is_err());
         assert!(check_request(&swipe(f64::NAN)).is_err());

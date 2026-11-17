@@ -1339,6 +1339,7 @@ fn action(name: &str, b: &Value) -> Option<Request> {
             from: (num("x1")?, num("y1")?),
             to: (num("x2")?, num("y2")?),
             seconds: num("seconds")?.clamp(0.05, 3.0),
+            hold: 0.0,
         },
         "type" => {
             Request::TypeText { text: text("text")?, submit: b.get("submit").and_then(Value::as_bool).unwrap_or(false) }
@@ -2013,7 +2014,7 @@ mod tests {
         assert_eq!(action("tap", &json!({"x": 10.0, "y": 20.5})), Some(Request::Tap { x: 10.0, y: 20.5 }));
         assert_eq!(
             action("swipe", &json!({"x1": 1, "y1": 2, "x2": 3, "y2": 4, "seconds": 9})),
-            Some(Request::Swipe { from: (1.0, 2.0), to: (3.0, 4.0), seconds: 3.0 })
+            Some(Request::Swipe { from: (1.0, 2.0), to: (3.0, 4.0), seconds: 3.0, hold: 0.0 })
         );
         assert_eq!(
             action("type", &json!({"text": "hi"})),

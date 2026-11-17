@@ -43,6 +43,10 @@ pub fn default_socket() -> PathBuf {
     }
 }
 
+fn is_zero(v: &f64) -> bool {
+    *v == 0.0
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TouchPhase {
@@ -93,10 +97,13 @@ pub enum Request {
         y: f64,
         seconds: f64,
     },
+    /// `hold`：先在起点按住几秒再移动（拖动图标、列表排序），0 是普通滑动。旧版本守护进程不认识这个字段，当普通滑动做
     Swipe {
         from: (f64, f64),
         to: (f64, f64),
         seconds: f64,
+        #[serde(default, skip_serializing_if = "is_zero")]
+        hold: f64,
     },
     TypeText {
         text: String,
@@ -903,9 +910,14 @@ mod tests {
 
     #[test]
     fn requests_round_trip_as_tagged_json() {
-        let r = Request::Swipe { from: (1.0, 2.0), to: (3.0, 4.0), seconds: 0.3 };
+        let r = Request::Swipe { from: (1.0, 2.0), to: (3.0, 4.0), seconds: 0.3, hold: 0.0 };
         let s = serde_json::to_string(&r).unwrap();
-        assert!(s.starts_with(r#"{"op":"swipe""#), "{s}");
+        // a plain swipe is what it always was on the wire: older daemons and clients see no change
+        assert_eq!(s, r#"{"op":"swipe","from":[1.0,2.0],"to":[3.0,4.0],"seconds":0.3}"#);
+        assert_eq!(serde_json::from_str::<Request>(&s).unwrap(), r);
+        let r = Request::Swipe { from: (1.0, 2.0), to: (3.0, 4.0), seconds: 0.7, hold: 0.6 };
+        let s = serde_json::to_string(&r).unwrap();
+        assert!(s.ends_with(r#""hold":0.6}"#), "{s}");
         assert_eq!(serde_json::from_str::<Request>(&s).unwrap(), r);
         let e: Response = serde_json::from_str(r#"{"kind":"error","message":"x"}"#).unwrap();
         assert_eq!(e, Response::error("x"));

@@ -72,6 +72,22 @@ pub fn swipe_steps(from: (f64, f64), to: (f64, f64), ms: u64) -> Vec<PointerStep
     ]
 }
 
+/// 按住再拖：按下后先原地按住 `hold_ms`，再用 `ms` 移到终点。按住要写成一段原地的 pointerMove，不能是 pause：
+/// iPhone 12 mini（iOS 26.4.1）上主屏幕图标按 pause 按住 0.6～1 秒再移动，0/6 次拖得动（只当成滑动翻页），
+/// 原地 move 0.5 秒再移动 3/3，0.3 秒 0/3。`hold_ms` 为 0 时就是 [`swipe_steps`]
+pub fn drag_steps(from: (f64, f64), to: (f64, f64), hold_ms: u64, ms: u64) -> Vec<PointerStep> {
+    if hold_ms == 0 {
+        return swipe_steps(from, to, ms);
+    }
+    vec![
+        PointerStep::Move { x: from.0, y: from.1, ms: 0 },
+        PointerStep::Down,
+        PointerStep::Move { x: from.0, y: from.1, ms: hold_ms },
+        PointerStep::Move { x: to.0, y: to.1, ms },
+        PointerStep::Up,
+    ]
+}
+
 /// `POST /session/{id}/actions` 的请求体
 pub fn actions_body(steps: &[PointerStep]) -> Value {
     let actions: Vec<Value> = steps
@@ -803,10 +819,11 @@ impl<T: Transport> WdaClient<T> {
 
     /// Swipes and stays in polling mode for the caller, who ends it with [`Self::end_polling`]: restoring the settings
     /// only to change them again right after would cost two round trips
-    pub async fn swipe_into_polling(&mut self, from: (f64, f64), to: (f64, f64), ms: u64) -> Result<()> {
+    /// `hold_ms` > 0 holds the finger still at `from` first ([`drag_steps`])
+    pub async fn swipe_into_polling(&mut self, from: (f64, f64), to: (f64, f64), hold_ms: u64, ms: u64) -> Result<()> {
         self.baseline().await?;
         self.set_idle_settings(IdleSettings::NO_COOL_OFF).await?;
-        let r = self.actions(&swipe_steps(from, to, ms)).await;
+        let r = self.actions(&drag_steps(from, to, hold_ms, ms)).await;
         if r.is_err() {
             self.end_polling().await;
         }
@@ -1549,6 +1566,23 @@ mod tests {
         assert_eq!(a["actions"][2]["duration"], 80);
         let s = swipe_steps((1.0, 2.0), (3.0, 4.0), 300);
         assert_eq!(s[3], PointerStep::Move { x: 3.0, y: 4.0, ms: 300 });
+    }
+
+    /// 按住再拖：按下后原地 move 按住（不是 pause，pause 拖不动图标），再移到终点；不按住就是普通滑动
+    #[test]
+    fn a_held_drag_holds_with_a_move_in_place() {
+        let s = drag_steps((1.0, 2.0), (3.0, 4.0), 600, 700);
+        assert_eq!(
+            s,
+            [
+                PointerStep::Move { x: 1.0, y: 2.0, ms: 0 },
+                PointerStep::Down,
+                PointerStep::Move { x: 1.0, y: 2.0, ms: 600 },
+                PointerStep::Move { x: 3.0, y: 4.0, ms: 700 },
+                PointerStep::Up,
+            ]
+        );
+        assert_eq!(drag_steps((1.0, 2.0), (3.0, 4.0), 0, 300), swipe_steps((1.0, 2.0), (3.0, 4.0), 300));
     }
 
     #[tokio::test]

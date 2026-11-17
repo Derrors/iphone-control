@@ -9,7 +9,7 @@ pub mod elements;
 pub mod http;
 pub mod runner;
 
-pub use client::{IdleSettings, Launch, WdaClient, swipe_steps, tap_steps};
+pub use client::{IdleSettings, Launch, WdaClient, drag_steps, swipe_steps, tap_steps};
 pub use runner::WdaRunner;
 
 #[derive(Debug, thiserror::Error)]

@@ -21,7 +21,7 @@ With [auto-unlock](./auto-unlock) on, `iphone_screenshot`, `iphone_list_elements
 | `iphone_tap` | Tap coordinates |
 | `iphone_tap_element` | Tap by text; if the center is covered by a floating bar or the keyboard it taps a visible part, and if it's fully covered it doesn't tap |
 | `iphone_long_press` | Long press; `seconds` defaults to 1, max 10 |
-| `iphone_swipe` | Swipe; returns once the list has stopped scrolling. `seconds` defaults to 0.3, max 10 |
+| `iphone_swipe` | Swipe; returns once the list has stopped scrolling. `seconds` defaults to 0.3, max 10. `hold` holds still at the start for that many seconds before moving, to drag things that need a long press first (home-screen icons, reorderable rows); about 0.6 works |
 | `iphone_type_text` | Type into the focused field (Chinese supported), read it back and fix dropped characters; `submit` presses Return |
 | `iphone_press_button` | `home`, `volume_up`, `volume_down`, `lock` |
 | `iphone_launch_app` / `iphone_terminate_app` | Launch / quit an app by name (e.g. `设置`) or bundle id |

@@ -2,6 +2,15 @@
 
 use super::*;
 
+/// 一次滑动（[`Daemon::swipe`]）：从 `from` 用 `seconds` 秒移到 `to`；`hold` 秒大于 0 时先在起点按住再移动
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct Stroke {
+    pub from: (f64, f64),
+    pub to: (f64, f64),
+    pub seconds: f64,
+    pub hold: f64,
+}
+
 impl Daemon {
     /// A stale pointer must neither unlock nor act on a new display. Unlock can itself
     /// rotate the foreground app, so take the final measurement after it completes.
@@ -240,16 +249,18 @@ impl Daemon {
     pub(crate) async fn swipe(
         &self,
         g: &mut Inner,
-        from: (f64, f64),
-        to: (f64, f64),
-        seconds: f64,
+        stroke: Stroke,
         view: Option<&str>,
         watched: bool,
     ) -> crate::error::Result<String> {
+        let Stroke { from, to, seconds, hold } = stroke;
         self.prepare_coordinates(g, view, true).await?;
-        let desc = format!("({},{}) → ({},{})", fmt_g(from.0), fmt_g(from.1), fmt_g(to.0), fmt_g(to.1));
+        let mut desc = format!("({},{}) → ({},{})", fmt_g(from.0), fmt_g(from.1), fmt_g(to.0), fmt_g(to.1));
+        if hold > 0.0 {
+            desc = ictl_l10n::trf!("{desc},先按住 {} 秒", "{desc}, held {} s first", fmt_g(hold));
+        }
         if let Some(w) = self.wda(g) {
-            match w.swipe_into_polling(from, to, (seconds * 1000.0) as u64).await {
+            match w.swipe_into_polling(from, to, (hold * 1000.0) as u64, (seconds * 1000.0) as u64).await {
                 // 滑动请求不等惯性滚动（等的话设置不对能卡十几秒），这里等列表停下再返回：
                 // 列表还在滚时下一次点击只会让它停住，点不到东西
                 // someone watches the screen ([`crate::protocol::WATCHED`]): they see when it stops
@@ -276,7 +287,7 @@ impl Daemon {
         self.hid_do(g, move |h| {
             Box::pin(async move {
                 h.rotation = rot;
-                h.drag(from, to, seconds).await
+                if hold > 0.0 { h.held_drag(from, to, hold, seconds).await } else { h.drag(from, to, seconds).await }
             })
         })
         .await?;

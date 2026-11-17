@@ -1514,7 +1514,7 @@ mod tests {
         let r = ts.handle(&req("iphone_tap", json!({"x": 5, "y": 6})), Some(&t.token), None, &mut None).await;
         assert_eq!(r, Some(Response::text("2")));
         t.thought("点一下");
-        let n = ts.auto_step(&t, &Request::Swipe { from: (1.0, 2.0), to: (3.0, 4.0), seconds: 0.3 });
+        let n = ts.auto_step(&t, &Request::Swipe { from: (1.0, 2.0), to: (3.0, 4.0), seconds: 0.3, hold: 0.0 });
         assert_eq!(n, 3);
         let (log, _, _) = t.subscribe();
         let steps: Vec<&Value> = log.iter().filter(|e| e.event == "step").map(|e| &e.data).collect();

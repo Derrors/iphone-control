@@ -6,6 +6,10 @@ What changed in each release, one line per change. Versions follow [Semantic Ver
 
 ## [Unreleased]
 
+### New
+
+- `iphone_swipe` takes `hold`: hold still at the start before moving, to drag home-screen icons and other things that need a long press first. An older daemon ignores it and swipes as before.
+
 ### Improvements
 
 - An action that had to unlock the phone first says so, and how long it took (#135).

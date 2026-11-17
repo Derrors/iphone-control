@@ -18,15 +18,15 @@ MCP 服务提供 17 个工具，开启[开发者工具](#开发者工具-显式�
 
 | 工具 | 作用 |
 |---|---|
-| `iphone_tap` | 按坐标点击 |
+| `iphone_tap` | 按坐标点击；`count` 在同一点连点（双击、要短时间内连点几下的入口） |
 | `iphone_tap_element` | 按文字点击；中心被悬浮栏、键盘挡住时改点露出来的部分，整个被挡住就不点 |
 | `iphone_long_press` | 长按；`seconds` 默认 1，最多 10 |
-| `iphone_swipe` | 滑动；列表停稳后才返回。`seconds` 默认 0.3，最多 10 |
+| `iphone_swipe` | 滑动；列表停稳后才返回。`seconds` 默认 0.3，最多 10。`hold` 先在起点按住几秒再移动，用来拖动要先长按才拿得起来的东西（主屏幕图标、可排序的列表项），0.6 左右即可 |
 | `iphone_type_text` | 在当前输入框输入文字（支持中文），输完读回核对，丢字会补上；`submit` 时按回车 |
 | `iphone_press_button` | `home`、`volume_up`、`volume_down`、`lock` |
 | `iphone_launch_app` / `iphone_terminate_app` | 启动 / 结束 App，可以用名字（如「设置」）或 Bundle ID |
 | `iphone_open_url` | 打开链接或 URL Scheme |
-| `iphone_batch` | 一次执行最多 20 步，出错就停。MCP 客户端取消调用时，剩下的步骤不再执行；没选定设备时，执行中控制的设备变了也会停下报错 |
+| `iphone_batch` | 一次执行最多 20 步，出错就停。步骤全是坐标点击时，`one_gesture` 把它们放进一个手势里依次点完，适合在同一个键盘上连按。MCP 客户端取消调用时，剩下的步骤不再执行；没选定设备时，执行中控制的设备变了也会停下报错 |
 
 ## 接着多台设备
 

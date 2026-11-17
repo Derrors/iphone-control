@@ -1217,7 +1217,8 @@ impl Daemon {
                     data = Some(crate::protocol::Data::Elements { elements });
                     text
                 }),
-            Request::Tap { x, y } => self.tap(g, x, y, view).await,
+            Request::Tap { x, y, count } => self.tap(g, x, y, count, view).await,
+            Request::TapSequence { points } => self.tap_sequence(g, &points).await,
             Request::TapElement { text, index, max_age_ms } => {
                 self.tap_element(g, &text, index, Duration::from_millis(max_age_ms)).await.map(|(t, missed)| {
                     outcome.tapped_nothing = missed;
@@ -1225,7 +1226,9 @@ impl Daemon {
                 })
             }
             Request::LongPress { x, y, seconds } => self.long_press(g, x, y, seconds, view).await,
-            Request::Swipe { from, to, seconds } => self.swipe(g, from, to, seconds, view, watched).await,
+            Request::Swipe { from, to, seconds, hold } => {
+                self.swipe(g, crate::tools::Stroke { from, to, seconds, hold }, view, watched).await
+            }
             Request::TypeText { text, submit } => self.type_text(g, &text, submit).await,
             Request::PressButton { button } => self.press_button(g, &button, watched).await,
             Request::Touch { phase, x, y } => {
@@ -1341,6 +1344,7 @@ fn lane(req: &Request) -> Lane {
         | Request::Screenshot { .. }
         | Request::ListElements { .. }
         | Request::Tap { .. }
+        | Request::TapSequence { .. }
         | Request::TapElement { .. }
         | Request::LongPress { .. }
         | Request::Swipe { .. }
@@ -1508,7 +1512,20 @@ fn check_request(req: &Request) -> Result<(), String> {
         _ => {}
     }
     let seconds = match req {
-        Request::LongPress { seconds, .. } | Request::Swipe { seconds, .. } => *seconds,
+        Request::LongPress { seconds, .. } => *seconds,
+        Request::Swipe { seconds, hold, .. } => {
+            if !hold.is_finite() || *hold < 0.0 {
+                return Err(ictl_l10n::trf!("hold 要是不小于 0 的秒数", "hold must be a number of seconds, 0 or more"));
+            }
+            // 按住加移动一共多久：HID 两段都要逐个发采样。seconds 自己的范围下面照常查，负数不能靠 hold 凑过去
+            if seconds.is_finite() && *seconds >= 0.0 && seconds + hold > MAX_GESTURE_SECONDS {
+                return Err(ictl_l10n::trf!(
+                    "seconds 加 hold 不能超过 {MAX_GESTURE_SECONDS} 秒",
+                    "seconds plus hold must be at most {MAX_GESTURE_SECONDS} s"
+                ));
+            }
+            *seconds
+        }
         _ => return Ok(()),
     };
     if !seconds.is_finite() || !(0.0..=MAX_GESTURE_SECONDS).contains(&seconds) {
@@ -1695,7 +1712,7 @@ pub(crate) mod tests {
     async fn coordinate_from_a_previous_view_is_rejected_before_dispatch() {
         let (d, dir) = test_daemon("previous-view");
         let ctx = CallCtx { expect_view: Some("old-view".into()), ..Default::default() };
-        let r = d.handle(Request::Tap { x: 3.0, y: 4.0 }, Instant::now(), ctx).await;
+        let r = d.handle(Request::Tap { x: 3.0, y: 4.0, count: 1 }, Instant::now(), ctx).await;
         assert!(matches!(r, Response::Error { message, retry_as_gesture: false } if message.contains("画面")));
         std::fs::remove_dir_all(dir).unwrap();
     }
@@ -1848,8 +1865,19 @@ pub(crate) mod tests {
 
     #[test]
     fn gesture_seconds_are_bounded() {
-        let swipe = |s| Request::Swipe { from: (0.0, 0.0), to: (1.0, 1.0), seconds: s };
+        let swipe = |s| Request::Swipe { from: (0.0, 0.0), to: (1.0, 1.0), seconds: s, hold: 0.0 };
         assert!(check_request(&swipe(0.3)).is_ok());
+        // a held drag counts the hold too, and the hold can't be negative
+        let held = |s, h| Request::Swipe { from: (0.0, 0.0), to: (1.0, 1.0), seconds: s, hold: h };
+        assert!(check_request(&held(0.7, 0.6)).is_ok());
+        assert!(check_request(&held(5.0, 5.0)).is_ok());
+        let too_long = check_request(&held(5.0, 5.5)).unwrap_err();
+        assert!(too_long.contains("hold"), "{too_long}");
+        // a negative seconds isn't made up for by the hold
+        assert!(check_request(&held(-0.5, 1.0)).is_err());
+        assert!(check_request(&held(0.3, 20.0)).is_err());
+        assert!(check_request(&held(0.7, -0.1)).is_err());
+        assert!(check_request(&held(0.7, f64::NAN)).is_err());
         assert!(check_request(&swipe(1e6)).is_err());
         assert!(check_request(&swipe(-1.0)).is_err());
         assert!(check_request(&swipe(f64::NAN)).is_err());

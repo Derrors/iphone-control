@@ -12,6 +12,8 @@ What changed in each release, one line per change. Versions follow [Semantic Ver
 
 ### Fixes
 
+- `iphone_tap_element` that found nothing to tap no longer says, with `then`, that "the action may not have taken effect"; it also returns the screen without waiting for it to settle.
+
 - A WDA probe that answers, even with an error, resets the timeout count instead of accumulating unrelated slow requests into a stall. Recovery logs state the reason, and timeout logs include the endpoint and elapsed time.
 
 ## [0.2.7] - 2026-11-15

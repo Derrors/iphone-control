@@ -1215,8 +1215,14 @@ impl Daemon {
                 }),
             Request::Tap { x, y } => self.tap(g, x, y, view).await,
             Request::TapElement { text, index, max_age_ms } => {
-                self.tap_element(g, &text, index, Duration::from_millis(max_age_ms)).await.map(|(t, missed)| {
+                let r = self.tap_element(g, &text, index, Duration::from_millis(max_age_ms)).await;
+                r.map(|(t, missed)| {
                     outcome.tapped_nothing = missed;
+                    // nothing was tapped: there is no "before the action" to compare the screen with, or the next
+                    // settle would say the tap may not have taken effect
+                    if missed {
+                        g.dev.before_action = None;
+                    }
                     t
                 })
             }

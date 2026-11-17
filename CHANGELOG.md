@@ -14,6 +14,8 @@ What changed in each release, one line per change. Versions follow [Semantic Ver
 
 ### Improvements
 
+- When the same action leaves the screen unchanged again and again, the result says how many times in a row and to try something else.
+
 - An action that had to unlock the phone first says so, and how long it took (#135).
 
 ### Fixes

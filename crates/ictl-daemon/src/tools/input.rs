@@ -1,6 +1,7 @@
 //! Acting at a point or on an element: taps, touches, long presses, swipes, typing
 
 use super::*;
+use crate::protocol::MAX_TAP_COUNT;
 
 impl Daemon {
     /// A stale pointer must neither unlock nor act on a new display. Unlock can itself
@@ -37,34 +38,57 @@ impl Daemon {
         Ok(rotation)
     }
 
-    pub(crate) async fn tap(&self, g: &mut Inner, x: f64, y: f64, view: Option<&str>) -> crate::error::Result<String> {
+    /// 点击 `count` 下（1 = 普通点击）。连点时 WDA 发一个手势（[`WdaClient::multi_tap`]），HID 在同一个会话里连发
+    pub(crate) async fn tap(
+        &self,
+        g: &mut Inner,
+        x: f64,
+        y: f64,
+        count: u32,
+        view: Option<&str>,
+    ) -> crate::error::Result<String> {
+        if !(1..=MAX_TAP_COUNT).contains(&count) {
+            return Err(ictl_l10n::trf!(
+                "count 要是 1 到 {MAX_TAP_COUNT} 的整数",
+                "count must be a whole number from 1 to {MAX_TAP_COUNT}"
+            )
+            .into());
+        }
         self.prepare_coordinates(g, view, true).await?;
         let pos = format!("({},{})", fmt_g(x), fmt_g(y));
+        let times = if count > 1 { ictl_l10n::trf!(",连点 {count} 下", ", {count} times") } else { String::new() };
         if let Some(w) = self.wda(g) {
             // 只有连不上才退到 HID；超时说明请求已发出，再用 HID 做一遍可能点两次
-            match w.tap(x, y).await {
-                Ok(()) => return Ok(ictl_l10n::trf!("已点击 {pos}", "Tapped {pos}")),
+            let r = if count > 1 { w.multi_tap(x, y, count).await } else { w.tap(x, y).await };
+            match r {
+                Ok(()) => return Ok(ictl_l10n::trf!("已点击 {pos}{times}", "Tapped {pos}{times}")),
                 Err(WdaError::Unavailable(_)) if view.is_none() => {}
                 Err(e) => return Err(e.into()),
             }
         }
         // natively HID is the way, not a fallback: the page's view was checked above as through WDA
-        if self.native(g) {
-            Box::pin(self.native_tap(g, x, y)).await?;
-            return Ok(ictl_l10n::trf!("已点击 {pos}", "Tapped {pos}"));
-        }
-        if view.is_some() {
+        let native = self.native(g);
+        if !native && view.is_some() {
             return Err(wda_down(&g.state, g.info.as_ref()).into());
         }
         let rot = self.hid_touch_rotation(g).await?;
         self.hid_do(g, move |h| {
             Box::pin(async move {
                 h.rotation = rot;
-                h.tap(x, y).await
+                for i in 0..count {
+                    if i > 0 {
+                        tokio::time::sleep(Duration::from_millis(ictl_wda::MULTI_TAP_GAP_MS)).await;
+                    }
+                    h.tap(x, y).await?;
+                }
+                Ok(())
             })
         })
         .await?;
-        Ok(ictl_l10n::trf!("已点击 {pos}(经 HID)", "Tapped {pos} (via HID)"))
+        if native {
+            return Ok(ictl_l10n::trf!("已点击 {pos}{times}", "Tapped {pos}{times}"));
+        }
+        Ok(ictl_l10n::trf!("已点击 {pos}{times}(经 HID)", "Tapped {pos}{times} (via HID)"))
     }
 
     /// 依次点几个点（`iphone_batch` 的 `one_gesture`）：WDA 发一个手势（[`WdaClient::tap_sequence`]），HID 在同一个会话里连发。

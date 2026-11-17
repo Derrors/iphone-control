@@ -1188,7 +1188,7 @@ fn gesture(tool: &str, args: &Value, result: &str) -> Option<Value> {
 /// [`gesture`] for a request that no tool call announced
 fn request_gesture(req: &Request) -> Option<Value> {
     match req {
-        Request::Tap { x, y } => Some(json!({"kind": "tap", "x": x, "y": y})),
+        Request::Tap { x, y, .. } => Some(json!({"kind": "tap", "x": x, "y": y})),
         Request::LongPress { x, y, .. } => Some(json!({"kind": "long_press", "x": x, "y": y})),
         Request::Swipe { from, to, .. } => {
             Some(json!({"kind": "swipe", "x": from.0, "y": from.1, "x2": to.0, "y2": to.1}))
@@ -1220,7 +1220,7 @@ mod tests {
     }
 
     fn tap() -> Request {
-        Request::Tap { x: 1.0, y: 2.0 }
+        Request::Tap { x: 1.0, y: 2.0, count: 1 }
     }
 
     async fn admit(ts: &Tasks, req: &Request, token: Option<&str>) -> Result<(Admission, bool), Response> {

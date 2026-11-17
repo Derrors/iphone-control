@@ -369,7 +369,7 @@ mod tests {
                 assert_eq!(events.next().await.unwrap().event, "task");
                 assert!(protocol::open_task(&socket, "又一个", "test", &[]).await.is_err(), "one at a time");
 
-                let tap = Request::Tap { x: 1.0, y: 2.0 };
+                let tap = Request::Tap { x: 1.0, y: 2.0, count: 1 };
                 let r = protocol::call(&socket, &tap, None).await.unwrap();
                 assert!(matches!(&r, Response::Error { message, .. } if message.contains(&opened.id)), "{r:?}");
                 // the task's own request gets past the task (and then finds no phone in this test)
@@ -420,7 +420,7 @@ mod tests {
             br#"{"op":"tap","x":1.0,"y":2.0,"cancel_on_close":true,"expect_udid":"U1","expect_view":"V1","lang":"en"}"#,
         )
         .unwrap();
-        assert_eq!(req, protocol::Request::Tap { x: 1.0, y: 2.0 });
+        assert_eq!(req, protocol::Request::Tap { x: 1.0, y: 2.0, count: 1 });
         assert!(cancel);
         assert_eq!(expect.expect_udid.as_deref(), Some("U1"));
         assert_eq!(expect.expect_view.as_deref(), Some("V1"));

@@ -12,6 +12,38 @@ pub(crate) struct Stroke {
     pub hold: f64,
 }
 
+/// 边滑边找时每次滑多久：1 秒的慢滑停下时几乎没有惯性，内容移动和手指移动差不多（iPhone 12 mini 设置首页：
+/// 手指移 300 点，0.3 秒滚了 618 点，0.6 秒 420 点，1 秒 282 点；W3C 在抬起前停一下也去不掉惯性）
+pub(super) const SEARCH_SWIPE_SECONDS: f64 = 1.0;
+
+/// 边滑边找时算找到了：有匹配，而且要点的那个没有被整个盖住（停在底部工具栏、悬浮栏下面的还要再滑一下）。
+/// index 超出匹配个数也算找到：滑下去不会让序号变得更有意义，交给后面照常报
+fn reachable_in(tree: &Tree, matches: &[&elements::Element], index: usize) -> bool {
+    match matches.get(index) {
+        Some(e) => !matches!(tree.tap_point(e), TapPoint::Covered { .. }),
+        None => !matches.is_empty(),
+    }
+}
+
+/// 有能点到的匹配，按 [`elements::find`]：没有文字完全相同的就算包含它的
+pub(super) fn reachable(tree: &Tree, text: &str, index: usize) -> bool {
+    reachable_in(tree, &elements::find(&tree.elements, text), index)
+}
+
+/// 有能点到的、文字（标签或名字）完全相同的匹配。边滑边找只在这时停下：当前屏只有包含它的（找「App」时的
+/// 「Apple账户」）不算，要找的多半在后面
+pub(super) fn reachable_exact(tree: &Tree, text: &str, index: usize) -> bool {
+    let exact: Vec<_> = tree.elements.iter().filter(|e| e.label == text || e.name == text).collect();
+    reachable_in(tree, &exact, index)
+}
+
+/// 边滑边找的一次滑动：屏幕正中，竖着滑 35% 屏高（前后两屏有重叠，不会漏过一行）。`down` 看下面的内容，手指往上
+pub(super) fn search_stroke(width: f64, height: f64, down: bool) -> ((f64, f64), (f64, f64)) {
+    let x = (width / 2.0).round();
+    let (low, high) = ((height * 0.68).round(), (height * 0.33).round());
+    if down { ((x, low), (x, high)) } else { ((x, high), (x, low)) }
+}
+
 impl Daemon {
     /// A stale pointer must neither unlock nor act on a new display. Unlock can itself
     /// rotate the foreground app, so take the final measurement after it completes.
@@ -231,24 +263,86 @@ impl Daemon {
         Ok(())
     }
 
+    /// 边滑边找的一次慢滑（[`search_stroke`]），等停下后读一棵新树
+    async fn search_scroll(&self, g: &mut Inner, down: bool) -> crate::error::Result<Tree> {
+        let screen = self.screen(g).await?;
+        let (from, to) = search_stroke(screen.width, screen.height, down);
+        Box::pin(self.swipe(g, Stroke { from, to, seconds: SEARCH_SWIPE_SECONDS, hold: 0.0 }, None, false)).await?;
+        self.tree(g, Duration::ZERO).await
+    }
+
     pub(crate) async fn tap_element(
         &self,
         g: &mut Inner,
         text: &str,
         index: usize,
         max_age: Duration,
+        scroll: Option<crate::protocol::ScrollSearch>,
     ) -> crate::error::Result<(String, bool)> {
         self.ensure_unlocked(g).await?;
-        let tree = self.tree(g, max_age).await?;
+        let mut tree = self.tree(g, max_age).await?;
+        // 屏幕上没有、又要边滑边找：慢滑一小段（不带惯性，不会把要找的甩过去）、等停下再读树，
+        // 找到文字完全相同的或滑到底为止。一路上记下第一次看到包含它的是滑了几次的时候
+        let mut scrolled = 0;
+        let mut back = 0;
+        let mut at_end = false;
+        if let Some(s) = scroll {
+            let mut partial_at = None;
+            loop {
+                if reachable_exact(&tree, text, index) {
+                    break;
+                }
+                if partial_at.is_none() && reachable(&tree, text, index) {
+                    partial_at = Some(scrolled);
+                }
+                if at_end || scrolled >= s.max {
+                    break;
+                }
+                let next = Box::pin(self.search_scroll(g, s.down)).await?;
+                scrolled += 1;
+                at_end = next.close_to(&tree, STILL_TOLERANCE);
+                tree = next;
+            }
+            // 没有文字完全相同的，包含它的又已经滑过去了：往回滑到看到它的地方（多滑一次，前后两屏有重叠）
+            if !reachable_exact(&tree, text, index)
+                && !reachable(&tree, text, index)
+                && let Some(k) = partial_at
+            {
+                while back <= scrolled - k && !reachable(&tree, text, index) {
+                    tree = Box::pin(self.search_scroll(g, !s.down)).await?;
+                    back += 1;
+                }
+            }
+        }
+        let searched = match (scrolled, at_end, back) {
+            (0, ..) => String::new(),
+            (n, _, b @ 1..) => ictl_l10n::trf!(
+                "(滑了 {n} 次没有文字完全相同的,又往回滑了 {b} 次)",
+                " (scrolled {n} times without an exact match, then {b} back)"
+            ),
+            (n, true, 0) => ictl_l10n::trf!("(滑了 {n} 次,已到尽头)", " (scrolled {n} times, reached the end)"),
+            (n, false, 0) => ictl_l10n::trf!("(滑了 {n} 次)", " (scrolled {n} times)"),
+        };
+        // 边滑边找了、最后点的却不是文字完全相同的：明说，Agent 看得出这和它要找的不一样
+        let partial_only = scroll.is_some() && !reachable_exact(&tree, text, index);
         // 点之前刚读的树就是操作前的界面（比操作开始前记下的更新）
         g.dev.before_action = Some(std::mem::take(&mut g.dev.seen));
         let matches = elements::find(&tree.elements, text);
         if matches.is_empty() {
             let limited = self.snapshot_note(g);
+            let hint = if scroll.is_some() {
+                String::new()
+            } else {
+                ictl_l10n::tr!(
+                    ";可能在屏幕外,可带 scroll 边滑边找",
+                    "; it may be off screen: pass scroll to look further"
+                )
+                .to_owned()
+            };
             return Ok((
                 ictl_l10n::trf!(
-                    "{}包含 \"{text}\" 的元素,先用 iphone_list_elements 或截图看看屏幕{limited}",
-                    "{}: no element contains \"{text}\"; look at the screen with iphone_list_elements or a screenshot first{limited}",
+                    "{}包含 \"{text}\" 的元素{searched},先用 iphone_list_elements 或截图看看屏幕{limited}{hint}",
+                    "{}: no element contains \"{text}\"{searched}; look at the screen with iphone_list_elements or a screenshot first{limited}{hint}",
                     tap_missed_prefixes()[0]
                 ),
                 true,
@@ -298,7 +392,19 @@ impl Daemon {
         } else {
             String::new()
         };
-        Ok((ictl_l10n::trf!("已点击 {}{note}{moved}", "Tapped {}{note}{moved}", e.describe()), false))
+        let found = match (scrolled, partial_only) {
+            (0, false) => String::new(),
+            (0, true) => {
+                ictl_l10n::tr!("(没有文字完全相同的,点的是包含它的)", " (no exact match, tapped one that contains it)")
+                    .to_owned()
+            }
+            (_, true) => ictl_l10n::trf!(
+                "{searched}(没有文字完全相同的,点的是包含它的)",
+                "{searched} (no exact match, tapped one that contains it)"
+            ),
+            (n, false) => ictl_l10n::trf!("(滑了 {n} 次后找到)", " (found after {n} scrolls)"),
+        };
+        Ok((ictl_l10n::trf!("已点击 {}{found}{note}{moved}", "Tapped {}{found}{note}{moved}", e.describe()), false))
     }
 
     pub(crate) async fn long_press(

@@ -486,6 +486,37 @@ mod tests {
         assert!(super::observe::change_text(Change::Unknown).is_empty());
     }
 
+    /// 边滑边找只在文字完全相同时停下：找「App」时屏幕上只有「Apple账户」，包含它但不算找到，要接着滑
+    #[test]
+    fn a_scroll_search_stops_only_on_an_exact_match() {
+        let row = |label: &str, y: u32| {
+            format!(
+                r#"<XCUIElementTypeButton type="XCUIElementTypeButton" label="{label}" name="{label}" x="20" y="{y}" width="390" height="52"/>"#
+            )
+        };
+        let xml = |rows: &str| {
+            format!(
+                r#"<XCUIElementTypeApplication type="XCUIElementTypeApplication" x="0" y="0" width="430" height="932"><XCUIElementTypeWindow type="XCUIElementTypeWindow" x="0" y="0" width="430" height="932">{rows}</XCUIElementTypeWindow></XCUIElementTypeApplication>"#
+            )
+        };
+        let screen = ictl_device::ScreenSize { width: 430.0, height: 932.0 };
+        let top = elements::parse_tree(&xml(&row("Apple账户、iCloud+等", 200)), screen);
+        assert!(input::reachable(&top, "App", 0), "a row that contains it");
+        assert!(!input::reachable_exact(&top, "App", 0), "but not the one asked for");
+        let bottom = elements::parse_tree(&xml(&(row("钱包与 Apple Pay", 300) + &row("App", 600))), screen);
+        assert!(input::reachable_exact(&bottom, "App", 0));
+    }
+
+    /// 边滑边找的一次滑动在屏幕正中竖着滑，往下找时手指往上；滑的距离不到半屏，前后两屏有重叠
+    #[test]
+    fn a_search_scroll_is_a_short_vertical_stroke_in_the_middle() {
+        let (from, to) = input::search_stroke(375.0, 812.0, true);
+        assert_eq!(from, (188.0, 552.0));
+        assert_eq!(to, (188.0, 268.0));
+        assert!(from.1 - to.1 < 812.0 / 2.0);
+        assert_eq!(input::search_stroke(375.0, 812.0, false), (to, from));
+    }
+
     /// 同一个操作原样重做、界面还是没变，从第二次起说是第几次；换了操作、参数不同、界面变了都重新数，
     /// 没法比（操作前没看过界面）的那次不数也不清零
     #[test]

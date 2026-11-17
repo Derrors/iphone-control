@@ -1,6 +1,48 @@
 //! Acting at a point or on an element: taps, touches, long presses, swipes, typing
 
 use super::*;
+use crate::protocol::MAX_TAP_COUNT;
+
+/// 一次滑动（[`Daemon::swipe`]）：从 `from` 用 `seconds` 秒移到 `to`；`hold` 秒大于 0 时先在起点按住再移动
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct Stroke {
+    pub from: (f64, f64),
+    pub to: (f64, f64),
+    pub seconds: f64,
+    pub hold: f64,
+}
+
+/// 边滑边找时每次滑多久：1 秒的慢滑停下时几乎没有惯性，内容移动和手指移动差不多（iPhone 12 mini 设置首页：
+/// 手指移 300 点，0.3 秒滚了 618 点，0.6 秒 420 点，1 秒 282 点；W3C 在抬起前停一下也去不掉惯性）
+pub(super) const SEARCH_SWIPE_SECONDS: f64 = 1.0;
+
+/// 边滑边找时算找到了：有匹配，而且要点的那个没有被整个盖住（停在底部工具栏、悬浮栏下面的还要再滑一下）。
+/// index 超出匹配个数也算找到：滑下去不会让序号变得更有意义，交给后面照常报
+fn reachable_in(tree: &Tree, matches: &[&elements::Element], index: usize) -> bool {
+    match matches.get(index) {
+        Some(e) => !matches!(tree.tap_point(e), TapPoint::Covered { .. }),
+        None => !matches.is_empty(),
+    }
+}
+
+/// 有能点到的匹配，按 [`elements::find`]：没有文字完全相同的就算包含它的
+pub(super) fn reachable(tree: &Tree, text: &str, index: usize) -> bool {
+    reachable_in(tree, &elements::find(&tree.elements, text), index)
+}
+
+/// 有能点到的、文字（标签或名字）完全相同的匹配。边滑边找只在这时停下：当前屏只有包含它的（找「App」时的
+/// 「Apple账户」）不算，要找的多半在后面
+pub(super) fn reachable_exact(tree: &Tree, text: &str, index: usize) -> bool {
+    let exact: Vec<_> = tree.elements.iter().filter(|e| e.label == text || e.name == text).collect();
+    reachable_in(tree, &exact, index)
+}
+
+/// 边滑边找的一次滑动：屏幕正中，竖着滑 35% 屏高（前后两屏有重叠，不会漏过一行）。`down` 看下面的内容，手指往上
+pub(super) fn search_stroke(width: f64, height: f64, down: bool) -> ((f64, f64), (f64, f64)) {
+    let x = (width / 2.0).round();
+    let (low, high) = ((height * 0.68).round(), (height * 0.33).round());
+    if down { ((x, low), (x, high)) } else { ((x, high), (x, low)) }
+}
 
 impl Daemon {
     /// A stale pointer must neither unlock nor act on a new display. Unlock can itself
@@ -37,34 +79,106 @@ impl Daemon {
         Ok(rotation)
     }
 
-    pub(crate) async fn tap(&self, g: &mut Inner, x: f64, y: f64, view: Option<&str>) -> crate::error::Result<String> {
+    /// 点击 `count` 下（1 = 普通点击）。连点时 WDA 发一个手势（[`WdaClient::multi_tap`]），HID 在同一个会话里连发
+    pub(crate) async fn tap(
+        &self,
+        g: &mut Inner,
+        x: f64,
+        y: f64,
+        count: u32,
+        view: Option<&str>,
+    ) -> crate::error::Result<String> {
+        if !(1..=MAX_TAP_COUNT).contains(&count) {
+            return Err(ictl_l10n::trf!(
+                "count 要是 1 到 {MAX_TAP_COUNT} 的整数",
+                "count must be a whole number from 1 to {MAX_TAP_COUNT}"
+            )
+            .into());
+        }
         self.prepare_coordinates(g, view, true).await?;
         let pos = format!("({},{})", fmt_g(x), fmt_g(y));
+        let times = if count > 1 { ictl_l10n::trf!(",连点 {count} 下", ", {count} times") } else { String::new() };
         if let Some(w) = self.wda(g) {
             // 只有连不上才退到 HID；超时说明请求已发出，再用 HID 做一遍可能点两次
-            match w.tap(x, y).await {
-                Ok(()) => return Ok(ictl_l10n::trf!("已点击 {pos}", "Tapped {pos}")),
+            let r = if count > 1 { w.multi_tap(x, y, count).await } else { w.tap(x, y).await };
+            match r {
+                Ok(()) => return Ok(ictl_l10n::trf!("已点击 {pos}{times}", "Tapped {pos}{times}")),
                 Err(WdaError::Unavailable(_)) if view.is_none() => {}
                 Err(e) => return Err(e.into()),
             }
         }
         // natively HID is the way, not a fallback: the page's view was checked above as through WDA
-        if self.native(g) {
-            Box::pin(self.native_tap(g, x, y)).await?;
-            return Ok(ictl_l10n::trf!("已点击 {pos}", "Tapped {pos}"));
-        }
-        if view.is_some() {
+        let native = self.native(g);
+        if !native && view.is_some() {
             return Err(wda_down(&g.state, g.info.as_ref()).into());
         }
         let rot = self.hid_touch_rotation(g).await?;
         self.hid_do(g, move |h| {
             Box::pin(async move {
                 h.rotation = rot;
-                h.tap(x, y).await
+                for i in 0..count {
+                    if i > 0 {
+                        tokio::time::sleep(Duration::from_millis(ictl_wda::MULTI_TAP_GAP_MS)).await;
+                    }
+                    h.tap(x, y).await?;
+                }
+                Ok(())
             })
         })
         .await?;
-        Ok(ictl_l10n::trf!("已点击 {pos}(经 HID)", "Tapped {pos} (via HID)"))
+        if native {
+            return Ok(ictl_l10n::trf!("已点击 {pos}{times}", "Tapped {pos}{times}"));
+        }
+        Ok(ictl_l10n::trf!("已点击 {pos}{times}(经 HID)", "Tapped {pos}{times} (via HID)"))
+    }
+
+    /// 依次点几个点（`iphone_batch` 的 `one_gesture`）：WDA 发一个手势（[`WdaClient::tap_sequence`]），HID 在同一个会话里连发。
+    /// 和 [`Self::tap`] 一样只有连不上 WDA 才退到 HID
+    pub(crate) async fn tap_sequence(&self, g: &mut Inner, points: &[(f64, f64)]) -> crate::error::Result<String> {
+        if points.is_empty() || points.len() > crate::protocol::MAX_SEQUENCE_POINTS {
+            return Err(ictl_l10n::trf!(
+                "一个手势要点 1 到 {} 个点",
+                "a gesture takes 1 to {} points",
+                crate::protocol::MAX_SEQUENCE_POINTS
+            )
+            .into());
+        }
+        self.prepare_coordinates(g, None, true).await?;
+        let n = points.len();
+        let list: Vec<String> = points.iter().map(|(x, y)| format!("({},{})", fmt_g(*x), fmt_g(*y))).collect();
+        let list = list.join(" ");
+        if let Some(w) = self.wda(g) {
+            match w.tap_sequence(points).await {
+                Ok(()) => {
+                    return Ok(ictl_l10n::trf!(
+                        "在一个手势里依次点了 {n} 个点:{list}",
+                        "Tapped {n} points in one gesture: {list}"
+                    ));
+                }
+                Err(WdaError::Unavailable(_)) => {}
+                Err(e) => return Err(e.into()),
+            }
+        }
+        let native = self.native(g);
+        let rot = self.hid_touch_rotation(g).await?;
+        let pts = points.to_vec();
+        self.hid_do(g, move |h| {
+            Box::pin(async move {
+                h.rotation = rot;
+                for (i, (x, y)) in pts.into_iter().enumerate() {
+                    if i > 0 {
+                        tokio::time::sleep(Duration::from_millis(ictl_wda::SEQUENCE_GAP_MS)).await;
+                    }
+                    h.tap(x, y).await?;
+                }
+                Ok(())
+            })
+        })
+        .await?;
+        if native {
+            return Ok(ictl_l10n::trf!("依次点了 {n} 个点:{list}", "Tapped {n} points: {list}"));
+        }
+        Ok(ictl_l10n::trf!("依次点了 {n} 个点(经 HID):{list}", "Tapped {n} points (via HID): {list}"))
     }
 
     /// Follow the viewer pointer with one HID report per call. The first event prepares the device.
@@ -149,24 +263,86 @@ impl Daemon {
         Ok(())
     }
 
+    /// 边滑边找的一次慢滑（[`search_stroke`]），等停下后读一棵新树
+    async fn search_scroll(&self, g: &mut Inner, down: bool) -> crate::error::Result<Tree> {
+        let screen = self.screen(g).await?;
+        let (from, to) = search_stroke(screen.width, screen.height, down);
+        Box::pin(self.swipe(g, Stroke { from, to, seconds: SEARCH_SWIPE_SECONDS, hold: 0.0 }, None, false)).await?;
+        self.tree(g, Duration::ZERO).await
+    }
+
     pub(crate) async fn tap_element(
         &self,
         g: &mut Inner,
         text: &str,
         index: usize,
         max_age: Duration,
+        scroll: Option<crate::protocol::ScrollSearch>,
     ) -> crate::error::Result<(String, bool)> {
         self.ensure_unlocked(g).await?;
-        let tree = self.tree(g, max_age).await?;
+        let mut tree = self.tree(g, max_age).await?;
+        // 屏幕上没有、又要边滑边找：慢滑一小段（不带惯性，不会把要找的甩过去）、等停下再读树，
+        // 找到文字完全相同的或滑到底为止。一路上记下第一次看到包含它的是滑了几次的时候
+        let mut scrolled = 0;
+        let mut back = 0;
+        let mut at_end = false;
+        if let Some(s) = scroll {
+            let mut partial_at = None;
+            loop {
+                if reachable_exact(&tree, text, index) {
+                    break;
+                }
+                if partial_at.is_none() && reachable(&tree, text, index) {
+                    partial_at = Some(scrolled);
+                }
+                if at_end || scrolled >= s.max {
+                    break;
+                }
+                let next = Box::pin(self.search_scroll(g, s.down)).await?;
+                scrolled += 1;
+                at_end = next.close_to(&tree, STILL_TOLERANCE);
+                tree = next;
+            }
+            // 没有文字完全相同的，包含它的又已经滑过去了：往回滑到看到它的地方（多滑一次，前后两屏有重叠）
+            if !reachable_exact(&tree, text, index)
+                && !reachable(&tree, text, index)
+                && let Some(k) = partial_at
+            {
+                while back <= scrolled - k && !reachable(&tree, text, index) {
+                    tree = Box::pin(self.search_scroll(g, !s.down)).await?;
+                    back += 1;
+                }
+            }
+        }
+        let searched = match (scrolled, at_end, back) {
+            (0, ..) => String::new(),
+            (n, _, b @ 1..) => ictl_l10n::trf!(
+                "(滑了 {n} 次没有文字完全相同的,又往回滑了 {b} 次)",
+                " (scrolled {n} times without an exact match, then {b} back)"
+            ),
+            (n, true, 0) => ictl_l10n::trf!("(滑了 {n} 次,已到尽头)", " (scrolled {n} times, reached the end)"),
+            (n, false, 0) => ictl_l10n::trf!("(滑了 {n} 次)", " (scrolled {n} times)"),
+        };
+        // 边滑边找了、最后点的却不是文字完全相同的：明说，Agent 看得出这和它要找的不一样
+        let partial_only = scroll.is_some() && !reachable_exact(&tree, text, index);
         // 点之前刚读的树就是操作前的界面（比操作开始前记下的更新）
         g.dev.before_action = Some(std::mem::take(&mut g.dev.seen));
         let matches = elements::find(&tree.elements, text);
         if matches.is_empty() {
             let limited = self.snapshot_note(g);
+            let hint = if scroll.is_some() {
+                String::new()
+            } else {
+                ictl_l10n::tr!(
+                    ";可能在屏幕外,可带 scroll 边滑边找",
+                    "; it may be off screen: pass scroll to look further"
+                )
+                .to_owned()
+            };
             return Ok((
                 ictl_l10n::trf!(
-                    "{}包含 \"{text}\" 的元素,先用 iphone_list_elements 或截图看看屏幕{limited}",
-                    "{}: no element contains \"{text}\"; look at the screen with iphone_list_elements or a screenshot first{limited}",
+                    "{}包含 \"{text}\" 的元素{searched},先用 iphone_list_elements 或截图看看屏幕{limited}{hint}",
+                    "{}: no element contains \"{text}\"{searched}; look at the screen with iphone_list_elements or a screenshot first{limited}{hint}",
                     tap_missed_prefixes()[0]
                 ),
                 true,
@@ -216,7 +392,19 @@ impl Daemon {
         } else {
             String::new()
         };
-        Ok((ictl_l10n::trf!("已点击 {}{note}{moved}", "Tapped {}{note}{moved}", e.describe()), false))
+        let found = match (scrolled, partial_only) {
+            (0, false) => String::new(),
+            (0, true) => {
+                ictl_l10n::tr!("(没有文字完全相同的,点的是包含它的)", " (no exact match, tapped one that contains it)")
+                    .to_owned()
+            }
+            (_, true) => ictl_l10n::trf!(
+                "{searched}(没有文字完全相同的,点的是包含它的)",
+                "{searched} (no exact match, tapped one that contains it)"
+            ),
+            (n, false) => ictl_l10n::trf!("(滑了 {n} 次后找到)", " (found after {n} scrolls)"),
+        };
+        Ok((ictl_l10n::trf!("已点击 {}{found}{note}{moved}", "Tapped {}{found}{note}{moved}", e.describe()), false))
     }
 
     pub(crate) async fn long_press(
@@ -240,16 +428,18 @@ impl Daemon {
     pub(crate) async fn swipe(
         &self,
         g: &mut Inner,
-        from: (f64, f64),
-        to: (f64, f64),
-        seconds: f64,
+        stroke: Stroke,
         view: Option<&str>,
         watched: bool,
     ) -> crate::error::Result<String> {
+        let Stroke { from, to, seconds, hold } = stroke;
         self.prepare_coordinates(g, view, true).await?;
-        let desc = format!("({},{}) → ({},{})", fmt_g(from.0), fmt_g(from.1), fmt_g(to.0), fmt_g(to.1));
+        let mut desc = format!("({},{}) → ({},{})", fmt_g(from.0), fmt_g(from.1), fmt_g(to.0), fmt_g(to.1));
+        if hold > 0.0 {
+            desc = ictl_l10n::trf!("{desc},先按住 {} 秒", "{desc}, held {} s first", fmt_g(hold));
+        }
         if let Some(w) = self.wda(g) {
-            match w.swipe_into_polling(from, to, (seconds * 1000.0) as u64).await {
+            match w.swipe_into_polling(from, to, (hold * 1000.0) as u64, (seconds * 1000.0) as u64).await {
                 // 滑动请求不等惯性滚动（等的话设置不对能卡十几秒），这里等列表停下再返回：
                 // 列表还在滚时下一次点击只会让它停住，点不到东西
                 // someone watches the screen ([`crate::protocol::WATCHED`]): they see when it stops
@@ -276,7 +466,7 @@ impl Daemon {
         self.hid_do(g, move |h| {
             Box::pin(async move {
                 h.rotation = rot;
-                h.drag(from, to, seconds).await
+                if hold > 0.0 { h.held_drag(from, to, hold, seconds).await } else { h.drag(from, to, seconds).await }
             })
         })
         .await?;

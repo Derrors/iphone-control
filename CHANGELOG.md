@@ -6,14 +6,23 @@ What changed in each release, one line per change. Versions follow [Semantic Ver
 
 ## [Unreleased]
 
+### New
+
+- `iphone_tap` takes `count` (1–10): the taps go in one gesture, about 0.1 s apart, so a double tap or several quick taps work; separate calls are about 0.5 s apart. An older daemon ignores it and taps once.
+- `iphone_batch` takes `one_gesture`: a batch of coordinate taps runs as one gesture, about twice as fast for pressing keys on a keyboard.
+- `iphone_swipe` takes `hold`: hold still at the start before moving, to drag home-screen icons and other things that need a long press first. An older daemon ignores it and swipes as before.
+- `iphone_tap_element` takes `scroll` (`down` / `up`) and `max_scrolls`: when the element isn't on screen it scrolls slowly and looks again, and taps it once found. An older daemon ignores them and only looks at the current screen.
+
 ### Improvements
+
+- When the same action leaves the screen unchanged again and again, the result says how many times in a row and to try something else.
 
 - An action that had to unlock the phone first says so, and how long it took (#135).
 
 ### Fixes
 
+- Native control (iOS 27): the floating search bar at the bottom of Settings counts as covering the rows under it, as it does through WDA. Tapping a row under it by text taps its visible part instead of opening the search.
 - `iphone_tap_element` that found nothing to tap no longer says, with `then`, that "the action may not have taken effect"; it also returns the screen without waiting for it to settle.
-
 - A WDA probe that answers, even with an error, resets the timeout count instead of accumulating unrelated slow requests into a stall. Recovery logs state the reason, and timeout logs include the endpoint and elapsed time.
 
 ## [0.2.7] - 2026-11-15

@@ -332,6 +332,11 @@ impl Tree {
 /// 真机：设置首页搜索栏底板顶边 856，点 834 还能进下面那一行，838 就被栏吞掉（什么都不发生）；
 /// 左右两边按同样的余量算
 const BAR_SLOP: f64 = 24.0;
+/// 原生控制读到的底部悬浮搜索栏（只有输入框，见 `floating_search`）往上吞掉多远的点击。真机（iPhone 15 Pro Max，
+/// iOS 27.2.1，设置首页）：输入框顶 866，点 806 还能进下面那一行，812、820、826 都被栏吞掉（什么都不发生）
+const SEARCH_BAR_REACH: f64 = 58.0;
+/// 同上，左右和往下：玻璃底板比输入框大约 10 点，再加 [`BAR_SLOP`]
+const SEARCH_BAR_SIDE: f64 = 10.0 + BAR_SLOP;
 
 /// 可滚动的内容区
 const SCROLLERS: [&str; 5] = ["ScrollView", "Table", "CollectionView", "WebView", "TextView"];
@@ -438,6 +443,8 @@ struct Open {
     group: usize,
     /// 这一层子节点的原始坐标要加上的偏移（小组件内部用的是相对小组件的坐标）
     offset: (f64, f64),
+    /// 自己是 WebView 或在 WebView 里
+    in_web: bool,
     in_status_bar: bool,
     kind: String,
     kept: Option<usize>,
@@ -504,10 +511,14 @@ pub fn parse_tree(xml: &str, view: impl Into<View>) -> Tree {
         let full_kind = attr.get("type").cloned().unwrap_or(tag);
         let kind = full_kind.strip_prefix("XCUIElementType").unwrap_or(&full_kind).to_owned();
 
-        // 小组件的内容：某个节点在 (0,0) 且和父节点一样大，而父节点不在 (0,0)——从它开始坐标是相对父节点的
+        // 小组件的内容：某个节点在 (0,0) 且和父节点一样大，而父节点不在 (0,0)——从它开始坐标是相对父节点的。
+        // 网页里不算：WKWebView 内部有一层节点也报 (0,0)、和 WebView 一样大，但网页元素用的是屏幕坐标，
+        // 加上偏移会把整页错开 WebView 的 y（App 内浏览器、小程序在导航栏下面时约 100 点）
         let parent = stack.last();
+        let in_web = kind == "WebView" || parent.is_some_and(|p| p.in_web);
         let mut offset = parent.map_or((0.0, 0.0), |p| p.offset);
         if let Some(p) = parent
+            && !p.in_web
             && raw.x == 0.0
             && raw.y == 0.0
             && (raw.w - p.abs.w).abs() < 1.0
@@ -523,7 +534,13 @@ pub fn parse_tree(xml: &str, view: impl Into<View>) -> Tree {
         // 下面判断在不在屏幕内、挡没挡住、点哪里，都用屏幕坐标
         let scr = rotate.unwrap_or(Rotate::None).apply(abs, screen);
         let in_status_bar = kind == "StatusBar" || parent.is_some_and(|p| p.in_status_bar);
-        let in_bar = matches!(kind.as_str(), "Toolbar" | "TabBar") || parent.is_some_and(|p| p.in_bar);
+        // 原生控制读到的树是扁平的：设置首页底部悬浮的搜索栏只是一个直接挂在 Application 下的 SearchField，外面没有
+        // WDA 树里那层 Toolbar。屏幕下部的这种搜索框也按悬浮栏算：盖得住下面的行，接收点击的范围也多算 BAR_SLOP。
+        // 不然被压在栏下的行按名字点会点它的中心，打开的是搜索（iPhone 15 Pro Max，iOS 27.2.1）
+        let floating_search =
+            kind == "SearchField" && parent.is_some_and(|p| p.kind == "Application") && scr.y > sh * 0.6;
+        let in_bar =
+            matches!(kind.as_str(), "Toolbar" | "TabBar") || floating_search || parent.is_some_and(|p| p.in_bar);
         let on_bar = in_bar || kind == "NavigationBar" || parent.is_some_and(|p| p.on_bar);
         // 子节点在可滚动内容里（容器自己不算：它就是那块区域）
         let in_scroll = parent.is_some_and(|p| p.in_scroll || SCROLLERS.contains(&p.kind.as_str()));
@@ -552,7 +569,15 @@ pub fn parse_tree(xml: &str, view: impl Into<View>) -> Tree {
             .then(|| {
                 let name = text.as_deref().map(|t| clip(t, 20, 20)).unwrap_or_default();
                 let mut rect = visible;
-                if in_bar && rect.y > sh * 0.6 {
+                // 原生的树里只有栏里的输入框，没有它外面那块玻璃底板：按真机量的范围算它吞掉的点击
+                if floating_search {
+                    rect = Rect {
+                        x: rect.x - SEARCH_BAR_SIDE,
+                        y: rect.y - SEARCH_BAR_REACH,
+                        w: rect.w + 2.0 * SEARCH_BAR_SIDE,
+                        h: rect.h + SEARCH_BAR_REACH + SEARCH_BAR_SIDE,
+                    };
+                } else if in_bar && rect.y > sh * 0.6 {
                     rect = Rect {
                         x: rect.x - BAR_SLOP,
                         y: rect.y - BAR_SLOP,
@@ -625,6 +650,7 @@ pub fn parse_tree(xml: &str, view: impl Into<View>) -> Tree {
             group,
             kind: kind_for_children,
             offset,
+            in_web,
             in_status_bar,
             kept,
             blocker,
@@ -1034,6 +1060,55 @@ mod tests {
         // 主屏图标本来就是屏幕坐标，不受影响
         let clock = els.iter().find(|e| e.label == "时钟" && e.kind == "Icon").unwrap();
         assert!(clock.center.1 > 400);
+    }
+
+    /// 真机（iOS 26，App 内浏览器）：WebView 在原生导航栏下面 (0,100)，WKWebView 内部那层报 (0,0) 且和 WebView
+    /// 一样大，看着像小组件；但网页元素给的是屏幕坐标，不能再加 WebView 的偏移
+    #[test]
+    fn web_contents_keep_screen_coordinates() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <XCUIElementTypeApplication type="XCUIElementTypeApplication" name="App" label="App" x="0" y="0" width="402" height="874">
+          <XCUIElementTypeWindow type="XCUIElementTypeWindow" x="0" y="0" width="402" height="874">
+            <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="402" height="874">
+              <XCUIElementTypeNavigationBar type="XCUIElementTypeNavigationBar" name="Page" x="0" y="56" width="402" height="44"/>
+              <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="100" width="402" height="774">
+                <XCUIElementTypeWebView type="XCUIElementTypeWebView" x="0" y="100" width="402" height="697">
+                  <XCUIElementTypeWebView type="XCUIElementTypeWebView" x="0" y="100" width="402" height="697">
+                    <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="402" height="697">
+                      <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="100" width="402" height="2990">
+                        <XCUIElementTypeStaticText type="XCUIElementTypeStaticText" value="Getting started" name="Getting started" label="Getting started" x="19" y="375" width="80" height="27"/>
+                      </XCUIElementTypeOther>
+                    </XCUIElementTypeOther>
+                  </XCUIElementTypeWebView>
+                </XCUIElementTypeWebView>
+              </XCUIElementTypeOther>
+            </XCUIElementTypeOther>
+          </XCUIElementTypeWindow>
+        </XCUIElementTypeApplication>"#;
+        let els = parse(xml, SCREEN);
+        let text = els.iter().find(|e| e.label == "Getting started").unwrap();
+        // 截图上就在这里，不是错开 100 点的 (59,488)
+        assert_eq!(text.center, (59, 388));
+    }
+
+    /// 真机（iPhone 15 Pro Max，iOS 27.2.1，原生控制）：设置首页底部悬浮的搜索栏在扁平的树里只是一个 SearchField，
+    /// 也要像工具栏一样挡住下面的行。它吞掉输入框（866）往上 58 点以内的点击：806 还能进下面那一行，812 就不行
+    #[test]
+    fn a_native_floating_search_field_covers_the_rows_under_it() {
+        const XML: &str = include_str!("../tests/fixtures/settings-floating-search-native-ios27.xml");
+        let row = |t: &Tree, label: &str| t.elements.iter().find(|e| e.label == label).cloned().unwrap();
+        let t = parse_tree(XML, SCREEN);
+        // 766..818: clear of it, tapped at its center
+        assert!(matches!(t.tap_point(&row(&t, "相机")), TapPoint::Center(_)));
+        // 818..870: all of it is where the bar takes taps
+        assert!(matches!(t.tap_point(&row(&t, "主屏幕与App资源库")), TapPoint::Covered { .. }));
+        // 790..842: tapped above 808
+        let lower = XML.replace(r#"y="766" width="390" height="52""#, r#"y="790" width="390" height="52""#);
+        let t = parse_tree(&lower, SCREEN);
+        match t.tap_point(&row(&t, "相机")) {
+            TapPoint::Moved { at, .. } => assert!(at.1 <= 806.0, "{at:?}"),
+            other => panic!("{other:?}"),
+        }
     }
 
     #[test]

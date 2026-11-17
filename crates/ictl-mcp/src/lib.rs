@@ -1096,7 +1096,9 @@ impl McpServer {
             Response::Text { text, outcome, .. } if req.is_device_action() => {
                 // 结果里已经说了有弹窗（启动 App 被挡）就不再查
                 let check = wants_alert_check(&req) && !protocol::alert_reported(&text, outcome);
-                self.finish(text, false, then, check).await
+                // 按名字没点到东西：界面没动过，不用等它稳定，直接给界面（按名字点击刚读过的树）
+                let settle = !tap_missed(&text, outcome);
+                self.finish(text, false, then, check, settle).await
             }
             resp => to_result(resp),
         }
@@ -1124,8 +1126,15 @@ impl McpServer {
     }
 
     /// 操作完成后：按 then 等界面稳定，再附上元素列表或截图（等稳定时顺带提醒弹窗）。
-    /// 不带 then 时，`alert_check` 为真就查一下有没有系统弹窗挡着
-    async fn finish(&self, mut text: String, failed: bool, opts: ThenOpts, alert_check: bool) -> CallToolResult {
+    /// 不带 then 时，`alert_check` 为真就查一下有没有系统弹窗挡着。`settle` 为假（什么都没点）时不等稳定
+    async fn finish(
+        &self,
+        mut text: String,
+        failed: bool,
+        opts: ThenOpts,
+        alert_check: bool,
+        settle: bool,
+    ) -> CallToolResult {
         let done = |blocks: Vec<ContentBlock>| {
             if failed { CallToolResult::error(blocks) } else { CallToolResult::success(blocks) }
         };
@@ -1136,15 +1145,17 @@ impl McpServer {
             }
             return done(vec![ContentBlock::text(text)]);
         }
-        match self.call(&Request::Settle { max_ms: opts.settle_ms }).await {
-            Response::Text { text: t, .. } => text += &format!("\n{t}"),
-            Response::Error { message, .. } => {
-                text += &ictl_l10n::trf!(
-                    "\n(等界面稳定失败:{message})",
-                    "\n(waiting for the screen to settle failed: {message})"
-                )
+        if settle {
+            match self.call(&Request::Settle { max_ms: opts.settle_ms }).await {
+                Response::Text { text: t, .. } => text += &format!("\n{t}"),
+                Response::Error { message, .. } => {
+                    text += &ictl_l10n::trf!(
+                        "\n(等界面稳定失败:{message})",
+                        "\n(waiting for the screen to settle failed: {message})"
+                    )
+                }
+                Response::Image { .. } => {}
             }
-            Response::Image { .. } => {}
         }
         match then {
             Then::Elements(filter) => {
@@ -1224,7 +1235,7 @@ impl McpServer {
                                 total - n
                             ));
                         }
-                        return self.finish(lines.join("\n"), true, then, false).await;
+                        return self.finish(lines.join("\n"), true, then, false, true).await;
                     }
                     Response::Text { text, outcome, .. } => {
                         check = wants_alert_check(&req) && !protocol::alert_reported(&text, outcome);
@@ -1240,12 +1251,12 @@ impl McpServer {
                                 total - n
                             ));
                         }
-                        return self.finish(lines.join("\n"), true, then, true).await;
+                        return self.finish(lines.join("\n"), true, then, true, true).await;
                     }
                 },
             }
         }
-        self.finish(lines.join("\n"), false, then, check).await
+        self.finish(lines.join("\n"), false, then, check, true).await
     }
 }
 

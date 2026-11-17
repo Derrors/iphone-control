@@ -182,6 +182,27 @@ impl HidSession {
         .await
     }
 
+    /// 按住再拖：按下后在起点按住 `hold` 秒（和 [`Self::long_press`] 一样每 100 毫秒重报一次位置），不抬起，接着
+    /// 像 [`Self::drag`] 一样移到终点抬起。拖动主屏幕图标、列表排序这类要先长按才能拖的
+    pub async fn held_drag(&mut self, from: (f64, f64), to: (f64, f64), hold: f64, seconds: f64) -> Result<()> {
+        let (x1, y1) = self.hid_point(from);
+        let (x2, y2) = self.hid_point(to);
+        let held = Duration::from_secs_f64(hold.clamp(0.0, 60.0));
+        let steps = ((seconds * 1000.0 / 20.0).round() as u32).max(10);
+        let d = held + Duration::from_secs_f64(seconds.max(0.0) + 10.0);
+        limit(ictl_l10n::tr!("HID 按住拖动", "HID held drag"), d, async {
+            let end = tokio::time::Instant::now() + held;
+            self.touch.send_touchscreen(TOUCHSCREEN_STATE_CONTACT, x1, y1, None).await?;
+            while tokio::time::Instant::now() < end {
+                tokio::time::sleep(Duration::from_millis(100).min(end - tokio::time::Instant::now())).await;
+                self.touch.send_touchscreen(TOUCHSCREEN_STATE_CONTACT, x1, y1, None).await?;
+            }
+            // drag() starts with a contact at (x1, y1): the finger stays down from the hold into the move
+            Ok(self.touch.drag(x1, y1, x2, y2, steps, 20).await?)
+        })
+        .await
+    }
+
     /// One sample of a finger that follows the user's pointer (the web viewer): `contact` true puts the finger at the
     /// point (the first one touches down, later ones move it), false lifts it there. iOS works out taps, long presses
     /// and the speed of a swipe from these samples and their timing, the same way as from a real finger

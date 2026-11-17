@@ -404,7 +404,8 @@ WDA 不可用时改用 CoreDevice HID(iOS 27 起;结果里注明「经 HID」)�
                     "from_y": num(ictl_l10n::tr!("起点 y(点)", "start y (points)")),
                     "to_x": num(ictl_l10n::tr!("终点 x(点)", "end x (points)")),
                     "to_y": num(ictl_l10n::tr!("终点 y(点)", "end y (points)")),
-                    "seconds": {"type": "number", "default": 0.3, "description": ictl_l10n::tr!("滑动用时(秒),默认 0.3;越小越快、惯性越大", "swipe duration (seconds), default 0.3; smaller is faster with more momentum")}
+                    "seconds": {"type": "number", "default": 0.3, "description": ictl_l10n::tr!("滑动用时(秒),默认 0.3;越小越快、惯性越大", "swipe duration (seconds), default 0.3; smaller is faster with more momentum")},
+                    "hold": {"type": "number", "default": 0, "minimum": 0, "description": ictl_l10n::tr!("先在起点按住几秒再移动,默认 0(普通滑动)。拖动要先长按才拿得起来的东西时用,例如主屏幕图标、可排序的列表项、文件:hold 0.6~1,seconds 0.7 左右。少于 0.5 秒通常拿不起来,只会滑动或翻页", "seconds to hold still at the start before moving, default 0 (a plain swipe). For dragging things that have to be long-pressed before they can be picked up, such as home-screen icons, reorderable list rows or files: hold 0.6-1, seconds about 0.7. Under 0.5 s usually doesn't pick anything up and just swipes or pages")}
                 })),
                 &["from_x", "from_y", "to_x", "to_y"],
             ),
@@ -668,6 +669,7 @@ pub fn to_request(name: &str, args: &Map<String, Value>) -> Result<Request, Stri
             from: (a.f("from_x")?, a.f("from_y")?),
             to: (a.f("to_x")?, a.f("to_y")?),
             seconds: a.f_or("seconds", 0.3)?,
+            hold: a.f_or("hold", 0.0)?,
         },
         "iphone_type_text" => Request::TypeText { text: a.s("text")?, submit: a.b_or("submit", false)? },
         "iphone_press_button" => Request::PressButton { button: a.s("button")? },
@@ -1250,6 +1252,20 @@ mod tests {
         with_lang(Lang::Zh, || assert!(has_cjk(instructions())));
     }
 
+    /// hold defaults to 0 (a plain swipe, same request as before) and is passed through when given
+    #[test]
+    fn swipe_hold_defaults_to_zero() {
+        let plain = to_request("iphone_swipe", &args(json!({"from_x": 1, "from_y": 2, "to_x": 3, "to_y": 4}))).unwrap();
+        assert_eq!(plain, Request::Swipe { from: (1.0, 2.0), to: (3.0, 4.0), seconds: 0.3, hold: 0.0 });
+        let held = json!({"from_x": 1, "from_y": 2, "to_x": 3, "to_y": 4, "seconds": 0.7, "hold": 0.6});
+        let held = to_request("iphone_swipe", &args(held)).unwrap();
+        assert_eq!(held, Request::Swipe { from: (1.0, 2.0), to: (3.0, 4.0), seconds: 0.7, hold: 0.6 });
+        assert!(
+            to_request("iphone_swipe", &args(json!({"from_x": 1, "from_y": 2, "to_x": 3, "to_y": 4, "hold": "x"})))
+                .is_err()
+        );
+    }
+
     /// one_gesture 把全是坐标点击的批量并成一个 TapSequence；混了别的步骤就报错，一步都不执行
     #[test]
     fn one_gesture_turns_taps_into_one_sequence() {
@@ -1295,7 +1311,7 @@ mod tests {
 
     #[test]
     fn alert_check_after_actions_but_not_buttons_or_reads() {
-        assert!(wants_alert_check(&Request::Swipe { from: (0.0, 0.0), to: (1.0, 1.0), seconds: 0.3 }));
+        assert!(wants_alert_check(&Request::Swipe { from: (0.0, 0.0), to: (1.0, 1.0), seconds: 0.3, hold: 0.0 }));
         assert!(wants_alert_check(&Request::LaunchApp { app: "微信".into() }));
         assert!(!wants_alert_check(&Request::PressButton { button: "home".into() }));
         assert!(!wants_alert_check(&Request::TerminateApp { app: "微信".into() }));
@@ -1367,7 +1383,7 @@ mod tests {
         );
         assert_eq!(
             to_request("iphone_swipe", &args(json!({"from_x": 1, "from_y": 2, "to_x": 3, "to_y": 4}))).unwrap(),
-            Request::Swipe { from: (1.0, 2.0), to: (3.0, 4.0), seconds: 0.3 }
+            Request::Swipe { from: (1.0, 2.0), to: (3.0, 4.0), seconds: 0.3, hold: 0.0 }
         );
         assert_eq!(
             to_request("iphone_long_press", &args(json!({"x": 1, "y": 2}))).unwrap(),

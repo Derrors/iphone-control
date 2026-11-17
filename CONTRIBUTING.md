@@ -47,7 +47,26 @@ export MCP_CMD="$PWD/target/release/iphone-control mcp"   # your build; the daem
 .venv/bin/python tests/device/run.py '[["iphone_launch_app", {"app": "设置"}], ["iphone_screenshot", {}]]'
 ```
 
-`run.py` prints every result with its wall time, ends with a line counting calls and failures, saves screenshots to `./shots` and exits with 1 if any call failed. `MCP_CMD` defaults to `iphone-control mcp` on your `PATH`. To test your branch, run its daemon too (stop the installed service with `iphone-control service stop`, then start `target/release/iphone-control daemon` in another terminal; `service start` afterwards). What a pull request has to run on the device is in [Required tests](#required-tests).
+`run.py` prints every result with its wall time, ends with a line counting calls and failures, saves screenshots to `./shots` and exits with 1 if any step failed. It starts with a `###` line naming the device it controls (model, iOS version, screen, native or WDA) and fails if another device is controlled by the end. The default steps check their answers (the tab tapped becomes the selected one, a screenshot has the screen's size, the typed text shows up) and work on any screen size and in any language; a step of your own may carry a third element saying what to expect: `["iphone_type_text", {"text": "x"}, {"error": true, "has": ["keyboard"]}]` (`has`, `lacks`, `error`, `max_s`, `image`; see `judge` in `tests/device/device.py`). `MCP_CMD` defaults to `iphone-control mcp` on your `PATH`. To test your branch, run its daemon too (stop the installed service with `iphone-control service stop`, then start `target/release/iphone-control daemon` in another terminal; `service start` afterwards). What a pull request has to run on the device is in [Required tests](#required-tests).
+
+The tools themselves have scenarios in `tests/device/scenarios.py`: the device cases of [docs/dev/regression-cases.md](docs/dev/regression-cases.md) that a script can repeat, each check a PASS / FAIL line with the case's number:
+
+```bash
+.venv/bin/python tests/device/scenarios.py                  # tools, typing, fresh, batch, menu
+.venv/bin/python tests/device/scenarios.py typing batch     # only these
+.venv/bin/python tests/device/scenarios.py --url url        # opens https://example.com in Safari
+.venv/bin/python tests/device/scenarios.py --lock lock      # locks the phone and lets it unlock itself
+```
+
+`lock` types the saved passcode into the phone: make sure the passcode saved for this device is this device's (`iphone-control passcode set`) before passing `--lock`, or the phone counts a wrong attempt and automatic unlocking is switched off.
+
+To compare times with `main`, let `run.py` write them down and `compare.py` judge them (the median of several runs, without the time an automatic unlock took):
+
+```bash
+.venv/bin/python tests/device/run.py --repeat 5 --json main.json      # with main's daemon running
+.venv/bin/python tests/device/run.py --repeat 5 --json branch.json    # with your branch's
+python3 tests/device/compare.py main.json branch.json                 # marks steps that became SLOWER
+```
 
 AI tasks (anything in `crates/ictl-daemon/src/tasks.rs`, `task`, the viewer's task API, the MCP server's task handling) have their own scenarios in `tests/device/tasks.py`, each check a PASS / FAIL line:
 
@@ -103,8 +122,8 @@ Every pull request must pass the tests below, and its description must show it: 
 
 Needed when the change touches code that talks to a phone or changes what it does or how long it takes: anything under `crates/` and `apps/` except pure text changes (comments, translations that don't change meaning). Not needed for changes limited to documentation, the website, CI, packaging or other tests; say so in the template. A bug fix or a feature always needs [part 4](#4-real-device-proof--every-bug-fix-and-every-feature), wherever the change is.
 
-- **Default steps:** build your branch, run its daemon and `tests/device/run.py` with the default steps on a real iPhone or iPad ([Testing on a real phone](#testing-on-a-real-phone)). Every call succeeds and the exit code is 0.
-- **No slower, no less stable:** on the same device, run the default steps once more on `main` (or the latest release), and paste both outputs. A step that became clearly slower (more than about 20 %, or by more than 0.5 s) needs a reason. A change that could affect long-running behaviour (WDA start-up and recovery, reconnecting, unlocking, the live picture, timers) also needs a longer run: repeat the default steps for at least an hour, e.g. `for i in $(seq 12); do .venv/bin/python tests/device/run.py || break; sleep 300; done`, and report failures and how the times developed.
+- **Default steps:** build your branch, run its daemon and `tests/device/run.py` with the default steps on a real iPhone or iPad ([Testing on a real phone](#testing-on-a-real-phone)). Every step passes and the exit code is 0. Run `tests/device/scenarios.py` too (its default scenarios; `lock` when the change concerns locking or unlocking, `url` when it concerns links, Safari or web content): every check passes.
+- **No slower, no less stable:** on the same device, run the default steps once more on `main` (or the latest release), and paste both outputs; `run.py --repeat 5 --json` on each and `tests/device/compare.py` do the comparison for you. A step that became clearly slower (more than about 20 %, or by more than 0.5 s) needs a reason. A change that could affect long-running behaviour (WDA start-up and recovery, reconnecting, unlocking, the live picture, timers) also needs a longer run: repeat the default steps for at least an hour, e.g. `for i in $(seq 12); do .venv/bin/python tests/device/run.py || break; sleep 300; done`, and report failures and how the times developed.
 - **What you changed:** also run steps that exercise the change itself (pass them as a JSON list) and paste the output.
 - **The right hardware:** when the change concerns iPad, landscape, an iOS version or a platform, test on that. Changes to macOS-only code go through [docs/dev/macos-verification.md](docs/dev/macos-verification.md).
 - **In the pull request:** device model, iOS version, Linux or macOS, and the outputs (the `===` lines and the last line are enough; remove private data).
@@ -114,8 +133,8 @@ Needed when the change touches code that talks to a phone or changes what it doe
 [docs/dev/regression-cases.md](docs/dev/regression-cases.md) lists the problems this project has run into, with the right behaviour and how each is tested. Every pull request must keep all of them passing.
 
 - Cases tested by unit tests are covered by part 1.
-- Cases tested on a device (真机, headless Chrome, measured by hand) in the area you changed: run them again and list their numbers in the pull request. To find them, search the file for the module, tool or behaviour you changed; if none apply, say so.
-- A pull request that fixes a problem not in the list adds a row: the problem, the right behaviour, and how it is tested (the unit test's name, or the device steps).
+- Cases tested on a device (真机, headless Chrome, measured by hand) in the area you changed: run them again and list their numbers in the pull request. To find them, search the file for the module, tool or behaviour you changed; if none apply, say so. Cases whose test names `scenarios.py` or `tasks.py` are run by that script.
+- A pull request that fixes a problem not in the list adds a row: the problem, the right behaviour, and how it is tested (the unit test's name, or the device steps; a device case a script can repeat becomes a check in `tests/device/scenarios.py`). CI checks that every test the list names exists (`tests/check_regression_cases.py`): when you rename a test, rename it in the list.
 
 ### 4. Real-device proof — every bug fix and every feature
 

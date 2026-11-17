@@ -41,6 +41,12 @@ jobs:
       - uses: actions/checkout@v7
       - name: Viewer interaction tests
         run: node --test tests/viewer/*.test.mjs
+      # 回归清单里点名的测试都还在（改名、删掉后清单会指向不存在的测试）
+      - name: Regression cases name existing tests
+        run: python3 tests/check_regression_cases.py
+      # 真机脚本的解析和断言也需离线验证，无需连接设备或安装 MCP SDK。
+      - name: Device test helper unit tests
+        run: python3 -m unittest discover -s tests/device -p 'test_*.py'
       # 锁定工具链（与发布一致）：新版 clippy 的 lint 不会在代码没变时把 CI 弄挂
       - uses: dtolnay/rust-toolchain@1.99.1
         with:
@@ -48,7 +54,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       # vendor/ 是上游代码，不格式化；只检查本仓库的包
       - name: fmt
-        run: for p in ictl-l10n ictl-webinspector ictl-device ictl-wda ictl-sign ictl-unlock ictl-daemon ictl-mcp ictl-protocol iphone-control; do cargo fmt -p $p -- --check; done
+        run: for p in ictl-ax ictl-l10n ictl-webinspector ictl-device ictl-wda ictl-sign ictl-unlock ictl-daemon ictl-mcp ictl-protocol iphone-control; do cargo fmt -p $p -- --check; done
       # --all-features：默认不编的 debug-cmds（调试子命令）也要能编译
       - run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
       # check_fish_candidates 的候选词断言需要真正的 fish；缺了它该段会被静默跳过

@@ -15,6 +15,30 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 pub const XCTEST_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 /// 经 XCTest 的请求连续这么多次送到了却没有应答（超时，或应答到一半断了），就当 WDA 卡死（见 [`WdaClient::stalled`]）
 pub const STALL_LIMIT: u32 = 3;
+/// 高位单独记录「长请求及其短探测都未应答」，低位仍是实际的连续无应答数。
+const UNANSWERED_PROBE: u32 = 1 << 31;
+
+/// 无响应的判定依据，不等同于已证明设备端永久死锁。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StallReason {
+    ConsecutiveRequests(u32),
+    LongRequestAndProbe,
+}
+
+impl StallReason {
+    pub fn describe(self) -> String {
+        match self {
+            Self::ConsecutiveRequests(n) => {
+                ictl_l10n::trf!("连续 {n} 次请求没有完整应答", "{n} requests in a row had no complete reply")
+            }
+            Self::LongRequestAndProbe => ictl_l10n::trf!(
+                "较长的请求和随后 {} 秒的 /wda/activeAppInfo 探测都没有完整应答",
+                "a long request and the following {} s /wda/activeAppInfo probe both had no complete reply",
+                XCTEST_PROBE_TIMEOUT.as_secs()
+            ),
+        }
+    }
+}
 /// How long a measured screen size is used before it is measured again, and then in the background
 /// ([`WdaClient::display_sample`] with `refresh_stale`), not at the start of a gesture: only Display Zoom changes the
 /// size, and `/wda/screen` takes about 100 ms on an iPhone with iOS 27 but 0.95 s on an iPad mini 5 (iPadOS 26.7.3),
@@ -135,6 +159,11 @@ fn acts(method: &str, path: &str) -> bool {
     method != "GET" && !path.starts_with("/element")
 }
 
+/// 正常响应和远端错误都证明请求获得了回答；连接失败则不算。
+fn answered(reply: &Result<Value>) -> bool {
+    matches!(reply, Ok(_) | Err(WdaError::Remote { .. }))
+}
+
 /// Frames a second and size (percent) of WDA's MJPEG stream with [`WdaClient::fast_stream`].
 ///
 /// Full size, so WDA passes on the JPEG that testmanagerd encodes in hardware. Any other size makes WDA decode,
@@ -202,7 +231,8 @@ pub struct WdaClient<T> {
     idle_current: Option<IdleSettings>,
     /// See [`Self::fast_stream`]
     fast_stream: bool,
-    /// 经 XCTest 的请求（除 `/status` 外都是）连续几次没有应答，有应答就清零。工具调用和守护进程的探测都算
+    /// 低位为连续无应答数；高位记录长请求后的短探测也未应答，详见 [`Self::stall_reason`]。
+    /// 工具调用和守护进程的探测都算；获得正常回答或远端错误才清零。
     unanswered: AtomicU32,
     /// 下次读元素树用的上限，[`SNAPSHOT_LEVELS`] 的下标
     snapshot_level: usize,
@@ -255,10 +285,11 @@ impl<T: Transport> WdaClient<T> {
         }
         // 已判定卡死：不再发、不再一次次等超时（一个工具调用里接连几个请求，每个都等满时限的话，
         // 设备会被占好几分钟，守护进程没机会重启 WDA）
-        if self.stalled() {
+        if let Some(reason) = self.stall_reason() {
+            let why = reason.describe();
             return Err(WdaError::Unavailable(ictl_l10n::trf!(
-                "WDA 卡死：经 XCTest 的请求连续 {STALL_LIMIT} 次没有应答，等守护进程重启它",
-                "WDA is stuck: {STALL_LIMIT} requests in a row through XCTest went unanswered; waiting for the daemon to restart it"
+                "WDA 卡死判定：{why}，等守护进程重启它",
+                "WDA is considered stuck: {why}; waiting for the daemon to restart it"
             )));
         }
         let r = self.send(method, path, body, timeout).await;
@@ -268,30 +299,43 @@ impl<T: Transport> WdaClient<T> {
                     self.delete_session(sid).await;
                 }
                 let n = self.unanswered.fetch_add(1, Ordering::Relaxed) + 1;
-                // a long request went unanswered: one quick question tells a stuck WDA from a slow request, instead of
-                // waiting the full time twice more (a tool call took 90 s before the daemon could restart it)
+                // 长请求未应答，补一次短探测；保留实际计数，不把两个请求写成三次无应答。
                 if n < STALL_LIMIT && timeout > XCTEST_PROBE_TIMEOUT {
                     match self.send("GET", "/wda/activeAppInfo", None, XCTEST_PROBE_TIMEOUT).await {
-                        Err(p) if p.no_answer() => self.unanswered.store(STALL_LIMIT, Ordering::Relaxed),
-                        // it answers: slow, not stuck (still counted, until something is answered)
+                        Err(p) if p.no_answer() => {
+                            self.unanswered.store((n + 1) | UNANSWERED_PROBE, Ordering::Relaxed);
+                        }
+                        reply if answered(&reply) => self.unanswered.store(0, Ordering::Relaxed),
                         _ => {}
                     }
                 }
             }
-            _ => self.unanswered.store(0, Ordering::Relaxed),
+            _ if answered(&r) => self.unanswered.store(0, Ordering::Relaxed),
+            _ => {}
         }
         r
     }
 
-    /// 经 XCTest 的请求连续 [`STALL_LIMIT`] 次没有应答：WDA 卡死了（`/status` 可能照样正常）。之后经 XCTest 的请求不再发，
-    /// 直接报不可用，由守护进程重启 WDA（换一个新的客户端）
+    /// 连续三次无应答，或长请求和其短探测均无应答时，后续请求不再发送，等待守护进程恢复。
     pub fn stalled(&self) -> bool {
-        self.unanswered() >= STALL_LIMIT
+        self.stall_reason().is_some()
     }
 
-    /// 经 XCTest 的请求眼下连续几次没有应答
+    /// 读取一致的计数与判定原因；`/status` 的响应不参与此状态。
+    pub fn stall_reason(&self) -> Option<StallReason> {
+        let state = self.unanswered.load(Ordering::Relaxed);
+        if state & UNANSWERED_PROBE != 0 {
+            Some(StallReason::LongRequestAndProbe)
+        } else if state >= STALL_LIMIT {
+            Some(StallReason::ConsecutiveRequests(state))
+        } else {
+            None
+        }
+    }
+
+    /// 实际连续无应答次数，不含判定标记。
     pub fn unanswered(&self) -> u32 {
-        self.unanswered.load(Ordering::Relaxed)
+        self.unanswered.load(Ordering::Relaxed) & !UNANSWERED_PROBE
     }
 
     async fn send(&self, method: &str, path: &str, body: Option<Value>, timeout: Duration) -> Result<Value> {
@@ -1272,7 +1316,7 @@ mod tests {
         let c = WdaClient::new(&t);
         assert!(c.wda_reports_locked().await.unwrap_err().no_answer());
         assert!(c.active_app().await.unwrap_err().no_answer());
-        assert_eq!(c.unanswered(), 2);
+        assert_eq!(c.unanswered(), 0, "两次短探测均获得回答，应清零");
         // 回了错误：还活着，从头数
         assert!(matches!(c.active_app().await, Err(WdaError::Remote { .. })));
         assert_eq!(c.unanswered(), 0);
@@ -1291,6 +1335,89 @@ mod tests {
         assert_eq!(t.sent.lock().unwrap().len(), sent);
         assert!(c.ready().await.unwrap());
         assert!(c.stalled());
+    }
+
+    /// 较长请求超时后，短探测的正常回答或远端错误都证明 WDA 仍有响应，应重新计数。
+    #[tokio::test]
+    async fn answered_probe_resets_stall_count_after_each_slow_request() {
+        for (status, body) in [
+            (200, r#"{"value":{}}"#),
+            (500, r#"{"value":{"error":"unknown error","message":"busy"}}"#),
+            (404, r#"{"message":"unknown route"}"#),
+            (502, "temporarily unavailable"),
+        ] {
+            let replies = (0..4).flat_map(|_| [timed_out(), Ok((status, body.as_bytes().to_vec()))]).collect();
+            let t = Script::new(replies);
+            let c = WdaClient::new(&t);
+            for _ in 0..4 {
+                assert!(c.wda_reports_locked().await.unwrap_err().no_answer());
+                assert_eq!(c.unanswered(), 0, "探测返回 {status} {body}");
+                assert!(!c.stalled());
+            }
+            assert_eq!(t.sent().len(), 8, "每个慢请求后都应继续做短探测");
+        }
+    }
+
+    /// 连不上不是收到回答，不能抹掉之前已经发生的无应答。
+    #[tokio::test]
+    async fn connection_error_does_not_reset_unanswered_count() {
+        let t = Script::new(vec![
+            timed_out(),
+            Err(std::io::Error::new(std::io::ErrorKind::NotConnected, "offline")),
+            Ok((500, br#"{"value":{"error":"unknown error","message":"busy"}}"#.to_vec())),
+        ]);
+        let c = WdaClient::new(&t);
+        assert!(c.xctest_responsive().await.unwrap_err().no_answer());
+        assert_eq!(c.unanswered(), 1);
+        assert!(matches!(c.xctest_responsive().await, Err(WdaError::Unavailable(_))));
+        assert_eq!(c.unanswered(), 1);
+        assert!(matches!(c.xctest_responsive().await, Err(WdaError::Remote { .. })));
+        assert_eq!(c.unanswered(), 0);
+        assert!(!c.stalled());
+    }
+
+    /// 两个请求未应答即可触发快速恢复，但实际计数和原因不能伪装成三次无应答。
+    #[tokio::test]
+    async fn long_request_and_failed_probe_keep_the_actual_count_and_reason() {
+        let t = Script::new(vec![timed_out(), timed_out(), ok(r#"{"value":{"ready":true}}"#)]);
+        let c = WdaClient::new(&t);
+        assert!(c.wda_reports_locked().await.unwrap_err().no_answer());
+        assert_eq!(c.unanswered(), 2);
+        assert_eq!(c.stall_reason(), Some(StallReason::LongRequestAndProbe));
+        assert!(c.stalled());
+        let why = c.stall_reason().unwrap().describe();
+        assert!(why.contains("/wda/activeAppInfo"));
+        assert!(!why.contains("3 次"));
+        // 本地 /status 的回答不应把已记录的判定抹掉。
+        assert!(c.ready().await.unwrap());
+        assert_eq!(c.stall_reason(), Some(StallReason::LongRequestAndProbe));
+        assert_eq!(t.sent(), ["GET /wda/locked", "GET /wda/activeAppInfo", "GET /status"]);
+    }
+
+    #[tokio::test]
+    async fn three_short_unanswered_requests_report_a_consecutive_stall() {
+        let t = Script::new(vec![timed_out(), timed_out(), timed_out()]);
+        let c = WdaClient::new(&t);
+        for n in 1..=STALL_LIMIT {
+            assert!(c.xctest_responsive().await.unwrap_err().no_answer());
+            assert_eq!(c.unanswered(), n);
+            assert_eq!(c.stalled(), n == STALL_LIMIT);
+        }
+        assert_eq!(c.stall_reason(), Some(StallReason::ConsecutiveRequests(STALL_LIMIT)));
+        // 后续调用仍立即拒绝，不再发送请求。
+        assert!(matches!(c.xctest_responsive().await, Err(WdaError::Unavailable(_))));
+        assert_eq!(t.sent().len(), STALL_LIMIT as usize);
+    }
+
+    /// 结束会话的回答只用于清理，不应代替真正的前台响应探测。
+    #[tokio::test]
+    async fn answered_session_delete_does_not_mask_a_failed_probe() {
+        let t = Script::new(vec![ok(r#"{"sessionId":"A"}"#), timed_out(), ok(r#"{"value":null}"#), timed_out()]);
+        let mut c = WdaClient::new(&t);
+        assert!(matches!(c.press_button("home").await, Err(WdaError::Timeout(_))));
+        assert_eq!(c.unanswered(), 2);
+        assert_eq!(c.stall_reason(), Some(StallReason::LongRequestAndProbe));
+        assert_eq!(t.sent()[2], "DELETE /session/A");
     }
 
     /// 经 XCTest 的探测：只有「送到了却没有应答」算卡死的迹象；WDA 回了错误说明它还在办事，连不上归 `/status` 管

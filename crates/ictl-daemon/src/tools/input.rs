@@ -2,6 +2,27 @@
 
 use super::*;
 
+/// 边滑边找时每次滑多久：1 秒的慢滑停下时几乎没有惯性，内容移动和手指移动差不多（iPhone 12 mini 设置首页：
+/// 手指移 300 点，0.3 秒滚了 618 点，0.6 秒 420 点，1 秒 282 点；W3C 在抬起前停一下也去不掉惯性）
+pub(super) const SEARCH_SWIPE_SECONDS: f64 = 1.0;
+
+/// 边滑边找时算找到了：有匹配，而且要点的那个没有被整个盖住（停在底部工具栏、悬浮栏下面的还要再滑一下）。
+/// index 超出匹配个数也算找到：滑下去不会让序号变得更有意义，交给后面照常报
+fn reachable(tree: &Tree, text: &str, index: usize) -> bool {
+    let matches = elements::find(&tree.elements, text);
+    match matches.get(index) {
+        Some(e) => !matches!(tree.tap_point(e), TapPoint::Covered { .. }),
+        None => !matches.is_empty(),
+    }
+}
+
+/// 边滑边找的一次滑动：屏幕正中，竖着滑 35% 屏高（前后两屏有重叠，不会漏过一行）。`down` 看下面的内容，手指往上
+pub(super) fn search_stroke(width: f64, height: f64, down: bool) -> ((f64, f64), (f64, f64)) {
+    let x = (width / 2.0).round();
+    let (low, high) = ((height * 0.68).round(), (height * 0.33).round());
+    if down { ((x, low), (x, high)) } else { ((x, high), (x, low)) }
+}
+
 impl Daemon {
     /// A stale pointer must neither unlock nor act on a new display. Unlock can itself
     /// rotate the foreground app, so take the final measurement after it completes.
@@ -155,18 +176,52 @@ impl Daemon {
         text: &str,
         index: usize,
         max_age: Duration,
+        scroll: Option<crate::protocol::ScrollSearch>,
     ) -> crate::error::Result<(String, bool)> {
         self.ensure_unlocked(g).await?;
-        let tree = self.tree(g, max_age).await?;
+        let mut tree = self.tree(g, max_age).await?;
+        // 屏幕上没有、又要边滑边找：慢滑一小段（不带惯性，不会把要找的甩过去）、等停下再读树，找到或滑到底为止
+        let mut scrolled = 0;
+        let mut at_end = false;
+        if let Some(s) = scroll {
+            while !reachable(&tree, text, index) && scrolled < s.max {
+                let screen = self.screen(g).await?;
+                let (from, to) = search_stroke(screen.width, screen.height, s.down);
+                let stroke = Box::pin(self.swipe(g, from, to, SEARCH_SWIPE_SECONDS, None, false)).await;
+                stroke?;
+                scrolled += 1;
+                let next = self.tree(g, Duration::ZERO).await?;
+                if next.close_to(&tree, STILL_TOLERANCE) {
+                    at_end = true;
+                    tree = next;
+                    break;
+                }
+                tree = next;
+            }
+        }
+        let searched = match (scrolled, at_end) {
+            (0, _) => String::new(),
+            (n, true) => ictl_l10n::trf!("(滑了 {n} 次,已到尽头)", " (scrolled {n} times, reached the end)"),
+            (n, false) => ictl_l10n::trf!("(滑了 {n} 次)", " (scrolled {n} times)"),
+        };
         // 点之前刚读的树就是操作前的界面（比操作开始前记下的更新）
         g.dev.before_action = Some(std::mem::take(&mut g.dev.seen));
         let matches = elements::find(&tree.elements, text);
         if matches.is_empty() {
             let limited = self.snapshot_note(g);
+            let hint = if scroll.is_some() {
+                String::new()
+            } else {
+                ictl_l10n::tr!(
+                    ";可能在屏幕外,可带 scroll 边滑边找",
+                    "; it may be off screen: pass scroll to look further"
+                )
+                .to_owned()
+            };
             return Ok((
                 ictl_l10n::trf!(
-                    "{}包含 \"{text}\" 的元素,先用 iphone_list_elements 或截图看看屏幕{limited}",
-                    "{}: no element contains \"{text}\"; look at the screen with iphone_list_elements or a screenshot first{limited}",
+                    "{}包含 \"{text}\" 的元素{searched},先用 iphone_list_elements 或截图看看屏幕{limited}{hint}",
+                    "{}: no element contains \"{text}\"{searched}; look at the screen with iphone_list_elements or a screenshot first{limited}{hint}",
                     tap_missed_prefixes()[0]
                 ),
                 true,
@@ -216,7 +271,12 @@ impl Daemon {
         } else {
             String::new()
         };
-        Ok((ictl_l10n::trf!("已点击 {}{note}{moved}", "Tapped {}{note}{moved}", e.describe()), false))
+        let found = if scrolled > 0 {
+            ictl_l10n::trf!("(滑了 {scrolled} 次后找到)", " (found after {scrolled} scrolls)")
+        } else {
+            String::new()
+        };
+        Ok((ictl_l10n::trf!("已点击 {}{found}{note}{moved}", "Tapped {}{found}{note}{moved}", e.describe()), false))
     }
 
     pub(crate) async fn long_press(

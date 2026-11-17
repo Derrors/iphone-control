@@ -43,6 +43,16 @@ pub fn default_socket() -> PathBuf {
     }
 }
 
+/// [`Request::TapElement`] 屏幕上找不到时边滑边找：`down` 看下面的内容（手指往上滑），否则看上面的；最多滑 `max` 次
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ScrollSearch {
+    pub down: bool,
+    pub max: u32,
+}
+
+/// [`ScrollSearch::max`] 的上限：每次慢滑加等列表停下约 2.5 秒，滑满 15 次也就半分钟出头
+pub const MAX_SEARCH_SCROLLS: u32 = 15;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TouchPhase {
@@ -87,6 +97,9 @@ pub enum Request {
         /// 同 ListElements。调用方声明这一串点击不改变界面布局（例如在同一个键盘上连按）时才给
         #[serde(default)]
         max_age_ms: u64,
+        /// 屏幕上没有时边滑边找。旧版本守护进程不认识这个字段，只在当前屏幕上找
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        scroll: Option<ScrollSearch>,
     },
     LongPress {
         x: f64,
@@ -903,6 +916,16 @@ mod tests {
 
     #[test]
     fn requests_round_trip_as_tagged_json() {
+        let r = Request::TapElement { text: "x".into(), index: 0, max_age_ms: 0, scroll: None };
+        // without a scroll search the request is what it always was on the wire
+        assert_eq!(serde_json::to_string(&r).unwrap(), r#"{"op":"tap_element","text":"x","index":0,"max_age_ms":0}"#);
+        let r = Request::TapElement {
+            text: "x".into(),
+            index: 0,
+            max_age_ms: 0,
+            scroll: Some(ScrollSearch { down: true, max: 8 }),
+        };
+        assert_eq!(serde_json::from_str::<Request>(&serde_json::to_string(&r).unwrap()).unwrap(), r);
         let r = Request::Swipe { from: (1.0, 2.0), to: (3.0, 4.0), seconds: 0.3 };
         let s = serde_json::to_string(&r).unwrap();
         assert!(s.starts_with(r#"{"op":"swipe""#), "{s}");

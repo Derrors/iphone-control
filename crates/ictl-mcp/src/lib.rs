@@ -352,7 +352,11 @@ WDA 不可用时改用 CoreDevice HID(iOS 27 起;结果里注明「经 HID」)�
                 with_then(json!({
                     "text": {"type": "string", "description": ictl_l10n::tr!("元素的文字(标签或名字),先精确匹配再按包含匹配", "the element's text (label or name); exact match first, then substring")},
                     "index": {"type": "integer", "default": 0,
-                        "description": ictl_l10n::tr!("匹配到多个时点第几个(从 0 开始,顺序同 iphone_list_elements)", "which match to tap if there are several (from 0, same order as iphone_list_elements)")}
+                        "description": ictl_l10n::tr!("匹配到多个时点第几个(从 0 开始,顺序同 iphone_list_elements)", "which match to tap if there are several (from 0, same order as iphone_list_elements)")},
+                    "scroll": {"type": "string", "enum": ["down", "up"],
+                        "description": ictl_l10n::tr!("当前屏幕上没有时边滑边找:down 往下找(看下面的内容),up 往上找。每次慢滑约三分之一屏、不带惯性,找到就点,滑到底(界面不再变)或滑满 max_scrolls 次还没有就停下说明。用于长列表、设置页里不在当前屏的项;不给就只在当前屏幕上找", "If it isn't on the current screen, scroll and look again: down looks further down (the content below), up further up. Each scroll is a slow third of the screen without momentum; it taps as soon as it is found, and stops and says so at the end of the list (the screen no longer changes) or after max_scrolls. For items of long lists and settings pages that are off screen; without it only the current screen is searched")},
+                    "max_scrolls": {"type": "integer", "default": 8, "minimum": 1, "maximum": ictl_protocol::MAX_SEARCH_SCROLLS,
+                        "description": ictl_l10n::tr!("带 scroll 时最多滑几次,默认 8", "with scroll: at most this many scrolls, default 8")}
                 })),
                 &["text"],
             ),
@@ -616,6 +620,28 @@ impl Args<'_> {
 }
 
 /// 工具调用 → 守护进程请求
+/// `iphone_tap_element` 的 `scroll` / `max_scrolls`：没给 scroll 时不滑
+fn scroll_search(a: &Args) -> Result<Option<ictl_protocol::ScrollSearch>, String> {
+    let dir = a.s_or("scroll", "")?;
+    let max = a.u_or("max_scrolls", 8)?;
+    if dir.is_empty() {
+        return Ok(None);
+    }
+    let down = match dir.as_str() {
+        "down" => true,
+        "up" => false,
+        _ => return Err(ictl_l10n::trf!("参数 scroll 要是 down 或 up", "parameter scroll must be down or up")),
+    };
+    if max == 0 || max > ictl_protocol::MAX_SEARCH_SCROLLS as usize {
+        return Err(ictl_l10n::trf!(
+            "参数 max_scrolls 要在 1 到 {} 之间",
+            "parameter max_scrolls must be between 1 and {}",
+            ictl_protocol::MAX_SEARCH_SCROLLS
+        ));
+    }
+    Ok(Some(ictl_protocol::ScrollSearch { down, max: max as u32 }))
+}
+
 pub fn to_request(name: &str, args: &Map<String, Value>) -> Result<Request, String> {
     let a = Args(args);
     Ok(match name {
@@ -642,7 +668,12 @@ pub fn to_request(name: &str, args: &Map<String, Value>) -> Result<Request, Stri
             keep_locked: false,
         },
         "iphone_tap" => Request::Tap { x: a.f("x")?, y: a.f("y")? },
-        "iphone_tap_element" => Request::TapElement { text: a.s("text")?, index: a.u_or("index", 0)?, max_age_ms: 0 },
+        "iphone_tap_element" => Request::TapElement {
+            text: a.s("text")?,
+            index: a.u_or("index", 0)?,
+            max_age_ms: 0,
+            scroll: scroll_search(&a)?,
+        },
         "iphone_long_press" => Request::LongPress { x: a.f("x")?, y: a.f("y")?, seconds: a.f_or("seconds", 1.0)? },
         "iphone_swipe" => Request::Swipe {
             from: (a.f("from_x")?, a.f("from_y")?),
@@ -798,8 +829,8 @@ pub fn batch_steps(args: &Map<String, Value>) -> Result<Vec<Step>, String> {
             let req = match to_request(tool, obj)
                 .map_err(|e| ictl_l10n::trf!("第 {n} 步({tool}):{e}", "step {n} ({tool}): {e}"))?
             {
-                Request::TapElement { text, index, .. } if reuse => {
-                    Request::TapElement { text, index, max_age_ms: BATCH_REUSE_MS }
+                Request::TapElement { text, index, scroll, .. } if reuse => {
+                    Request::TapElement { text, index, max_age_ms: BATCH_REUSE_MS, scroll }
                 }
                 other => other,
             };
@@ -1203,6 +1234,32 @@ mod tests {
         with_lang(Lang::Zh, || assert!(has_cjk(instructions())));
     }
 
+    /// scroll 是可选的：不给就和以前一样只看当前屏幕；方向只认 down / up，次数 1 到上限
+    #[test]
+    fn tap_element_scroll_search_is_optional_and_checked() {
+        let req = |v: Value| to_request("iphone_tap_element", &args(v));
+        let plain = req(json!({"text": "隐私"})).unwrap();
+        assert_eq!(plain, Request::TapElement { text: "隐私".into(), index: 0, max_age_ms: 0, scroll: None });
+        let down = req(json!({"text": "隐私", "scroll": "down"})).unwrap();
+        let s = |down, max| Some(protocol::ScrollSearch { down, max });
+        assert_eq!(down, Request::TapElement { text: "隐私".into(), index: 0, max_age_ms: 0, scroll: s(true, 8) });
+        let up = req(json!({"text": "隐私", "scroll": "up", "max_scrolls": 3})).unwrap();
+        assert_eq!(up, Request::TapElement { text: "隐私".into(), index: 0, max_age_ms: 0, scroll: s(false, 3) });
+        for bad in [
+            json!({"text": "x", "scroll": "left"}),
+            json!({"text": "x", "scroll": "down", "max_scrolls": 0}),
+            json!({"text": "x", "scroll": "down", "max_scrolls": 16}),
+            json!({"text": "x", "scroll": true}),
+        ] {
+            assert!(req(bad).is_err());
+        }
+        // reused in a batch, the scroll search stays
+        let steps = batch_steps(&args(
+            json!({"reuse_elements": true, "steps": [{"tool": "iphone_tap_element", "text": "x", "scroll": "down"}]}),
+        ));
+        assert!(matches!(&steps.unwrap()[0], Step::Request { req: Request::TapElement { scroll: Some(_), .. }, .. }));
+    }
+
     #[test]
     fn alert_check_after_actions_but_not_buttons_or_reads() {
         assert!(wants_alert_check(&Request::Swipe { from: (0.0, 0.0), to: (1.0, 1.0), seconds: 0.3 }));
@@ -1370,7 +1427,7 @@ mod tests {
             steps(true)[0],
             Step::Request {
                 tool: "iphone_tap_element".into(),
-                req: Request::TapElement { text: "One".into(), index: 0, max_age_ms: BATCH_REUSE_MS }
+                req: Request::TapElement { text: "One".into(), index: 0, max_age_ms: BATCH_REUSE_MS, scroll: None }
             }
         );
         assert!(matches!(&steps(false)[0], Step::Request { req: Request::TapElement { max_age_ms: 0, .. }, .. }));
@@ -1409,7 +1466,7 @@ mod tests {
         // 写成字符串的数字照收（toolkit 的 pydantic 也收）
         assert_eq!(
             to_request("iphone_tap_element", &args(json!({"text": "设置", "index": "2"}))).unwrap(),
-            Request::TapElement { text: "设置".into(), index: 2, max_age_ms: 0 }
+            Request::TapElement { text: "设置".into(), index: 2, max_age_ms: 0, scroll: None }
         );
         assert_eq!(
             to_request("iphone_list_elements", &args(json!({"limit": null}))).unwrap(),

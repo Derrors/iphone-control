@@ -1362,6 +1362,7 @@ fn action(name: &str, b: &Value) -> Option<Request> {
             text: text("text")?,
             index: b.get("index").and_then(Value::as_u64).unwrap_or(0) as usize,
             max_age_ms: 0,
+            scroll: None,
         },
         "wait_for" => Request::WaitFor {
             text: text("text")?,
@@ -2022,7 +2023,7 @@ mod tests {
         assert_eq!(action("button", &json!({"button": "home"})), Some(Request::PressButton { button: "home".into() }));
         assert_eq!(
             action("tap_element", &json!({"text": "通用", "index": 1})),
-            Some(Request::TapElement { text: "通用".into(), index: 1, max_age_ms: 0 })
+            Some(Request::TapElement { text: "通用".into(), index: 1, max_age_ms: 0, scroll: None })
         );
         assert_eq!(
             action("wait_for", &json!({"text": "x", "timeout": 99})),

@@ -1214,8 +1214,8 @@ impl Daemon {
                     text
                 }),
             Request::Tap { x, y } => self.tap(g, x, y, view).await,
-            Request::TapElement { text, index, max_age_ms } => {
-                self.tap_element(g, &text, index, Duration::from_millis(max_age_ms)).await.map(|(t, missed)| {
+            Request::TapElement { text, index, max_age_ms, scroll } => {
+                self.tap_element(g, &text, index, Duration::from_millis(max_age_ms), scroll).await.map(|(t, missed)| {
                     outcome.tapped_nothing = missed;
                     t
                 })

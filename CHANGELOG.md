@@ -6,6 +6,10 @@ What changed in each release, one line per change. Versions follow [Semantic Ver
 
 ## [Unreleased]
 
+### New
+
+- `iphone_tap_element` takes `scroll` (`down` / `up`) and `max_scrolls`: when the element isn't on screen it scrolls slowly and looks again, and taps it once found. An older daemon ignores them and only looks at the current screen.
+
 ### Improvements
 
 - An action that had to unlock the phone first says so, and how long it took (#135).

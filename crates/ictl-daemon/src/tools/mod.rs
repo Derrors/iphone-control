@@ -484,6 +484,16 @@ mod tests {
         assert!(super::observe::change_text(Change::Unknown).is_empty());
     }
 
+    /// 边滑边找的一次滑动在屏幕正中竖着滑，往下找时手指往上；滑的距离不到半屏，前后两屏有重叠
+    #[test]
+    fn a_search_scroll_is_a_short_vertical_stroke_in_the_middle() {
+        let (from, to) = input::search_stroke(375.0, 812.0, true);
+        assert_eq!(from, (188.0, 552.0));
+        assert_eq!(to, (188.0, 268.0));
+        assert!(from.1 - to.1 < 812.0 / 2.0);
+        assert_eq!(input::search_stroke(375.0, 812.0, false), (to, from));
+    }
+
     /// 太久以前看过的界面不拿来比；拿走以后就没了
     #[test]
     fn seen_screens_are_taken_once() {

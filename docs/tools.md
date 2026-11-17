@@ -19,7 +19,7 @@ Coordinates are in **points**, the same unit as the pixels of a full-screen `iph
 | Tool | Parameters | Notes |
 |---|---|---|
 | `iphone_tap` | `x`, `y` | For targets without text (icons, games, maps); falls back to HID when WDA is down |
-| `iphone_tap_element` | `text`, `index` (default 0) | Exact label or name first, then substring. If the element's center is covered (floating toolbar, keyboard, overlay), taps an uncovered part of it; if it is fully covered, does not tap and says so |
+| `iphone_tap_element` | `text`, `index` (default 0), `scroll` (`down` / `up`), `max_scrolls` (default 8, max 15) | Exact label or name first, then substring. If the element's center is covered (floating toolbar, keyboard, overlay), taps an uncovered part of it; if it is fully covered, does not tap and says so. With `scroll`, when it isn't on screen (or is fully covered) it scrolls a slow third of the screen at a time without momentum and looks again, until it is found, the screen stops changing (the end of the list) or `max_scrolls` is reached; the result says how many scrolls it took |
 | `iphone_long_press` | `x`, `y`, `seconds` (default 1, max 10) | Holds one finger still, then lifts: context menus, home-screen quick actions, text selection |
 | `iphone_swipe` | `from_x`, `from_y`, `to_x`, `to_y`, `seconds` (default 0.3, max 10) | Returns after the list has stopped scrolling (up to 2.5 s). Swipe up (`from_y` > `to_y`) to see content further down |
 | `iphone_type_text` | `text`, `submit` (default false) | Types into the focused field (Chinese supported); fails if no keyboard is shown. Reads the field back afterwards: dropped trailing characters are typed again; if the field still doesn't match, it reports an error and does not press Return |

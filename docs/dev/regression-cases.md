@@ -1,6 +1,6 @@
 # 必须覆盖的回归用例
 
-#1～#34 来自 toolkit 和本项目早期实际踩过的坑，#35～#45 是多设备和 HID 横屏，#46～#58 是实时画面、开发者工具和英文界面，#59～#63 是 iPhone 18 Pro Max（iOS 27.2.1）真机全量测试发现的问题，#64 起是 viewer 的 AI 任务和新页面，#116～#122 是任务的控制权、控制台的局域网访问与登录、跨主机，#123 起是 0.2.4 发版前回归中发现的。能单测的写单测，不能单测的进真机回归清单。**每个 PR 都必须保持这里的全部用例通过**：单测的由 `cargo test` 覆盖；改到的范围里测试方式是真机、无头 Chrome 或手动测量的，要重跑并在 PR 里列出编号，写明设备和 iOS 版本；修了清单里没有的问题，要加一行。完整要求见 [CONTRIBUTING.md 的 Required tests](../../CONTRIBUTING.md#required-tests)。
+#1～#34 来自 toolkit 和本项目早期实际踩过的坑，#35～#45 是多设备和 HID 横屏，#46～#58 是实时画面、开发者工具和英文界面，#59～#63 是 iPhone 18 Pro Max（iOS 27.2.1）真机全量测试发现的问题，#64 起是 viewer 的 AI 任务和新页面，#116～#122 是任务的控制权、控制台的局域网访问与登录、跨主机，#123 起是 0.2.4 发版前回归中发现的。能单测的写单测，不能单测的进真机回归清单。真机上能用脚本重复的写成 `tests/device/scenarios.py`（工具）或 `tests/device/tasks.py`（AI 任务）里的一项检查，测试方式里写明场景名。**每个 PR 都必须保持这里的全部用例通过**：单测的由 `cargo test` 覆盖；改到的范围里测试方式是真机、无头 Chrome 或手动测量的，要重跑并在 PR 里列出编号，写明设备和 iOS 版本；修了清单里没有的问题，要加一行。完整要求见 [CONTRIBUTING.md 的 Required tests](../../CONTRIBUTING.md#required-tests)。
 
 | # | 坑 | 正确行为 | 测试方式 |
 |---|---|---|---|
@@ -16,10 +16,10 @@
 | 10 | `ios forward` 监听所有网卡，WDA 无认证，局域网可直接控制手机 | 默认不监听任何端口；bridge 只绑 127.0.0.1 | 集成测试（检查监听地址） |
 | 11 | 依赖大版本漂移（mcp 2.x 把 FastMCP 改名、idevice 0.1.x 每版破坏性变更） | 所有依赖锁定精确版本 + `Cargo.lock` 入库；升级单独提交 | CI |
 | 12 | host 侧 runner 退出后手机上残留 WDA 仍响应几十秒 | 就绪 = 本进程 XCTest 会话存活 且 `/status` ready | 真机 |
-| 13 | App 冷启动后立即点击会被吞 | `launch_app` 等到前台再停 1 秒 | 真机 |
+| 13 | App 冷启动后立即点击会被吞 | `launch_app` 等到前台再停 1 秒 | 真机；真机脚本 `scenarios.py fresh` |
 | 14 | 完整元素树 7～8 秒 | `excluded_attributes` 排除可见性等属性（约 0.3 秒），可见性按坐标判断 | 单测 + 计时 |
 | 15 | 铺满全屏的 Application/Window/Toolbar 等元素没有定位价值 | 列表中过滤 | 单测 |
-| 16 | 区域放大倍数只保留 2 位有效数字导致边缘约 1.4 点误差 | 保留 3 位 | 单测 |
+| 16 | 区域放大倍数只保留 2 位有效数字导致边缘约 1.4 点误差 | 保留 3 位 | 单测；真机脚本 `scenarios.py tools` |
 | 17 | 只有 ToolError 的消息能透传给 MCP 客户端（Python SDK） | 所有预期错误都转成工具错误文本 | 单测 |
 | 18 | 锁屏（未首次解锁）时隧道报 `PasswordProtected` | 进入 NeedsUnlock，提示人工 | 真机 |
 | 19 | Apple ID 会话过期只在重签时才发现 | 每日独立验证会话 | 单测（模拟过期） |
@@ -35,9 +35,9 @@
 | 29 | WDA 请求超时或中途断开后退到 HID，同一个动作做了两遍 | 传输层区分连不上（`WdaError::Unavailable`，可以退到 HID）和请求已发出之后的超时、断开、响应不完整（不退，报错让 agent 先截图确认） | 单测 + 代码审查 |
 | 30 | 设置文件里留空的 `ICTL_LOG=` 生成一个什么都不放行的过滤器，日志全没了 | 空值当作没设 | 真机（看守护进程的输出） |
 | 31 | `/wda/tap` 每次先等界面空闲：主屏点图标约 1.7 秒（调小等待设置也没用）；W3C actions 手势做完又要等动画冷却（默认 2 秒），App 里切标签约 1.9 秒 | 点击用单个 actions 手势，期间临时把 waitForIdleTimeout/animationCoolOffTimeout 调成 1/0.2，做完恢复（原值只读一次）。真机：主屏点图标 1.70→0.91 秒（到前台 1.80→1.01 秒），App 里 0.62→0.72 秒 | 单测（请求顺序、恢复原值）+ 真机计时 |
-| 32 | `/wda/keys` 没有输入框获得焦点时也返回成功，什么都没输（真机：Safari 地址栏没点中、主屏上直接输入） | 输入前查屏幕上有没有软键盘（`XCUIElementTypeKeyboard`，约 0.2 秒），没有就报错让先点输入框 | 真机 |
+| 32 | `/wda/keys` 没有输入框获得焦点时也返回成功，什么都没输（真机：Safari 地址栏没点中、主屏上直接输入） | 输入前查屏幕上有没有软键盘（`XCUIElementTypeKeyboard`，约 0.2 秒），没有就报错让先点输入框 | 真机；真机脚本 `scenarios.py typing` |
 | 33 | 系统弹窗（定位、通知权限）挡着时 Home 不生效、App 到不了前台，WDA 照样报成功；弹窗属于 SpringBoard，看前台 App 发现不了 | 按 Home 前查 `/alert/text`（App 静止时约 0.4 秒；按下后动画中查要好几秒）；有弹窗就说明并不按。launch_app 没到前台时同样带上弹窗文字。按 Home 后等主屏到前台再返回 | 真机计时；弹窗路径待弹窗再出现时复测 |
-| 34 | `/wda/touchAndHold` 前后都等界面空闲：主屏长按图标 1.2 秒要约 12 秒 | 长按和点击一样用单个 actions 手势、临时调小等待：约 2 秒 | 真机计时 |
+| 34 | `/wda/touchAndHold` 前后都等界面空闲：主屏长按图标 1.2 秒要约 12 秒 | 长按和点击一样用单个 actions 手势、临时调小等待：约 2 秒 | 真机计时；真机脚本 `scenarios.py menu` |
 | 35 | 接着多台时，`devices` / `iphone_list_devices` 漏设备或标错正在控制的那台 | 列出 USB 上每一台的名字、型号、iOS 版本、UDID，标出正在控制哪台、有没有设自动解锁密码 | 真机（两台） |
 | 36 | 按 usbmuxd 的列表顺序选设备，列表顺序一变就换了台 | 选定了只认那一台，没接就是离线、不换；没选定时正在控制的那台一直用到它断开 | 单测（`device_pick_is_pinned_or_sticky`）+ 真机（拔掉选定的那台） |
 | 37 | `select` 按名字选到了别的设备 | 先比 UDID，再比设备名，最后是名字包含这段文字且只有一台；对上多台就报错，让用 UDID 指定 | 单测（`device_is_found_by_udid_then_name`） |
@@ -71,7 +71,7 @@
 | 65 | viewer 已经停了、任务已经停了，agent 的 MCP 服务还在继续操作手机 | 连不上守护进程或任务已结束一律拒绝，并告诉 agent 停下；开任务的程序断开，任务就结束（abandoned） | 单测（`without_the_daemon_a_task_call_is_refused`、`an_ended_or_unknown_token_is_refused_for_everything`、`an_opened_task_holds_the_phone_until_its_lease_goes`）+ 真机（任务中途停止，之后没有新步骤，agent 进程组已结束） |
 | 66 | 暂停只挡住了界面上的按钮，agent 照样继续点 | 暂停、接管、等确认时，任务的请求在守护进程里挂住（包括一个工具调用中间的请求，如 `iphone_batch` 的下一步），恢复后才放行 | 单测（`a_paused_task_holds_its_requests_until_resumed`、`a_held_request_whose_caller_left_is_dropped`）+ 真机（暂停 8 秒没有新步骤） |
 | 67 | 用户接管时动过手机，交还后 agent 按旧的界面接着点 | 交还后、或别人动过手机后，任务的操作一直被拒，直到它截图或读过元素 | 单测（`after_someone_else_acted_the_agent_looks_before_acting`）+ 真机（交还后先截图） |
-| 68 | 用户拒绝确认后 agent 正常结束，页面显示「已完成」 | 有被拒绝的一步就按「已停止」结束 | 单测（`a_rejected_confirmation_tells_the_agent_not_to_do_it`）+ 真机（拒绝删除世界时钟城市，没有删） |
+| 68 | 用户拒绝确认后 agent 正常结束，页面显示「已完成」 | 有被拒绝的一步就按「已停止」结束 | 单测（`a_rejected_confirmation_ends_the_task_as_rejected`）+ 真机（拒绝删除世界时钟城市，没有删） |
 | 69 | 按结果文字里的 `@(x,y)` 给所有步骤画点击标记，读元素的一步也被标成点击 | 只给 `iphone_tap_element` 的结果解析点击位置 | 单测（`only_a_tap_by_text_gets_a_mark_from_its_result`） |
 | 70 | 其他网站用 `<img src="http://127.0.0.1:8200/api/elements">` 触发读元素，顺带自动解锁手机 | 浏览器标明 `Sec-Fetch-Site` 不是 same-origin / none 的读请求一律 403 | 单测（`reads_from_other_sites_are_refused`）+ curl |
 | 71 | AI 任务执行中，用户在页面上点击和 agent 同时操作 | 没有接管时 viewer 拒绝手动操作（409 并说明），页面也锁住 | 真机（任务中 `/api/tap` 被拒，接管后按 Home 生效） |
@@ -105,10 +105,10 @@
 | 99 | `iphone-control status \| head -1`：读者先退出，后面的 `println!` 遇到 EPIPE 就 panic（退出码 101，打出崩溃信息）。Rust 启动时把 SIGPIPE 设成了忽略 | 只打印结果就结束的命令恢复 SIGPIPE 默认行为，安静退出；守护进程、MCP、viewer、wda-bridge 和跨守护进程重启的 update、service、setup 保持忽略 | 单测 sigpipe_default_only_for_commands_that_print_and_end、集成测试 a_closed_stdout_ends_printing_commands_quietly |
 | 100 | 0.2.2 起控制台每次按下都先请求 `/wda/screen`（约 0.1～0.2 秒），HID 会话空闲 30 秒关掉后，鼠标一直停在画面里时第一下还要等约 0.5 秒重开 | 按下只问方向，尺寸在转屏时和距上次测量满 60 秒后才重量；鼠标在画面上移动时每 20 秒最多预热一次 HID 会话 | 单测 display_poll_remeasures_size_only_when_needed；页面测试 hovering keeps the HID session warm at most every 20 seconds；真机：控制台连按，按下往返在几十毫秒内 |
 | 101 | 控制台开着、页面走 WDA 截图的画面（浏览器解不了 HEVC，或低于 iOS 27）时，WDA 每 1.5～2.5 分钟被 iOS 杀掉（`cpu_resource_fatal`：60 秒内平均 86%～93% CPU，上限 80%）。MJPEG 缩到 75% 让 WDA 逐帧解码、缩放（CoreGraphics）、重新编码；横屏时 `mjpegFixOrientation` 让它逐帧旋转、重新编码，同样超限 | MJPEG 原尺寸、不转正（`MJPEG_SCALE` = 100，`mjpegFixOrientation` = false）：WDA 直接转发 testmanagerd 硬件编好的 JPEG，帧率不变（约 34 fps）。横屏的竖帧由页面转正（H.264 按 `display.rotation`，MJPEG 的 img 由浏览器按 EXIF） | 真机（iPhone 15 Pro Max，iOS 27.0.1）：拉本机编码的 `/video`，竖屏 25 分钟、横屏 5 分钟不再被杀（开着转正时横屏 2 分钟被杀）；无头 Chrome：横屏下 H.264 和 MJPEG 画面方向正确、坐标换算正确 |
-| 102 | iPhone 15 Pro Max（iOS 27.0.1）每次锁屏约 10 秒：经 IOHID 短按电源键（0.05～0.1 秒）调用卡约 5.3 秒且不锁，再等 3 秒才退回 `/wda/lock`（约 1.9 秒）。iPhone 18 Pro Max（iOS 27.2.1）正相反 | 按设备记住哪种锁屏有效（`PerDevice::lock_via_wda`），之后先用它；先用的不灵仍会试另一种 | 单测 lock_order_follows_what_worked_on_this_device；真机：同一台连续锁屏，第一次约 10 秒、之后约 2 秒 |
-| 103 | WDA 半死：`/status` 照常 200，前台 App、截图、读元素、`/wda/locked` 全部超时（iPad mini 5，iPadOS 26.7.3，后台启动的 WDA 跑 20～40 分钟后；2026-11-16 对照：XCTest 会话启动的 WDA 一样会卡，跑几分钟也会，卡时手机上 testmanagerd 不再输出，见 D18 补充）。守护进程只看 `/status`，一直显示「就绪」，不重启；后台模式下守护进程重启还会把它接回来。只靠巡检探测也不够：卡死时工具调用一个接一个等满超时（每个 10～30 秒），设备被占好几分钟，巡检抢不到锁 | WDA 客户端数经 XCTest 的请求（`/status` 之外都是，工具调用和巡检探测 `/wda/activeAppInfo` 一样算）连续几次送到了却没有应答，有应答（哪怕是错误）就清零；连续 3 次就算卡死：之后经 XCTest 的请求直接报不可用，巡检和每个设备请求开头都会忘掉记下的后台 WDA、丢掉会话重新启动 | 单测 three_unanswered_requests_mean_stalled、xctest_probe_counts_only_missing_answers；真机：绕过守护进程让 WDA 长按（期间 `/status` 5 毫秒 200，`/wda/activeAppInfo` 超时）。空闲时 0.2.3 一直「就绪」，修复后约 28 秒判定卡死、34 秒恢复；同时经守护进程背靠背发工具调用时，main（#60）180 秒里 8 次调用各等 10～30 秒、不重启，修复后第 3 次超时（约 50 秒）就重启，13 秒后就绪，其间的调用立即返回；经守护进程连续长按 6×10 秒不误判 |
+| 102 | iPhone 15 Pro Max（iOS 27.0.1）每次锁屏约 10 秒：经 IOHID 短按电源键（0.05～0.1 秒）调用卡约 5.3 秒且不锁，再等 3 秒才退回 `/wda/lock`（约 1.9 秒）。iPhone 18 Pro Max（iOS 27.2.1）正相反 | 按设备记住哪种锁屏有效（`PerDevice::lock_via_wda`），之后先用它；先用的不灵仍会试另一种 | 单测 lock_order_follows_what_worked_on_this_device；真机：同一台连续锁屏，第一次约 10 秒、之后约 2 秒；真机脚本 `scenarios.py lock` |
+| 103 | WDA 半死：`/status` 照常 200，前台 App、截图、读元素、`/wda/locked` 全部超时（iPad mini 5，iPadOS 26.7.3，后台启动的 WDA 跑 20～40 分钟后；2026-11-16 对照：XCTest 会话启动的 WDA 一样会卡，跑几分钟也会，卡时手机上 testmanagerd 不再输出，见 D18 补充）。守护进程只看 `/status`，一直显示「就绪」，不重启；后台模式下守护进程重启还会把它接回来。只靠巡检探测也不够：卡死时工具调用一个接一个等满超时（每个 10～30 秒），设备被占好几分钟，巡检抢不到锁 | WDA 客户端数经 XCTest 的请求（`/status` 之外都是，工具调用和巡检探测 `/wda/activeAppInfo` 一样算）连续几次送到了却没有应答，有应答（哪怕是错误）就清零；连续 3 次，或较长请求及其后的短探测均未应答，就判为无响应（日志区分实际依据）：之后经 XCTest 的请求直接报不可用，巡检和每个设备请求开头都会忘掉记下的后台 WDA、丢掉会话重新启动 | 单测 three_unanswered_requests_mean_stalled、xctest_probe_counts_only_missing_answers；真机：绕过守护进程让 WDA 长按（期间 `/status` 5 毫秒 200，`/wda/activeAppInfo` 超时）。空闲时 0.2.3 一直「就绪」，修复后约 28 秒判定卡死、34 秒恢复；同时经守护进程背靠背发工具调用时，main（#60）180 秒里 8 次调用各等 10～30 秒、不重启，修复后第 3 次超时（约 50 秒）就重启，13 秒后就绪，其间的调用立即返回；经守护进程连续长按 6×10 秒不误判 |
 | 104 | iOS 27 以下（iPad mini 5，iPadOS 26.7.3）锁屏没锁上：经 IOHID 按电源键 3 秒后未锁、`/wda/lock` 报「Timed out while waiting until the screen gets locked」，之后退到 HID 后备路线，而低版本没有 HID，报的是「WDA 不可用（刚掉线）」，WDA 其实正常 | WDA 在、两种办法都没锁上、又没有 HID 后备时，报「没锁上屏」和两种办法各自的原因；有 HID 后备时照旧退到 HID | 单测 a_failed_lock_says_why_not_that_wda_is_down；真机：见 PR |
-| 105 | iPad mini 5（iPadOS 26.7.3）一直锁不上屏：经 IOHID 按电源键 0.1 秒调用卡约 5.4 秒、不锁；`/wda/lock`（iOS 27 以下是 XCTest 的 `pressLockButton`）10 秒后报「Timed out while waiting until the screen gets locked」。iPhone 15 Pro Max（iOS 27.0.1）上 0.1 秒同样不认，每台第一次锁屏要退到 `/wda/lock`，约 10 秒 | 电源键按 0.15 秒（`POWER_PRESS_SECS`）：iPad mini 5、iPhone 15 Pro Max 上 0.15～0.3 秒都能锁，iPhone 18 Pro Max（iOS 27.2.1）上 0.05～0.15 秒能锁、0.5 秒不行 | 单测 hid_buttons_send_consumer_page_events；真机：经 `wda-bridge` 每次先解锁再按不同时长，看 `/wda/locked`；经守护进程连续锁屏 3 次 |
+| 105 | iPad mini 5（iPadOS 26.7.3）一直锁不上屏：经 IOHID 按电源键 0.1 秒调用卡约 5.4 秒、不锁；`/wda/lock`（iOS 27 以下是 XCTest 的 `pressLockButton`）10 秒后报「Timed out while waiting until the screen gets locked」。iPhone 15 Pro Max（iOS 27.0.1）上 0.1 秒同样不认，每台第一次锁屏要退到 `/wda/lock`，约 10 秒 | 电源键按 0.15 秒（`POWER_PRESS_SECS`）：iPad mini 5、iPhone 15 Pro Max 上 0.15～0.3 秒都能锁，iPhone 18 Pro Max（iOS 27.2.1）上 0.05～0.15 秒能锁、0.5 秒不行 | 单测 hid_buttons_send_consumer_page_events；真机：经 `wda-bridge` 每次先解锁再按不同时长，看 `/wda/locked`；经守护进程连续锁屏 3 次；真机脚本 `scenarios.py lock` |
 | 106 | AI 任务进行中，另一个 MCP 客户端或命令行照样能点手机，和 agent 抢着操作（监管只在 viewer 里） | 任务由守护进程管：不带任务口令的请求可以看，操作一律拒绝并说明是哪个任务，用户接管后才放行；切换设备一律拒绝 | 单测（`others_may_look_but_not_act_until_the_user_takes_over`、`an_opened_task_holds_the_phone_until_its_lease_goes`）+ 真机（任务进行中用 `iphone-control` 另开的 MCP 点击被拒，截图照常） |
 | 107 | 任务进行中在别处 `select` 或自动选设备换了一台，任务接着操作另一台手机 | 任务的请求固定发往开任务时的设备；控制的设备变成另一台时任务中断（interrupted） | 单测（`the_task_goes_to_its_own_device`、`another_device_interrupts_the_task`） |
 | 108 | 守护进程重启后任务和步骤记录都没了，也说不清任务怎么结束的 | 任务事件逐条落盘（`tasks/<id>.jsonl`，最多 50 个），重启后没结束的记成 interrupted，旧口令失效 | 单测（`logs_survive_a_restart_and_unfinished_tasks_are_interrupted`、`tasks_keep_their_order_across_a_restart_even_within_a_millisecond`、`only_the_newest_logs_are_kept`） |
@@ -128,15 +128,15 @@
 | 122 | 升级时运行新程序的 `--version` 偶尔失败：`Text file busy`（同一进程的其他线程 fork 时，新程序还以写方式打开） | 遇到 `ETXTBSY` 等 50 毫秒重试，最多 20 次 | 单测 `the_candidate_runs_once_it_is_no_longer_open_for_writing`（修复前稳定复现） |
 | 123 | iPad（iPadOS 26）重启后要输入密码启用 UI 自动化时，通知写的是「iPhone 需要输入锁屏密码」；所有通知标题都写死「iPhone」，多台设备时看不出是哪一台 | 标题用设备名（没有名字时用型号类别），密码提示按设备类别写系统弹窗的说法；离线通知用离线前记下的名字 | 单测 `a_notification_names_its_device`；真机 `notify-test pin`（控制 iPad，经本地假 Bark 截到标题） |
 | 124 | 切到另一台设备再切回 iPhone（iOS 27）后，WDA 卡在「Enable UI Automation」密码框期间，HID 后备路线的截图、按键都报「WDA 不可用,也不知道屏幕尺寸」：state.json 只记最后一台的尺寸 | 每台设备的尺寸按 UDID 记下（`screens`），`screen`/`screen_udid` 照旧写给旧版本 | 单测 `every_device_keeps_its_screen_size`；真机：iPhone 和 iPad 来回切换后，iPhone 的 WDA 还没起来时截图、按 Home |
-| 125 | 原生控制（iOS 27 不用 WDA）：手机只在切换 App 时推送元素树，App 内换页（设置 → 通用）读到的还是点击前的页面 | 每次读界面都自己走树（类型 4 + 每层一次发出类型 5） | 真机（`then=elements` 里有新页面的元素，「界面有变化」） |
+| 125 | 原生控制（iOS 27 不用 WDA）：手机只在切换 App 时推送元素树，App 内换页（设置 → 通用）读到的还是点击前的页面 | 每次读界面都自己走树（类型 4 + 每层一次发出类型 5） | 真机（`then=elements` 里有新页面的元素，「界面有变化」）；真机脚本 `scenarios.py fresh` |
 | 126 | 原生：HID 的屏幕媒体流开着时，锁屏键盘和系统密码框对无障碍是空的（任何会话都只读到应用元素），自动解锁报「调不出键盘」 | 读锁屏前先关 HID 会话，元素 0.1～0.7 秒后回来 | 真机（锁屏后任一操作） |
-| 127 | 原生：解锁后马上点击，被锁屏滑开的动画吞掉，界面不变 | 解锁后等 0.7 秒再操作 | 真机（锁屏后 `tap_element`，3/3） |
+| 127 | 原生：解锁后马上点击，被锁屏滑开的动画吞掉，界面不变 | 解锁后等 0.7 秒再操作 | 真机（锁屏后 `tap_element`，3/3）；真机脚本 `scenarios.py lock` |
 | 128 | 原生：走树一个元素一次请求、一来一回约 40 毫秒，57 个元素 2.5 秒；滑动后等列表停下时还连带读 SpringBoard，读太慢，每次都报「还在滚动」 | 一层的请求一次发出、按答复里的元素对象配对；等列表停下只读 App | 真机计时（列元素约 0.2 秒；向上滑不再报还在动） |
 | 129 | 原生：SpringBoard 的提问（「…想从“dtpasteboardd”粘贴」、权限请求）没有 Alert 元素：按 Home 不拦、「允许粘贴」不点、输入中文失败 | 前台是 SpringBoard、元素不多、两个以上按钮、没有图标/键盘/密码栏/单元格时包一层 Alert | 单测 `a_question_springboard_asks_reads_as_an_alert` + 真机 |
-| 130 | 原生：按 Home 关掉主屏的长按菜单后马上启动 App，菜单动画结束时 App 又被送回主屏（3/3） | Home 按下后至少 0.6 秒才返回 | 真机（3/3 留在前台） |
-| 131 | 原生：结束 App 后马上打开链接，手机报「无法确定启动的应用的进程标识符」，报错是一串归档的字节 | 结束 App 等进程真的退出（最多 2 秒）；CoreDevice 的报错取出里面的说明文字 | 单测 `a_coredevice_error_says_what_it_says` + 真机 |
+| 130 | 原生：按 Home 关掉主屏的长按菜单后马上启动 App，菜单动画结束时 App 又被送回主屏（3/3） | Home 按下后至少 0.6 秒才返回 | 真机（3/3 留在前台）；真机脚本 `scenarios.py menu` |
+| 131 | 原生：结束 App 后马上打开链接，手机报「无法确定启动的应用的进程标识符」，报错是一串归档的字节 | 结束 App 等进程真的退出（最多 2 秒）；CoreDevice 的报错取出里面的说明文字 | 单测 `a_coredevice_error_says_what_it_says` + 真机；真机脚本 `scenarios.py url` |
 | 132 | 原生：解锁沿用 WDA 的固定等待（唤醒 1 秒、上滑 1.5 秒），一次解锁约 8 秒 | 原生读锁屏只要约 0.1 秒：上滑后每 0.2 秒找键盘，唤醒等 0.5 秒；每位照旧读回核对（#4） | 单测 `a_screen_read_cheaply_finds_the_keypad_without_waiting_it_out` + 真机计时 |
-| 133 | 原生：网页（Safari）的文字读不到：网页元素在 WebKit WebContent 进程里，没有宿主视图 | 按进程列表认出 WebContent，元素原样放置 | 单测 + 真机（`wait_for` 网页文字 0.2～0.8 秒） |
+| 133 | 原生：网页（Safari）的文字读不到：网页元素在 WebKit WebContent 进程里，没有宿主视图 | 按进程列表认出 WebContent，元素原样放置 | 单测 + 真机（`wait_for` 网页文字 0.2～0.8 秒）；真机脚本 `scenarios.py url` |
 | 134 | 原生：每次截图都重新连截屏服务，新连接上第一个请求要多做一次握手（0.82 秒，同一连接上之后 0.30 秒）。截屏服务只认 `png`（idevice 的 `jpeg` 和其他十几个格式名都被拒），在隧道的 SYN 里通告 MSS 也没让 8 MB 的 PNG 变快 | 截屏服务的连接留在隧道上复用，失效就重连一次 | 真机计时（截图中位数 0.91 → 0.43 秒）；`debug shot-formats` |
 | 135 | 原生：按键盘「下一个键盘」按钮的值判断是英文键盘就直接按键：那个值是点了要切到的键盘，不是当前的；HID 按键走硬件键盘的输入法，屏幕上是英文键盘也照样组成拼音（「wifi」成了带下划线的「w i f i」），去掉空格的读回核对没拦住 | 一律粘贴 | 真机 |
 | 136 | 原生：SpringBoard 在前台时（锁屏、面容 ID 框）状态栏的按钮被算进「SpringBoard 的提问」，报出一个标题是时间的弹窗 | 判断提问、取标题都不算状态栏元素 | 单测 `a_question_springboard_asks_reads_as_an_alert` |
@@ -146,5 +146,6 @@
 | 140 | 开着后台启动（`ICTL_WDA_DETACHED=1`）用过 WDA、再切回原生控制：之前后台启动的 WDA 一直在手机上运行，state.json 里也一直记着它。原来结束它用的 DVT `kill_app` 对 WDA 无效（WDA 模式下关掉开关时，随后用 XCTest 会话启动的 WDA 会顶替它，所以那条路看不出问题） | 原生准备手机时（开发者镜像好了之后）结束记下的那个 WDA；结束一律走 AppService 的 SIGKILL，等它从进程列表消失（最多 2 秒）再忘掉；结束不了就留着记录，下次准备时再试 | 真机（切 WDA 让后台 WDA 起来，再切回原生，看日志和 state.json） |
 | 141 | 开着后台启动（`ICTL_WDA_DETACHED=1`）时 `iphone-control service stop`、`service uninstall` 之后，后台启动的 WDA 还在手机上运行（它本来就不随守护进程退出，好让重启、升级不打断它），一直占着 8100 端口 | `service stop`/`uninstall` 停掉服务后（还有守护进程应答时不动），对接着的手机逐个结束记下的后台 WDA（AppService SIGKILL，等它从进程列表消失），忘掉结束了的；没接着、结束不了的留着记录，守护进程下次准备这台手机时处理。`service restart`、升级照旧不结束 | 单测 `only_the_wda_runner_with_that_pid_is_wda` + 真机（`service stop` 后进程列表里没有 WDA、记录清空；`restart` 后接上原进程） |
 | 142 | 开着后台启动时切换设备：`state.json` 只记一条后台 WDA，切到另一台就被覆盖，原来那台手机上的 WDA 没人记着、继续运行，切回去时只能重新后台启动 | 每台设备各记一条（`detached_wdas`，按 UDID），切回去直接接上；最近一条照旧写进 `detached_wda` 给旧版本；旧版本留下的那一条在记下别的设备之前先迁进新表 | 单测 `each_device_keeps_its_background_wda`、`an_older_versions_background_wda_is_still_known` + 真机（iPhone ↔ iPad 来回切，日志是「接上…没有重新启动」） |
-| 143 | 原生：Spotlight 打开时选中上次的搜索词，再粘贴同样的词会把它替换成自己，输入框的值不变，`iphone_type_text` 报「粘贴了…但输入框里没有这段文字」（带 `submit` 时还不按回车），其实已经输进去了 | 「允许粘贴」点过之后，输入框原来就有这段文字、1.5 秒不变，算输入成功并提示截图确认；没点过「允许粘贴」时仍报错 | 单测 `a_paste_that_replaced_the_same_text_is_told_apart_from_one_that_missed` + 真机（Spotlight 留着「设置」时再输入「设置」，`run.py` 连跑两遍）|
-| 144 | 设备闲置时自动锁屏，下一个操作先自动解锁（iPad 经 WDA 约 15 秒，iPhone 原生约 9 秒），结果和事件日志都没说，看着像「切换设备后第一个操作慢」 | 结果第一行（截图在说明里、出错时在报错里）写「手机锁着,先自动解锁了,用时 X 秒」，事件日志记「已自动解锁」 | 单测 `an_unlock_first_is_said_on_the_answers_first_line` + 真机（锁屏后按名字点击、截图，两台设备）|
+| 143 | 原生：Spotlight 打开时选中上次的搜索词，再粘贴同样的词会把它替换成自己，输入框的值不变，`iphone_type_text` 报「粘贴了…但输入框里没有这段文字」（带 `submit` 时还不按回车），其实已经输进去了 | 「允许粘贴」点过之后，输入框原来就有这段文字、1.5 秒不变，算输入成功并提示截图确认；没点过「允许粘贴」时仍报错 | 单测 `a_paste_that_replaced_the_same_text_is_told_apart_from_one_that_missed` + 真机（Spotlight 留着「设置」时再输入「设置」，`run.py` 连跑两遍）；真机脚本 `scenarios.py typing` |
+| 144 | 设备闲置时自动锁屏，下一个操作先自动解锁（iPad 经 WDA 约 15 秒，iPhone 原生约 9 秒），结果和事件日志都没说，看着像「切换设备后第一个操作慢」 | 结果第一行（截图在说明里、出错时在报错里）写「手机锁着,先自动解锁了,用时 X 秒」，事件日志记「已自动解锁」 | 单测 `an_unlock_first_is_said_on_the_answers_first_line` + 真机（锁屏后按名字点击、截图，两台设备）；真机脚本 `scenarios.py lock` |
+| 145 | WDA 的短探测已正常应答或返回远端错误，却不清零超时计数，三个独立慢请求仍会触发重启；连接失败反而清零。日志还把长请求和短探测均未应答写成「连续 3 次」、宣称尚未检查的 `/status` 正常，请求超时本身缺端点日志 | 只有正常响应或远端错误清零，连接失败不清零；连续无应答和长请求后的失败探测分别记录原因及实际次数；超时诊断记录方法、短路径和耗时，不记录查询参数或正文 | 单测 `answered_probe_resets_stall_count_after_each_slow_request`、`connection_error_does_not_reset_unanswered_count`、`long_request_and_failed_probe_keep_the_actual_count_and_reason`、`three_short_unanswered_requests_report_a_consecutive_stall`、`answered_session_delete_does_not_mask_a_failed_probe`、`failed_request_log_keeps_endpoint_and_time_without_query`、`successful_request_log_does_not_include_response_body`；真机：同一 iPad、同一 WDA，把只读业务请求的客户端时限缩短到 20ms，短探测保留 5s，对照修复前后各 3 轮 |

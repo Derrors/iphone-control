@@ -10,6 +10,10 @@ What changed in each release, one line per change. Versions follow [Semantic Ver
 
 - An action that had to unlock the phone first says so, and how long it took (#135).
 
+### Fixes
+
+- A WDA probe that answers, even with an error, resets the timeout count instead of accumulating unrelated slow requests into a stall. Recovery logs state the reason, and timeout logs include the endpoint and elapsed time.
+
 ## [0.2.7] - 2026-11-15
 
 ### Upgrade notes

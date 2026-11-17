@@ -523,8 +523,8 @@ impl Daemon {
         }
     }
 
-    /// WDA 卡死了没有：经 XCTest 的请求连续 [`ictl_wda::client::STALL_LIMIT`] 次没有应答（[`WdaClient::stalled`]）。
-    /// 还没到就再探测一次（[`WdaClient::xctest_responsive`]），算进同一个计数。WDA 回了错误、或者应答了，都算活着
+    /// 按客户端记录的连续无应答或长请求后的失败短探测判断是否需恢复。
+    /// 尚未判定时再探测一次；正常回答或远端错误都表明仍有响应，会清零计数。
     async fn xctest_stalled(&self, g: &mut Inner) -> bool {
         let Some(w) = g.wda.as_ref() else { return false };
         if !w.stalled()
@@ -545,10 +545,12 @@ impl Daemon {
     /// WDA 卡死（[`WdaClient::stalled`]）：丢掉会话，重新启动。巡检和每个工具请求开头都会检查：
     /// 工具调用接连不断时巡检抢不到设备，不能只靠它
     pub(crate) async fn restart_stalled_wda(&self, g: &mut Inner) {
+        let Some(reason) = g.wda.as_ref().and_then(|w| w.stall_reason()) else { return };
+        let why = reason.describe();
+        // 请求入口也会走这里，未必刚检查过 /status，不宣称它此刻正常。
         self.log.log(&ictl_l10n::log_trf!(
-            "WDA 卡死：/status 正常，但经 XCTest 的请求连续 {} 次没有应答，重新启动 WDA",
-            "WDA is stuck: /status answers, but {} requests in a row through XCTest went unanswered; restarting WDA",
-            ictl_wda::client::STALL_LIMIT
+            "WDA 卡死判定：{why}，重新启动 WDA",
+            "WDA is considered stuck: {why}; restarting WDA"
         ));
         // 后台启动的那个不能再接上：忘掉它，重新后台启动时会先结束它
         self.forget_detached_here(g);

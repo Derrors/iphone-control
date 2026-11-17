@@ -1526,6 +1526,30 @@ mod tests {
         assert_eq!(steps[4]["gesture"]["x2"], 3.0);
     }
 
+    /// A result that lists elements is full of `@(x,y)`: only a tap by text is marked from what its result says
+    #[tokio::test]
+    async fn only_a_tap_by_text_gets_a_mark_from_its_result() {
+        let listed = "Button \"通用\" @(200,300) 100x40\nButton \"蓝牙\" @(200,350) 100x40";
+        assert_eq!(gesture("iphone_list_elements", &json!({}), listed), None);
+        assert_eq!(
+            gesture("iphone_wait_for", &json!({"text": "通用"}), "已出现 Button \"通用\" @(200,300) 100x40"),
+            None
+        );
+        assert_eq!(gesture("iphone_tap_element", &json!({"text": "x"}), "没找到包含 \"x\" 的元素"), None);
+        let ts = tasks();
+        let t = open(&ts);
+        let req = |tool: &str, args: Value| Request::TaskStep { tool: tool.into(), args };
+        ts.handle(&req("iphone_list_elements", json!({})), Some(&t.token), None, &mut None).await;
+        t.step_done(1, true, 80, listed, None);
+        ts.handle(&req("iphone_tap_element", json!({"text": "蓝牙"})), Some(&t.token), None, &mut None).await;
+        t.step_done(2, true, 90, "已点击 Button \"蓝牙\" @(200,350) 100x40", None);
+        let (log, _, _) = t.subscribe();
+        let done: Vec<&Value> =
+            log.iter().filter(|e| e.event == "step" && e.data.get("ms").is_some()).map(|e| &e.data).collect();
+        assert!(done[0].get("gesture").is_none(), "{}", done[0]);
+        assert_eq!(done[1]["gesture"], json!({"kind": "tap", "x": 200.0, "y": 350.0}));
+    }
+
     #[tokio::test]
     async fn another_device_interrupts_the_task() {
         let ts = tasks();

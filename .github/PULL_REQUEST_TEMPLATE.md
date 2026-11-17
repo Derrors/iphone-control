@@ -17,7 +17,8 @@
 
 - Device, iOS version, host (Linux / macOS): <!-- e.g. iPhone 15 Pro Max, iOS 27.0.1, Debian 12 -->
 - [ ] `tests/device/run.py` default steps pass on this branch (exit code 0)
-- [ ] The same steps on `main` or the latest release, same device, for comparison; no step clearly slower, or why:
+- [ ] `tests/device/scenarios.py` passes on this branch: <!-- which scenarios; `lock` / `url` if the change concerns them -->
+- [ ] The same steps on `main` or the latest release, same device, for comparison (`run.py --repeat 5 --json`, `compare.py`); no step clearly slower, or why:
 - [ ] Steps exercising this change: <!-- what you ran -->
 - [ ] Longer run (WDA start-up/recovery, reconnecting, unlocking, live picture, timers): <!-- duration and result, or "not affected" -->
 - [ ] Not needed: the change doesn't touch code that talks to a phone — why:

@@ -59,7 +59,43 @@ impl Transport for DeviceTransport {
         timeout: Duration,
     ) -> std::io::Result<(u16, Vec<u8>)> {
         let t0 = std::time::Instant::now();
-        let req = build_request(method, path, body.as_deref());
+        let r = self.send_request(method, path, body.as_deref(), timeout).await;
+        match &r {
+            Err(e) if matches!(e.kind(), std::io::ErrorKind::TimedOut | AFTER_SENT) => {
+                tracing::warn!("{}", request_log(method, path, t0.elapsed(), &r));
+            }
+            _ => tracing::debug!("{}", request_log(method, path, t0.elapsed(), &r)),
+        }
+        r
+    }
+}
+
+/// 诊断只记录方法、短路径、耗时与状态，不记录请求正文或查询参数。
+fn request_log(method: &str, path: &str, took: Duration, result: &std::io::Result<(u16, Vec<u8>)>) -> String {
+    let short = path.split('?').next().unwrap_or(path);
+    let secs = took.as_secs_f64();
+    match result {
+        Ok((status, _)) => ictl_l10n::log_trf!(
+            "wda {method} {short} → {status}（{secs:.2}s）",
+            "wda {method} {short} → {status} ({secs:.2}s)"
+        ),
+        Err(e) => ictl_l10n::log_trf!(
+            "wda {method} {short} 失败（{secs:.2}s）：{e}",
+            "wda {method} {short} failed ({secs:.2}s): {e}"
+        ),
+    }
+}
+
+impl DeviceTransport {
+    /// 将所有提前返回的连接错误和请求超时交回外层，保证这些失败也能留下诊断日志。
+    async fn send_request(
+        &self,
+        method: &str,
+        path: &str,
+        body: Option<&[u8]>,
+        timeout: Duration,
+    ) -> std::io::Result<(u16, Vec<u8>)> {
+        let req = build_request(method, path, body);
         let idevice = tokio::time::timeout(CONNECT_TIMEOUT, self.provider.connect(self.port))
             .await
             .map_err(|_| {
@@ -105,33 +141,12 @@ impl Transport for DeviceTransport {
             }
             parse_response(buf).map_err(after_sent)
         };
-        let r = tokio::time::timeout(timeout, fut).await.map_err(|_| {
+        tokio::time::timeout(timeout, fut).await.map_err(|_| {
             std::io::Error::new(
                 std::io::ErrorKind::TimedOut,
-                ictl_l10n::trf!("请求超时（{} 秒）", "request timed out ({} s)", timeout.as_secs()),
+                ictl_l10n::trf!("请求超时（{} 秒）", "request timed out ({} s)", timeout.as_secs_f64()),
             )
-        })?;
-        // 路径截掉查询串（/source 的排除属性很长）
-        let short = path.split('?').next().unwrap_or(path);
-        match &r {
-            Ok((status, _)) => tracing::debug!(
-                "{}",
-                ictl_l10n::log_trf!(
-                    "wda {method} {short} → {status}（{:.2}s）",
-                    "wda {method} {short} → {status} ({:.2}s)",
-                    t0.elapsed().as_secs_f64()
-                )
-            ),
-            Err(e) => tracing::debug!(
-                "{}",
-                ictl_l10n::log_trf!(
-                    "wda {method} {short} 失败（{:.2}s）：{e}",
-                    "wda {method} {short} failed ({:.2}s): {e}",
-                    t0.elapsed().as_secs_f64()
-                )
-            ),
-        }
-        r
+        })?
     }
 }
 
@@ -250,6 +265,29 @@ fn dechunk(mut body: &[u8]) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn failed_request_log_keeps_endpoint_and_time_without_query() {
+        for kind in [std::io::ErrorKind::TimedOut, AFTER_SENT, std::io::ErrorKind::NotConnected] {
+            let result = Err(std::io::Error::new(kind, "test failure"));
+            let line = request_log("POST", "/session/A/elements?text=private", Duration::from_millis(1250), &result);
+            assert!(line.contains("POST /session/A/elements"));
+            assert!(line.contains("1.25s"));
+            assert!(line.contains("test failure"));
+            assert!(!line.contains("private"));
+            assert!(!line.contains('?'));
+        }
+    }
+
+    #[test]
+    fn successful_request_log_does_not_include_response_body() {
+        let result = Ok((200, b"private response".to_vec()));
+        let line = request_log("GET", "/status", Duration::from_millis(10), &result);
+        assert!(line.contains("GET /status"));
+        assert!(line.contains("200"));
+        assert!(line.contains("0.01s"));
+        assert!(!line.contains("private response"));
+    }
 
     #[test]
     fn request_has_length_only_with_body() {

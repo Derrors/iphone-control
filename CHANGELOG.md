@@ -6,6 +6,10 @@ What changed in each release, one line per change. Versions follow [Semantic Ver
 
 ## [Unreleased]
 
+### New
+
+- `iphone_tap` takes `count` (1–10): the taps go in one gesture, about 0.1 s apart, so a double tap or several quick taps work; separate calls are about 0.5 s apart. An older daemon ignores it and taps once.
+
 ### Improvements
 
 - An action that had to unlock the phone first says so, and how long it took (#135).

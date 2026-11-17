@@ -43,6 +43,17 @@ pub fn default_socket() -> PathBuf {
     }
 }
 
+/// [`Request::Tap`] 一次最多连点几下
+pub const MAX_TAP_COUNT: u32 = 10;
+
+fn one() -> u32 {
+    1
+}
+
+fn is_one(n: &u32) -> bool {
+    *n == 1
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TouchPhase {
@@ -80,6 +91,9 @@ pub enum Request {
     Tap {
         x: f64,
         y: f64,
+        /// 在这一点连点几下（一个手势），1 = 普通点击。旧版本客户端不带，按 1；为 1 时不写进请求，旧版本守护进程照常认
+        #[serde(default = "one", skip_serializing_if = "is_one")]
+        count: u32,
     },
     TapElement {
         text: String,
@@ -871,6 +885,16 @@ pub async fn task_list(socket: &std::path::Path) -> Result<Vec<TaskInfo>, String
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 不带 count 的点击（旧版本客户端）按 1 下；count 为 1 时不写进请求，旧版本守护进程收到的和以前一样
+    #[test]
+    fn a_tap_without_count_is_one_tap_on_the_wire() {
+        let old: Request = serde_json::from_str(r#"{"op":"tap","x":1.0,"y":2.0}"#).unwrap();
+        assert_eq!(old, Request::Tap { x: 1.0, y: 2.0, count: 1 });
+        assert_eq!(serde_json::to_string(&old).unwrap(), r#"{"op":"tap","x":1.0,"y":2.0}"#);
+        let five = Request::Tap { x: 1.0, y: 2.0, count: 5 };
+        assert_eq!(serde_json::to_string(&five).unwrap(), r#"{"op":"tap","x":1.0,"y":2.0,"count":5}"#);
+    }
 
     /// A daemon that is restarting (it left the marker just now) is waited for; one that isn't running is reported
     /// at once

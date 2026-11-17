@@ -18,7 +18,7 @@ With [auto-unlock](./auto-unlock) on, `iphone_screenshot`, `iphone_list_elements
 
 | Tool | What it does |
 |---|---|
-| `iphone_tap` | Tap coordinates |
+| `iphone_tap` | Tap coordinates; `count` taps the same point several times (double tap, entries that need quick repeated taps) |
 | `iphone_tap_element` | Tap by text; if the center is covered by a floating bar or the keyboard it taps a visible part, and if it's fully covered it doesn't tap |
 | `iphone_long_press` | Long press; `seconds` defaults to 1, max 10 |
 | `iphone_swipe` | Swipe; returns once the list has stopped scrolling. `seconds` defaults to 0.3, max 10 |

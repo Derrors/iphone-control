@@ -26,7 +26,7 @@ MCP 服务提供 17 个工具，开启[开发者工具](#开发者工具-显式�
 | `iphone_press_button` | `home`、`volume_up`、`volume_down`、`lock` |
 | `iphone_launch_app` / `iphone_terminate_app` | 启动 / 结束 App，可以用名字（如「设置」）或 Bundle ID |
 | `iphone_open_url` | 打开链接或 URL Scheme |
-| `iphone_batch` | 一次执行最多 20 步，出错就停。MCP 客户端取消调用时，剩下的步骤不再执行；没选定设备时，执行中控制的设备变了也会停下报错 |
+| `iphone_batch` | 一次执行最多 20 步，出错就停。步骤全是坐标点击时，`one_gesture` 把它们放进一个手势里依次点完，适合在同一个键盘上连按。MCP 客户端取消调用时，剩下的步骤不再执行；没选定设备时，执行中控制的设备变了也会停下报错 |
 
 ## 接着多台设备
 

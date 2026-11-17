@@ -6,6 +6,10 @@ What changed in each release, one line per change. Versions follow [Semantic Ver
 
 ## [Unreleased]
 
+### New
+
+- `iphone_batch` takes `one_gesture`: a batch of coordinate taps runs as one gesture, about twice as fast for pressing keys on a keyboard.
+
 ### Improvements
 
 - An action that had to unlock the phone first says so, and how long it took (#135).

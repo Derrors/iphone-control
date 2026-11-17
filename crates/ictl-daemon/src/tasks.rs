@@ -214,6 +214,7 @@ pub fn scope_check(req: &Request) -> Option<Check> {
         Request::LaunchApp { app } => Some(Check::Launch(app.clone())),
         Request::OpenUrl { url } => Some(Check::Url(url.clone())),
         Request::Tap { .. }
+        | Request::TapSequence { .. }
         | Request::TapElement { .. }
         | Request::LongPress { .. }
         | Request::Swipe { .. }

@@ -26,7 +26,7 @@ With [auto-unlock](./auto-unlock) on, `iphone_screenshot`, `iphone_list_elements
 | `iphone_press_button` | `home`, `volume_up`, `volume_down`, `lock` |
 | `iphone_launch_app` / `iphone_terminate_app` | Launch / quit an app by name (e.g. `设置`) or bundle id |
 | `iphone_open_url` | Open a link or URL scheme |
-| `iphone_batch` | Run up to 20 steps in one call, stopping at the first error. If the MCP client cancels the call, the remaining steps don't run; with no device selected, it also stops with an error if the controlled device changes |
+| `iphone_batch` | Run up to 20 steps in one call, stopping at the first error. When every step is a coordinate tap, `one_gesture` taps them in turn within one gesture, for pressing keys on one keyboard. If the MCP client cancels the call, the remaining steps don't run; with no device selected, it also stops with an error if the controlled device changes |
 
 ## Several devices
 

@@ -332,6 +332,11 @@ impl Tree {
 /// 真机：设置首页搜索栏底板顶边 856，点 834 还能进下面那一行，838 就被栏吞掉（什么都不发生）；
 /// 左右两边按同样的余量算
 const BAR_SLOP: f64 = 24.0;
+/// 原生控制读到的底部悬浮搜索栏（只有输入框，见 `floating_search`）往上吞掉多远的点击。真机（iPhone 15 Pro Max，
+/// iOS 27.2.1，设置首页）：输入框顶 866，点 806 还能进下面那一行，812、820、826 都被栏吞掉（什么都不发生）
+const SEARCH_BAR_REACH: f64 = 58.0;
+/// 同上，左右和往下：玻璃底板比输入框大约 10 点，再加 [`BAR_SLOP`]
+const SEARCH_BAR_SIDE: f64 = 10.0 + BAR_SLOP;
 
 /// 可滚动的内容区
 const SCROLLERS: [&str; 5] = ["ScrollView", "Table", "CollectionView", "WebView", "TextView"];
@@ -529,7 +534,13 @@ pub fn parse_tree(xml: &str, view: impl Into<View>) -> Tree {
         // 下面判断在不在屏幕内、挡没挡住、点哪里，都用屏幕坐标
         let scr = rotate.unwrap_or(Rotate::None).apply(abs, screen);
         let in_status_bar = kind == "StatusBar" || parent.is_some_and(|p| p.in_status_bar);
-        let in_bar = matches!(kind.as_str(), "Toolbar" | "TabBar") || parent.is_some_and(|p| p.in_bar);
+        // 原生控制读到的树是扁平的：设置首页底部悬浮的搜索栏只是一个直接挂在 Application 下的 SearchField，外面没有
+        // WDA 树里那层 Toolbar。屏幕下部的这种搜索框也按悬浮栏算：盖得住下面的行，接收点击的范围也多算 BAR_SLOP。
+        // 不然被压在栏下的行按名字点会点它的中心，打开的是搜索（iPhone 15 Pro Max，iOS 27.2.1）
+        let floating_search =
+            kind == "SearchField" && parent.is_some_and(|p| p.kind == "Application") && scr.y > sh * 0.6;
+        let in_bar =
+            matches!(kind.as_str(), "Toolbar" | "TabBar") || floating_search || parent.is_some_and(|p| p.in_bar);
         let on_bar = in_bar || kind == "NavigationBar" || parent.is_some_and(|p| p.on_bar);
         // 子节点在可滚动内容里（容器自己不算：它就是那块区域）
         let in_scroll = parent.is_some_and(|p| p.in_scroll || SCROLLERS.contains(&p.kind.as_str()));
@@ -558,7 +569,15 @@ pub fn parse_tree(xml: &str, view: impl Into<View>) -> Tree {
             .then(|| {
                 let name = text.as_deref().map(|t| clip(t, 20, 20)).unwrap_or_default();
                 let mut rect = visible;
-                if in_bar && rect.y > sh * 0.6 {
+                // 原生的树里只有栏里的输入框，没有它外面那块玻璃底板：按真机量的范围算它吞掉的点击
+                if floating_search {
+                    rect = Rect {
+                        x: rect.x - SEARCH_BAR_SIDE,
+                        y: rect.y - SEARCH_BAR_REACH,
+                        w: rect.w + 2.0 * SEARCH_BAR_SIDE,
+                        h: rect.h + SEARCH_BAR_REACH + SEARCH_BAR_SIDE,
+                    };
+                } else if in_bar && rect.y > sh * 0.6 {
                     rect = Rect {
                         x: rect.x - BAR_SLOP,
                         y: rect.y - BAR_SLOP,
@@ -1070,6 +1089,26 @@ mod tests {
         let text = els.iter().find(|e| e.label == "Getting started").unwrap();
         // 截图上就在这里，不是错开 100 点的 (59,488)
         assert_eq!(text.center, (59, 388));
+    }
+
+    /// 真机（iPhone 15 Pro Max，iOS 27.2.1，原生控制）：设置首页底部悬浮的搜索栏在扁平的树里只是一个 SearchField，
+    /// 也要像工具栏一样挡住下面的行。它吞掉输入框（866）往上 58 点以内的点击：806 还能进下面那一行，812 就不行
+    #[test]
+    fn a_native_floating_search_field_covers_the_rows_under_it() {
+        const XML: &str = include_str!("../tests/fixtures/settings-floating-search-native-ios27.xml");
+        let row = |t: &Tree, label: &str| t.elements.iter().find(|e| e.label == label).cloned().unwrap();
+        let t = parse_tree(XML, SCREEN);
+        // 766..818: clear of it, tapped at its center
+        assert!(matches!(t.tap_point(&row(&t, "相机")), TapPoint::Center(_)));
+        // 818..870: all of it is where the bar takes taps
+        assert!(matches!(t.tap_point(&row(&t, "主屏幕与App资源库")), TapPoint::Covered { .. }));
+        // 790..842: tapped above 808
+        let lower = XML.replace(r#"y="766" width="390" height="52""#, r#"y="790" width="390" height="52""#);
+        let t = parse_tree(&lower, SCREEN);
+        match t.tap_point(&row(&t, "相机")) {
+            TapPoint::Moved { at, .. } => assert!(at.1 <= 806.0, "{at:?}"),
+            other => panic!("{other:?}"),
+        }
     }
 
     #[test]

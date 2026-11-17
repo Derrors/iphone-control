@@ -6,6 +6,8 @@ mod launch;
 mod native;
 mod observe;
 
+pub(crate) use input::Stroke;
+
 use std::time::{Duration, Instant};
 
 use base64::Engine;
@@ -24,8 +26,8 @@ use crate::notify::Event;
 use crate::protocol::{ALERT_BLOCKING, Response, TAP_MISSED, TouchPhase};
 use crate::protocol::{ElementData, StatusData};
 pub(crate) use native::AX_WAIT;
-pub(crate) use observe::Seen;
 use observe::*;
+pub(crate) use observe::{Repeats, Seen};
 
 /// 锁屏后至少等这么久再自动解锁：锁屏过渡没走完就唤醒，WDA 第一下上滑卡约 16 秒后报 `point.x != INFINITY`
 pub(crate) const LOCK_SETTLE: Duration = Duration::from_secs(3);
@@ -484,6 +486,66 @@ mod tests {
         assert!(super::observe::change_text(Change::Unknown).is_empty());
     }
 
+    /// 边滑边找只在文字完全相同时停下：找「App」时屏幕上只有「Apple账户」，包含它但不算找到，要接着滑
+    #[test]
+    fn a_scroll_search_stops_only_on_an_exact_match() {
+        let row = |label: &str, y: u32| {
+            format!(
+                r#"<XCUIElementTypeButton type="XCUIElementTypeButton" label="{label}" name="{label}" x="20" y="{y}" width="390" height="52"/>"#
+            )
+        };
+        let xml = |rows: &str| {
+            format!(
+                r#"<XCUIElementTypeApplication type="XCUIElementTypeApplication" x="0" y="0" width="430" height="932"><XCUIElementTypeWindow type="XCUIElementTypeWindow" x="0" y="0" width="430" height="932">{rows}</XCUIElementTypeWindow></XCUIElementTypeApplication>"#
+            )
+        };
+        let screen = ictl_device::ScreenSize { width: 430.0, height: 932.0 };
+        let top = elements::parse_tree(&xml(&row("Apple账户、iCloud+等", 200)), screen);
+        assert!(input::reachable(&top, "App", 0), "a row that contains it");
+        assert!(!input::reachable_exact(&top, "App", 0), "but not the one asked for");
+        let bottom = elements::parse_tree(&xml(&(row("钱包与 Apple Pay", 300) + &row("App", 600))), screen);
+        assert!(input::reachable_exact(&bottom, "App", 0));
+    }
+
+    /// 边滑边找的一次滑动在屏幕正中竖着滑，往下找时手指往上；滑的距离不到半屏，前后两屏有重叠
+    #[test]
+    fn a_search_scroll_is_a_short_vertical_stroke_in_the_middle() {
+        let (from, to) = input::search_stroke(375.0, 812.0, true);
+        assert_eq!(from, (188.0, 552.0));
+        assert_eq!(to, (188.0, 268.0));
+        assert!(from.1 - to.1 < 812.0 / 2.0);
+        assert_eq!(input::search_stroke(375.0, 812.0, false), (to, from));
+    }
+
+    /// 同一个操作原样重做、界面还是没变，从第二次起说是第几次；换了操作、参数不同、界面变了都重新数，
+    /// 没法比（操作前没看过界面）的那次不数也不清零
+    #[test]
+    fn the_same_action_leaving_the_screen_unchanged_is_counted() {
+        use super::observe::{Change, Repeats, repeat_text};
+        use crate::protocol::Request;
+        let tap = |x| Request::Tap { x, y: 640.0, count: 1 };
+        let mut r = Repeats::default();
+        let mut run = |req: &Request, c| {
+            r.start(req);
+            r.settled(c)
+        };
+        assert_eq!(run(&tap(232.0), Change::Same), 1);
+        assert_eq!(run(&tap(232.0), Change::Same), 2);
+        assert_eq!(run(&tap(232.0), Change::Unknown), 0);
+        assert_eq!(run(&tap(232.0), Change::Same), 3);
+        // another point is another action
+        assert_eq!(run(&tap(100.0), Change::Same), 1);
+        assert_eq!(run(&tap(100.0), Change::Changed), 0);
+        assert_eq!(run(&tap(100.0), Change::Same), 1);
+        // something else in between starts the count again
+        assert_eq!(run(&Request::PressButton { button: "home".into() }, Change::Unknown), 0);
+        assert_eq!(run(&tap(100.0), Change::Same), 1);
+        // a settle without an action counts nothing
+        assert_eq!(r.settled(Change::Same), 0);
+        assert!(repeat_text(0).is_empty() && repeat_text(1).is_empty());
+        assert!(repeat_text(3).contains('3'));
+    }
+
     /// 太久以前看过的界面不拿来比；拿走以后就没了
     #[test]
     fn seen_screens_are_taken_once() {
@@ -551,9 +613,13 @@ mod tests {
         g.info = Some(ictl_device::DeviceInfo { product_version: "26.7.3".into(), ..Default::default() });
         g.state = crate::machine::DeviceState::WdaStarting { last_error: None };
         let down = |e: &str| e.contains("没有 HID 后备路线") || e.contains("no HID fallback");
-        let tap = d.tap(&mut g, 20., 50., None).await.unwrap_err().to_string();
+        let tap = d.tap(&mut g, 20., 50., 1, None).await.unwrap_err().to_string();
         assert!(down(&tap), "{tap}");
-        let swipe = d.swipe(&mut g, (20., 50.), (20., 300.), 0.3, None, false).await.unwrap_err().to_string();
+        let swipe = d
+            .swipe(&mut g, Stroke { from: (20., 50.), to: (20., 300.), seconds: 0.3, hold: 0.0 }, None, false)
+            .await
+            .unwrap_err()
+            .to_string();
         assert!(down(&swipe), "{swipe}");
         // a finger: the same, and the page may still send the whole gesture once WDA is back
         match d.touch(&mut g, TouchPhase::Down, 20., 50., None).await {

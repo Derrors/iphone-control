@@ -214,6 +214,7 @@ pub fn scope_check(req: &Request) -> Option<Check> {
         Request::LaunchApp { app } => Some(Check::Launch(app.clone())),
         Request::OpenUrl { url } => Some(Check::Url(url.clone())),
         Request::Tap { .. }
+        | Request::TapSequence { .. }
         | Request::TapElement { .. }
         | Request::LongPress { .. }
         | Request::Swipe { .. }
@@ -1187,7 +1188,7 @@ fn gesture(tool: &str, args: &Value, result: &str) -> Option<Value> {
 /// [`gesture`] for a request that no tool call announced
 fn request_gesture(req: &Request) -> Option<Value> {
     match req {
-        Request::Tap { x, y } => Some(json!({"kind": "tap", "x": x, "y": y})),
+        Request::Tap { x, y, .. } => Some(json!({"kind": "tap", "x": x, "y": y})),
         Request::LongPress { x, y, .. } => Some(json!({"kind": "long_press", "x": x, "y": y})),
         Request::Swipe { from, to, .. } => {
             Some(json!({"kind": "swipe", "x": from.0, "y": from.1, "x2": to.0, "y2": to.1}))
@@ -1219,7 +1220,7 @@ mod tests {
     }
 
     fn tap() -> Request {
-        Request::Tap { x: 1.0, y: 2.0 }
+        Request::Tap { x: 1.0, y: 2.0, count: 1 }
     }
 
     async fn admit(ts: &Tasks, req: &Request, token: Option<&str>) -> Result<(Admission, bool), Response> {
@@ -1514,7 +1515,7 @@ mod tests {
         let r = ts.handle(&req("iphone_tap", json!({"x": 5, "y": 6})), Some(&t.token), None, &mut None).await;
         assert_eq!(r, Some(Response::text("2")));
         t.thought("点一下");
-        let n = ts.auto_step(&t, &Request::Swipe { from: (1.0, 2.0), to: (3.0, 4.0), seconds: 0.3 });
+        let n = ts.auto_step(&t, &Request::Swipe { from: (1.0, 2.0), to: (3.0, 4.0), seconds: 0.3, hold: 0.0 });
         assert_eq!(n, 3);
         let (log, _, _) = t.subscribe();
         let steps: Vec<&Value> = log.iter().filter(|e| e.event == "step").map(|e| &e.data).collect();

@@ -46,6 +46,10 @@ impl StallReason {
 const SCREEN_RECHECK: Duration = Duration::from_secs(60);
 /// 普通点击按下的时长（毫秒）。太短可能不被识别成点击；解锁按键另有自己的时长
 const TAP_PRESS_MS: u64 = 50;
+/// 一个手势里依次点几个点时，前一个抬起到后一个按下停多久（毫秒）。真机上 20、40、60 都没有漏键、多键
+pub const SEQUENCE_GAP_MS: u64 = 40;
+/// 连点时两下之间停多久（毫秒）：双击要在约 250 毫秒内，「800 毫秒内点 5 下」要每下不到 160 毫秒
+pub const MULTI_TAP_GAP_MS: u64 = 100;
 
 /// W3C pointer 动作的一步
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -61,6 +65,20 @@ pub fn tap_steps(x: f64, y: f64, press_ms: u64) -> Vec<PointerStep> {
     vec![PointerStep::Move { x, y, ms: 0 }, PointerStep::Down, PointerStep::Pause { ms: press_ms }, PointerStep::Up]
 }
 
+/// 同一点连点 `count` 下，两下之间停 `gap_ms`：一个手势，一根手指只移动一次。
+/// 一根手指在同一个手势里移到别的点再按，iPhone 17（iOS 26.5.2）上每下都被识别两次（数字键盘上点 7 个键输出 14 位），
+/// 所以这里只点一个点
+pub fn multi_tap_steps(x: f64, y: f64, count: u32, press_ms: u64, gap_ms: u64) -> Vec<PointerStep> {
+    let mut steps = vec![PointerStep::Move { x, y, ms: 0 }];
+    for i in 0..count {
+        if i > 0 {
+            steps.push(PointerStep::Pause { ms: gap_ms });
+        }
+        steps.extend([PointerStep::Down, PointerStep::Pause { ms: press_ms }, PointerStep::Up]);
+    }
+    steps
+}
+
 /// 滑动：按下、停 50ms、在 `ms` 毫秒内移到终点、抬起（与 toolkit 一致）
 pub fn swipe_steps(from: (f64, f64), to: (f64, f64), ms: u64) -> Vec<PointerStep> {
     vec![
@@ -70,6 +88,48 @@ pub fn swipe_steps(from: (f64, f64), to: (f64, f64), ms: u64) -> Vec<PointerStep
         PointerStep::Move { x: to.0, y: to.1, ms },
         PointerStep::Up,
     ]
+}
+
+/// 按住再拖：按下后先原地按住 `hold_ms`，再用 `ms` 移到终点。按住要写成一段原地的 pointerMove，不能是 pause：
+/// iPhone 12 mini（iOS 26.4.1）上主屏幕图标按 pause 按住 0.6～1 秒再移动，0/6 次拖得动（只当成滑动翻页），
+/// 原地 move 0.5 秒再移动 3/3，0.3 秒 0/3。`hold_ms` 为 0 时就是 [`swipe_steps`]
+pub fn drag_steps(from: (f64, f64), to: (f64, f64), hold_ms: u64, ms: u64) -> Vec<PointerStep> {
+    if hold_ms == 0 {
+        return swipe_steps(from, to, ms);
+    }
+    vec![
+        PointerStep::Move { x: from.0, y: from.1, ms: 0 },
+        PointerStep::Down,
+        PointerStep::Move { x: from.0, y: from.1, ms: hold_ms },
+        PointerStep::Move { x: to.0, y: to.1, ms },
+        PointerStep::Up,
+    ]
+}
+
+/// 一个 actions 请求里依次点几个点，每个点一根手指：第 k 根手指先空等前面 k 个点按完（每个点占 5 个节拍：移动、按下、
+/// 按住 `press_ms`、抬起、停 `gap_ms`），再移过去按下抬起。W3C 按节拍对齐各手指，所以这些点一个接一个、不重叠。
+/// 不用一根手指移来移去：iPhone 17（iOS 26.5.2）上一根手指在一个手势里移到别的点再按，每个点都被识别两次
+/// （数字键盘上点 7 个键输出 14 位）
+pub fn tap_sequence_body(points: &[(f64, f64)], press_ms: u64, gap_ms: u64) -> Value {
+    let pause = |ms: u64| json!({"type": "pause", "duration": ms});
+    let fingers: Vec<Value> = points
+        .iter()
+        .enumerate()
+        .map(|(k, &(x, y))| {
+            let mut actions = Vec::with_capacity(5 * k + 4);
+            for _ in 0..k {
+                actions.extend([pause(0), pause(0), pause(press_ms), pause(0), pause(gap_ms)]);
+            }
+            actions.extend([
+                json!({"type": "pointerMove", "duration": 0, "x": x, "y": y}),
+                json!({"type": "pointerDown", "button": 0}),
+                pause(press_ms),
+                json!({"type": "pointerUp", "button": 0}),
+            ]);
+            json!({"type": "pointer", "id": format!("finger{}", k + 1), "parameters": {"pointerType": "touch"}, "actions": actions})
+        })
+        .collect();
+    json!({"actions": fingers})
 }
 
 /// `POST /session/{id}/actions` 的请求体
@@ -788,6 +848,21 @@ impl<T: Transport> WdaClient<T> {
         self.quick_gesture(&tap_steps(x, y, TAP_PRESS_MS), IdleSettings::NO_COOL_OFF).await
     }
 
+    /// 依次点几个点，一个手势（[`tap_sequence_body`]）：同一个键盘、键盘上连按时用。分开点每下都要等界面空闲，
+    /// 数字键盘上点 7 个键约 3.6 秒，一个手势约 1.9 秒。点的过程中界面变了（跳了页面）后面的点也照样点下去，
+    /// 所以只给点的时候布局不变的一串点用
+    pub async fn tap_sequence(&mut self, points: &[(f64, f64)]) -> Result<()> {
+        let body = tap_sequence_body(points, TAP_PRESS_MS, SEQUENCE_GAP_MS);
+        self.quick_actions(body, IdleSettings::NO_COOL_OFF).await
+    }
+
+    /// 同一点连点 `count` 下（双击、「短时间内连点 N 下」的隐藏入口），一个 actions 手势，每下之间停
+    /// [`MULTI_TAP_GAP_MS`]。分开点每下都要等界面空闲（约 0.6 秒），`iphone_batch` 连点 5 下约 2.9 秒，赶不上这类入口的时间窗
+    pub async fn multi_tap(&mut self, x: f64, y: f64, count: u32) -> Result<()> {
+        let steps = multi_tap_steps(x, y, count, TAP_PRESS_MS, MULTI_TAP_GAP_MS);
+        self.quick_gesture(&steps, IdleSettings::NO_COOL_OFF).await
+    }
+
     /// 长按：按下、停 `seconds` 秒、抬起，一个 actions 手势。`/wda/touchAndHold` 前后都等界面空闲，
     /// 真机上主屏长按图标 1.2 秒要约 12 秒才返回。等待设置同 [`Self::tap`]
     pub async fn touch_and_hold(&mut self, x: f64, y: f64, seconds: f64) -> Result<()> {
@@ -812,10 +887,11 @@ impl<T: Transport> WdaClient<T> {
 
     /// Swipes and stays in polling mode for the caller, who ends it with [`Self::end_polling`]: restoring the settings
     /// only to change them again right after would cost two round trips
-    pub async fn swipe_into_polling(&mut self, from: (f64, f64), to: (f64, f64), ms: u64) -> Result<()> {
+    /// `hold_ms` > 0 holds the finger still at `from` first ([`drag_steps`])
+    pub async fn swipe_into_polling(&mut self, from: (f64, f64), to: (f64, f64), hold_ms: u64, ms: u64) -> Result<()> {
         self.baseline().await?;
         self.set_idle_settings(IdleSettings::NO_COOL_OFF).await?;
-        let r = self.actions(&swipe_steps(from, to, ms)).await;
+        let r = self.actions(&drag_steps(from, to, hold_ms, ms)).await;
         if r.is_err() {
             self.end_polling().await;
         }
@@ -858,9 +934,13 @@ impl<T: Transport> WdaClient<T> {
 
     /// 发一个手势，期间把等待设置临时换成 `during`（见 [`Self::tap`]），做完恢复
     async fn quick_gesture(&mut self, steps: &[PointerStep], during: IdleSettings) -> Result<()> {
+        self.quick_actions(actions_body(steps), during).await
+    }
+
+    async fn quick_actions(&mut self, body: Value, during: IdleSettings) -> Result<()> {
         let baseline = self.baseline().await?;
         self.set_idle_settings(during).await?;
-        let r = self.actions(steps).await;
+        let r = self.post("/actions", body).await.map(drop);
         if let Err(e) = self.set_idle_settings(baseline).await {
             tracing::warn!(
                 "{}",
@@ -1305,6 +1385,55 @@ mod tests {
         assert!(matches!(w.launch_app("x").await, Err(WdaError::Remote { .. })));
     }
 
+    /// 依次点几个点：每个点一根手指，第 k 根先空等前面的点按完；各手指的节拍数对得上，按下抬起一个接一个、不重叠
+    #[test]
+    fn a_sequence_is_one_finger_per_point_in_turn() {
+        let body = tap_sequence_body(&[(10.0, 20.0), (30.0, 40.0), (50.0, 60.0)], 50, 40);
+        let fingers = body["actions"].as_array().unwrap();
+        assert_eq!(fingers.len(), 3);
+        for (k, f) in fingers.iter().enumerate() {
+            let a = f["actions"].as_array().unwrap();
+            assert_eq!(a.len(), 5 * k + 4, "finger {k}");
+            // pauses only until its own turn, then move, down, hold, up at its point
+            assert!(a[..5 * k].iter().all(|s| s["type"] == "pause"));
+            assert_eq!(a[5 * k]["type"], "pointerMove");
+            assert_eq!(a[5 * k]["x"].as_f64(), Some(10.0 + 20.0 * k as f64));
+            assert_eq!(a[5 * k + 1]["type"], "pointerDown");
+            assert_eq!(a[5 * k + 3]["type"], "pointerUp");
+            assert_ne!(fingers[0]["id"], fingers[k.max(1)]["id"]);
+        }
+        // finger k waits 5 ticks per earlier point: move, down, hold, up, gap
+        assert_eq!(fingers[1]["actions"][2]["duration"], 50);
+        assert_eq!(fingers[1]["actions"][4]["duration"], 40);
+    }
+
+    /// 连点是一个 actions 请求：一根手指只移动一次，在同一点按下抬起 N 次，两下之间停 MULTI_TAP_GAP_MS；
+    /// 5 下在 0.8 秒内点完
+    #[tokio::test]
+    async fn multi_tap_is_one_request_at_one_point() {
+        let ok = r#"{"value":null}"#;
+        let m = Mock::with(&[
+            (200, r#"{"sessionId":"A"}"#),
+            (200, r#"{"value":{"waitForIdleTimeout":10,"animationCoolOffTimeout":2}}"#),
+            (200, ok),
+            (200, ok),
+            (200, ok),
+        ]);
+        let mut c = WdaClient::new(&m);
+        c.multi_tap(10.0, 20.0, 5).await.unwrap();
+        let seen = m.seen.lock().unwrap().clone();
+        let actions: Vec<_> = seen.iter().filter(|s| s.1.ends_with("/actions")).collect();
+        assert_eq!(actions.len(), 1);
+        let body = serde_json::from_str::<Value>(actions[0].2.as_deref().unwrap()).unwrap();
+        let steps = body["actions"][0]["actions"].as_array().unwrap();
+        let count = |t: &str| steps.iter().filter(|s| s["type"] == t).count();
+        assert_eq!((count("pointerMove"), count("pointerDown"), count("pointerUp")), (1, 5, 5));
+        assert_eq!((steps[0]["x"].as_f64(), steps[0]["y"].as_f64()), (Some(10.0), Some(20.0)));
+        let ms: u64 = steps.iter().filter_map(|s| s["duration"].as_u64()).sum();
+        assert_eq!(ms, 5 * TAP_PRESS_MS + 4 * MULTI_TAP_GAP_MS);
+        assert!(ms < 800);
+    }
+
     #[tokio::test]
     async fn remote_error_keeps_first_line_and_unreachable_maps_to_unavailable() {
         let m = Mock::with(&[
@@ -1617,6 +1746,23 @@ mod tests {
         assert_eq!(a["actions"][2]["duration"], 80);
         let s = swipe_steps((1.0, 2.0), (3.0, 4.0), 300);
         assert_eq!(s[3], PointerStep::Move { x: 3.0, y: 4.0, ms: 300 });
+    }
+
+    /// 按住再拖：按下后原地 move 按住（不是 pause，pause 拖不动图标），再移到终点；不按住就是普通滑动
+    #[test]
+    fn a_held_drag_holds_with_a_move_in_place() {
+        let s = drag_steps((1.0, 2.0), (3.0, 4.0), 600, 700);
+        assert_eq!(
+            s,
+            [
+                PointerStep::Move { x: 1.0, y: 2.0, ms: 0 },
+                PointerStep::Down,
+                PointerStep::Move { x: 1.0, y: 2.0, ms: 600 },
+                PointerStep::Move { x: 3.0, y: 4.0, ms: 700 },
+                PointerStep::Up,
+            ]
+        );
+        assert_eq!(drag_steps((1.0, 2.0), (3.0, 4.0), 0, 300), swipe_steps((1.0, 2.0), (3.0, 4.0), 300));
     }
 
     #[tokio::test]

@@ -438,6 +438,8 @@ struct Open {
     group: usize,
     /// 这一层子节点的原始坐标要加上的偏移（小组件内部用的是相对小组件的坐标）
     offset: (f64, f64),
+    /// 自己是 WebView 或在 WebView 里
+    in_web: bool,
     in_status_bar: bool,
     kind: String,
     kept: Option<usize>,
@@ -504,10 +506,14 @@ pub fn parse_tree(xml: &str, view: impl Into<View>) -> Tree {
         let full_kind = attr.get("type").cloned().unwrap_or(tag);
         let kind = full_kind.strip_prefix("XCUIElementType").unwrap_or(&full_kind).to_owned();
 
-        // 小组件的内容：某个节点在 (0,0) 且和父节点一样大，而父节点不在 (0,0)——从它开始坐标是相对父节点的
+        // 小组件的内容：某个节点在 (0,0) 且和父节点一样大，而父节点不在 (0,0)——从它开始坐标是相对父节点的。
+        // 网页里不算：WKWebView 内部有一层节点也报 (0,0)、和 WebView 一样大，但网页元素用的是屏幕坐标，
+        // 加上偏移会把整页错开 WebView 的 y（App 内浏览器、小程序在导航栏下面时约 100 点）
         let parent = stack.last();
+        let in_web = kind == "WebView" || parent.is_some_and(|p| p.in_web);
         let mut offset = parent.map_or((0.0, 0.0), |p| p.offset);
         if let Some(p) = parent
+            && !p.in_web
             && raw.x == 0.0
             && raw.y == 0.0
             && (raw.w - p.abs.w).abs() < 1.0
@@ -625,6 +631,7 @@ pub fn parse_tree(xml: &str, view: impl Into<View>) -> Tree {
             group,
             kind: kind_for_children,
             offset,
+            in_web,
             in_status_bar,
             kept,
             blocker,
@@ -1034,6 +1041,35 @@ mod tests {
         // 主屏图标本来就是屏幕坐标，不受影响
         let clock = els.iter().find(|e| e.label == "时钟" && e.kind == "Icon").unwrap();
         assert!(clock.center.1 > 400);
+    }
+
+    /// 真机（iOS 26，App 内浏览器）：WebView 在原生导航栏下面 (0,100)，WKWebView 内部那层报 (0,0) 且和 WebView
+    /// 一样大，看着像小组件；但网页元素给的是屏幕坐标，不能再加 WebView 的偏移
+    #[test]
+    fn web_contents_keep_screen_coordinates() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <XCUIElementTypeApplication type="XCUIElementTypeApplication" name="App" label="App" x="0" y="0" width="402" height="874">
+          <XCUIElementTypeWindow type="XCUIElementTypeWindow" x="0" y="0" width="402" height="874">
+            <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="402" height="874">
+              <XCUIElementTypeNavigationBar type="XCUIElementTypeNavigationBar" name="Page" x="0" y="56" width="402" height="44"/>
+              <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="100" width="402" height="774">
+                <XCUIElementTypeWebView type="XCUIElementTypeWebView" x="0" y="100" width="402" height="697">
+                  <XCUIElementTypeWebView type="XCUIElementTypeWebView" x="0" y="100" width="402" height="697">
+                    <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="0" width="402" height="697">
+                      <XCUIElementTypeOther type="XCUIElementTypeOther" x="0" y="100" width="402" height="2990">
+                        <XCUIElementTypeStaticText type="XCUIElementTypeStaticText" value="Getting started" name="Getting started" label="Getting started" x="19" y="375" width="80" height="27"/>
+                      </XCUIElementTypeOther>
+                    </XCUIElementTypeOther>
+                  </XCUIElementTypeWebView>
+                </XCUIElementTypeWebView>
+              </XCUIElementTypeOther>
+            </XCUIElementTypeOther>
+          </XCUIElementTypeWindow>
+        </XCUIElementTypeApplication>"#;
+        let els = parse(xml, SCREEN);
+        let text = els.iter().find(|e| e.label == "Getting started").unwrap();
+        // 截图上就在这里，不是错开 100 点的 (59,488)
+        assert_eq!(text.center, (59, 388));
     }
 
     #[test]

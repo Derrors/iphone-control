@@ -18,15 +18,15 @@ With [auto-unlock](./auto-unlock) on, `iphone_screenshot`, `iphone_list_elements
 
 | Tool | What it does |
 |---|---|
-| `iphone_tap` | Tap coordinates |
+| `iphone_tap` | Tap coordinates; `count` taps the same point several times (double tap, entries that need quick repeated taps) |
 | `iphone_tap_element` | Tap by text; if the center is covered by a floating bar or the keyboard it taps a visible part, and if it's fully covered it doesn't tap. With `scroll` (`down` / `up`) it scrolls slowly and looks again when the element isn't on screen, until it is found, the list ends or `max_scrolls` (default 8) is reached |
 | `iphone_long_press` | Long press; `seconds` defaults to 1, max 10 |
-| `iphone_swipe` | Swipe; returns once the list has stopped scrolling. `seconds` defaults to 0.3, max 10 |
+| `iphone_swipe` | Swipe; returns once the list has stopped scrolling. `seconds` defaults to 0.3, max 10. `hold` holds still at the start for that many seconds before moving, to drag things that need a long press first (home-screen icons, reorderable rows); about 0.6 works |
 | `iphone_type_text` | Type into the focused field (Chinese supported), read it back and fix dropped characters; `submit` presses Return |
 | `iphone_press_button` | `home`, `volume_up`, `volume_down`, `lock` |
 | `iphone_launch_app` / `iphone_terminate_app` | Launch / quit an app by name (e.g. `设置`) or bundle id |
 | `iphone_open_url` | Open a link or URL scheme |
-| `iphone_batch` | Run up to 20 steps in one call, stopping at the first error. If the MCP client cancels the call, the remaining steps don't run; with no device selected, it also stops with an error if the controlled device changes |
+| `iphone_batch` | Run up to 20 steps in one call, stopping at the first error. When every step is a coordinate tap, `one_gesture` taps them in turn within one gesture, for pressing keys on one keyboard. If the MCP client cancels the call, the remaining steps don't run; with no device selected, it also stops with an error if the controlled device changes |
 
 ## Several devices
 

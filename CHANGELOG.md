@@ -21,6 +21,7 @@ What changed in each release, one line per change. Versions follow [Semantic Ver
 
 ### Fixes
 
+- Native control (iOS 27): the floating search bar at the bottom of Settings counts as covering the rows under it, as it does through WDA. Tapping a row under it by text taps its visible part instead of opening the search.
 - A WDA probe that answers, even with an error, resets the timeout count instead of accumulating unrelated slow requests into a stall. Recovery logs state the reason, and timeout logs include the endpoint and elapsed time.
 
 ## [0.2.7] - 2026-11-15

@@ -96,6 +96,8 @@ Without `then`, the result still warns when a system alert covers the screen, be
 
 Steps run in order. The batch stops at the first error or the first `iphone_tap_element` that finds nothing, and reports which step it stopped at. `then` applies once, after the last step. `reuse_elements: true` lets `iphone_tap_element` reuse the element tree from the last 10 seconds; use it only when the steps don't change the layout (for example pressing keys on the same keypad).
 
+`one_gesture: true` is for a batch made only of `iphone_tap` steps: the points are tapped one after another in a single WDA gesture, one finger per point, about 0.04 s apart, with no wait for the interface in between. Use it to press keys on one keyboard when a field doesn't take `iphone_type_text` (some in-app web views only take key taps): on an iPhone 12 mini, 7 digit keys took 1.9 s instead of 3.6 s, 20 took 4.6 s instead of 9.6 s. Nothing is checked between the taps, so check the result afterwards with `then` or a screenshot. Any other kind of step in the batch is an error and nothing runs. Without WDA it falls back to tapping the points one by one.
+
 If the MCP client cancels the call, the remaining steps don't run; a request still queued for the device is dropped too. If no device was selected and the controlled device changes during a batch (for example it was unplugged and another one took over), the batch stops with an error.
 
 ```json

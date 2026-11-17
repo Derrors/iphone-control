@@ -91,6 +91,55 @@ impl Daemon {
         Ok(ictl_l10n::trf!("已点击 {pos}{times}(经 HID)", "Tapped {pos}{times} (via HID)"))
     }
 
+    /// 依次点几个点（`iphone_batch` 的 `one_gesture`）：WDA 发一个手势（[`WdaClient::tap_sequence`]），HID 在同一个会话里连发。
+    /// 和 [`Self::tap`] 一样只有连不上 WDA 才退到 HID
+    pub(crate) async fn tap_sequence(&self, g: &mut Inner, points: &[(f64, f64)]) -> crate::error::Result<String> {
+        if points.is_empty() || points.len() > crate::protocol::MAX_SEQUENCE_POINTS {
+            return Err(ictl_l10n::trf!(
+                "一个手势要点 1 到 {} 个点",
+                "a gesture takes 1 to {} points",
+                crate::protocol::MAX_SEQUENCE_POINTS
+            )
+            .into());
+        }
+        self.prepare_coordinates(g, None, true).await?;
+        let n = points.len();
+        let list: Vec<String> = points.iter().map(|(x, y)| format!("({},{})", fmt_g(*x), fmt_g(*y))).collect();
+        let list = list.join(" ");
+        if let Some(w) = self.wda(g) {
+            match w.tap_sequence(points).await {
+                Ok(()) => {
+                    return Ok(ictl_l10n::trf!(
+                        "在一个手势里依次点了 {n} 个点:{list}",
+                        "Tapped {n} points in one gesture: {list}"
+                    ));
+                }
+                Err(WdaError::Unavailable(_)) => {}
+                Err(e) => return Err(e.into()),
+            }
+        }
+        let native = self.native(g);
+        let rot = self.hid_touch_rotation(g).await?;
+        let pts = points.to_vec();
+        self.hid_do(g, move |h| {
+            Box::pin(async move {
+                h.rotation = rot;
+                for (i, (x, y)) in pts.into_iter().enumerate() {
+                    if i > 0 {
+                        tokio::time::sleep(Duration::from_millis(ictl_wda::SEQUENCE_GAP_MS)).await;
+                    }
+                    h.tap(x, y).await?;
+                }
+                Ok(())
+            })
+        })
+        .await?;
+        if native {
+            return Ok(ictl_l10n::trf!("依次点了 {n} 个点:{list}", "Tapped {n} points: {list}"));
+        }
+        Ok(ictl_l10n::trf!("依次点了 {n} 个点(经 HID):{list}", "Tapped {n} points (via HID): {list}"))
+    }
+
     /// Follow the viewer pointer with one HID report per call. The first event prepares the device.
     /// Later events reuse the open HID session and reject a change in display orientation.
     pub(crate) async fn touch(

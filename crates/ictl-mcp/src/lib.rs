@@ -557,7 +557,9 @@ then 在全部做完(或停下)后返回一次界面。", "Run several steps in 
                     "steps": {"type": "array", "items": {"type": "object"},
                         "description": ictl_l10n::tr!("要执行的步骤,1 到 20 个,例如 [{\"tool\": \"iphone_tap_element\", \"text\": \"通用\"}]", "the steps to run, 1 to 20, e.g. [{\"tool\": \"iphone_tap_element\", \"text\": \"General\"}]")},
                     "reuse_elements": {"type": "boolean", "default": false,
-                        "description": ictl_l10n::tr!("这批操作不改变界面布局时(例如在同一个键盘上连按)设为 true:按名字点击复用最近读到的元素树,每步省 0.3~0.8 秒。会跳转页面的不要用,否则可能点到旧位置", "Set to true when the steps don't change the layout (e.g. pressing keys on the same keypad): tapping by text reuses the most recent element tree, saving 0.3-0.8 s per step. Don't use it for steps that navigate, or it may tap where things used to be")}
+                        "description": ictl_l10n::tr!("这批操作不改变界面布局时(例如在同一个键盘上连按)设为 true:按名字点击复用最近读到的元素树,每步省 0.3~0.8 秒。会跳转页面的不要用,否则可能点到旧位置", "Set to true when the steps don't change the layout (e.g. pressing keys on the same keypad): tapping by text reuses the most recent element tree, saving 0.3-0.8 s per step. Don't use it for steps that navigate, or it may tap where things used to be")},
+                    "one_gesture": {"type": "boolean", "default": false,
+                        "description": ictl_l10n::tr!("步骤全是 iphone_tap 时可设为 true:这些点在一个手势里依次点完(每个点一根手指,间隔约 0.04 秒),中间不等界面空闲。用于在同一个键盘上连按,例如输入框不接受 iphone_type_text 时逐个点数字键:7 个键约 1.9 秒,分开点约 3.6 秒。点的过程中不看界面,中途跳了页面后面的点也照样点下去;点完截图或读元素核对", "Only when every step is iphone_tap: set to true to tap the points one after another in a single gesture (one finger per point, about 0.04 s apart) without waiting for the interface in between. For pressing keys on the same keyboard, e.g. digit keys one by one when a field doesn't take iphone_type_text: 7 keys in about 1.9 s instead of about 3.6 s. Nothing is checked while it taps, so if a tap navigates, the remaining points still land; check the result with a screenshot or elements afterwards")}
                 })),
                 &["steps"],
             ),
@@ -780,13 +782,14 @@ pub fn batch_steps(args: &Map<String, Value>) -> Result<Vec<Step>, String> {
         .and_then(Value::as_array)
         .ok_or(ictl_l10n::tr!("缺少 steps(数组)", "missing steps (array)"))?;
     let reuse = Args(args).b_or("reuse_elements", false)?;
+    let one_gesture = Args(args).b_or("one_gesture", false)?;
     if steps.is_empty() || steps.len() > BATCH_MAX_STEPS {
         return Err(ictl_l10n::trf!(
             "steps 要有 1 到 {BATCH_MAX_STEPS} 步",
             "steps must have 1 to {BATCH_MAX_STEPS} steps"
         ));
     }
-    steps
+    let steps: Vec<Step> = steps
         .iter()
         .enumerate()
         .map(|(i, s)| {
@@ -823,7 +826,32 @@ pub fn batch_steps(args: &Map<String, Value>) -> Result<Vec<Step>, String> {
             };
             Ok(Step::Request { tool: tool.to_owned(), req })
         })
-        .collect()
+        .collect::<Result<_, String>>()?;
+    if !one_gesture {
+        return Ok(steps);
+    }
+    // 全是坐标点击才能并成一个手势：别的步骤（按名字点、等待、输入）都要在点之间看界面或花时间
+    let points = steps
+        .iter()
+        .map(|s| match s {
+            Step::Request { req: Request::Tap { x, y, count }, .. } => Some((*x, *y, *count)),
+            _ => None,
+        })
+        .collect::<Option<Vec<_>>>()
+        .ok_or(ictl_l10n::tr!(
+            "one_gesture 只能用于步骤全是 iphone_tap(按坐标点)的批量",
+            "one_gesture only works when every step is iphone_tap (tap by coordinates)"
+        ))?;
+    // 一个手势里每个点只点一下；要连点用 iphone_tap 的 count，不悄悄当成点一下
+    if points.iter().any(|p| p.2 != 1) {
+        return Err(ictl_l10n::tr!(
+            "one_gesture 里的 iphone_tap 不能带 count;要在一个点连点,单独调用 iphone_tap 并给 count",
+            "iphone_tap steps under one_gesture can't take count; to tap one point several times, call iphone_tap on its own with count"
+        )
+        .into());
+    }
+    let points = points.into_iter().map(|(x, y, _)| (x, y)).collect();
+    Ok(vec![Step::Request { tool: "iphone_tap".into(), req: Request::TapSequence { points } }])
 }
 
 /// tap_element 的结果是不是「没点到」（没找到、index 超出匹配个数、或整个被别的东西盖住）
@@ -837,6 +865,7 @@ pub fn tap_missed(text: &str, outcome: Option<protocol::Outcome>) -> bool {
 pub fn wants_alert_check(req: &Request) -> bool {
     match req {
         Request::Tap { .. }
+        | Request::TapSequence { .. }
         | Request::TapElement { .. }
         | Request::LongPress { .. }
         | Request::Swipe { .. }
@@ -1219,6 +1248,34 @@ mod tests {
             }
         });
         with_lang(Lang::Zh, || assert!(has_cjk(instructions())));
+    }
+
+    /// one_gesture 把全是坐标点击的批量并成一个 TapSequence；混了别的步骤就报错，一步都不执行
+    #[test]
+    fn one_gesture_turns_taps_into_one_sequence() {
+        let steps = batch_steps(&args(json!({"one_gesture": true, "steps": [
+            {"tool": "iphone_tap", "x": 60, "y": 548},
+            {"tool": "iphone_tap", "x": 23, "y": 548.5}
+        ]})));
+        let req = Request::TapSequence { points: vec![(60.0, 548.0), (23.0, 548.5)] };
+        assert_eq!(steps, Ok(vec![Step::Request { tool: "iphone_tap".into(), req }]));
+        for other in [
+            json!({"tool": "iphone_tap_element", "text": "1"}),
+            json!({"tool": "wait", "seconds": 0.1}),
+            json!({"tool": "iphone_type_text", "text": "1"}),
+        ] {
+            let steps = json!({"one_gesture": true, "steps": [{"tool": "iphone_tap", "x": 1, "y": 2}, other]});
+            assert!(batch_steps(&args(steps)).is_err());
+        }
+        // without it a batch of taps stays step by step
+        let steps = batch_steps(&args(json!({"steps": [{"tool": "iphone_tap", "x": 1, "y": 2}]}))).unwrap();
+        assert_eq!(
+            steps,
+            vec![Step::Request { tool: "iphone_tap".into(), req: Request::Tap { x: 1.0, y: 2.0, count: 1 } }]
+        );
+        // a step's count can't go into one gesture: an error, not one tap
+        let steps = json!({"one_gesture": true, "steps": [{"tool": "iphone_tap", "x": 1, "y": 2, "count": 2}]});
+        assert!(batch_steps(&args(steps)).is_err());
     }
 
     /// iphone_tap 不带 count 是点一下；count 要是 1 到 MAX_TAP_COUNT 的整数，给错了报错、不点，不悄悄改成 1

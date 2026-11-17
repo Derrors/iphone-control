@@ -53,6 +53,8 @@ fn one() -> u32 {
 fn is_one(n: &u32) -> bool {
     *n == 1
 }
+/// [`Request::TapSequence`] 一个手势最多点几个点（同 `iphone_batch` 最多几步）
+pub const MAX_SEQUENCE_POINTS: usize = 20;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -94,6 +96,10 @@ pub enum Request {
         /// 在这一点连点几下（一个手势），1 = 普通点击。旧版本客户端不带，按 1；为 1 时不写进请求，旧版本守护进程照常认
         #[serde(default = "one", skip_serializing_if = "is_one")]
         count: u32,
+    },
+    /// 依次点几个点，一个手势（`iphone_batch` 的 `one_gesture`）：同一个键盘上连按。旧版本守护进程不认识，报错，不会只点一部分
+    TapSequence {
+        points: Vec<(f64, f64)>,
     },
     TapElement {
         text: String,
@@ -431,6 +437,7 @@ impl Request {
         match self {
             Self::Tap { .. }
             | Self::TapElement { .. }
+            | Self::TapSequence { .. }
             | Self::LongPress { .. }
             | Self::Swipe { .. }
             | Self::TypeText { .. }
@@ -930,6 +937,10 @@ mod tests {
         let r = Request::Swipe { from: (1.0, 2.0), to: (3.0, 4.0), seconds: 0.3 };
         let s = serde_json::to_string(&r).unwrap();
         assert!(s.starts_with(r#"{"op":"swipe""#), "{s}");
+        assert_eq!(serde_json::from_str::<Request>(&s).unwrap(), r);
+        let r = Request::TapSequence { points: vec![(60.0, 548.0), (23.0, 548.0)] };
+        let s = serde_json::to_string(&r).unwrap();
+        assert_eq!(s, r#"{"op":"tap_sequence","points":[[60.0,548.0],[23.0,548.0]]}"#);
         assert_eq!(serde_json::from_str::<Request>(&s).unwrap(), r);
         let e: Response = serde_json::from_str(r#"{"kind":"error","message":"x"}"#).unwrap();
         assert_eq!(e, Response::error("x"));

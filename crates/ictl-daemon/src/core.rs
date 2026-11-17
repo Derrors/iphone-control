@@ -436,6 +436,9 @@ pub(crate) struct PerDevice {
     /// 最近一个操作开始前的界面：操作做完、界面稳定时和它比，告诉调用方界面变没变（`Daemon::settle`）。
     /// 按名字点击会在点之前读树，用那棵树
     pub before_action: Option<crate::tools::Seen>,
+    /// 最近一个操作原样是什么（请求的 JSON），和它连续几次做完界面都没变：同一个操作原样重做、界面还是不变，
+    /// 结果里说是第几次了（[`crate::tools::Repeats`]）
+    pub repeats: crate::tools::Repeats,
     /// 最近一个操作开始的时间：原生控制等界面稳定时，从这之后的推送算起
     pub acted_at: Option<Instant>,
     /// How long the request being handled spent unlocking the phone first ([`Daemon::ensure_unlocked`]); taken by
@@ -1168,6 +1171,7 @@ impl Daemon {
             if acted {
                 // 这个操作之前读过的界面就是「操作前」；操作期间读的（按名字点击先读树）也是操作前，操作完都不再算
                 g.dev.before_action = g.dev.seen.take_fresh();
+                g.dev.repeats.start(&req);
                 // 原生控制等界面稳定时，从这之后手机推来的树算起
                 g.dev.acted_at = Some(Instant::now());
             }

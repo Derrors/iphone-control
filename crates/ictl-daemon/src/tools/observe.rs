@@ -152,7 +152,9 @@ impl Daemon {
             g.dev.seen.saw_thumb(t.clone());
             thumb = Some(t);
         }
-        change_text(compare(&before, tree, thumb.as_deref()))
+        let change = compare(&before, tree, thumb.as_deref());
+        let n = g.dev.repeats.settled(change);
+        change_text(change) + &repeat_text(n)
     }
 
     pub(super) async fn settle_visually(
@@ -405,6 +407,58 @@ pub(super) fn change_text(c: Change) -> String {
         .into(),
         Change::Unknown => String::new(),
     }
+}
+
+/// 同一个操作原样连续做了几次、界面都没变。操作开始时 [`Self::start`]，等界面稳定比较完 [`Self::settled`]
+#[derive(Debug, Default)]
+pub(crate) struct Repeats {
+    /// 正在做的操作
+    acting: Option<String>,
+    /// 上一个做完界面没变的操作，和它连续没变的次数
+    same: Option<(String, u32)>,
+}
+
+impl Repeats {
+    /// 一个操作开始：换了操作（参数不同也算）就重新数
+    pub(crate) fn start(&mut self, req: &crate::protocol::Request) {
+        let sig = serde_json::to_string(req).unwrap_or_default();
+        if self.same.as_ref().is_some_and(|(s, _)| *s != sig) {
+            self.same = None;
+        }
+        self.acting = Some(sig);
+    }
+
+    /// 操作做完、和操作前比过：界面没变时返回这是连续第几次（1 起），变了或没法比时为 0
+    pub(super) fn settled(&mut self, change: Change) -> u32 {
+        let Some(sig) = self.acting.take() else { return 0 };
+        match change {
+            Change::Same => {
+                let n = match &self.same {
+                    Some((s, n)) if *s == sig => n + 1,
+                    _ => 1,
+                };
+                self.same = Some((sig, n));
+                n
+            }
+            Change::Changed => {
+                self.same = None;
+                0
+            }
+            // 没法比（操作前没看过界面）：不数这一次，也不清零
+            Change::Unknown => 0,
+        }
+    }
+}
+
+/// 同一个操作原样做了 `n` 次界面都没变（第二次起）：明说在原地打转，要换做法
+pub(super) fn repeat_text(n: u32) -> String {
+    if n < 2 {
+        return String::new();
+    }
+    ictl_l10n::trf!(
+        ";这已经是连续第 {n} 次原样做这个操作、界面都没变:别再重复了,换个做法(截图看清目标在哪、换个位置或改用按名字点、先关掉挡住的东西),还不行就告诉用户卡在了哪一步",
+        "; this exact action has now left the screen unchanged {n} times in a row: stop repeating it and try something else (look at a screenshot to find the target, tap elsewhere or by text, close whatever is in the way), or tell the user where it is stuck"
+    )
 }
 
 /// An element as data: the text it shows (its label, else its name, else its value) and its box

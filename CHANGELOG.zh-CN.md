@@ -6,25 +6,27 @@
 
 ## [Unreleased]
 
+## [0.2.8] - 2026-11-18
+
 ### 新功能
 
-- `iphone_tap` 加 `count`（1～10）：在一个手势里连点，每下间隔约 0.1 秒，双击、短时间内连点几下的入口都能点到；分开调用每下约隔 0.5 秒。旧版本守护进程不认这个参数，只点一下。
-- `iphone_batch` 新增 `one_gesture`：全是坐标点击的一批步骤放进一个手势里点完，在键盘上逐个按键快一倍左右。
-- `iphone_swipe` 新增 `hold`：先在起点按住几秒再移动，用来拖动主屏幕图标等要先长按才拿得起来的东西。旧版本守护进程会忽略它，照常滑动。
-- `iphone_tap_element` 新增 `scroll`（`down` / `up`）和 `max_scrolls`：屏幕上没有时慢慢边滑边找，找到就点。旧版本守护进程会忽略它们，只在当前屏幕上找。
+- `iphone_tap` 新增 `count`：在同一点一次连点几下，双击和要短时间内连点几下的入口都能点到（#141）。
+- `iphone_batch` 新增 `one_gesture`：一串坐标点击（比如键盘上的键）放进一个手势里点完，快一倍左右（#143）。
+- `iphone_swipe` 新增 `hold`：先按住再移动，主屏幕图标等要先长按才拿得起来的东西也能拖动了（#144）。
+- `iphone_tap_element` 新增 `scroll`（`down` / `up`）和 `max_scrolls`：屏幕上没有时边滑边找，找到就点（#147）。
 
 ### 改进
 
-- 同一个操作原样重做、界面还是没变时，结果里说明已经连续几次，并提示换个做法。
-
+- 同一个操作原样重做、界面还是没变时，结果里说明已经连续几次，并提示换个做法（#145）。
 - 操作前先自动解锁了的话，结果里会说明，并写明用了多久（#135）。
 
 ### 修复
 
-- 原生控制（iOS 27）：设置首页底部悬浮的搜索栏算作挡住它下面的行，和经 WDA 时一样。按名字点被压在栏下的行，改点露出来的部分，不会再打开搜索。
-- 第一次启动系统 App 时，不再被隐私说明页卡住 60 秒、还把 WDA 判成卡死重启；马上返回，并说明被说明页挡着。
-- `iphone_tap_element` 没找到可点的元素时，带 `then` 不再说「操作可能没生效」，也不再等界面稳定，直接返回界面。
-- WDA 的短探测正常应答或返回远端错误时清零超时计数，不再把多个独立慢请求累计成卡死；恢复日志写明判定依据，请求超时日志包含端点和耗时。
+- App 内浏览器里的元素位置不再整体偏下一个导航栏的高度，按文字点击能点中（#139）。
+- 第一次启动系统 App 时，不再被隐私说明页卡住一分钟、还让 WDA 重启；马上说明被说明页挡着（#148）。
+- 原生控制（iOS 27）下，设置页底部悬浮搜索栏下面的行不再隔着搜索栏去点、打开搜索（#150）。
+- `iphone_tap_element` 什么都没点到时，带 `then` 不再说「操作可能没生效」，返回也更快（#149）。
+- 几个慢的 WDA 请求不再累计成一次不必要的 WDA 重启（#140）。
 
 ## [0.2.7] - 2026-11-15
 
@@ -321,7 +323,8 @@
 - `setup`、`doctor`、`status`、`mcp-config`。
 - Docker 镜像和预编译的 Linux 二进制。
 
-[Unreleased]: https://github.com/Derrors/iphone-control/compare/v0.2.7...HEAD
+[Unreleased]: https://github.com/Derrors/iphone-control/compare/v0.2.8...HEAD
+[0.2.8]: https://github.com/Derrors/iphone-control/compare/v0.2.7...v0.2.8
 [0.2.7]: https://github.com/Derrors/iphone-control/compare/v0.2.6...v0.2.7
 [0.2.6]: https://github.com/Derrors/iphone-control/compare/v0.2.5...v0.2.6
 [0.2.5]: https://github.com/Derrors/iphone-control/compare/v0.2.4...v0.2.5

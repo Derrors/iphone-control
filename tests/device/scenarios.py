@@ -20,6 +20,8 @@ Scenarios (the numbers are regression cases):
            the rest is not done
   menu     a long press on a home-screen icon takes about as long as it was asked to (#34); Home closes the menu
            and an app started right afterwards stays in front (#130)
+  idle     after the daemon has closed the idle HID session, Home on the home screen and an app started right
+           afterwards stays in front (#157); takes about 2 minutes (it waits for the session to close)
   url      a link opened right after its app was terminated opens (#131); text on the web page can be waited for (#133)
   lock     the lock button locks within seconds, again and again (#59, #102, #105); the next action unlocks first
            and says so (#144); a tap right after unlocking isn't swallowed (#127)
@@ -50,6 +52,8 @@ from run import Runner, connect
 
 results: list[bool] = []
 MISSING = "不存在的按钮xyz"
+# seconds without a touch before the daemon closes the HID session (crates/ictl-daemon/src/supervise.rs HID_IDLE)
+HID_IDLE = 30
 AUTO_UNLOCK = dev.T("操作时会自动解锁", "actions unlock automatically")
 PINNED = dev.T("(选定)", "(selected)")
 
@@ -214,6 +218,23 @@ async def fresh(p: Phone):
     await p.home(c)
 
 
+async def idle(p: Phone):
+    c = "idle"
+    for n in range(2):
+        await p.home(c)
+        await asyncio.sleep(2)
+        # the daemon closes the HID session after 30 s without a touch (supervise::HID_IDLE); not with the control
+        # page showing the screen, when this passes either way
+        await asyncio.sleep(HID_IDLE + 5)
+        await p.home(c)
+        await p.ok(c, "iphone_launch_app", {"app": dev.CLOCK})
+        await asyncio.sleep(1.5)
+        status = await p.front()
+        check(c, f"#157 Home with the HID session idle, then an app started: it stays in front, {n + 1} of 2",
+              dev.CLOCK in status, status)
+    await p.home(c)
+
+
 async def batch(p: Phone):
     c = "batch"
     await p.home(c)
@@ -342,7 +363,9 @@ async def lock(p: Phone):
     await p.home(c)
 
 
-SCENARIOS = {"tools": tools, "typing": typing, "fresh": fresh, "batch": batch, "menu": menu, "url": url, "lock": lock}
+SCENARIOS = {
+    "tools": tools, "typing": typing, "fresh": fresh, "batch": batch, "menu": menu, "idle": idle, "url": url, "lock": lock
+}
 OPT_IN = {"lock": "--lock", "url": "--url"}
 
 

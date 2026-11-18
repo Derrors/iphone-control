@@ -486,6 +486,10 @@ impl Daemon {
                 blocking(&text)
             ));
         }
+        // the HID session opened first, the wait below counted from the press: opening it (the screen stream, about
+        // 0.6 s after the daemon left it idle) used up the whole wait, and an app launched right after a Home on the
+        // home screen was sent back there (7 times in 8; 0 in 8 with the session already open)
+        self.hid(g).await?;
         let pressed = Instant::now();
         self.hid_do(g, |h| Box::pin(h.press(Button::Home))).await?;
         if self.native_reached_home(g).await {

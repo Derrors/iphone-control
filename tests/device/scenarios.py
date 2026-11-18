@@ -204,18 +204,21 @@ def spotlight_queries(text: str) -> list[str]:
 async def editing(p: Phone):
     c = "editing"
     if p.d.native:
-        await p.spotlight(c)
-        await p.ok(c, "iphone_type_text", {"text": "wifi"})
-        before = await p.ok(c, "iphone_list_elements", {"filter": "SearchField"})
-        if not check("#159", "Spotlight query is wifi before replacement",
-                     spotlight_queries(before) == ["wifi"], before):
-            return
-        err, answer, dt, _ = await p.call("iphone_type_text", {"text": "蓝牙", "replace": True})
-        readback = await p.ok(c, "iphone_list_elements", {"filter": "SearchField"})
-        check("#159", f"replace the focused Spotlight query ({dt:.2f}s)",
-              not err and spotlight_queries(readback) == ["蓝牙"],
-              answer if err else readback)
-        await p.home(c)
+        try:
+            await p.spotlight(c)
+            await p.ok(c, "iphone_type_text", {"text": "wifi"})
+            before = await p.ok(c, "iphone_list_elements", {"filter": "SearchField"})
+            if not check("#159", "Spotlight query is wifi before replacement",
+                         spotlight_queries(before) == ["wifi"], before):
+                return
+            for wanted in ("wi", "蓝牙"):
+                err, answer, dt, _ = await p.call("iphone_type_text", {"text": wanted, "replace": True})
+                readback = await p.ok(c, "iphone_list_elements", {"filter": "SearchField"})
+                if not check("#159", f"replace the focused Spotlight query with {wanted!r} ({dt:.2f}s)",
+                             not err and spotlight_queries(readback) == [wanted], answer if err else readback):
+                    return
+        finally:
+            await p.home(c)
         err, answer, _, _ = await p.call("iphone_type_text", {"text": "蓝牙", "replace": True, "submit": True})
         check("#159", "replacement without a keyboard is refused", err and says(answer, dev.NO_KEYBOARD), answer)
     else:

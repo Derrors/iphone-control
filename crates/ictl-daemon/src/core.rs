@@ -1492,6 +1492,7 @@ fn admit(req: &Request, queued_at: Instant, ctx: &CallCtx, controlled: Option<&s
 }
 
 fn check_request(req: &Request) -> Result<(), String> {
+    req.check_required_text()?;
     match req {
         Request::WebEval { expression, timeout_ms, .. }
             if expression.trim().is_empty() || *timeout_ms > MAX_WEB_EVAL_MS =>
@@ -1516,13 +1517,6 @@ fn check_request(req: &Request) -> Result<(), String> {
         }
         Request::Touch { x, y, .. } if !x.is_finite() || !y.is_finite() => {
             return Err(ictl_l10n::tr!("x、y 要是有效的数", "x and y must be valid numbers").into());
-        }
-        Request::WaitFor { text, .. }
-        | Request::WaitForDisappearance { text, .. }
-        | Request::ReplaceText { text, .. }
-            if text.is_empty() =>
-        {
-            return Err(ictl_l10n::tr!("text 不能为空", "text can't be empty").into());
         }
         Request::AppLogs { since_secs, limit, .. } if *since_secs > 3600 || *limit == 0 || *limit > 1000 => {
             return Err(ictl_l10n::tr!(

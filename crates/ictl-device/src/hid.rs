@@ -275,6 +275,11 @@ impl HidSession {
         self.command_shortcut(KEY_A, ictl_l10n::tr!("HID 全选", "HID select all")).await
     }
 
+    pub async fn collapse_selection(&mut self) -> Result<()> {
+        const RIGHT_ARROW: u64 = 0x4f;
+        limit("HID Right Arrow", Duration::from_secs(10), self.send_keys(vec![(RIGHT_ARROW, false)])).await
+    }
+
     async fn command_shortcut(&mut self, key: u64, name: &str) -> Result<()> {
         limit(name, Duration::from_secs(10), async {
             self.indigo.send_keyboard(KEY_LEFT_GUI, ButtonState::Down).await?;

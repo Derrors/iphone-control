@@ -8,7 +8,7 @@ MCP 服务提供 17 个工具，开启[开发者工具](#开发者工具-显式�
 |---|---|
 | `iphone_status` | 是否就绪、控制方式（原生或 WDA）、是否锁屏、前台 App、屏幕尺寸 |
 | `iphone_screenshot` | 截图；给出 `x`、`y`、`width`、`height` 时只返回这块区域的放大图，看清小字和小图标 |
-| `iphone_list_elements` | 列出屏幕上带文字的元素：类型、文字、中心点、尺寸；`filter` 可按文字或类型筛选。结构化输出含 `matched_count`（本次读到且匹配的元素数）和 `truncated`（是否受 `limit` 截断） |
+| `iphone_list_elements` | 列出屏幕上带文字的元素：类型、文字、中心点、尺寸；`filter` 可按文字或类型筛选。结构化输出含 `matched_count`（本次读到且匹配的元素数）和 `truncated`（是否受 `limit` 截断）  操作和批量的 `then: "elements"` 也返回这两个字段。|
 | `iphone_wait_for` | 默认等文字出现。`state: "disappeared"` 等当前界面不再匹配。输入框里正在编辑的字不计入匹配。`timeout` 默认 5 秒，最多 30 秒 |
 | `iphone_list_apps` | 已安装的 App；只读，没有 `then` |
 

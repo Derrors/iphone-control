@@ -397,7 +397,8 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> Session<S> {
         let deadline = Instant::now() + budget;
         let mut attrs: HashMap<ObjectRef, Obj> = HashMap::new();
         let mut seen = HashSet::from([(root.pid, root.id)]);
-        let mut frontier: VecDeque<(ObjectRef, usize)> = VecDeque::from([(root, 0)]);
+        let mut frontier = VecDeque::from([(root, 0, None)]);
+        let mut missing = Vec::new();
         let mut complete = true;
         while !frontier.is_empty() {
             if attrs.len() >= limit || Instant::now() >= deadline {
@@ -405,12 +406,16 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> Session<S> {
                 break;
             }
             let n = frontier.len().min(BATCH).min(limit - attrs.len());
-            let chunk: Vec<(ObjectRef, usize)> = frontier.drain(..n).collect();
-            let objects: Vec<ObjectRef> = chunk.iter().map(|(o, _)| *o).collect();
+            let chunk: Vec<_> = frontier.drain(..n).collect();
+            let objects: Vec<ObjectRef> = chunk.iter().map(|(o, _, _)| *o).collect();
             let got = self.attributes_of(&objects).await?;
-            for (o, depth) in chunk {
+            for (o, depth, parent) in chunk {
                 let Some(a) = got.get(&o) else {
-                    complete = false;
+                    if let Some(parent) = parent {
+                        missing.push((parent, o));
+                    } else {
+                        complete = false;
+                    }
                     continue;
                 };
                 let (e, kids) = tree::element(Some(o), a, None, depth);
@@ -423,11 +428,27 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> Session<S> {
                 }
                 for k in kids {
                     if seen.insert((k.pid, k.id)) {
-                        frontier.push_back((k, depth + 1));
+                        frontier.push_back((k, depth + 1, Some(o)));
                     }
                 }
             }
             attrs.extend(got);
+        }
+        // An attribute error alone cannot distinguish a removed child from an unreadable live one.
+        // Re-read each affected parent once, only when the rest of the walk completed within budget.
+        if complete && !missing.is_empty() {
+            complete = false;
+            if Instant::now() < deadline {
+                let parents: HashSet<_> = missing.iter().map(|(parent, _)| *parent).collect();
+                let parents: Vec<_> = parents.into_iter().collect();
+                let fresh = self.attributes_of(&parents).await?;
+                complete = missing.iter().all(|(parent, child)| {
+                    fresh.get(parent).is_some_and(|a| {
+                        let (_, kids) = tree::element(Some(*parent), a, None, 0);
+                        !kids.contains(child) && kids.iter().all(|k| seen.contains(&(k.pid, k.id)))
+                    })
+                });
+            }
         }
         Ok((tree::assemble(root, &attrs), complete))
     }

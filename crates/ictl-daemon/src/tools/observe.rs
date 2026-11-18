@@ -262,11 +262,11 @@ impl Daemon {
         w.begin_polling().await?;
         let r = async {
             loop {
-                if disappeared && w.locked().await? {
-                    return Err(wait_locked());
-                }
                 let tree = w.tree().await?;
                 if let Some(result) = wait_match(&tree, text, disappeared, t0.elapsed()) {
+                    if disappeared && w.check_lock(None, true).await?.locked {
+                        return Err(wait_locked());
+                    }
                     return Ok(result);
                 }
                 if t0.elapsed() >= timeout {
@@ -315,8 +315,8 @@ pub(super) fn wait_timeout(text: &str, timeout: Duration, disappeared: bool) -> 
 
 pub(super) fn wait_locked() -> crate::error::Error {
     ictl_l10n::tr!(
-        "等待时手机锁屏，无法确认文字已消失",
-        "The phone locked while waiting, so disappearance cannot be confirmed"
+        "无法确认手机处于解锁界面，无法确认文字已消失",
+        "Could not confirm the phone is on an unlocked screen, so disappearance cannot be confirmed"
     )
     .into()
 }

@@ -708,9 +708,6 @@ pub fn to_request(name: &str, args: &Map<String, Value>) -> Result<Request, Stri
             let text = a.s("text")?;
             let submit = a.b_or("submit", false)?;
             if a.b_or("replace", false)? {
-                if text.is_empty() {
-                    return Err(ictl_l10n::tr!("替换文字不能为空", "Replacement text must not be empty").into());
-                }
                 Request::ReplaceText { text, submit }
             } else {
                 Request::TypeText { text, submit }
@@ -882,6 +879,8 @@ pub fn batch_steps(args: &Map<String, Value>) -> Result<Vec<Step>, String> {
                 }
                 other => other,
             };
+            req.check_required_text()
+                .map_err(|e| ictl_l10n::trf!("第 {n} 步({tool}):{e}", "step {n} ({tool}): {e}"))?;
             Ok(Step::Request { tool: tool.to_owned(), req })
         })
         .collect::<Result<_, String>>()?;
@@ -973,15 +972,18 @@ pub fn wants_alert_check(req: &Request) -> bool {
     }
 }
 
+fn with_elements(mut result: CallToolResult, data: Option<protocol::Data>) -> CallToolResult {
+    if let Some(data @ protocol::Data::Elements { .. }) = data {
+        result.structured_content = serde_json::to_value(data).ok();
+    }
+    result
+}
+
 /// 守护进程响应 → MCP 结果。错误走工具错误（is_error），文字原样给客户端
 pub fn to_result(r: Response) -> CallToolResult {
     match r {
         Response::Text { text, data, .. } => {
-            let mut result = CallToolResult::success(vec![ContentBlock::text(text)]);
-            if let Some(data @ protocol::Data::Elements { .. }) = data {
-                result.structured_content = serde_json::to_value(data).ok();
-            }
-            result
+            with_elements(CallToolResult::success(vec![ContentBlock::text(text)]), data)
         }
         Response::Image { jpeg_base64, caption } => {
             CallToolResult::success(vec![ContentBlock::image(jpeg_base64, "image/jpeg"), ContentBlock::text(caption)])
@@ -1202,9 +1204,11 @@ impl McpServer {
                     })
                     .await
                 {
-                    Response::Text { text: t, .. } => {
+                    Response::Text { text: t, data, .. } => {
                         text +=
-                            &ictl_l10n::trf!("\n--- 操作后的界面 ---\n{t}", "\n--- Screen after the action ---\n{t}")
+                            &ictl_l10n::trf!("\n--- 操作后的界面 ---\n{t}", "\n--- Screen after the action ---\n{t}");
+                        let result = done(vec![ContentBlock::text(text)]);
+                        return with_elements(result, data);
                     }
                     Response::Error { message, .. } => {
                         text += &ictl_l10n::trf!("\n(读界面失败:{message})", "\n(reading the screen failed: {message})")

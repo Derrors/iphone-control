@@ -8,7 +8,7 @@ The MCP server provides 17 tools, 23 with the [developer tools](#developer-tools
 |---|---|
 | `iphone_status` | Ready or not, native or WDA, locked or not, foreground app, screen size |
 | `iphone_screenshot` | Screenshot; with `x`, `y`, `width`, `height` it returns an enlarged region for small text and icons |
-| `iphone_list_elements` | Elements with text: type, text, center, size; `filter` by text or type. Structured output includes `matched_count` in the observed tree and `truncated` when `limit` omitted matches |
+| `iphone_list_elements` | Elements with text: type, text, center, size; `filter` by text or type. Structured output includes `matched_count` in the observed tree and `truncated` when `limit` omitted matches  These fields are also returned with action and batch `then: "elements"`. |
 | `iphone_wait_for` | Wait for text to appear by default. With `state: "disappeared"`, wait for a screen without a match. Edited values in input fields do not count. `timeout` defaults to 5 seconds, max 30 |
 | `iphone_list_apps` | Installed apps; read-only, no `then` |
 

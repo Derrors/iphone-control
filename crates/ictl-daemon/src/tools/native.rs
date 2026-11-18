@@ -44,6 +44,11 @@ fn native_for(backend: IosBackend, info: Option<&DeviceInfo>) -> bool {
     backend.drives_natively(info)
 }
 
+enum PasteTarget<'a> {
+    Append(Option<&'a [String]>),
+    Replace(ictl_ax::ObjectRef),
+}
+
 /// What a paste did, as far as the fields show
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Pasted {
@@ -448,11 +453,17 @@ impl Daemon {
     ) -> crate::error::Result<String> {
         let t0 = Instant::now();
         loop {
-            if disappeared && self.native_locked(g).await? {
-                return Err(super::observe::wait_locked());
-            }
-            let tree = self.ax_tree(g, AX_WAIT).await?;
+            let screen = self.ax_snapshot(g, AX_WAIT, true).await?;
+            let (xml, size, _) = self.ax_render(g, &screen).await?;
+            let mut tree = elements::parse_tree(&xml, size);
+            tree.incomplete |= !screen.app_complete || !screen.overlays_complete;
             if let Some(result) = super::observe::wait_match(&tree, text, disappeared, t0.elapsed()) {
+                if disappeared
+                    && (self.native_locked(g).await?
+                        || (screen.springboard_front && !unlocked_springboard(&xml, &tree)))
+                {
+                    return Err(super::observe::wait_locked());
+                }
                 return Ok(result);
             }
             if t0.elapsed() >= timeout {
@@ -586,7 +597,7 @@ impl Daemon {
         let old = elements::field_values(&before.elements);
         let mut note = String::new();
         if !text.is_empty() {
-            let (typed, prompt) = self.native_paste(g, text, old.as_deref()).await?;
+            let (typed, prompt) = self.native_paste(g, text, PasteTarget::Append(old.as_deref())).await?;
             if prompt {
                 note += ictl_l10n::tr!("(已替你点了「允许粘贴」)", " (“Allow Paste” was tapped for you)");
             }
@@ -642,22 +653,36 @@ impl Daemon {
             )
             .into());
         }
-        let old = focused_text_value(&before).ok_or_else(|| {
-            ictl_l10n::tr!(
-                "无法确认当前聚焦的是可读的普通输入框，没有替换文字",
-                "Couldn't identify a readable focused text field; no text was replaced"
-            )
-        })?;
+        let (target, old) =
+            focused_text_field(&before).and_then(|f| Some((f.object?, f.value.as_str()))).ok_or_else(|| {
+                ictl_l10n::tr!(
+                    "无法确认当前聚焦的是可读的普通输入框，没有替换文字",
+                    "Couldn't identify a readable focused text field; no text was replaced"
+                )
+            })?;
         if old != text {
-            self.hid_do(g, |h| Box::pin(h.select_all())).await?;
-            let old = [old.to_owned()];
-            self.native_paste(g, text, Some(&old)).await?;
-            let after = self.ax_snapshot(g, AX_WAIT, false).await?;
-            if before.app_pid != after.app_pid || focused_text_value(&after) != Some(text) {
-                return Err(ictl_l10n::tr!(
-                    "替换后无法核对输入框全文，未按回车；请查看手机界面",
-                    "Couldn't verify the full field value after the replacement; Return was not pressed. Check the screen"
-                ).into());
+            let result = async {
+                self.hid_do(g, |h| Box::pin(h.select_all())).await?;
+                let (seen, _) = self.native_paste(g, text, PasteTarget::Replace(target)).await?;
+                if seen != Pasted::Typed {
+                    return Err(ictl_l10n::tr!(
+                        "替换后无法核对输入框全文，未按回车；请查看手机界面",
+                        "Couldn't verify the full field value after the replacement; Return was not pressed"
+                    )
+                    .into());
+                }
+                Ok(())
+            }
+            .await;
+            if let Err(err) = result {
+                if let Err(cause) = self.collapse_field_selection(g, target).await {
+                    return Err(ictl_l10n::trf!(
+                        "{err}（无法收起原输入框的选区，请在重试前查看屏幕：{cause}）",
+                        "{err} (couldn't collapse the original selection; inspect the screen before retrying: {cause})"
+                    )
+                    .into());
+                }
+                return Err(err);
             }
         }
         if submit {
@@ -674,14 +699,22 @@ impl Daemon {
         })
     }
 
-    /// Pastes `text` and waits for it to show in a field (`old`: the fields' values before; None: a password field
-    /// on screen). Returns what the fields show and whether the paste prompt was answered. The pasteboard is put
-    /// back before returning
+    async fn collapse_field_selection(&self, g: &mut Inner, target: ictl_ax::ObjectRef) -> crate::error::Result<()> {
+        let screen = self.ax_snapshot(g, AX_WAIT, true).await?;
+        if focused_text_field(&screen).and_then(|f| f.object) != Some(target)
+            || self.snapshot_tree(g, &screen).await?.alert().is_some()
+        {
+            return Err(ictl_l10n::tr!("输入焦点已改变或被弹窗遮挡", "Focus changed or an alert is in front").into());
+        }
+        self.hid_do(g, |h| Box::pin(h.collapse_selection())).await
+    }
+
+    /// Answer the system paste prompt and verify the requested edit before restoring the clipboard.
     async fn native_paste(
         &self,
         g: &mut Inner,
         text: &str,
-        old: Option<&[String]>,
+        target: PasteTarget<'_>,
     ) -> crate::error::Result<(Pasted, bool)> {
         // a paste through the WDA-down path may still wait to be put back
         self.restore_pasteboard(g, false).await;
@@ -701,11 +734,9 @@ impl Daemon {
             let deadline = Instant::now() + PASTE_WAIT;
             // when the paste prompt was last answered
             let mut answered: Option<Instant> = None;
-            let wanted = text.trim();
             let typed = loop {
-                // a whole read: the prompt brings SpringBoard to the front, but it may also come over the app (a read
-                // of the app alone missed it once in a regression run, and the paste never went in)
-                let tree = self.ax_tree(g, AX_WAIT).await?;
+                let screen = self.ax_snapshot(g, AX_WAIT, true).await?;
+                let tree = self.snapshot_tree(g, &screen).await?;
                 if let Some((x, y)) = paste_allow(&tree) {
                     self.native_tap(g, x, y).await?;
                     answered = Some(Instant::now());
@@ -715,7 +746,12 @@ impl Daemon {
                     }
                     continue;
                 }
-                let seen = paste_seen(elements::field_values(&tree.elements).as_deref(), old, wanted);
+                let seen = match target {
+                    PasteTarget::Append(old) => {
+                        paste_seen(elements::field_values(&tree.elements).as_deref(), old, text.trim())
+                    }
+                    PasteTarget::Replace(object) => replacement_seen(&screen, object, text),
+                };
                 match seen {
                     Pasted::Typed => break seen,
                     // only once the prompt was answered: before that, the paste hasn't gone in yet
@@ -821,17 +857,28 @@ impl Daemon {
     }
 }
 
-fn focused_text_value(screen: &ictl_device::ax::AxScreen) -> Option<&str> {
-    if !screen.app_complete {
-        return None;
-    }
+// PasswordProtected stays false on a phone without a passcode. Only accept a recognisable unlocked
+// SpringBoard surface: a cover sheet or an unidentified system screen cannot establish absence.
+fn unlocked_springboard(xml: &str, tree: &Tree) -> bool {
+    elements::cover_sheet(xml) == elements::CoverSheet::None
+        && tree.elements.iter().any(|e| e.kind == "Icon" || e.name == "SpotlightSearchField")
+}
+
+fn focused_text_field(screen: &ictl_device::ax::AxScreen) -> Option<&ictl_ax::Element> {
     let mut fields = screen.app.iter().filter(|e| {
         // Raw AX retains focus and exact text, including whitespace. The shared XML has been normalized for display.
         e.focused && matches!(ictl_ax::xml::kind(e), "TextField" | "TextView" | "SearchField" | "SecureTextField")
     });
     let f = fields.next()?;
-    (fields.next().is_none() && f.enabled && f.visible && ictl_ax::xml::kind(f) != "SecureTextField")
-        .then_some(f.value.as_str())
+    (fields.next().is_none() && f.enabled && f.visible && ictl_ax::xml::kind(f) != "SecureTextField").then_some(f)
+}
+
+fn replacement_seen(screen: &ictl_device::ax::AxScreen, target: ictl_ax::ObjectRef, text: &str) -> Pasted {
+    if focused_text_field(screen).is_some_and(|f| f.object == Some(target) && f.value == text) {
+        Pasted::Typed
+    } else {
+        Pasted::Missing
+    }
 }
 
 /// The phone as [`ictl_unlock`] sees it, driven natively
@@ -956,6 +1003,20 @@ mod tests {
     use super::*;
 
     #[test]
+    fn only_a_recognisable_unlocked_springboard_can_confirm_absence() {
+        let check = |markers: &str| {
+            let xml = format!(r#"<App>{markers}</App>"#);
+            let tree = elements::parse_tree(&xml, ScreenSize { width: 390.0, height: 844.0 });
+            unlocked_springboard(&xml, &tree)
+        };
+        let icon = r#"<XCUIElementTypeIcon type="Icon" label="Clock" x="10" y="10" width="54" height="54"/>"#;
+        assert!(check(icon));
+        assert!(!check(&format!(r#"{icon}<Other name="lockscreen-date-view"/>"#)));
+        assert!(!check(r#"<Other name="proud-lock"/>"#));
+        assert!(!check(r#"<StaticText label="12:25"/>"#));
+    }
+
+    #[test]
     fn replacing_text_requires_one_readable_focused_field() {
         let mut screen = ictl_device::ax::AxScreen {
             app: vec![
@@ -982,14 +1043,23 @@ mod tests {
             springboard_front: false,
             at: Instant::now(),
         };
-        assert_eq!(focused_text_value(&screen), Some(" 蓝牙 "));
+        assert_eq!(focused_text_field(&screen).map(|f| f.value.as_str()), Some(" 蓝牙 "));
+        let target = ictl_ax::ObjectRef { pid: 1, id: 2, is_app: false };
+        screen.app[1].object = Some(target);
+        screen.app[1].value = "wifi".into();
+        screen.app[0].value = "wi".into();
+        screen.app_complete = false;
+        assert_eq!(replacement_seen(&screen, target, "wi"), Pasted::Missing);
+        screen.app[1].value = "wi".into();
+        assert_eq!(replacement_seen(&screen, target, "wi"), Pasted::Typed);
+        assert_eq!(replacement_seen(&screen, ictl_ax::ObjectRef { id: 3, ..target }, "wi"), Pasted::Missing);
         screen.app[0].focused = true;
-        assert_eq!(focused_text_value(&screen), None);
+        assert_eq!(focused_text_field(&screen).map(|f| f.value.as_str()), None);
         screen.app[0].focused = false;
         screen.app[1].value = "••••".into();
-        assert_eq!(focused_text_value(&screen), Some("••••"));
+        assert_eq!(focused_text_field(&screen).map(|f| f.value.as_str()), Some("••••"));
         screen.app[1].xc_type = 50; // SecureTextField
-        assert_eq!(focused_text_value(&screen), None);
+        assert_eq!(focused_text_field(&screen).map(|f| f.value.as_str()), None);
     }
 
     /// The HID session isn't closed right after a touch (the phone takes the touch back): the rest of

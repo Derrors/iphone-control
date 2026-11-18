@@ -465,6 +465,18 @@ impl Response {
 }
 
 impl Request {
+    /// Shared by the daemon and the MCP batch preflight, before any earlier steps run.
+    pub fn check_required_text(&self) -> Result<(), String> {
+        match self {
+            Self::ReplaceText { text, .. } | Self::WaitFor { text, .. } | Self::WaitForDisappearance { text, .. }
+                if text.is_empty() =>
+            {
+                Err(ictl_l10n::tr!("text 不能为空", "text can't be empty").into())
+            }
+            _ => Ok(()),
+        }
+    }
+
     /// 会改变手机状态的操作。守护进程忙时排队太久就放弃，免得点击落到已经变了的屏幕上
     /// Every variant is listed (no `_`), so a new request type has to be classified here
     pub fn is_device_action(&self) -> bool {

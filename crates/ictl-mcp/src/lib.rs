@@ -801,6 +801,52 @@ pub fn parse_then(args: &Map<String, Value>) -> Result<ThenOpts, String> {
     Ok(ThenOpts { then, settle_ms: (secs * 1000.0) as u64 })
 }
 
+/// Each tool's argument names: the properties of its input schema, the developer tools' and
+/// [`task::CONFIRM_TOOL`]'s included
+static ARG_NAMES: std::sync::LazyLock<std::collections::HashMap<String, Vec<String>>> =
+    std::sync::LazyLock::new(|| {
+        tools_with(true)
+            .into_iter()
+            .chain([confirm_tool()])
+            .map(|t| {
+                let names = t
+                    .input_schema
+                    .get("properties")
+                    .and_then(Value::as_object)
+                    .map(|p| p.keys().cloned().collect())
+                    .unwrap_or_default();
+                (t.name.to_string(), names)
+            })
+            .collect()
+    });
+
+/// Refuses an argument `tool` doesn't take, before anything is done. Unknown arguments used to be dropped: a call
+/// with a misspelt name, or with one this version doesn't have yet, ran with the default instead and reported success
+/// (`iphone_wait_for` with `state: "disappeared"` answered “appeared” at once, #158). `extra`: names taken besides the
+/// schema's (a batch step's `tool`); `then` and the like are only taken where the schema lists them, so not in a
+/// batch's steps (the batch's own then applies). A tool this server doesn't know is left to the call to refuse
+pub fn check_args(tool: &str, args: &Map<String, Value>, extra: &[&str], then: bool) -> Result<(), String> {
+    let Some(names) = ARG_NAMES.get(tool) else { return Ok(()) };
+    let then_names = ["then", "then_filter", "then_region", "then_settle"];
+    let takes = |k: &str| (names.iter().any(|n| n == k) && (then || !then_names.contains(&k))) || extra.contains(&k);
+    let mut unknown: Vec<&str> = args.keys().map(String::as_str).filter(|k| !takes(k)).collect();
+    if unknown.is_empty() {
+        return Ok(());
+    }
+    unknown.sort_unstable();
+    let mut known: Vec<&str> =
+        names.iter().map(String::as_str).filter(|k| takes(k)).chain(extra.iter().copied()).collect();
+    known.sort_unstable();
+    known.dedup();
+    let sep = ictl_l10n::tr!("、", ", ");
+    let known = if known.is_empty() { ictl_l10n::tr!("(无)", "(none)").to_owned() } else { known.join(sep) };
+    Err(ictl_l10n::trf!(
+        "{tool} 没有参数 {},什么都没做;它的参数:{known}",
+        "{tool} has no argument {}, nothing was done; its arguments: {known}",
+        unknown.join(sep)
+    ))
+}
+
 /// 批量里的一步
 #[derive(Debug, Clone, PartialEq)]
 pub enum Step {
@@ -840,6 +886,12 @@ pub fn batch_steps(args: &Map<String, Value>) -> Result<Vec<Step>, String> {
                 ));
             }
             if tool == "wait" {
+                if let Some(k) = obj.keys().find(|k| !matches!(k.as_str(), "tool" | "seconds")) {
+                    return Err(ictl_l10n::trf!(
+                        "第 {n} 步:wait 没有参数 {k},它的参数:tool、seconds",
+                        "step {n}: wait has no argument {k}; its arguments: tool, seconds"
+                    ));
+                }
                 let secs = Args(obj).f("seconds").map_err(|e| ictl_l10n::trf!("第 {n} 步:{e}", "step {n}: {e}"))?;
                 if !(0.0..=5.0).contains(&secs) {
                     return Err(ictl_l10n::trf!(
@@ -849,7 +901,8 @@ pub fn batch_steps(args: &Map<String, Value>) -> Result<Vec<Step>, String> {
                 }
                 return Ok(Step::Wait(std::time::Duration::from_secs_f64(secs)));
             }
-            let req = match to_request(tool, obj)
+            let req = match check_args(tool, obj, &["tool"], false)
+                .and_then(|()| to_request(tool, obj))
                 .map_err(|e| ictl_l10n::trf!("第 {n} 步({tool}):{e}", "step {n} ({tool}): {e}"))?
             {
                 Request::TapElement { text, index, scroll, .. } if reuse => {
@@ -1031,6 +1084,9 @@ impl McpServer {
         let args = request.arguments.clone().unwrap_or_default();
         let work = async {
             if request.name == task::CONFIRM_TOOL {
+                if let Err(e) = check_args(&request.name, &args, &[], false) {
+                    return Ok(CallToolResult::error(vec![ContentBlock::text(e)]).into());
+                }
                 let r = match task::confirm(&self.socket, &args).await {
                     Ok(m) => CallToolResult::success(vec![ContentBlock::text(m)]),
                     Err(m) => CallToolResult::error(vec![ContentBlock::text(m)]),
@@ -1071,6 +1127,9 @@ impl McpServer {
 
     async fn call_tool_inner(&self, request: CallToolRequestParams) -> Result<CallToolResponse, ErrorData> {
         let args = request.arguments.unwrap_or_default();
+        if let Err(e) = check_args(&request.name, &args, &[], true) {
+            return Ok(to_result(Response::error(e)).into());
+        }
         let then = match parse_then(&args) {
             Ok(t) => t,
             Err(e) => return Ok(to_result(Response::error(e)).into()),
@@ -1495,6 +1554,49 @@ mod tests {
         assert!(then(json!({"then": "video"})).is_err());
         assert_eq!(parse_then(&args(json!({"then": "screenshot", "then_settle": 5}))).unwrap().settle_ms, 5000);
         assert!(parse_then(&args(json!({"then_settle": 30}))).is_err());
+    }
+
+    /// #158: an argument the tool doesn't take is refused, not dropped (a wait for disappearance ran as a wait for
+    /// appearance and answered at once)
+    #[test]
+    fn unknown_arguments_are_refused() {
+        let e = check_args("iphone_wait_for", &args(json!({"text": "飞行模式", "state": "disappeared"})), &[], true)
+            .unwrap_err();
+        assert!(e.contains("state") && e.contains("text") && e.contains("timeout"), "{e}");
+        // misspelt
+        assert!(check_args("iphone_type_text", &args(json!({"text": "a", "sumbit": true})), &[], true).is_err());
+        // every documented argument, then on an action, null for a default
+        assert!(
+            check_args(
+                "iphone_type_text",
+                &args(json!({"text": "a", "submit": true, "then": "elements",
+            "then_filter": "x", "then_settle": 1})),
+                &[],
+                true
+            )
+            .is_ok()
+        );
+        assert!(check_args("iphone_list_elements", &args(json!({"limit": null})), &[], true).is_ok());
+        // then only where the schema lists it
+        assert!(check_args("iphone_screenshot", &args(json!({"then": "elements"})), &[], true).is_err());
+        assert!(check_args("iphone_status", &args(json!({})), &[], true).is_ok());
+        assert!(check_args("iphone_batch", &args(json!({"steps": [], "then": "screenshot"})), &[], true).is_ok());
+        // developer tools and the confirm tool have their own; a tool this server doesn't know is left alone
+        assert!(check_args("iphone_web_eval", &args(json!({"expression": "1", "timeout": 2})), &[], true).is_ok());
+        assert!(
+            check_args(task::CONFIRM_TOOL, &args(json!({"action": "a", "detail": "b", "x": 1})), &[], false).is_err()
+        );
+        assert!(check_args("no_such_tool", &args(json!({"x": 1})), &[], true).is_ok());
+    }
+
+    #[test]
+    fn batch_steps_refuse_unknown_arguments() {
+        let bad = |step: Value| batch_steps(&args(json!({"steps": [step]}))).unwrap_err();
+        let e = bad(json!({"tool": "iphone_wait_for", "text": "x", "state": "disappeared"}));
+        assert!(e.contains("第 1 步") && e.contains("state"), "{e}");
+        // a step's then would be ignored (the batch's then applies): refused, not dropped
+        assert!(bad(json!({"tool": "iphone_tap", "x": 1, "y": 2, "then": "elements"})).contains("then"));
+        assert!(bad(json!({"tool": "wait", "seconds": 1, "secs": 2})).contains("secs"));
     }
 
     #[test]

@@ -117,7 +117,8 @@ impl Tunnel {
             tracing::debug!("remoteAXService: walk cut at {} elements", elements.len());
         }
         if elements.is_empty() {
-            return Err(DeviceError::Timeout(ictl_l10n::tr!("没有读到界面元素", "no screen elements read").into()));
+            tracing::debug!("remoteAXService: app {} reads no elements on a new session either", app.pid);
+            return Err(nothing_read());
         }
         let overlays = if overlays { self.ax_overlays(app.pid).await } else { Vec::new() };
         Ok(AxScreen {
@@ -197,6 +198,15 @@ impl Tunnel {
 // SpringBoard's application element answers whichever app is in front: its children are the status bar's items
 // and whatever it draws over the app; see `Tunnel::ax_overlays`
 
+/// The frontmost app reads no elements at all, not even its own application element, on a new session too. axauditd
+/// gets stuck this way as well (iPhone19,7, iOS 27.2.1): every app read empty, SpringBoard read as usual, with no
+/// timeout, and neither a new session nor restarting the daemon helped; ending axauditd did. So it is told as the
+/// service not answering ([`DeviceError::AxUnanswered`], read the same as before), which the daemon restarts it for.
+/// Not to be confused with the lock screen under the HID screen stream (#126), which reads one element, the app's
+fn nothing_read() -> DeviceError {
+    DeviceError::AxUnanswered(ictl_l10n::tr!("没有读到界面元素", "no screen elements read").into())
+}
+
 /// The frontmost app's element, asked again for up to `wait` while the phone has none (between two apps)
 async fn frontmost(s: &AxSession, wait: Duration) -> Result<ObjectRef> {
     let deadline = Instant::now() + wait;
@@ -222,6 +232,15 @@ mod wedge_tests {
         let e = DeviceError::from(ictl_ax::AxError::Timeout("deviceAPIVersion"));
         assert!(matches!(&e, DeviceError::AxUnanswered(w) if w == "remoteAXService: deviceAPIVersion"), "{e:?}");
         assert_eq!(e.to_string(), DeviceError::Timeout("remoteAXService: deviceAPIVersion".into()).to_string());
+    }
+
+    /// An app that reads no elements at all is axauditd stuck too (restarted for), and says what it said before
+    #[test]
+    fn an_app_read_with_no_elements_is_an_unanswered_accessibility_service() {
+        let e = nothing_read();
+        assert!(matches!(&e, DeviceError::AxUnanswered(_)), "{e:?}");
+        let before = DeviceError::Timeout(ictl_l10n::tr!("没有读到界面元素", "no screen elements read").into());
+        assert_eq!(e.to_string(), before.to_string());
     }
 
     /// Paths as the phone lists them (iOS 27.2.1); only axauditd itself is ended

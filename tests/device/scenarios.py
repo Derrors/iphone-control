@@ -22,7 +22,8 @@ Scenarios (the numbers are regression cases):
            and an app started right afterwards stays in front (#130)
   idle     after the daemon has closed the idle HID session, Home on the home screen and an app started right
            afterwards stays in front (#157); takes about 2 minutes (it waits for the session to close)
-  url      a link opened right after its app was terminated opens (#131); text on the web page can be waited for (#133)
+  url      a link opened right after its app was terminated opens (#131; in Safari natively, in the default browser
+           through WDA); text on the web page can be waited for (#133)
   lock     the lock button locks within seconds, again and again (#59, #102, #105); the next action unlocks first
            and says so (#144); a tap right after unlocking isn't swallowed (#127)
 
@@ -39,6 +40,7 @@ import argparse
 import asyncio
 import base64
 import json
+import re
 import os
 import shlex
 import sys
@@ -301,8 +303,13 @@ async def url(p: Phone):
     err, text, dt, _ = await p.call("iphone_open_url", {"url": "https://example.com"})
     # iPad 的过渡动画中回答可能暂时写 DockFolderViewService；用实际前台状态核对启动结果。
     front = await p.front()
-    check(c, f"#131 a link opened right after Safari was terminated opens in Safari ({dt:.2f}s)",
-          not err and "https://example.com" in text and dev.SAFARI in front, f"{text} / {front}")
+    # natively a web link always opens in Safari; through WDA the system opens it in the default browser, which may be
+    # another one (Chrome): the app the answer names, in front and not the home screen, is as good
+    m = re.search(r"(?:前台|foreground) ([\w.-]+)", text)
+    opened = m.group(1) if m else ""
+    in_browser = dev.SAFARI in front or (bool(opened) and opened != dev.SPRINGBOARD and opened in front)
+    check(c, f"#131 a link opened right after Safari was terminated opens in a browser ({opened or '?'}, {dt:.2f}s)",
+          not err and "https://example.com" in text and in_browser, f"{text} / {front}")
     if not err and dev.SAFARI in front and dev.SAFARI not in text:
         print(f"NOTE [{c}] 打开链接的回答和随后查询的前台 App 不一致：{short(text)}", flush=True)
     # a word of the page's English paragraph (the page has no heading in the tree, and its first paragraph follows

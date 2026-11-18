@@ -468,9 +468,8 @@ impl Request {
     /// Shared by the daemon and the MCP batch preflight, before any earlier steps run.
     pub fn check_required_text(&self) -> Result<(), String> {
         match self {
-            Self::ReplaceText { text, .. } | Self::WaitFor { text, .. } | Self::WaitForDisappearance { text, .. }
-                if text.is_empty() =>
-            {
+            // an empty ReplaceText empties the field
+            Self::WaitFor { text, .. } | Self::WaitForDisappearance { text, .. } if text.is_empty() => {
                 Err(ictl_l10n::tr!("text 不能为空", "text can't be empty").into())
             }
             _ => Ok(()),

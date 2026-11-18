@@ -25,6 +25,8 @@ const PASTE_WAIT: Duration = Duration::from_secs(5);
 /// After the paste prompt was answered, a field that already showed the text and doesn't change for this long took
 /// the paste as it was: the pasted text replaced the same text, selected (Spotlight keeps the last search selected).
 /// A paste shows in the field within about half a second of the answer
+/// How long a field emptied by [`Daemon::replace_text`] may take to read as empty
+const CLEAR_WAIT: Duration = Duration::from_millis(1500);
 const PASTE_SAME_SETTLE: Duration = Duration::from_millis(1500);
 /// How long an app may take to come to the front
 const LAUNCH_WAIT: Duration = Duration::from_secs(8);
@@ -654,7 +656,7 @@ impl Daemon {
             .into());
         }
         let (target, old) =
-            focused_text_field(&before).and_then(|f| Some((f.object?, f.value.as_str()))).ok_or_else(|| {
+            focused_text_field(&before).and_then(|f| Some((f.object?, shown_text(f)))).ok_or_else(|| {
                 ictl_l10n::tr!(
                     "无法确认当前聚焦的是可读的普通输入框，没有替换文字",
                     "Couldn't identify a readable focused text field; no text was replaced"
@@ -663,7 +665,13 @@ impl Daemon {
         if old != text {
             let result = async {
                 self.hid_do(g, |h| Box::pin(h.select_all())).await?;
-                let (seen, _) = self.native_paste(g, text, PasteTarget::Replace(target)).await?;
+                let seen = if text.is_empty() {
+                    // emptying: Delete takes the selection, nothing is pasted (no paste prompt)
+                    self.hid_do(g, |h| Box::pin(h.delete_backward())).await?;
+                    self.native_field_emptied(g, target).await?
+                } else {
+                    self.native_paste(g, text, PasteTarget::Replace(target)).await?.0
+                };
                 if seen != Pasted::Typed {
                     return Err(ictl_l10n::tr!(
                         "替换后无法核对输入框全文，未按回车；请查看手机界面",
@@ -689,14 +697,28 @@ impl Daemon {
             self.hid_do(g, |h| Box::pin(h.type_ascii("\n"))).await?;
         }
         let n = text.chars().count();
-        Ok(if submit {
-            ictl_l10n::trf!(
+        Ok(match (n, submit) {
+            (0, true) => ictl_l10n::tr!("已清空输入框，并按了回车", "Emptied the field and pressed Return").into(),
+            (0, false) => ictl_l10n::tr!("已清空输入框", "Emptied the field").into(),
+            (_, true) => ictl_l10n::trf!(
                 "已替换为 {n} 个字符，并按了回车",
                 "Replaced the field with {n} characters and pressed Return"
-            )
-        } else {
-            ictl_l10n::trf!("已替换为 {n} 个字符", "Replaced the field with {n} characters")
+            ),
+            (_, false) => ictl_l10n::trf!("已替换为 {n} 个字符", "Replaced the field with {n} characters"),
         })
+    }
+
+    /// After select all and Delete: `target` reads as empty within [`CLEAR_WAIT`]
+    async fn native_field_emptied(&self, g: &mut Inner, target: ictl_ax::ObjectRef) -> crate::error::Result<Pasted> {
+        let deadline = Instant::now() + CLEAR_WAIT;
+        loop {
+            let screen = self.ax_snapshot(g, AX_WAIT, false).await?;
+            let seen = replacement_seen(&screen, target, "");
+            if seen == Pasted::Typed || Instant::now() >= deadline {
+                return Ok(seen);
+            }
+            tokio::time::sleep(Duration::from_millis(150)).await;
+        }
     }
 
     async fn collapse_field_selection(&self, g: &mut Inner, target: ictl_ax::ObjectRef) -> crate::error::Result<()> {
@@ -873,8 +895,15 @@ fn focused_text_field(screen: &ictl_device::ax::AxScreen) -> Option<&ictl_ax::El
     (fields.next().is_none() && f.enabled && f.visible && ictl_ax::xml::kind(f) != "SecureTextField").then_some(f)
 }
 
+/// What a field holds: an empty field reads its placeholder as its value natively (Spotlight's empty field reads
+/// «搜索»), so that counts as empty. A field holding exactly its placeholder's words reads as empty too: rare, and
+/// replacing it with other text still works (only emptying it is then taken as done already)
+fn shown_text(f: &ictl_ax::Element) -> &str {
+    if !f.placeholder.is_empty() && f.value == f.placeholder { "" } else { &f.value }
+}
+
 fn replacement_seen(screen: &ictl_device::ax::AxScreen, target: ictl_ax::ObjectRef, text: &str) -> Pasted {
-    if focused_text_field(screen).is_some_and(|f| f.object == Some(target) && f.value == text) {
+    if focused_text_field(screen).is_some_and(|f| f.object == Some(target) && shown_text(f) == text) {
         Pasted::Typed
     } else {
         Pasted::Missing
@@ -1053,6 +1082,14 @@ mod tests {
         screen.app[1].value = "wi".into();
         assert_eq!(replacement_seen(&screen, target, "wi"), Pasted::Typed);
         assert_eq!(replacement_seen(&screen, ictl_ax::ObjectRef { id: 3, ..target }, "wi"), Pasted::Missing);
+        // emptied: the field reads its placeholder as its value
+        screen.app[1].placeholder = "搜索".into();
+        screen.app[1].value = "搜索".into();
+        assert_eq!(replacement_seen(&screen, target, ""), Pasted::Typed);
+        screen.app[1].value = "搜索结果".into();
+        assert_eq!(replacement_seen(&screen, target, ""), Pasted::Missing);
+        screen.app[1].value = "wi".into();
+        screen.app[1].placeholder = String::new();
         screen.app[0].focused = true;
         assert_eq!(focused_text_field(&screen).map(|f| f.value.as_str()), None);
         screen.app[0].focused = false;

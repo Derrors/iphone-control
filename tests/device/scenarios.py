@@ -14,7 +14,7 @@ Scenarios (the numbers are regression cases):
            selecting the device already selected, an enlarged region (#16), then=screenshot
   typing   typing with no keyboard up is refused and types nothing (#32); the same text typed twice into
            Spotlight counts as typed the second time too (#143)
-  editing  replace focused text on native iOS (#159), read element-limit metadata (#160),
+  editing  replace and empty focused text on native iOS (#159), read element-limit metadata (#160),
            and wait for a visible Clock tab to disappear (#161)
   fresh    a tap right after a cold start isn't swallowed (#13); then=elements shows the page after the tap,
            not the one before (#125)
@@ -217,6 +217,12 @@ async def editing(p: Phone):
                 if not check("#159", f"replace the focused Spotlight query with {wanted!r} ({dt:.2f}s)",
                              not err and spotlight_queries(readback) == [wanted], answer if err else readback):
                     return
+            # empty text empties it; the empty field reads its placeholder as its value
+            err, answer, dt, _ = await p.call("iphone_type_text", {"text": "", "replace": True})
+            readback = await p.ok(c, "iphone_list_elements", {"filter": "SearchField"})
+            check("#159", f"replace with empty text empties the Spotlight query ({dt:.2f}s)",
+                  not err and says(answer, dev.T("已清空", "Emptied")) and "蓝牙" not in readback,
+                  answer if err else readback)
         finally:
             await p.home(c)
         err, answer, _, _ = await p.call("iphone_type_text", {"text": "蓝牙", "replace": True, "submit": True})

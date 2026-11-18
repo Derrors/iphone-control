@@ -275,6 +275,12 @@ impl HidSession {
         self.command_shortcut(KEY_A, ictl_l10n::tr!("HID 全选", "HID select all")).await
     }
 
+    /// Delete (Backspace): with text selected, deletes it
+    pub async fn delete_backward(&mut self) -> Result<()> {
+        const DELETE: u64 = 0x2a;
+        limit("HID Delete", Duration::from_secs(10), self.send_keys(vec![(DELETE, false)])).await
+    }
+
     pub async fn collapse_selection(&mut self) -> Result<()> {
         const RIGHT_ARROW: u64 = 0x4f;
         limit("HID Right Arrow", Duration::from_secs(10), self.send_keys(vec![(RIGHT_ARROW, false)])).await

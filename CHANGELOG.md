@@ -12,7 +12,7 @@ What changed in each release, one line per change. Versions follow [Semantic Ver
 
 ### New
 
-- With native control, `iphone_type_text` supports `replace: true` and verifies the full field value before pressing Return.
+- With native control, `iphone_type_text` supports `replace: true` (empty text empties the field) and verifies the full field value before pressing Return; when it fails, the old text is left unselected.
 - `iphone_list_elements` reports the match count and whether `limit` truncated the list in its structured result.
 - `iphone_wait_for` can wait for text to disappear without mistaking an incomplete screen read for success.
 

@@ -22,10 +22,18 @@ const OVERLAY_BUDGET: Duration = Duration::from_secs(2);
 impl From<ictl_ax::AxError> for DeviceError {
     fn from(e: ictl_ax::AxError) -> Self {
         match e {
-            ictl_ax::AxError::Timeout(what) => Self::Timeout(format!("remoteAXService: {what}")),
+            ictl_ax::AxError::Timeout(what) => Self::AxUnanswered(format!("remoteAXService: {what}")),
             other => Self::Idevice(other.to_string()),
         }
     }
+}
+
+/// After axauditd is ended, how long launchd is given before the next connection starts it again
+const AX_DAEMON_RESTART: Duration = Duration::from_secs(1);
+
+/// The phone's process behind remoteAXService
+pub fn is_ax_daemon(exe: &str) -> bool {
+    exe.ends_with("/AccessibilityAudit.framework/Support/axauditd")
 }
 
 /// One read of the screen
@@ -68,7 +76,11 @@ impl Tunnel {
                 limit(ictl_l10n::tr!("连接无障碍服务", "connect to the accessibility service"), CONNECT_WAIT, async {
                     Ok(AxSession::connect(stream, CONNECT_WAIT).await?)
                 })
-                .await?;
+                .await
+                .map_err(|e| match e {
+                    DeviceError::Timeout(what) => DeviceError::AxUnanswered(what),
+                    e => e,
+                })?;
             self.ax = Some(s);
         }
         Ok(self.ax.as_ref().expect("just opened"))
@@ -143,6 +155,23 @@ impl Tunnel {
         })
     }
 
+    /// Ends axauditd, the phone's process behind remoteAXService; the next connection starts it again. It can get stuck
+    /// (iPhone 15 Pro Max, iOS 27.2.1: after automatic unlocks and daemon restarts): every handshake then times out
+    /// on `deviceAPIVersion`, a new session or tunnel doesn't help, and before this only replugging the phone did.
+    /// Returns how many processes were ended (0: it wasn't running)
+    pub async fn restart_ax_daemon(&mut self) -> Result<usize> {
+        self.close_ax().await;
+        let pids: Vec<u64> =
+            self.processes().await?.into_iter().filter(|(_, exe)| is_ax_daemon(exe)).map(|(pid, _)| pid).collect();
+        for pid in &pids {
+            self.signal(*pid, 9).await?;
+        }
+        if !pids.is_empty() {
+            tokio::time::sleep(AX_DAEMON_RESTART).await;
+        }
+        Ok(pids.len())
+    }
+
     /// The frontmost app's process (one request, no walk)
     pub async fn ax_frontmost_pid(&mut self, wait: Duration) -> Result<i64> {
         let s = self.ax().await?;
@@ -179,6 +208,32 @@ async fn frontmost(s: &AxSession, wait: Duration) -> Result<ObjectRef> {
                 tokio::time::sleep(Duration::from_millis(200)).await;
             }
             Err(e) => return Err(e.into()),
+        }
+    }
+}
+
+#[cfg(test)]
+mod wedge_tests {
+    use super::*;
+
+    /// remoteAXService not answering is an error of its own (the daemon restarts axauditd for it), worded as before
+    #[test]
+    fn an_unanswered_accessibility_service_is_told_apart_and_reads_as_a_timeout() {
+        let e = DeviceError::from(ictl_ax::AxError::Timeout("deviceAPIVersion"));
+        assert!(matches!(&e, DeviceError::AxUnanswered(w) if w == "remoteAXService: deviceAPIVersion"), "{e:?}");
+        assert_eq!(e.to_string(), DeviceError::Timeout("remoteAXService: deviceAPIVersion".into()).to_string());
+    }
+
+    /// Paths as the phone lists them (iOS 27.2.1); only axauditd itself is ended
+    #[test]
+    fn only_axauditd_is_the_accessibility_daemon() {
+        assert!(is_ax_daemon("file:///System/Library/PrivateFrameworks/AccessibilityAudit.framework/Support/axauditd"));
+        for other in [
+            "file:///System/Library/PrivateFrameworks/AXAssetLoader.framework/Support/axassetsd",
+            "file:///System/Library/CoreServices/AccessibilityUIServer.app/AccessibilityUIServer",
+            "file:///System/Library/Frameworks/MediaAccessibility.framework/XPCServices/com.apple.accessibility.mediaaccessibilityd.xpc/com.apple.accessibility.mediaaccessibilityd",
+        ] {
+            assert!(!is_ax_daemon(other), "{other}");
         }
     }
 }

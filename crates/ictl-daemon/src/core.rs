@@ -441,6 +441,8 @@ pub(crate) struct PerDevice {
     pub repeats: crate::tools::Repeats,
     /// 最近一个操作开始的时间：原生控制等界面稳定时，从这之后的推送算起
     pub acted_at: Option<Instant>,
+    /// 原生控制：上次因为无障碍服务不应答而重启手机上 axauditd 的时间（`tools::native::AX_RESTART_EVERY` 内只重启一次）
+    pub ax_restarted: Option<Instant>,
     /// How long the request being handled spent unlocking the phone first ([`Daemon::ensure_unlocked`]); taken by
     /// [`Daemon::dispatch`], which says so in the answer
     pub unlocked: Option<Duration>,

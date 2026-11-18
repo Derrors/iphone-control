@@ -911,9 +911,10 @@ enum Cover {
     None,
     /// The lock screen, known by its marks ([`elements::cover_sheet`])
     Locked,
-    /// Notification center, control center, or SpringBoard in front with something not known as unlocked: the lock
-    /// screen often reads natively without its marks (6-7 elements: date, time, notifications, flashlight, camera;
-    /// iPhone19,7, iOS 27.2.1), and lockdown says locked only on a phone with a passcode
+    /// Notification center, control center, or the lock screen without the marks [`elements::cover_sheet`] knows it
+    /// by, as it often reads natively: SpringBoard in front without app icons (6-7 elements: date, time,
+    /// notifications, flashlight, camera; iPhone19,7, iOS 27.2.1), or another process in front with the lock
+    /// screen's buttons ([`cover_mark`]). Lockdown says locked only on a phone with a passcode
     Other,
 }
 
@@ -922,8 +923,19 @@ fn native_cover(xml: &str, screen: &ictl_device::ax::AxScreen, tree: &Tree) -> C
         elements::CoverSheet::Locked => Cover::Locked,
         elements::CoverSheet::NotificationCenter => Cover::Other,
         elements::CoverSheet::None if screen.springboard_front && !unlocked_springboard(tree) => Cover::Other,
+        elements::CoverSheet::None if tree.elements.iter().any(cover_mark) => Cover::Other,
         elements::CoverSheet::None => Cover::None,
     }
+}
+
+/// An element only the lock screen and notification center show, whichever process is in front: the flashlight
+/// and camera buttons at the bottom, and the sleep lock screen's own elements. During a sleep focus the lock screen
+/// is another process (`SleepLockScreen`), not SpringBoard, with SpringBoard's elements over it (iPhone19,7, iOS
+/// 27.2.1, 2026-11-19 00:04)
+fn cover_mark(e: &elements::Element) -> bool {
+    e.name == "flashlight-orb-button"
+        || e.name.starts_with("system-orb-button-")
+        || e.name.starts_with("UIA.SleepLockScreen")
 }
 
 /// SpringBoard in front, recognisably unlocked: the home screen (app icons) or Spotlight
@@ -1106,6 +1118,14 @@ mod tests {
         assert_eq!(cover(lock, true), Cover::Other);
         // an app in front: its own screen, whatever is on it
         assert_eq!(cover(lock, false), Cover::None);
+        // the sleep lock screen: another process in front, SpringBoard's flashlight and camera over it
+        let sleep = r#"<XCUIElementTypeButton label="无闹钟" name="UIA.SleepLockScreen.Alarm.Button" x="100" y="300" width="200" height="50"/>
+<XCUIElementTypeStaticText label="00:04" x="120" y="120" width="200" height="90"/>
+<XCUIElementTypeButton label="手电筒" name="flashlight-orb-button" x="40" y="760" width="50" height="50"/>
+<XCUIElementTypeButton label="相机" name="system-orb-button-com.apple.camera.deeplink.button" x="350" y="760" width="50" height="50"/>"#;
+        assert_eq!(cover(sleep, false), Cover::Other);
+        let orb = r#"<XCUIElementTypeButton label="手电筒" name="flashlight-orb-button" x="40" y="760" width="50" height="50"/>"#;
+        assert_eq!(cover(orb, false), Cover::Other);
     }
 
     #[test]

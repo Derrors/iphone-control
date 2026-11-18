@@ -6,25 +6,27 @@ What changed in each release, one line per change. Versions follow [Semantic Ver
 
 ## [Unreleased]
 
+## [0.2.8] - 2026-11-18
+
 ### New
 
-- `iphone_tap` takes `count` (1–10): the taps go in one gesture, about 0.1 s apart, so a double tap or several quick taps work; separate calls are about 0.5 s apart. An older daemon ignores it and taps once.
-- `iphone_batch` takes `one_gesture`: a batch of coordinate taps runs as one gesture, about twice as fast for pressing keys on a keyboard.
-- `iphone_swipe` takes `hold`: hold still at the start before moving, to drag home-screen icons and other things that need a long press first. An older daemon ignores it and swipes as before.
-- `iphone_tap_element` takes `scroll` (`down` / `up`) and `max_scrolls`: when the element isn't on screen it scrolls slowly and looks again, and taps it once found. An older daemon ignores them and only looks at the current screen.
+- `iphone_tap` takes `count` to tap the same point several times in one go, so double taps and entries that need quick repeated taps work (#141).
+- `iphone_batch` takes `one_gesture`: a run of coordinate taps, such as keys on a keyboard, goes in one gesture, about twice as fast (#143).
+- `iphone_swipe` takes `hold` to hold still before moving, so home-screen icons and other things that need a long press first can be dragged (#144).
+- `iphone_tap_element` takes `scroll` (`down` / `up`) and `max_scrolls`: when the element isn't on screen, it scrolls and looks again, and taps it once found (#147).
 
 ### Improvements
 
-- When the same action leaves the screen unchanged again and again, the result says how many times in a row and to try something else.
-
+- When the same action leaves the screen unchanged again and again, the result says how many times in a row and to try something else (#145).
 - An action that had to unlock the phone first says so, and how long it took (#135).
 
 ### Fixes
 
-- Native control (iOS 27): the floating search bar at the bottom of Settings counts as covering the rows under it, as it does through WDA. Tapping a row under it by text taps its visible part instead of opening the search.
-- Launching a system app for the first time no longer hangs for 60 seconds behind its privacy notice and restarts WDA; it returns at once and says the notice is in the way.
-- `iphone_tap_element` that found nothing to tap no longer says, with `then`, that "the action may not have taken effect"; it also returns the screen without waiting for it to settle.
-- A WDA probe that answers, even with an error, resets the timeout count instead of accumulating unrelated slow requests into a stall. Recovery logs state the reason, and timeout logs include the endpoint and elapsed time.
+- Elements in an app's in-app browser are no longer placed one navigation bar too low, so tapping them by text hits them (#139).
+- Launching a system app for the first time no longer hangs for a minute behind its privacy notice and restarts WDA; it says at once that the notice is in the way (#148).
+- With native control (iOS 27), a row under the floating search bar of Settings is no longer tapped through the bar, which opened the search (#150).
+- `iphone_tap_element` that tapped nothing no longer claims, with `then`, that the action may not have taken effect, and answers sooner (#149).
+- A few slow WDA requests no longer add up to a needless WDA restart (#140).
 
 ## [0.2.7] - 2026-11-15
 
@@ -321,7 +323,8 @@ First public release.
 - `setup`, `doctor`, `status` and `mcp-config`.
 - Docker image and prebuilt Linux binaries.
 
-[Unreleased]: https://github.com/Derrors/iphone-control/compare/v0.2.7...HEAD
+[Unreleased]: https://github.com/Derrors/iphone-control/compare/v0.2.8...HEAD
+[0.2.8]: https://github.com/Derrors/iphone-control/compare/v0.2.7...v0.2.8
 [0.2.7]: https://github.com/Derrors/iphone-control/compare/v0.2.6...v0.2.7
 [0.2.6]: https://github.com/Derrors/iphone-control/compare/v0.2.5...v0.2.6
 [0.2.5]: https://github.com/Derrors/iphone-control/compare/v0.2.4...v0.2.5

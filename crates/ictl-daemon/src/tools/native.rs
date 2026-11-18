@@ -5,7 +5,7 @@
 //!
 //! The tools keep their WDA code; where WDA isn't there they come here when [`Daemon::native`] says so.
 
-use ictl_device::{ClipboardRestore, DeviceInfo};
+use ictl_device::DeviceInfo;
 use ictl_unlock::Screen;
 use ictl_wda::client::LockCheck;
 use ictl_wda::elements::View;
@@ -25,6 +25,10 @@ const PASTE_WAIT: Duration = Duration::from_secs(5);
 /// After the paste prompt was answered, a field that already showed the text and doesn't change for this long took
 /// the paste as it was: the pasted text replaced the same text, selected (Spotlight keeps the last search selected).
 /// A paste shows in the field within about half a second of the answer
+/// How long a field emptied by [`Daemon::replace_text`] may take to read as empty
+const CLEAR_WAIT: Duration = Duration::from_millis(1500);
+/// How often a wait for text to disappear asks lockdown whether the phone is locked (a new connection each time)
+const LOCK_ASK_EVERY: Duration = Duration::from_secs(1);
 const PASTE_SAME_SETTLE: Duration = Duration::from_millis(1500);
 /// How long an app may take to come to the front
 const LAUNCH_WAIT: Duration = Duration::from_secs(8);
@@ -42,6 +46,11 @@ const LAUNCH_SETTLE: Duration = Duration::from_millis(800);
 /// See [`IosBackend::drives_natively`]
 fn native_for(backend: IosBackend, info: Option<&DeviceInfo>) -> bool {
     backend.drives_natively(info)
+}
+
+enum PasteTarget<'a> {
+    Append(Option<&'a [String]>),
+    Replace(ictl_ax::ObjectRef),
 }
 
 /// What a paste did, as far as the fields show
@@ -229,8 +238,8 @@ impl Daemon {
 
     /// The screen's elements through remoteAXService (see [`Self::ax_read`])
     pub(crate) async fn ax_tree(&self, g: &mut Inner, wait: Duration) -> crate::error::Result<Tree> {
-        let (xml, size, _) = self.ax_read(g, wait).await?;
-        Ok(elements::parse_tree(&xml, size))
+        let screen = self.ax_snapshot(g, wait, true).await?;
+        self.snapshot_tree(g, &screen).await
     }
 
     /// The frontmost app's bundle ID (one request, no walk)
@@ -389,13 +398,15 @@ impl Daemon {
 
     async fn snapshot_tree(&self, g: &mut Inner, s: &ictl_device::ax::AxScreen) -> crate::error::Result<Tree> {
         let (xml, size, _) = self.ax_render(g, s).await?;
-        Ok(elements::parse_tree(&xml, size))
+        let mut tree = elements::parse_tree(&xml, size);
+        tree.incomplete |= !s.app_complete || !s.overlays_complete;
+        Ok(tree)
     }
 
     /// `s`, a read of the app alone, with what SpringBoard shows over it, as a tree
     async fn with_overlays(&self, g: &mut Inner, mut s: ictl_device::ax::AxScreen) -> crate::error::Result<Tree> {
         if let Some(t) = g.tunnel.as_mut() {
-            s.overlays = t.ax_overlays(s.app_pid).await;
+            (s.overlays, s.overlays_complete) = t.ax_overlays(s.app_pid).await;
         }
         self.snapshot_tree(g, &s).await
     }
@@ -442,28 +453,50 @@ impl Daemon {
         g: &mut Inner,
         text: &str,
         timeout: Duration,
+        disappeared: bool,
     ) -> crate::error::Result<String> {
+        use super::observe::Waited;
         let t0 = Instant::now();
+        // lockdown's last answer, and when (None: it failed)
+        let mut lock: Option<(Instant, Option<bool>)> = None;
         loop {
-            let tree = self.ax_tree(g, AX_WAIT).await?;
-            // 不算输入框里的字：刚输入的搜索词不能算「结果出来了」
-            if let Some(e) = elements::find_shown(&tree.elements, text).first() {
-                return Ok(ictl_l10n::trf!(
-                    "已出现 {}({:.1} 秒)",
-                    "Appeared: {} ({:.1} s)",
-                    e.describe(),
-                    t0.elapsed().as_secs_f64()
-                ));
-            }
+            let screen = self.ax_snapshot(g, AX_WAIT, true).await?;
+            let (xml, size, _) = self.ax_render(g, &screen).await?;
+            let mut tree = elements::parse_tree(&xml, size);
+            tree.incomplete |= !screen.app_complete || !screen.overlays_complete;
+            let why = match super::observe::wait_match(&tree, text, disappeared, t0.elapsed()) {
+                Some(result) if !disappeared => return Ok(result),
+                Some(result) => {
+                    // the read first (costs nothing more), then lockdown: it says locked before the read shows the
+                    // lock screen, but only on a phone with a passcode, so it can't be the only check. Asked at most
+                    // every LOCK_ASK_EVERY (a new connection each time); a failure leaves it unknown, not the wait
+                    let cover = native_cover(&xml, &screen, &tree);
+                    if cover == Cover::Locked {
+                        return Err(super::observe::wait_locked());
+                    }
+                    let locked = match lock {
+                        Some((at, answer)) if at.elapsed() < LOCK_ASK_EVERY => answer,
+                        _ => {
+                            let answer = self.native_locked(g).await.inspect_err(|e| {
+                                tracing::debug!("lock state while waiting for {text:?} to disappear: {e}")
+                            });
+                            let answer = answer.ok();
+                            lock = Some((Instant::now(), answer));
+                            answer
+                        }
+                    };
+                    match (cover, locked) {
+                        (_, Some(true)) => return Err(super::observe::wait_locked()),
+                        (Cover::None, Some(false)) => return Ok(result),
+                        _ => Waited::Covered,
+                    }
+                }
+                None => Waited::after(&tree, text, disappeared),
+            };
             if t0.elapsed() >= timeout {
-                return Err(ictl_l10n::trf!(
-                    "{:.0} 秒内没出现包含 \"{text}\" 的元素,截图看看屏幕",
-                    "No element containing \"{text}\" appeared within {:.0} s; take a screenshot to look at the screen",
-                    timeout.as_secs_f64()
-                )
-                .into());
+                return Err(super::observe::wait_timeout(text, timeout, why));
             }
-            tokio::time::sleep(Duration::from_millis(300)).await;
+            tokio::time::sleep(Duration::from_millis(300).min(timeout.saturating_sub(t0.elapsed()))).await;
         }
     }
 
@@ -591,7 +624,7 @@ impl Daemon {
         let old = elements::field_values(&before.elements);
         let mut note = String::new();
         if !text.is_empty() {
-            let (typed, prompt) = self.native_paste(g, text, old.as_deref()).await?;
+            let (typed, prompt) = self.native_paste(g, text, PasteTarget::Append(old.as_deref())).await?;
             if prompt {
                 note += ictl_l10n::tr!("(已替你点了「允许粘贴」)", " (“Allow Paste” was tapped for you)");
             }
@@ -633,14 +666,102 @@ impl Daemon {
         ))
     }
 
-    /// Pastes `text` and waits for it to show in a field (`old`: the fields' values before; None: a password field
-    /// on screen). Returns what the fields show and whether the paste prompt was answered. The pasteboard is put
-    /// back before returning
+    /// Replace a single focused, readable field. Verify the full value before sending Return.
+    pub(crate) async fn replace_text(&self, g: &mut Inner, text: &str, submit: bool) -> crate::error::Result<String> {
+        if !self.native(g) || self.wda(g).is_some() {
+            return Err(ictl_l10n::tr!("替换全文需要原生控制", "Replacing text requires native control").into());
+        }
+        self.ensure_unlocked(g).await?;
+        let before = self.ax_snapshot(g, AX_WAIT, false).await?;
+        if !keyboard_up(&self.snapshot_tree(g, &before).await?) {
+            return Err(ictl_l10n::tr!(
+                "屏幕上没有键盘，先点一下要替换的输入框",
+                "No keyboard on screen; tap the field you want to replace first"
+            )
+            .into());
+        }
+        let (target, old) =
+            focused_text_field(&before).and_then(|f| Some((f.object?, shown_text(f)))).ok_or_else(|| {
+                ictl_l10n::tr!(
+                    "无法确认当前聚焦的是可读的普通输入框，没有替换文字",
+                    "Couldn't identify a readable focused text field; no text was replaced"
+                )
+            })?;
+        if old != text {
+            let result = async {
+                self.hid_do(g, |h| Box::pin(h.select_all())).await?;
+                let seen = if text.is_empty() {
+                    // emptying: Delete takes the selection, nothing is pasted (no paste prompt)
+                    self.hid_do(g, |h| Box::pin(h.delete_backward())).await?;
+                    self.native_field_emptied(g, target).await?
+                } else {
+                    self.native_paste(g, text, PasteTarget::Replace(target)).await?.0
+                };
+                if seen != Pasted::Typed {
+                    return Err(ictl_l10n::tr!(
+                        "替换后无法核对输入框全文，未按回车；请查看手机界面",
+                        "Couldn't verify the full field value after the replacement; Return was not pressed"
+                    )
+                    .into());
+                }
+                Ok(())
+            }
+            .await;
+            if let Err(err) = result {
+                if let Err(cause) = self.collapse_field_selection(g, target).await {
+                    return Err(ictl_l10n::trf!(
+                        "{err}（无法收起原输入框的选区，请在重试前查看屏幕：{cause}）",
+                        "{err} (couldn't collapse the original selection; inspect the screen before retrying: {cause})"
+                    )
+                    .into());
+                }
+                return Err(err);
+            }
+        }
+        if submit {
+            self.hid_do(g, |h| Box::pin(h.type_ascii("\n"))).await?;
+        }
+        let n = text.chars().count();
+        Ok(match (n, submit) {
+            (0, true) => ictl_l10n::tr!("已清空输入框，并按了回车", "Emptied the field and pressed Return").into(),
+            (0, false) => ictl_l10n::tr!("已清空输入框", "Emptied the field").into(),
+            (_, true) => ictl_l10n::trf!(
+                "已替换为 {n} 个字符，并按了回车",
+                "Replaced the field with {n} characters and pressed Return"
+            ),
+            (_, false) => ictl_l10n::trf!("已替换为 {n} 个字符", "Replaced the field with {n} characters"),
+        })
+    }
+
+    /// After select all and Delete: `target` reads as empty within [`CLEAR_WAIT`]
+    async fn native_field_emptied(&self, g: &mut Inner, target: ictl_ax::ObjectRef) -> crate::error::Result<Pasted> {
+        let deadline = Instant::now() + CLEAR_WAIT;
+        loop {
+            let screen = self.ax_snapshot(g, AX_WAIT, false).await?;
+            let seen = replacement_seen(&screen, target, "");
+            if seen == Pasted::Typed || Instant::now() >= deadline {
+                return Ok(seen);
+            }
+            tokio::time::sleep(Duration::from_millis(150)).await;
+        }
+    }
+
+    async fn collapse_field_selection(&self, g: &mut Inner, target: ictl_ax::ObjectRef) -> crate::error::Result<()> {
+        let screen = self.ax_snapshot(g, AX_WAIT, true).await?;
+        if focused_text_field(&screen).and_then(|f| f.object) != Some(target)
+            || self.snapshot_tree(g, &screen).await?.alert().is_some()
+        {
+            return Err(ictl_l10n::tr!("输入焦点已改变或被弹窗遮挡", "Focus changed or an alert is in front").into());
+        }
+        self.hid_do(g, |h| Box::pin(h.collapse_selection())).await
+    }
+
+    /// Answer the system paste prompt and verify the requested edit before restoring the clipboard.
     async fn native_paste(
         &self,
         g: &mut Inner,
         text: &str,
-        old: Option<&[String]>,
+        target: PasteTarget<'_>,
     ) -> crate::error::Result<(Pasted, bool)> {
         // a paste through the WDA-down path may still wait to be put back
         self.restore_pasteboard(g, false).await;
@@ -655,49 +776,45 @@ impl Daemon {
                 return Err(ictl_l10n::trf!("粘贴失败:{e}", "Paste failed: {e}").into());
             }
         };
-        let deadline = Instant::now() + PASTE_WAIT;
-        // when the paste prompt was last answered
-        let mut answered: Option<Instant> = None;
-        let wanted = text.trim();
-        let typed = loop {
-            // a whole read: the prompt brings SpringBoard to the front, but it may also come over the app (a read
-            // of the app alone missed it once in a regression run, and the paste never went in)
-            let tree = self.ax_tree(g, AX_WAIT).await?;
-            if let Some((x, y)) = paste_allow(&tree) {
-                self.native_tap(g, x, y).await?;
-                answered = Some(Instant::now());
-                tokio::time::sleep(Duration::from_millis(300)).await;
-                continue;
-            }
-            let seen = paste_seen(elements::field_values(&tree.elements).as_deref(), old, wanted);
-            match seen {
-                Pasted::Typed => break seen,
-                // only once the prompt was answered: before that, the paste hasn't gone in yet
-                Pasted::Unchanged if answered.is_some_and(|t| t.elapsed() >= PASTE_SAME_SETTLE) => break seen,
-                // never asked: iOS asks for every paste of ours, so nothing may have been pasted at all
-                Pasted::Unchanged if Instant::now() >= deadline => break Pasted::Missing,
-                _ if Instant::now() >= deadline => break seen,
-                _ => {}
-            }
-            tokio::time::sleep(Duration::from_millis(250)).await;
-        };
-        let prompt = answered.is_some();
-        if let Some(p) = pending {
-            let restored = match g.tunnel.as_mut() {
-                Some(t) => Box::pin(t.restore_pasteboard(p)).await,
-                None => ClipboardRestore::Failed("no tunnel".into()),
+        g.dev.pending_paste = pending.map(|p| (Instant::now(), p));
+        let result = async {
+            let deadline = Instant::now() + PASTE_WAIT;
+            // when the paste prompt was last answered
+            let mut answered: Option<Instant> = None;
+            let typed = loop {
+                let screen = self.ax_snapshot(g, AX_WAIT, true).await?;
+                let tree = self.snapshot_tree(g, &screen).await?;
+                if let Some((x, y)) = paste_allow(&tree) {
+                    self.native_tap(g, x, y).await?;
+                    answered = Some(Instant::now());
+                    tokio::time::sleep(Duration::from_millis(300)).await;
+                    if Instant::now() >= deadline {
+                        break Pasted::Missing;
+                    }
+                    continue;
+                }
+                let seen = match target {
+                    PasteTarget::Append(old) => {
+                        paste_seen(elements::field_values(&tree.elements).as_deref(), old, text.trim())
+                    }
+                    PasteTarget::Replace(object) => replacement_seen(&screen, object, text),
+                };
+                match seen {
+                    Pasted::Typed => break seen,
+                    // only once the prompt was answered: before that, the paste hasn't gone in yet
+                    Pasted::Unchanged if answered.is_some_and(|t| t.elapsed() >= PASTE_SAME_SETTLE) => break seen,
+                    // never asked: iOS asks for every paste of ours, so nothing may have been pasted at all
+                    Pasted::Unchanged if Instant::now() >= deadline => break Pasted::Missing,
+                    _ if Instant::now() >= deadline => break seen,
+                    _ => {}
+                }
+                tokio::time::sleep(Duration::from_millis(250)).await;
             };
-            if let ClipboardRestore::Failed(e) = restored {
-                tracing::warn!(
-                    "{}",
-                    ictl_l10n::log_trf!(
-                        "粘贴后还原剪贴板失败：{e}",
-                        "Restoring the pasteboard after the paste failed: {e}"
-                    )
-                );
-            }
+            Ok((typed, answered.is_some()))
         }
-        Ok((typed, prompt))
+        .await;
+        self.restore_pasteboard(g, false).await;
+        result
     }
 
     /// Launches `bundle_id` in front (with `url`, the link for it to open) and waits for it to be there
@@ -784,6 +901,69 @@ impl Daemon {
             tokio::time::sleep(UNLOCK_SETTLE).await;
         }
         r
+    }
+}
+
+/// What is over the screen in a native read, for a wait for text to disappear
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Cover {
+    /// An app, or SpringBoard's home screen or Spotlight: what it shows is the screen
+    None,
+    /// The lock screen, known by its marks ([`elements::cover_sheet`])
+    Locked,
+    /// Notification center, control center, or the lock screen without the marks [`elements::cover_sheet`] knows it
+    /// by, as it often reads natively: SpringBoard in front without app icons (6-7 elements: date, time,
+    /// notifications, flashlight, camera; iPhone19,7, iOS 27.2.1), or another process in front with the lock
+    /// screen's buttons ([`cover_mark`]). Lockdown says locked only on a phone with a passcode
+    Other,
+}
+
+fn native_cover(xml: &str, screen: &ictl_device::ax::AxScreen, tree: &Tree) -> Cover {
+    match elements::cover_sheet(xml) {
+        elements::CoverSheet::Locked => Cover::Locked,
+        elements::CoverSheet::NotificationCenter => Cover::Other,
+        elements::CoverSheet::None if screen.springboard_front && !unlocked_springboard(tree) => Cover::Other,
+        elements::CoverSheet::None if tree.elements.iter().any(cover_mark) => Cover::Other,
+        elements::CoverSheet::None => Cover::None,
+    }
+}
+
+/// An element only the lock screen and notification center show, whichever process is in front: the flashlight
+/// and camera buttons at the bottom, and the sleep lock screen's own elements. During a sleep focus the lock screen
+/// is another process (`SleepLockScreen`), not SpringBoard, with SpringBoard's elements over it (iPhone19,7, iOS
+/// 27.2.1, 2026-11-19 00:04)
+fn cover_mark(e: &elements::Element) -> bool {
+    e.name == "flashlight-orb-button"
+        || e.name.starts_with("system-orb-button-")
+        || e.name.starts_with("UIA.SleepLockScreen")
+}
+
+/// SpringBoard in front, recognisably unlocked: the home screen (app icons) or Spotlight
+fn unlocked_springboard(tree: &Tree) -> bool {
+    tree.elements.iter().any(|e| e.kind == "Icon" || e.name == "SpotlightSearchField")
+}
+
+fn focused_text_field(screen: &ictl_device::ax::AxScreen) -> Option<&ictl_ax::Element> {
+    let mut fields = screen.app.iter().filter(|e| {
+        // Raw AX retains focus and exact text, including whitespace. The shared XML has been normalized for display.
+        e.focused && matches!(ictl_ax::xml::kind(e), "TextField" | "TextView" | "SearchField" | "SecureTextField")
+    });
+    let f = fields.next()?;
+    (fields.next().is_none() && f.enabled && f.visible && ictl_ax::xml::kind(f) != "SecureTextField").then_some(f)
+}
+
+/// What a field holds: an empty field reads its placeholder as its value natively (Spotlight's empty field reads
+/// «搜索»), so that counts as empty. A field holding exactly its placeholder's words reads as empty too: rare, and
+/// replacing it with other text still works (only emptying it is then taken as done already)
+fn shown_text(f: &ictl_ax::Element) -> &str {
+    if !f.placeholder.is_empty() && f.value == f.placeholder { "" } else { &f.value }
+}
+
+fn replacement_seen(screen: &ictl_device::ax::AxScreen, target: ictl_ax::ObjectRef, text: &str) -> Pasted {
+    if focused_text_field(screen).is_some_and(|f| f.object == Some(target) && shown_text(f) == text) {
+        Pasted::Typed
+    } else {
+        Pasted::Missing
     }
 }
 
@@ -907,6 +1087,100 @@ impl Screen for NativeScreen<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_a_recognisable_unlocked_springboard_can_confirm_absence() {
+        let screen = |springboard_front| ictl_device::ax::AxScreen {
+            app: Vec::new(),
+            app_complete: true,
+            overlays: Vec::new(),
+            overlays_complete: true,
+            app_pid: 1,
+            springboard_front,
+            at: Instant::now(),
+        };
+        let cover = |markers: &str, springboard_front| {
+            let xml = format!(r#"<App>{markers}</App>"#);
+            let tree = elements::parse_tree(&xml, ScreenSize { width: 390.0, height: 844.0 });
+            native_cover(&xml, &screen(springboard_front), &tree)
+        };
+        let icon = r#"<XCUIElementTypeIcon type="Icon" label="Clock" x="10" y="10" width="54" height="54"/>"#;
+        // the home screen
+        assert_eq!(cover(icon, true), Cover::None);
+        // the lock screen by its marks, in front or not
+        assert_eq!(cover(r#"<Other name="proud-lock"/>"#, true), Cover::Locked);
+        assert_eq!(cover(r#"<Other name="proud-lock"/>"#, false), Cover::Locked);
+        // notification center pulled over an app
+        assert_eq!(cover(&format!(r#"{icon}<Other name="lockscreen-date-view"/>"#), false), Cover::Other);
+        // the lock screen as read natively: no marks, SpringBoard in front, no icons
+        let lock = r#"<XCUIElementTypeStaticText label="22:53" x="120" y="120" width="200" height="90"/>
+<XCUIElementTypeButton label="手电筒" x="40" y="860" width="50" height="50"/>"#;
+        assert_eq!(cover(lock, true), Cover::Other);
+        // an app in front: its own screen, whatever is on it
+        assert_eq!(cover(lock, false), Cover::None);
+        // the sleep lock screen: another process in front, SpringBoard's flashlight and camera over it
+        let sleep = r#"<XCUIElementTypeButton label="无闹钟" name="UIA.SleepLockScreen.Alarm.Button" x="100" y="300" width="200" height="50"/>
+<XCUIElementTypeStaticText label="00:04" x="120" y="120" width="200" height="90"/>
+<XCUIElementTypeButton label="手电筒" name="flashlight-orb-button" x="40" y="760" width="50" height="50"/>
+<XCUIElementTypeButton label="相机" name="system-orb-button-com.apple.camera.deeplink.button" x="350" y="760" width="50" height="50"/>"#;
+        assert_eq!(cover(sleep, false), Cover::Other);
+        let orb = r#"<XCUIElementTypeButton label="手电筒" name="flashlight-orb-button" x="40" y="760" width="50" height="50"/>"#;
+        assert_eq!(cover(orb, false), Cover::Other);
+    }
+
+    #[test]
+    fn replacing_text_requires_one_readable_focused_field() {
+        let mut screen = ictl_device::ax::AxScreen {
+            app: vec![
+                ictl_ax::Element {
+                    xc_type: 49,
+                    value: "old".into(),
+                    visible: true,
+                    enabled: true,
+                    ..Default::default()
+                },
+                ictl_ax::Element {
+                    xc_type: 49,
+                    value: " 蓝牙 ".into(),
+                    focused: true,
+                    visible: true,
+                    enabled: true,
+                    ..Default::default()
+                },
+            ],
+            app_complete: true,
+            overlays: Vec::new(),
+            overlays_complete: true,
+            app_pid: 1,
+            springboard_front: false,
+            at: Instant::now(),
+        };
+        assert_eq!(focused_text_field(&screen).map(|f| f.value.as_str()), Some(" 蓝牙 "));
+        let target = ictl_ax::ObjectRef { pid: 1, id: 2, is_app: false };
+        screen.app[1].object = Some(target);
+        screen.app[1].value = "wifi".into();
+        screen.app[0].value = "wi".into();
+        screen.app_complete = false;
+        assert_eq!(replacement_seen(&screen, target, "wi"), Pasted::Missing);
+        screen.app[1].value = "wi".into();
+        assert_eq!(replacement_seen(&screen, target, "wi"), Pasted::Typed);
+        assert_eq!(replacement_seen(&screen, ictl_ax::ObjectRef { id: 3, ..target }, "wi"), Pasted::Missing);
+        // emptied: the field reads its placeholder as its value
+        screen.app[1].placeholder = "搜索".into();
+        screen.app[1].value = "搜索".into();
+        assert_eq!(replacement_seen(&screen, target, ""), Pasted::Typed);
+        screen.app[1].value = "搜索结果".into();
+        assert_eq!(replacement_seen(&screen, target, ""), Pasted::Missing);
+        screen.app[1].value = "wi".into();
+        screen.app[1].placeholder = String::new();
+        screen.app[0].focused = true;
+        assert_eq!(focused_text_field(&screen).map(|f| f.value.as_str()), None);
+        screen.app[0].focused = false;
+        screen.app[1].value = "••••".into();
+        assert_eq!(focused_text_field(&screen).map(|f| f.value.as_str()), Some("••••"));
+        screen.app[1].xc_type = 50; // SecureTextField
+        assert_eq!(focused_text_field(&screen).map(|f| f.value.as_str()), None);
+    }
 
     /// The HID session isn't closed right after a touch (the phone takes the touch back): the rest of
     /// `TOUCH_LANDS` is waited out first, and nothing when no touch was sent or it was long enough ago

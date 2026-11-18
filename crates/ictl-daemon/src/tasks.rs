@@ -173,7 +173,13 @@ fn ended_message() -> &'static str {
 
 /// Requests that show the agent the screen: after one, it may act again ([`TaskState::recheck`])
 pub(crate) fn observes(req: &Request) -> bool {
-    matches!(req, Request::Screenshot { .. } | Request::ListElements { .. } | Request::WaitFor { .. })
+    matches!(
+        req,
+        Request::Screenshot { .. }
+            | Request::ListElements { .. }
+            | Request::WaitFor { .. }
+            | Request::WaitForDisappearance { .. }
+    )
 }
 
 /// The home screen, the lock screen and notifications: always in a task's scope (getting back from elsewhere)
@@ -219,6 +225,7 @@ pub fn scope_check(req: &Request) -> Option<Check> {
         | Request::LongPress { .. }
         | Request::Swipe { .. }
         | Request::TypeText { .. }
+        | Request::ReplaceText { .. }
         | Request::WebEval { .. }
         | Request::Touch { phase: TouchPhase::Down | TouchPhase::Move, .. } => Some(Check::Foreground),
         Request::InstallApp { path } => {
@@ -240,6 +247,7 @@ pub fn scope_check(req: &Request) -> Option<Check> {
         | Request::Settle { .. }
         | Request::AlertCheck
         | Request::WaitFor { .. }
+        | Request::WaitForDisappearance { .. }
         | Request::Daemon
         | Request::Doctor
         | Request::Resign { .. }

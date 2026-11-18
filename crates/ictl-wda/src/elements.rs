@@ -217,6 +217,8 @@ pub struct Tree {
     blockers: Vec<Blocker>,
     /// 屏幕上有转圈的加载指示（ActivityIndicator，有没有文字都算）
     pub loading: bool,
+    /// Some nodes may not have been observed. Missing text on this tree does not prove absence.
+    pub incomplete: bool,
 }
 
 /// 按名字点击时实际点哪里
@@ -481,7 +483,10 @@ pub fn parse_tree(xml: &str, view: impl Into<View>) -> Tree {
                 }
                 continue;
             }
-            Ok(Event::Eof) => break,
+            Ok(Event::Eof) => {
+                tree.incomplete = !stack.is_empty();
+                break;
+            }
             Err(e) => {
                 // 解析到一半出错：已解析的照常返回，但要留痕，否则「没找到元素」看起来像真结果
                 tracing::warn!(
@@ -492,6 +497,7 @@ pub fn parse_tree(xml: &str, view: impl Into<View>) -> Tree {
                         reader.buffer_position()
                     )
                 );
+                tree.incomplete = true;
                 break;
             }
             Ok(_) => continue,

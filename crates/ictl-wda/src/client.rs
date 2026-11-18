@@ -811,7 +811,9 @@ impl<T: Transport> WdaClient<T> {
     pub async fn tree(&mut self) -> Result<elements::Tree> {
         let view = self.view().await?;
         self.move_detection_point(view.screen).await;
-        Ok(elements::parse_tree(&self.source_xml().await?, view))
+        let mut tree = elements::parse_tree(&self.source_xml().await?, view);
+        tree.incomplete |= SNAPSHOT_LEVELS[self.snapshot_read].children.is_some();
+        Ok(tree)
     }
 
     /// 把 WDA 判断前台 App 的点（appium setting `activeAppDetectionPoint`）挪到 [`detection_point`]，每个客户端做一次。

@@ -106,6 +106,7 @@ const KEY_LEFT_SHIFT: u64 = 0xE1;
 /// 左 Command（HID usage Left GUI）
 const KEY_LEFT_GUI: u64 = 0xE3;
 const KEY_V: u64 = 0x19;
+const KEY_A: u64 = 0x04;
 
 pub struct HidSession {
     /// 设备竖放时的尺寸：HID 触摸坐标按竖放归一化
@@ -267,14 +268,33 @@ impl HidSession {
     /// 按 Cmd-V（硬件键盘的粘贴）：按住 Cmd，按一下 V，松开 Cmd。手机不确认收到，粘没粘上只能看屏幕
     /// （iPhone16,2 / iOS 27.2.1 实测会触发粘贴，见 [`crate::Tunnel::paste_text`]）
     pub async fn paste_shortcut(&mut self) -> Result<()> {
-        limit(ictl_l10n::tr!("HID 粘贴", "HID paste"), Duration::from_secs(10), async {
+        self.command_shortcut(KEY_V, ictl_l10n::tr!("HID 粘贴", "HID paste")).await
+    }
+
+    pub async fn select_all(&mut self) -> Result<()> {
+        self.command_shortcut(KEY_A, ictl_l10n::tr!("HID 全选", "HID select all")).await
+    }
+
+    /// Delete (Backspace): with text selected, deletes it
+    pub async fn delete_backward(&mut self) -> Result<()> {
+        const DELETE: u64 = 0x2a;
+        limit("HID Delete", Duration::from_secs(10), self.send_keys(vec![(DELETE, false)])).await
+    }
+
+    pub async fn collapse_selection(&mut self) -> Result<()> {
+        const RIGHT_ARROW: u64 = 0x4f;
+        limit("HID Right Arrow", Duration::from_secs(10), self.send_keys(vec![(RIGHT_ARROW, false)])).await
+    }
+
+    async fn command_shortcut(&mut self, key: u64, name: &str) -> Result<()> {
+        limit(name, Duration::from_secs(10), async {
             self.indigo.send_keyboard(KEY_LEFT_GUI, ButtonState::Down).await?;
             let r = async {
-                self.indigo.send_keyboard(KEY_V, ButtonState::Down).await?;
-                self.indigo.send_keyboard(KEY_V, ButtonState::Up).await
+                self.indigo.send_keyboard(key, ButtonState::Down).await?;
+                self.indigo.send_keyboard(key, ButtonState::Up).await
             }
             .await;
-            // V 没发出去也要松开 Cmd：一直按着的话，后面的按键都会变成快捷键
+            // Release Cmd even when the key event failed.
             let up = self.indigo.send_keyboard(KEY_LEFT_GUI, ButtonState::Up).await;
             r?;
             Ok(up?)

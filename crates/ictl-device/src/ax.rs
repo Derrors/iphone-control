@@ -41,8 +41,11 @@ pub fn is_ax_daemon(exe: &str) -> bool {
 pub struct AxScreen {
     /// The frontmost application's tree, its element first
     pub app: Vec<Element>,
+    /// Whether the walk reached the end rather than a node or time limit.
+    pub app_complete: bool,
     /// What SpringBoard shows over the app (alerts, banners, its status bar); empty when SpringBoard is the app
     pub overlays: Vec<Element>,
+    pub overlays_complete: bool,
     pub app_pid: i64,
     /// SpringBoard is the app in front (the home screen, the lock screen, or a question it asks over an app)
     pub springboard_front: bool,
@@ -120,10 +123,12 @@ impl Tunnel {
             tracing::debug!("remoteAXService: app {} reads no elements on a new session either", app.pid);
             return Err(nothing_read());
         }
-        let overlays = if overlays { self.ax_overlays(app.pid).await } else { Vec::new() };
+        let (overlays, overlays_complete) = if overlays { self.ax_overlays(app.pid).await } else { (Vec::new(), true) };
         Ok(AxScreen {
             app: elements,
+            app_complete: complete,
             overlays,
+            overlays_complete,
             app_pid: app.pid,
             springboard_front: sb == Some(app.pid),
             at: Instant::now(),
@@ -132,8 +137,11 @@ impl Tunnel {
 
     /// What SpringBoard shows over the app of process `app_pid` (alerts, banners, its status bar); empty when
     /// SpringBoard is that app, or can't be read
-    pub async fn ax_overlays(&mut self, app_pid: i64) -> Vec<Element> {
-        let Some(sb) = self.springboard_pid().await.filter(|sb| *sb != app_pid) else { return Vec::new() };
+    pub async fn ax_overlays(&mut self, app_pid: i64) -> (Vec<Element>, bool) {
+        let Some(sb) = self.springboard_pid().await else { return (Vec::new(), false) };
+        if sb == app_pid {
+            return (Vec::new(), true);
+        }
         let r = async {
             let root = match self.springboard_app {
                 Some(o) => o,
@@ -152,7 +160,7 @@ impl Tunnel {
         r.unwrap_or_else(|e| {
             tracing::debug!("SpringBoard's elements: {e}");
             self.springboard_app = None;
-            Vec::new()
+            (Vec::new(), false)
         })
     }
 

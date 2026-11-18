@@ -221,7 +221,7 @@ impl WebInspector {
             // a DOM node or similar serializes to {}; its description ("body", "div#app") says more
             let empty = v["result"]["value"].as_object().is_some_and(|o| o.is_empty());
             let plain = r["result"]["className"] == "Object" || r["result"]["subtype"] == "array";
-            if v["result"].get("value").is_some() && !(empty && !plain) { v } else { r }
+            if v["result"].get("value").is_some() && (!empty || plain) { v } else { r }
         };
         Ok(eval_result(&r))
     }

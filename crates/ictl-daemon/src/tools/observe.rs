@@ -31,7 +31,7 @@ impl Daemon {
         limit: usize,
         max_age: Duration,
         keep_locked: bool,
-    ) -> crate::error::Result<(String, Vec<ElementData>)> {
+    ) -> crate::error::Result<(String, crate::protocol::Data)> {
         if keep_locked {
             // only looking (a read-only viewer): the passcode isn't typed for it
             let native = self.native(g);
@@ -54,8 +54,14 @@ impl Daemon {
         let shown: Vec<&elements::Element> =
             if filter.is_empty() { els.iter().collect() } else { elements::filter(&els, filter) };
         let lines: Vec<_> = shown.iter().take(limit).map(|e| e.describe()).collect();
-        let data = shown.iter().take(limit).map(|e| element_data(e)).collect();
-        let more = if shown.len() > limit {
+        let matched_count = shown.len();
+        let truncated = matched_count > limit;
+        let data = crate::protocol::Data::Elements {
+            elements: shown.iter().take(limit).map(|e| element_data(e)).collect(),
+            matched_count: Some(matched_count),
+            truncated: Some(truncated),
+        };
+        let more = if truncated {
             ictl_l10n::trf!(
                 "\n……另有 {} 个未列出,可用 filter 缩小范围",
                 "\n…{} more not listed, narrow it down with filter",
@@ -238,32 +244,168 @@ impl Daemon {
         })
     }
 
-    /// 等包含 `text` 的元素出现
-    pub(crate) async fn wait_for(&self, g: &mut Inner, text: &str, timeout: Duration) -> crate::error::Result<String> {
+    /// Wait for text to appear or to be absent from a successfully read screen.
+    pub(crate) async fn wait_for(
+        &self,
+        g: &mut Inner,
+        text: &str,
+        timeout: Duration,
+        disappeared: bool,
+    ) -> crate::error::Result<String> {
         self.ensure_unlocked(g).await?;
         let t0 = Instant::now();
         if self.wda(g).is_none() && self.native(g) {
-            return Box::pin(self.native_wait_for(g, text, timeout)).await;
+            return Box::pin(self.native_wait_for(g, text, timeout, disappeared)).await;
         }
         let w = self.require_wda(g)?;
         // 轮询时不等界面空闲：页面还在加载、播放动画时每次读树也只要约 0.2 秒
         w.begin_polling().await?;
         let r = async {
             loop {
-                let els = w.elements().await.map_err(|e| e.to_string())?;
-                // 不算输入框里的字：刚输入的搜索词不能算「结果出来了」
-                if let Some(e) = elements::find_shown(&els, text).first() {
-                    return Ok(ictl_l10n::trf!("已出现 {}({:.1} 秒)", "Appeared: {} ({:.1} s)", e.describe(), t0.elapsed().as_secs_f64()));
-                }
+                let tree = w.tree().await?;
+                let why = match wait_match(&tree, text, disappeared, t0.elapsed()) {
+                    Some(result) if !disappeared => return Ok(result),
+                    // the lock screen lacks the text too: asked only when it would count as gone
+                    Some(result) => match w.check_lock(None, true).await {
+                        Ok(c) if c.locked => return Err(wait_locked()),
+                        Ok(c) if !c.uncertain => return Ok(result),
+                        Ok(_) => Waited::Covered,
+                        // not known whether locked: not gone yet, asked again on the next read
+                        Err(e) => {
+                            tracing::debug!("lock state while waiting for {text:?} to disappear: {e}");
+                            Waited::Covered
+                        }
+                    },
+                    None => Waited::after(&tree, text, disappeared),
+                };
                 if t0.elapsed() >= timeout {
-                    return Err(ictl_l10n::trf!("{:.0} 秒内没出现包含 \"{text}\" 的元素,截图看看屏幕", "No element containing \"{text}\" appeared within {:.0} s; take a screenshot to look at the screen", timeout.as_secs_f64()));
+                    return Err(wait_timeout(text, timeout, why));
                 }
-                tokio::time::sleep(Duration::from_millis(300)).await;
+                tokio::time::sleep(Duration::from_millis(300).min(timeout.saturating_sub(t0.elapsed()))).await;
             }
         }
         .await;
         w.end_polling().await;
-        Ok(r?)
+        r
+    }
+}
+
+pub(super) fn wait_match(tree: &Tree, text: &str, disappeared: bool, elapsed: Duration) -> Option<String> {
+    let matches = elements::find_shown(&tree.elements, text);
+    let elapsed = elapsed.as_secs_f64();
+    if disappeared {
+        if matches.is_empty() && !tree.incomplete && !tree.elements.is_empty() {
+            return Some(ictl_l10n::trf!(
+                "已消失「{text}」({elapsed:.1} 秒)",
+                "Disappeared: \"{text}\" ({elapsed:.1} s)"
+            ));
+        }
+        return None;
+    }
+    matches
+        .first()
+        .map(|e| ictl_l10n::trf!("已出现 {}({elapsed:.1} 秒)", "Appeared: {} ({elapsed:.1} s)", e.describe()))
+}
+
+/// Why [`Daemon::wait_for`] isn't done after the last read, for its timeout to say
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Waited {
+    /// Waiting for text to appear: it hasn't
+    NotAppeared,
+    /// Waiting for it to disappear: it was read, still there
+    Present,
+    /// Not seen, but the read can't tell it is gone: nothing read, or cut short ([`wait_match`])
+    Unread,
+    /// Not seen, but something is over the screen (notification center, control center, a lock screen not known
+    /// by its marks), or whether the phone is locked couldn't be found out
+    Covered,
+}
+
+impl Waited {
+    /// A read where the text didn't count as appeared, or as gone ([`wait_match`] gave nothing)
+    pub(super) fn after(tree: &Tree, text: &str, disappeared: bool) -> Self {
+        if !disappeared {
+            Self::NotAppeared
+        } else if elements::find_shown(&tree.elements, text).is_empty() {
+            Self::Unread
+        } else {
+            Self::Present
+        }
+    }
+}
+
+pub(super) fn wait_timeout(text: &str, timeout: Duration, why: Waited) -> crate::error::Error {
+    let seconds = timeout.as_secs_f64();
+    match why {
+        Waited::NotAppeared => {}
+        Waited::Present => {
+            return ictl_l10n::trf!(
+                "{seconds:.1} 秒内「{text}」没消失,截图看看屏幕",
+                "\"{text}\" did not disappear within {seconds:.1} s; take a screenshot"
+            )
+            .into();
+        }
+        Waited::Unread => {
+            return ictl_l10n::trf!(
+                "{seconds:.1} 秒内无法确认「{text}」已消失:界面没读到或没读全(元素太多、读得太慢),截图看看屏幕",
+                "Couldn't confirm within {seconds:.1} s that \"{text}\" disappeared: the screen wasn't read, or not in full (too many elements, a slow read); take a screenshot"
+            )
+            .into();
+        }
+        Waited::Covered => {
+            return ictl_l10n::trf!(
+                "{seconds:.1} 秒内无法确认「{text}」已消失:屏幕被通知中心、控制中心或锁屏挡着,或查不到是否锁屏,截图看看屏幕",
+                "Couldn't confirm within {seconds:.1} s that \"{text}\" disappeared: notification center, control center or the lock screen is over the screen, or the lock state couldn't be found out; take a screenshot"
+            )
+            .into();
+        }
+    }
+    ictl_l10n::trf!(
+        "{seconds:.0} 秒内没出现包含 \"{text}\" 的元素,截图看看屏幕",
+        "No element containing \"{text}\" appeared within {seconds:.0} s; take a screenshot to look at the screen"
+    )
+    .into()
+}
+
+pub(super) fn wait_locked() -> crate::error::Error {
+    ictl_l10n::tr!(
+        "等待时手机锁屏了,无法确认文字已消失;解锁后再等",
+        "The phone locked while waiting, so disappearance can't be confirmed; wait again once it is unlocked"
+    )
+    .into()
+}
+
+#[cfg(test)]
+mod wait_tests {
+    use super::*;
+
+    #[test]
+    fn disappearance_requires_a_readable_complete_screen_without_the_target() {
+        let screen = ScreenSize { width: 390.0, height: 844.0 };
+        let mut tree = elements::parse_tree(r#"<Button label="Clock" x="0" y="0" width="80" height="40"/>"#, screen);
+        assert!(wait_match(&tree, "Clock", false, Duration::ZERO).is_some());
+        assert!(wait_match(&tree, "Clock", true, Duration::ZERO).is_none());
+        assert!(wait_match(&tree, "Timer", true, Duration::ZERO).is_some());
+        tree.incomplete = true;
+        assert!(wait_match(&tree, "Timer", true, Duration::ZERO).is_none());
+        assert!(wait_match(&Tree::default(), "Timer", true, Duration::ZERO).is_none());
+    }
+
+    /// The timeout says why: still there, not read in full, or not appeared
+    #[test]
+    fn a_timeout_tells_present_from_unread() {
+        let screen = ScreenSize { width: 390.0, height: 844.0 };
+        let mut tree = elements::parse_tree(r#"<Button label="Clock" x="0" y="0" width="80" height="40"/>"#, screen);
+        assert_eq!(Waited::after(&tree, "Clock", true), Waited::Present);
+        assert_eq!(Waited::after(&tree, "Clock", false), Waited::NotAppeared);
+        tree.incomplete = true;
+        assert_eq!(Waited::after(&tree, "Timer", true), Waited::Unread);
+        // read even though cut short: it is still there
+        assert_eq!(Waited::after(&tree, "Clock", true), Waited::Present);
+        assert_eq!(Waited::after(&Tree::default(), "Timer", true), Waited::Unread);
+        let msg = |w| wait_timeout("Clock", Duration::from_secs(2), w).to_string();
+        let all = [Waited::NotAppeared, Waited::Present, Waited::Unread, Waited::Covered].map(msg);
+        assert!(all.iter().collect::<std::collections::HashSet<_>>().len() == 4, "{all:?}");
     }
 }
 

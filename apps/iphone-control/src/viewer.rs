@@ -2159,12 +2159,13 @@ mod tests {
                 height: h,
             })
             .collect();
-        let els = element_list(Some(protocol::Data::Elements { elements }));
+        let els =
+            element_list(Some(protocol::Data::Elements { elements, matched_count: None, truncated: None })).elements;
         assert_eq!(
             els[0],
             json!({"type": "Button", "label": "今天", "x": 33.0, "y": 861.0, "width": 56.0, "height": 38.0})
         );
-        assert!(element_list(Some(protocol::Data::Alert { text: None })).is_empty());
+        assert!(element_list(Some(protocol::Data::Alert { text: None })).elements.is_empty());
         let (frame, b) = alert_parts(&els);
         assert_eq!(frame, json!({"x": 80.0, "y": 306.0, "width": 270.0, "height": 320.0}));
         let labels: Vec<&str> = b.iter().filter_map(|v| v["label"].as_str()).collect();

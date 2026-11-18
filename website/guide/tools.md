@@ -8,8 +8,8 @@ MCP 服务提供 17 个工具，开启[开发者工具](#开发者工具-显式�
 |---|---|
 | `iphone_status` | 是否就绪、控制方式（原生或 WDA）、是否锁屏、前台 App、屏幕尺寸 |
 | `iphone_screenshot` | 截图；给出 `x`、`y`、`width`、`height` 时只返回这块区域的放大图，看清小字和小图标 |
-| `iphone_list_elements` | 列出屏幕上带文字的元素：类型、文字、中心点、尺寸；`filter` 可按文字或类型筛选 |
-| `iphone_wait_for` | 等某段文字出现（页面加载完、弹窗出现），出现就返回；输入框里的字不算。`timeout` 默认 5 秒，最多 30 秒 |
+| `iphone_list_elements` | 列出屏幕上带文字的元素：类型、文字、中心点、尺寸；`filter` 可按文字或类型筛选。结构化输出含 `matched_count`（本次读到且匹配的元素数）和 `truncated`（是否受 `limit` 截断）；操作和批量的 `then: "elements"` 也返回这两个字段 |
+| `iphone_wait_for` | 默认等文字出现。`state: "disappeared"` 等当前界面不再匹配。输入框里正在编辑的字不计入匹配。`timeout` 默认 5 秒，最多 30 秒 |
 | `iphone_list_apps` | 已安装的 App；只读，没有 `then` |
 
 开启[自动解锁](./auto-unlock)时，手机锁着的话，`iphone_screenshot`、`iphone_list_elements`、`iphone_wait_for` 也会先解锁。这些工具标为「只读」，指的是不改界面内容。`iphone_status`、`iphone_list_apps` 不会解锁。
@@ -22,7 +22,7 @@ MCP 服务提供 17 个工具，开启[开发者工具](#开发者工具-显式�
 | `iphone_tap_element` | 按文字点击；中心被悬浮栏、键盘挡住时改点露出来的部分，整个被挡住就不点。带 `scroll`（`down` / `up`）时，屏幕上没有就慢慢边滑边找，找到就点，滑到底或滑满 `max_scrolls`（默认 8）次为止 |
 | `iphone_long_press` | 长按；`seconds` 默认 1，最多 10 |
 | `iphone_swipe` | 滑动；列表停稳后才返回。`seconds` 默认 0.3，最多 10。`hold` 先在起点按住几秒再移动，用来拖动要先长按才拿得起来的东西（主屏幕图标、可排序的列表项），0.6 左右即可 |
-| `iphone_type_text` | 在当前输入框输入文字（支持中文），输完读回核对，丢字会补上；`submit` 时按回车 |
+| `iphone_type_text` | 在当前输入框输入文字（支持中文），输完读回核对，丢字会补上；`submit` 时按回车。原生控制下 `replace: true` 替换当前普通输入框的全文（`text` 为空时清空），核对全文后才会按回车 |
 | `iphone_press_button` | `home`、`volume_up`、`volume_down`、`lock` |
 | `iphone_launch_app` / `iphone_terminate_app` | 启动 / 结束 App，可以用名字（如「设置」）或 Bundle ID |
 | `iphone_open_url` | 打开链接或 URL Scheme |

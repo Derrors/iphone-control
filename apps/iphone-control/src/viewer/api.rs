@@ -178,7 +178,7 @@ pub(super) async fn apps(ctx: &Ctx, system: bool) -> Result<Value, String> {
 /// `keep_locked`: a read-only visitor, for whom a locked phone isn't unlocked
 pub(super) async fn elements(ctx: &Ctx, filter: &str, keep_locked: bool) -> Result<Value, String> {
     let req = Request::ListElements { filter: filter.to_owned(), limit: ELEMENT_LIMIT, max_age_ms: 0, keep_locked };
-    Ok(json!({"elements": element_list(data_of(&ctx.socket, req).await?)}))
+    Ok(serde_json::to_value(element_list(data_of(&ctx.socket, req).await?)).expect("element list is JSON"))
 }
 
 /// A system alert on the phone (a permission prompt and the like): `{ alert: null }` or
@@ -197,17 +197,24 @@ pub(super) async fn alert(ctx: &Ctx, keep_locked: bool) -> Result<Value, String>
     let req = Request::ListElements { filter: String::new(), limit: ELEMENT_LIMIT, max_age_ms: 0, keep_locked };
     // without its buttons the page still says there is an alert
     let els = data_of(&ctx.socket, req).await.map(element_list).unwrap_or_default();
-    let (frame, buttons) = alert_parts(&els);
+    let (frame, buttons) = alert_parts(&els.elements);
     Ok(json!({"alert": {"text": text, "frame": frame, "buttons": buttons}}))
 }
 
 /// The elements in a [`protocol::Data::Elements`] as the page's JSON: `{ type, label, x, y, width, height }`
-pub(super) fn element_list(data: Option<protocol::Data>) -> Vec<Value> {
+#[derive(Default, serde::Serialize)]
+pub(super) struct ElementList {
+    pub(super) elements: Vec<Value>,
+    matched_count: Option<usize>,
+    truncated: Option<bool>,
+}
+
+pub(super) fn element_list(data: Option<protocol::Data>) -> ElementList {
     match data {
-        Some(protocol::Data::Elements { elements }) => {
-            elements.iter().filter_map(|e| serde_json::to_value(e).ok()).collect()
+        Some(protocol::Data::Elements { elements, matched_count, truncated }) => {
+            ElementList { elements: elements.into_iter().map(|e| json!(e)).collect(), matched_count, truncated }
         }
-        _ => Vec::new(),
+        _ => ElementList::default(),
     }
 }
 

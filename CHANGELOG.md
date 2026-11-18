@@ -6,6 +6,10 @@ What changed in each release, one line per change. Versions follow [Semantic Ver
 
 ## [Unreleased]
 
+### Upgrade notes
+
+- MCP tools now refuse an argument they don't take, and do nothing, instead of ignoring it. A misspelt argument, or one from a newer version, used to run the call with the default and report success: `iphone_wait_for` with `state: "disappeared"` answered that the text had appeared (#158). The error names the arguments the tool takes. This includes `then` on tools that don't list it, and on the steps of `iphone_batch` (the batch's own `then` applies).
+
 ### New
 
 - With native control, `iphone_type_text` supports `replace: true` and verifies the full field value before pressing Return.

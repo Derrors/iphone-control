@@ -6,12 +6,14 @@ What changed in each release, one line per change. Versions follow [Semantic Ver
 
 ## [Unreleased]
 
+## [0.2.9] - 2026-11-18
+
 ### Fixes
 
 - With native control (iOS 27), reading the screen no longer keeps failing until the phone is replugged when the phone's accessibility service stops answering; it is restarted on its own (#152).
-- With native control (iOS 27), automatic unlocking no longer fails with "couldn't bring up the passcode keypad" while the keypad is on screen: the keys it tapped were sometimes not taken by the phone.
-- With native control (iOS 27), an app launched right after Home is no longer sent back to the home screen when the daemon had left the touch session idle (for example the first actions after the daemon started).
-- With native control (iOS 27), when the phone's accessibility service reads every app as empty (only the home screen reads), it is restarted on its own as well, instead of reading the screen failing until it is ended by hand.
+- With native control (iOS 27), automatic unlocking no longer fails with "couldn't bring up the passcode keypad" while the keypad is on screen (#154).
+- With native control (iOS 27), an app launched right after Home no longer goes back to the home screen, as it often did for the first actions after the daemon started (#155).
+- With native control (iOS 27), reading the screen no longer keeps failing when the phone's accessibility service reads every app as empty; it is restarted on its own then too (#156).
 
 ## [0.2.8] - 2026-11-18
 
@@ -330,7 +332,8 @@ First public release.
 - `setup`, `doctor`, `status` and `mcp-config`.
 - Docker image and prebuilt Linux binaries.
 
-[Unreleased]: https://github.com/Derrors/iphone-control/compare/v0.2.8...HEAD
+[Unreleased]: https://github.com/Derrors/iphone-control/compare/v0.2.9...HEAD
+[0.2.9]: https://github.com/Derrors/iphone-control/compare/v0.2.8...v0.2.9
 [0.2.8]: https://github.com/Derrors/iphone-control/compare/v0.2.7...v0.2.8
 [0.2.7]: https://github.com/Derrors/iphone-control/compare/v0.2.6...v0.2.7
 [0.2.6]: https://github.com/Derrors/iphone-control/compare/v0.2.5...v0.2.6

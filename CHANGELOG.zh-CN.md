@@ -6,12 +6,14 @@
 
 ## [Unreleased]
 
+## [0.2.9] - 2026-11-18
+
 ### 修复
 
 - 原生控制（iOS 27）下，手机上的无障碍服务不再应答时，读界面不会再一直失败到重新插线为止；会自动把它重启（#152）。
-- 原生控制（iOS 27）下，自动解锁不会再在密码键盘已经出来时报「调不出锁屏密码键盘」：点下去的数字键有时没被手机认。
-- 原生控制（iOS 27）下，触摸会话闲置后（比如守护进程刚启动）按 Home 再马上启动 App，App 不会再被送回主屏幕。
-- 原生控制（iOS 27）下，手机上的无障碍服务把每个 App 都读成空的（只有主屏幕读得出来）时，也会自动重启它，不会再一直读界面失败到手动结束它为止。
+- 原生控制（iOS 27）下，自动解锁不会再在密码键盘已经出来时报「调不出锁屏密码键盘」（#154）。
+- 原生控制（iOS 27）下，按 Home 后马上启动的 App 不会再被送回主屏幕，守护进程刚启动后的头几个操作以前常常这样（#155）。
+- 原生控制（iOS 27）下，手机上的无障碍服务把每个 App 都读成空的时，读界面不会再一直失败；这时也会自动把它重启（#156）。
 
 ## [0.2.8] - 2026-11-18
 
@@ -330,7 +332,8 @@
 - `setup`、`doctor`、`status`、`mcp-config`。
 - Docker 镜像和预编译的 Linux 二进制。
 
-[Unreleased]: https://github.com/Derrors/iphone-control/compare/v0.2.8...HEAD
+[Unreleased]: https://github.com/Derrors/iphone-control/compare/v0.2.9...HEAD
+[0.2.9]: https://github.com/Derrors/iphone-control/compare/v0.2.8...v0.2.9
 [0.2.8]: https://github.com/Derrors/iphone-control/compare/v0.2.7...v0.2.8
 [0.2.7]: https://github.com/Derrors/iphone-control/compare/v0.2.6...v0.2.7
 [0.2.6]: https://github.com/Derrors/iphone-control/compare/v0.2.5...v0.2.6

@@ -27,6 +27,8 @@ const PASTE_WAIT: Duration = Duration::from_secs(5);
 /// A paste shows in the field within about half a second of the answer
 /// How long a field emptied by [`Daemon::replace_text`] may take to read as empty
 const CLEAR_WAIT: Duration = Duration::from_millis(1500);
+/// How often a wait for text to disappear asks lockdown whether the phone is locked (a new connection each time)
+const LOCK_ASK_EVERY: Duration = Duration::from_secs(1);
 const PASTE_SAME_SETTLE: Duration = Duration::from_millis(1500);
 /// How long an app may take to come to the front
 const LAUNCH_WAIT: Duration = Duration::from_secs(8);
@@ -453,23 +455,46 @@ impl Daemon {
         timeout: Duration,
         disappeared: bool,
     ) -> crate::error::Result<String> {
+        use super::observe::Waited;
         let t0 = Instant::now();
+        // lockdown's last answer, and when (None: it failed)
+        let mut lock: Option<(Instant, Option<bool>)> = None;
         loop {
             let screen = self.ax_snapshot(g, AX_WAIT, true).await?;
             let (xml, size, _) = self.ax_render(g, &screen).await?;
             let mut tree = elements::parse_tree(&xml, size);
             tree.incomplete |= !screen.app_complete || !screen.overlays_complete;
-            if let Some(result) = super::observe::wait_match(&tree, text, disappeared, t0.elapsed()) {
-                if disappeared
-                    && (self.native_locked(g).await?
-                        || (screen.springboard_front && !unlocked_springboard(&xml, &tree)))
-                {
-                    return Err(super::observe::wait_locked());
+            let why = match super::observe::wait_match(&tree, text, disappeared, t0.elapsed()) {
+                Some(result) if !disappeared => return Ok(result),
+                Some(result) => {
+                    // the read first (costs nothing more), then lockdown: it says locked before the read shows the
+                    // lock screen, but only on a phone with a passcode, so it can't be the only check. Asked at most
+                    // every LOCK_ASK_EVERY (a new connection each time); a failure leaves it unknown, not the wait
+                    let cover = native_cover(&xml, &screen, &tree);
+                    if cover == Cover::Locked {
+                        return Err(super::observe::wait_locked());
+                    }
+                    let locked = match lock {
+                        Some((at, answer)) if at.elapsed() < LOCK_ASK_EVERY => answer,
+                        _ => {
+                            let answer = self.native_locked(g).await.inspect_err(|e| {
+                                tracing::debug!("lock state while waiting for {text:?} to disappear: {e}")
+                            });
+                            let answer = answer.ok();
+                            lock = Some((Instant::now(), answer));
+                            answer
+                        }
+                    };
+                    match (cover, locked) {
+                        (_, Some(true)) => return Err(super::observe::wait_locked()),
+                        (Cover::None, Some(false)) => return Ok(result),
+                        _ => Waited::Covered,
+                    }
                 }
-                return Ok(result);
-            }
+                None => Waited::after(&tree, text, disappeared),
+            };
             if t0.elapsed() >= timeout {
-                return Err(super::observe::wait_timeout(text, timeout, disappeared));
+                return Err(super::observe::wait_timeout(text, timeout, why));
             }
             tokio::time::sleep(Duration::from_millis(300).min(timeout.saturating_sub(t0.elapsed()))).await;
         }
@@ -879,11 +904,31 @@ impl Daemon {
     }
 }
 
-// PasswordProtected stays false on a phone without a passcode. Only accept a recognisable unlocked
-// SpringBoard surface: a cover sheet or an unidentified system screen cannot establish absence.
-fn unlocked_springboard(xml: &str, tree: &Tree) -> bool {
-    elements::cover_sheet(xml) == elements::CoverSheet::None
-        && tree.elements.iter().any(|e| e.kind == "Icon" || e.name == "SpotlightSearchField")
+/// What is over the screen in a native read, for a wait for text to disappear
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Cover {
+    /// An app, or SpringBoard's home screen or Spotlight: what it shows is the screen
+    None,
+    /// The lock screen, known by its marks ([`elements::cover_sheet`])
+    Locked,
+    /// Notification center, control center, or SpringBoard in front with something not known as unlocked: the lock
+    /// screen often reads natively without its marks (6-7 elements: date, time, notifications, flashlight, camera;
+    /// iPhone19,7, iOS 27.2.1), and lockdown says locked only on a phone with a passcode
+    Other,
+}
+
+fn native_cover(xml: &str, screen: &ictl_device::ax::AxScreen, tree: &Tree) -> Cover {
+    match elements::cover_sheet(xml) {
+        elements::CoverSheet::Locked => Cover::Locked,
+        elements::CoverSheet::NotificationCenter => Cover::Other,
+        elements::CoverSheet::None if screen.springboard_front && !unlocked_springboard(tree) => Cover::Other,
+        elements::CoverSheet::None => Cover::None,
+    }
+}
+
+/// SpringBoard in front, recognisably unlocked: the home screen (app icons) or Spotlight
+fn unlocked_springboard(tree: &Tree) -> bool {
+    tree.elements.iter().any(|e| e.kind == "Icon" || e.name == "SpotlightSearchField")
 }
 
 fn focused_text_field(screen: &ictl_device::ax::AxScreen) -> Option<&ictl_ax::Element> {
@@ -1033,16 +1078,34 @@ mod tests {
 
     #[test]
     fn only_a_recognisable_unlocked_springboard_can_confirm_absence() {
-        let check = |markers: &str| {
+        let screen = |springboard_front| ictl_device::ax::AxScreen {
+            app: Vec::new(),
+            app_complete: true,
+            overlays: Vec::new(),
+            overlays_complete: true,
+            app_pid: 1,
+            springboard_front,
+            at: Instant::now(),
+        };
+        let cover = |markers: &str, springboard_front| {
             let xml = format!(r#"<App>{markers}</App>"#);
             let tree = elements::parse_tree(&xml, ScreenSize { width: 390.0, height: 844.0 });
-            unlocked_springboard(&xml, &tree)
+            native_cover(&xml, &screen(springboard_front), &tree)
         };
         let icon = r#"<XCUIElementTypeIcon type="Icon" label="Clock" x="10" y="10" width="54" height="54"/>"#;
-        assert!(check(icon));
-        assert!(!check(&format!(r#"{icon}<Other name="lockscreen-date-view"/>"#)));
-        assert!(!check(r#"<Other name="proud-lock"/>"#));
-        assert!(!check(r#"<StaticText label="12:25"/>"#));
+        // the home screen
+        assert_eq!(cover(icon, true), Cover::None);
+        // the lock screen by its marks, in front or not
+        assert_eq!(cover(r#"<Other name="proud-lock"/>"#, true), Cover::Locked);
+        assert_eq!(cover(r#"<Other name="proud-lock"/>"#, false), Cover::Locked);
+        // notification center pulled over an app
+        assert_eq!(cover(&format!(r#"{icon}<Other name="lockscreen-date-view"/>"#), false), Cover::Other);
+        // the lock screen as read natively: no marks, SpringBoard in front, no icons
+        let lock = r#"<XCUIElementTypeStaticText label="22:53" x="120" y="120" width="200" height="90"/>
+<XCUIElementTypeButton label="手电筒" x="40" y="860" width="50" height="50"/>"#;
+        assert_eq!(cover(lock, true), Cover::Other);
+        // an app in front: its own screen, whatever is on it
+        assert_eq!(cover(lock, false), Cover::None);
     }
 
     #[test]

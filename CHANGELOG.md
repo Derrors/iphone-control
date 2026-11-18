@@ -9,6 +9,7 @@ What changed in each release, one line per change. Versions follow [Semantic Ver
 ### Fixes
 
 - With native control (iOS 27), reading the screen no longer keeps failing until the phone is replugged when the phone's accessibility service stops answering; it is restarted on its own (#152).
+- With native control (iOS 27), automatic unlocking no longer fails with "couldn't bring up the passcode keypad" while the keypad is on screen: the keys it tapped were sometimes not taken by the phone.
 
 ## [0.2.8] - 2026-11-18
 

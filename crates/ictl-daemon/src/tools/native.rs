@@ -791,9 +791,13 @@ struct NativeScreen<'a> {
 
 /// Reads the lock screen: with the HID session's screen stream open, the phone hides the lock screen and its
 /// passcode keypad from accessibility (one element, the app's, for every session; iPhone 15 Pro Max, iOS 27.2.1), so
-/// the session is closed first, and the elements come back a moment after. The next tap opens it again (about 0.5 s)
+/// the session is closed first, and the elements come back a moment after. The next tap opens it again (about 0.5 s).
+/// Not before the last touch has landed ([`TOUCH_LANDS`])
 async fn read_lock_screen(d: &Daemon, g: &mut Inner) -> crate::error::Result<(String, ScreenSize, i64)> {
     let was_open = g.tunnel.as_ref().is_some_and(ictl_device::Tunnel::hid_open);
+    if was_open && let Some(left) = touch_lands_in(g.hid_used.map(|t| t.elapsed())) {
+        tokio::time::sleep(left).await;
+    }
     crate::core::close_hid(g).await;
     let t0 = Instant::now();
     loop {
@@ -808,6 +812,19 @@ async fn read_lock_screen(d: &Daemon, g: &mut Inner) -> crate::error::Result<(St
         }
         tokio::time::sleep(Duration::from_millis(150)).await;
     }
+}
+
+/// A touch sent over HID doesn't count when its session closes right after it: the passcode keypad came up, but no
+/// key went down and the field stayed at 0 digits, so unlocking failed with "couldn't bring up the keypad" (or
+/// stopped at the 2nd or 3rd digit). Not every time: the same phone unlocked with no wait for hours, then lost
+/// every key. Unlocks while it lost them, by how long the session stayed open after the touch (iPhone19,7,
+/// iOS 27.2.1, one daemon, the waits taken in turn): 0 ms 0 of 9, 50 ms 0 of 3, 100 ms 0 of 3, 150 ms 1 of 3,
+/// 200 ms 3 of 4, 250 ms 5 of 5, 350 ms 3 of 3. An unlock takes about 1.5 s longer for it (8.3 s without)
+const TOUCH_LANDS: Duration = Duration::from_millis(350);
+
+/// How much longer the HID session has to stay open for the last touch sent over it to count, `since` it was sent
+fn touch_lands_in(since: Option<Duration>) -> Option<Duration> {
+    TOUCH_LANDS.checked_sub(since?).filter(|d| !d.is_zero())
 }
 
 /// How long after the HID session closes the lock screen's elements may take to come back
@@ -886,6 +903,18 @@ impl Screen for NativeScreen<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The HID session isn't closed right after a touch (the phone takes the touch back): the rest of
+    /// `TOUCH_LANDS` is waited out first, and nothing when no touch was sent or it was long enough ago
+    #[test]
+    fn the_hid_session_stays_open_until_the_last_touch_has_landed() {
+        let ms = Duration::from_millis;
+        assert_eq!(touch_lands_in(Some(ms(0))), Some(TOUCH_LANDS));
+        assert_eq!(touch_lands_in(Some(ms(100))), Some(TOUCH_LANDS - ms(100)));
+        assert_eq!(touch_lands_in(Some(TOUCH_LANDS)), None);
+        assert_eq!(touch_lands_in(Some(ms(5000))), None);
+        assert_eq!(touch_lands_in(None), None);
+    }
 
     fn info(version: &str) -> DeviceInfo {
         DeviceInfo {

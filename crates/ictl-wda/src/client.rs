@@ -214,9 +214,26 @@ pub fn detection_point(screen: ScreenSize) -> (u32, u32) {
 }
 
 /// 改变手机状态的请求：没有应答时要结束会话，免得它和排在它后面的请求过一阵才执行（见 [`WdaClient::in_session`]）。
-/// 读的请求（GET、`POST /elements` 找元素）不算：排在读后面的东西不会动手机，结束会话只会让下一次开会话也排到它后面
+/// 读的请求（GET、`POST /element`、`POST /elements` 找元素）不算：排在读后面的东西不会动手机，结束会话只会让下一次开会话
+/// 也排到它后面。对元素的操作（`POST /element/:id/clear`）算
 fn acts(method: &str, path: &str) -> bool {
-    method != "GET" && !path.starts_with("/element")
+    method != "GET" && !path.ends_with("/element") && !path.ends_with("/elements")
+}
+
+/// The element a find or `/element/active` answered: `{"ELEMENT": id, "element-6066-…": id}`
+fn element_id(v: &Value) -> Option<String> {
+    let o = v.as_object()?;
+    o.get("ELEMENT").or_else(|| o.values().next())?.as_str().map(str::to_owned)
+}
+
+/// The element with keyboard focus ([`WdaClient::focused_field`])
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FocusedField {
+    /// WDA's id for it (`/element/:id/…`)
+    pub id: String,
+    /// The type without `XCUIElementType`: `TextField`, `SearchField`, `TextView`, `SecureTextField`…
+    pub kind: String,
+    pub placeholder: String,
 }
 
 /// 正常响应和远端错误都证明请求获得了回答；连接失败则不算。
@@ -974,6 +991,45 @@ impl<T: Transport> WdaClient<T> {
     pub async fn keyboard_shown(&mut self) -> Result<bool> {
         let v = self.post("/elements", json!({"using": "class name", "value": "XCUIElementTypeKeyboard"})).await?;
         Ok(v.as_array().is_some_and(|a| !a.is_empty()))
+    }
+
+    /// The element with keyboard focus (`GET /element/active`); None when no element has it
+    pub async fn focused_field(&mut self) -> Result<Option<FocusedField>> {
+        let v = match self.in_session("GET", "/element/active", None, DEFAULT_TIMEOUT).await {
+            Ok(v) => v,
+            Err(WdaError::Remote { kind, .. }) if kind.contains("no such element") => return Ok(None),
+            Err(e) => return Err(e),
+        };
+        let Some(id) = element_id(&v) else { return Ok(None) };
+        let kind = self.attribute(&id, "type").await?;
+        let kind = kind.strip_prefix("XCUIElementType").unwrap_or(&kind).to_owned();
+        let placeholder = self.attribute(&id, "placeholderValue").await?;
+        Ok(Some(FocusedField { id, kind, placeholder }))
+    }
+
+    /// An attribute of an element as text; a missing one (`null`) reads as empty
+    pub async fn attribute(&mut self, id: &str, name: &str) -> Result<String> {
+        let v = self.in_session("GET", &format!("/element/{id}/attribute/{name}"), None, DEFAULT_TIMEOUT).await?;
+        Ok(match v {
+            Value::String(s) => s,
+            Value::Null => String::new(),
+            other => other.to_string(),
+        })
+    }
+
+    /// What the field holds: an empty field reads its placeholder as its value (Spotlight's reads «搜索»), so that
+    /// counts as empty, as with native control
+    pub async fn field_text(&mut self, f: &FocusedField) -> Result<String> {
+        let v = self.attribute(&f.id, "value").await?;
+        Ok(if !f.placeholder.is_empty() && v == f.placeholder { String::new() } else { v })
+    }
+
+    /// Empties a field (`POST /element/:id/clear`): WDA deletes the text with the keyboard until the field reads
+    /// empty, and answers an error when it doesn't (some custom fields)
+    pub async fn clear(&mut self, id: &str) -> Result<()> {
+        self.in_session("POST", &format!("/element/{id}/clear"), Some(json!({})), Duration::from_secs(60))
+            .await
+            .map(drop)
     }
 
     pub async fn keys(&mut self, text: &str) -> Result<()> {
@@ -1736,6 +1792,53 @@ mod tests {
         let mut c = WdaClient::new(&m);
         assert_eq!(c.passcode_field().await.unwrap(), Some((6, 2)));
         assert_eq!(m.seen.lock().unwrap()[2].1, "/session/S/element/E1/attribute/value");
+    }
+
+    #[tokio::test]
+    async fn focused_field_reads_its_type_and_placeholder() {
+        let m = Mock::with(&[
+            (200, r#"{"sessionId":"S"}"#),
+            (200, r#"{"value":{"ELEMENT":"F1","element-6066-11e4-a52e-4f735466cecf":"F1"}}"#),
+            (200, r#"{"value":"XCUIElementTypeSearchField"}"#),
+            (200, r#"{"value":"搜索"}"#),
+            // empty: reads its placeholder
+            (200, r#"{"value":"搜索"}"#),
+            (200, r#"{"value":"wifi"}"#),
+        ]);
+        let mut c = WdaClient::new(&m);
+        let f = c.focused_field().await.unwrap().unwrap();
+        assert_eq!(f, FocusedField { id: "F1".into(), kind: "SearchField".into(), placeholder: "搜索".into() });
+        assert_eq!(c.field_text(&f).await.unwrap(), "");
+        assert_eq!(c.field_text(&f).await.unwrap(), "wifi");
+        let paths: Vec<_> = m.seen.lock().unwrap().iter().map(|s| s.1.clone()).collect();
+        assert_eq!(
+            paths[1..4],
+            [
+                "/session/S/element/active",
+                "/session/S/element/F1/attribute/type",
+                "/session/S/element/F1/attribute/placeholderValue"
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn no_focused_element_is_none() {
+        let m = Mock::with(&[
+            (200, r#"{"sessionId":"S"}"#),
+            (404, r#"{"value":{"error":"no such element","message":"No element is in focus"}}"#),
+        ]);
+        assert_eq!(WdaClient::new(&m).focused_field().await.unwrap(), None);
+    }
+
+    /// Finding elements reads; clearing one changes the phone (its session is ended when it doesn't answer)
+    #[test]
+    fn element_finds_read_and_element_edits_act() {
+        assert!(!acts("POST", "/elements"));
+        assert!(!acts("POST", "/element"));
+        assert!(!acts("POST", "/element/E1/elements"));
+        assert!(!acts("GET", "/element/active"));
+        assert!(acts("POST", "/element/E1/clear"));
+        assert!(acts("POST", "/wda/keys"));
     }
 
     #[test]

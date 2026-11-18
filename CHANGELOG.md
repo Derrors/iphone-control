@@ -12,7 +12,7 @@ What changed in each release, one line per change. Versions follow [Semantic Ver
 
 ### New
 
-- With native control, `iphone_type_text` supports `replace: true` (empty text empties the field) and verifies the full field value before pressing Return; when it fails, the old text is left unselected.
+- `iphone_type_text` supports `replace: true` (empty text empties the field) and verifies the full field value before pressing Return. With native control, when it fails, the old text is left unselected; through WDA (iOS 26 and earlier, or `ICTL_IOS_BACKEND=wda`) the field is cleared first, so a failure there says the old text is gone (#162).
 - `iphone_list_elements` reports the match count and whether `limit` truncated the list in its structured result.
 - `iphone_wait_for` can wait for text to disappear without mistaking an incomplete screen read for success.
 

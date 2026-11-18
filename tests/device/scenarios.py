@@ -14,7 +14,7 @@ Scenarios (the numbers are regression cases):
            selecting the device already selected, an enlarged region (#16), then=screenshot
   typing   typing with no keyboard up is refused and types nothing (#32); the same text typed twice into
            Spotlight counts as typed the second time too (#143)
-  editing  replace and empty focused text on native iOS (#159), read element-limit metadata (#160),
+  editing  replace and empty focused text, natively (#159) and through WDA (#162), read element-limit metadata (#160),
            and wait for a visible Clock tab to disappear (#161)
   fresh    a tap right after a cold start isn't swallowed (#13); then=elements shows the page after the tap,
            not the one before (#125)
@@ -203,32 +203,29 @@ def spotlight_queries(text: str) -> list[str]:
 
 async def editing(p: Phone):
     c = "editing"
-    if p.d.native:
-        try:
-            await p.spotlight(c)
-            await p.ok(c, "iphone_type_text", {"text": "wifi"})
-            before = await p.ok(c, "iphone_list_elements", {"filter": "SearchField"})
-            if not check("#159", "Spotlight query is wifi before replacement",
-                         spotlight_queries(before) == ["wifi"], before):
-                return
-            for wanted in ("wi", "蓝牙"):
-                err, answer, dt, _ = await p.call("iphone_type_text", {"text": wanted, "replace": True})
-                readback = await p.ok(c, "iphone_list_elements", {"filter": "SearchField"})
-                if not check("#159", f"replace the focused Spotlight query with {wanted!r} ({dt:.2f}s)",
-                             not err and spotlight_queries(readback) == [wanted], answer if err else readback):
-                    return
-            # empty text empties it; the empty field reads its placeholder as its value
-            err, answer, dt, _ = await p.call("iphone_type_text", {"text": "", "replace": True})
+    try:
+        await p.spotlight(c)
+        await p.ok(c, "iphone_type_text", {"text": "wifi"})
+        before = await p.ok(c, "iphone_list_elements", {"filter": "SearchField"})
+        if not check("#159", "Spotlight query is wifi before replacement",
+                     spotlight_queries(before) == ["wifi"], before):
+            return
+        for wanted in ("wi", "蓝牙"):
+            err, answer, dt, _ = await p.call("iphone_type_text", {"text": wanted, "replace": True})
             readback = await p.ok(c, "iphone_list_elements", {"filter": "SearchField"})
-            check("#159", f"replace with empty text empties the Spotlight query ({dt:.2f}s)",
-                  not err and says(answer, dev.T("已清空", "Emptied")) and "蓝牙" not in readback,
-                  answer if err else readback)
-        finally:
-            await p.home(c)
-        err, answer, _, _ = await p.call("iphone_type_text", {"text": "蓝牙", "replace": True, "submit": True})
-        check("#159", "replacement without a keyboard is refused", err and says(answer, dev.NO_KEYBOARD), answer)
-    else:
-        print(f"SKIP [{c}] #159 replacement needs native control", flush=True)
+            if not check("#159", f"replace the focused Spotlight query with {wanted!r} ({dt:.2f}s)",
+                         not err and spotlight_queries(readback) == [wanted], answer if err else readback):
+                return
+        # empty text empties it; the empty field reads its placeholder as its value
+        err, answer, dt, _ = await p.call("iphone_type_text", {"text": "", "replace": True})
+        readback = await p.ok(c, "iphone_list_elements", {"filter": "SearchField"})
+        check("#159", f"replace with empty text empties the Spotlight query ({dt:.2f}s)",
+              not err and says(answer, dev.T("已清空", "Emptied")) and "蓝牙" not in readback,
+              answer if err else readback)
+    finally:
+        await p.home(c)
+    err, answer, _, _ = await p.call("iphone_type_text", {"text": "蓝牙", "replace": True, "submit": True})
+    check("#159", "replacement without a keyboard is refused", err and says(answer, dev.NO_KEYBOARD), answer)
 
     await p.ok(c, "iphone_launch_app", {"app": dev.CLOCK})
     tabs = await p.clock_tabs(c)

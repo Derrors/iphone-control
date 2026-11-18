@@ -419,18 +419,18 @@ WDA 不可用时改用 CoreDevice HID(iOS 27 起;结果里注明「经 HID」)�
         t(
             "iphone_type_text",
             action_desc(
-                ictl_l10n::tr!("在当前获得焦点的输入框里输入文字(支持中文),默认从光标处输入。原生控制可用 replace=true 替换当前普通输入框的全文(text 为空时清空)。submit=true 时末尾按回车。\n\n\
+                ictl_l10n::tr!("在当前获得焦点的输入框里输入文字(支持中文),默认从光标处输入。replace=true 替换当前聚焦的普通输入框的全文(text 为空时清空),读回全文一致才按回车。submit=true 时末尾按回车。\n\n\
 何时用:搜索框、表单、聊天框等。要先点中输入框让键盘弹出;屏幕上没有键盘时报错,什么都不输。\
 回车可能会发送消息或提交表单,发送前先向用户确认。\n\n\
 行为:输完会读回输入框核对,少了结尾几个字会自动补上;对不上就报错,也不按回车。\
-WDA 不可用时改用 HID(iOS 27 起):美式键盘上的英文和符号直接按键;中文等经剪贴板粘贴,手机会弹「允许粘贴」,要截图后点它才粘得进去(剪贴板 45 秒后还原)。", "Type text into the focused text field (any language, including Chinese) at the cursor by default. On native control, replace=true replaces the contents of a readable focused field (empty text empties it). With submit=true it presses Return at the end.\n\nWhen to use: search boxes, forms, chat fields. Tap the field first so the keyboard comes up; with no keyboard on screen it fails and types nothing. Return may send a message or submit a form, so ask the user before sending.\n\nBehavior: it reads the field back afterwards; dropped trailing characters are typed again. If it still doesn't match, it reports an error and doesn't press Return. If WDA is unavailable it uses HID instead (iOS 27+): English letters and symbols of a US keyboard are typed as keys, anything else is pasted through the pasteboard, and the phone asks to “Allow Paste”: take a screenshot and tap it to let the text in (the pasteboard is put back after 45 s)."),
+WDA 不可用时改用 HID(iOS 27 起):美式键盘上的英文和符号直接按键;中文等经剪贴板粘贴,手机会弹「允许粘贴」,要截图后点它才粘得进去(剪贴板 45 秒后还原)。", "Type text into the focused text field (any language, including Chinese) at the cursor by default. replace=true replaces the contents of a readable focused field (empty text empties it), and presses Return only once the field reads back as exactly the text. With submit=true it presses Return at the end.\n\nWhen to use: search boxes, forms, chat fields. Tap the field first so the keyboard comes up; with no keyboard on screen it fails and types nothing. Return may send a message or submit a form, so ask the user before sending.\n\nBehavior: it reads the field back afterwards; dropped trailing characters are typed again. If it still doesn't match, it reports an error and doesn't press Return. If WDA is unavailable it uses HID instead (iOS 27+): English letters and symbols of a US keyboard are typed as keys, anything else is pasted through the pasteboard, and the phone asks to “Allow Paste”: take a screenshot and tap it to let the text in (the pasteboard is put back after 45 s)."),
                 ictl_l10n::tr!("已输入 4 个字符,并按了回车", "Typed 4 characters and pressed Return"),
                 true,
             ),
             schema(
                 with_then(json!({
                     "text": {"type": "string", "description": ictl_l10n::tr!("要输入的文字", "the text to type")},
-                    "replace": {"type": "boolean", "default": false, "description": ictl_l10n::tr!("替换当前聚焦输入框的全文,text 为空时清空输入框。仅原生控制、普通可读输入框(不含密码框);默认在光标处输入", "replace all text in the focused field; with empty text, empty it. Native control, readable fields only (not password fields); defaults to typing at the cursor")},
+                    "replace": {"type": "boolean", "default": false, "description": ictl_l10n::tr!("替换当前聚焦输入框的全文,text 为空时清空输入框。仅普通可读输入框(不含密码框);经 WDA 时先清空再输入,失败时原来的文字已删掉;默认在光标处输入", "replace all text in the focused field; with empty text, empty it. Readable fields only (not password fields); through WDA the field is emptied first, so after a failure the old text is gone; defaults to typing at the cursor")},
                     "submit": {"type": "boolean", "default": false, "description": ictl_l10n::tr!("输完后按回车(搜索、发送、提交)", "press Return afterwards (search, send, submit)")}
                 })),
                 &["text"],

@@ -25,7 +25,7 @@ const PASTE_WAIT: Duration = Duration::from_secs(5);
 /// After the paste prompt was answered, a field that already showed the text and doesn't change for this long took
 /// the paste as it was: the pasted text replaced the same text, selected (Spotlight keeps the last search selected).
 /// A paste shows in the field within about half a second of the answer
-/// How long a field emptied by [`Daemon::replace_text`] may take to read as empty
+/// How long a field emptied by [`Daemon::native_replace`] may take to read as empty
 const CLEAR_WAIT: Duration = Duration::from_millis(1500);
 /// How often a wait for text to disappear asks lockdown whether the phone is locked (a new connection each time)
 const LOCK_ASK_EVERY: Duration = Duration::from_secs(1);
@@ -666,12 +666,9 @@ impl Daemon {
         ))
     }
 
-    /// Replace a single focused, readable field. Verify the full value before sending Return.
-    pub(crate) async fn replace_text(&self, g: &mut Inner, text: &str, submit: bool) -> crate::error::Result<String> {
-        if !self.native(g) || self.wda(g).is_some() {
-            return Err(ictl_l10n::tr!("替换全文需要原生控制", "Replacing text requires native control").into());
-        }
-        self.ensure_unlocked(g).await?;
+    /// Replaces a single focused, readable field natively ([`Daemon::replace_text`]). Verifies the full value before
+    /// sending Return
+    pub(crate) async fn native_replace(&self, g: &mut Inner, text: &str, submit: bool) -> crate::error::Result<String> {
         let before = self.ax_snapshot(g, AX_WAIT, false).await?;
         if !keyboard_up(&self.snapshot_tree(g, &before).await?) {
             return Err(ictl_l10n::tr!(
@@ -721,16 +718,7 @@ impl Daemon {
         if submit {
             self.hid_do(g, |h| Box::pin(h.type_ascii("\n"))).await?;
         }
-        let n = text.chars().count();
-        Ok(match (n, submit) {
-            (0, true) => ictl_l10n::tr!("已清空输入框，并按了回车", "Emptied the field and pressed Return").into(),
-            (0, false) => ictl_l10n::tr!("已清空输入框", "Emptied the field").into(),
-            (_, true) => ictl_l10n::trf!(
-                "已替换为 {n} 个字符，并按了回车",
-                "Replaced the field with {n} characters and pressed Return"
-            ),
-            (_, false) => ictl_l10n::trf!("已替换为 {n} 个字符", "Replaced the field with {n} characters"),
-        })
+        Ok(input::replaced(text, submit, ""))
     }
 
     /// After select all and Delete: `target` reads as empty within [`CLEAR_WAIT`]

@@ -156,7 +156,8 @@ async def default_steps(r: Runner, d: dev.Device):
     await r.step("iphone_press_button", {"button": "home"})
     # down from the middle of the home screen: Spotlight, with its keyboard up
     await r.step("iphone_swipe", {"from_x": cx, "from_y": round(d.h * 0.43), "to_x": cx, "to_y": round(d.h * 0.75)})
-    word = d.name(dev.SETTINGS) if dev.SETTINGS in d.apps else "设置"
+    # Clock was launched above. Wait for its result in Spotlight, which excludes the query field itself.
+    word = d.name(dev.CLOCK)
     await r.step("iphone_type_text", {"text": word}, lacks=[dev.NO_KEYBOARD])
     await r.step("iphone_wait_for", {"text": word, "timeout": 5}, has=[dev.APPEARED])
     await r.step("iphone_screenshot", image=[d.w, d.h])

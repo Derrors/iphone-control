@@ -195,6 +195,12 @@ async def typing(p: Phone):
     await p.home(c)
 
 
+def spotlight_queries(text: str) -> list[str]:
+    # describe() prints a field value only once when it equals the label.
+    return [e.value if e.value is not None else e.label for e in dev.elements(text)
+            if e.kind in ("SearchField", "TextField")]
+
+
 async def editing(p: Phone):
     c = "editing"
     if p.d.native:
@@ -202,13 +208,12 @@ async def editing(p: Phone):
         await p.ok(c, "iphone_type_text", {"text": "wifi"})
         before = await p.ok(c, "iphone_list_elements", {"filter": "SearchField"})
         if not check("#159", "Spotlight query is wifi before replacement",
-                     any(e.value == "wifi" for e in dev.elements(before)), before):
+                     spotlight_queries(before) == ["wifi"], before):
             return
         err, answer, dt, _ = await p.call("iphone_type_text", {"text": "蓝牙", "replace": True})
         readback = await p.ok(c, "iphone_list_elements", {"filter": "SearchField"})
-        fields = [e for e in dev.elements(readback) if e.kind in ("SearchField", "TextField")]
         check("#159", f"replace the focused Spotlight query ({dt:.2f}s)",
-              not err and any(e.value == "蓝牙" for e in fields) and not any("wifi" in (e.value or "") for e in fields),
+              not err and spotlight_queries(readback) == ["蓝牙"],
               answer if err else readback)
         await p.home(c)
         err, answer, _, _ = await p.call("iphone_type_text", {"text": "蓝牙", "replace": True, "submit": True})

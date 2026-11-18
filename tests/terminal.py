@@ -339,14 +339,18 @@ def main():
             # That holds only if this script itself isn't held up between the
             # writes (a busy macOS runner stalled it past the budget, and ↓ came
             # out as "B"): an attempt whose writes took longer proves nothing
-            # and is run again.
+            # and is run again. A busy runner can stretch every sleep for a
+            # while (five attempts in a row took 0.21-0.33s), so it gets many
+            # attempts, bounded in time.
             spread = 0.2
+            attempts, patience = 30, 20.0
             for fragmented_env, keys, result in [(env, b"\x1b[B", 2),
                                                   (env, b"\x1bOB", 2),
                                                   (yes_env, "否".encode(), 0),
                                                   (yes_env, "不".encode(), 0)]:
                 took = []
-                while len(took) < 5:
+                give_up = time.monotonic() + patience
+                while len(took) < attempts and time.monotonic() < give_up:
                     session = Session(command, fragmented_env)
                     try:
                         session.expect("Esc")
@@ -359,11 +363,14 @@ def main():
                         session.send(b"\r")
                         if took[-1] <= spread:
                             session.finish(f"MENU_RESULT={result}")
+                            if len(took) > 1:
+                                print(f"note: sending {keys!r} took {len(took)} attempts "
+                                      f"(the slow ones: {[round(t, 2) for t in took[:-1]]})", flush=True)
                             break
                     finally:
                         session.close()
                 else:
-                    raise AssertionError(f"could not send {keys!r} within {spread}s: took {took}")
+                    raise AssertionError(f"could not send {keys!r} within {spread}s in {len(took)} attempts: took {took}")
             # A partial control sequence that times out is ignored, not Esc.
             session = Session(command, env)
             try:

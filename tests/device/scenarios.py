@@ -14,6 +14,8 @@ Scenarios (the numbers are regression cases):
            selecting the device already selected, an enlarged region (#16), then=screenshot
   typing   typing with no keyboard up is refused and types nothing (#32); the same text typed twice into
            Spotlight counts as typed the second time too (#143)
+  editing  replace focused text on native iOS (#159), read element-limit metadata (#160),
+           and wait for a visible Clock tab to disappear (#161)
   fresh    a tap right after a cold start isn't swallowed (#13); then=elements shows the page after the tap,
            not the one before (#125)
   batch    iphone_batch runs its steps in order and answers for each; a tap that found nothing stops it and
@@ -191,6 +193,52 @@ async def typing(p: Phone):
     err, text, dt, _ = await p.call("iphone_wait_for", {"text": MISSING, "timeout": 2})
     check(c, f"waiting for text that never comes gives up after its timeout ({dt:.2f}s)", 1.5 < dt < 6 and not says(text, dev.APPEARED), text)
     await p.home(c)
+
+
+async def editing(p: Phone):
+    c = "editing"
+    if p.d.native:
+        await p.spotlight(c)
+        await p.ok(c, "iphone_type_text", {"text": "wifi"})
+        before = await p.ok(c, "iphone_list_elements", {"filter": "SearchField"})
+        if not check("#159", "Spotlight query is wifi before replacement",
+                     any(e.value == "wifi" for e in dev.elements(before)), before):
+            return
+        err, answer, dt, _ = await p.call("iphone_type_text", {"text": "蓝牙", "replace": True})
+        readback = await p.ok(c, "iphone_list_elements", {"filter": "SearchField"})
+        fields = [e for e in dev.elements(readback) if e.kind in ("SearchField", "TextField")]
+        check("#159", f"replace the focused Spotlight query ({dt:.2f}s)",
+              not err and any(e.value == "蓝牙" for e in fields) and not any("wifi" in (e.value or "") for e in fields),
+              answer if err else readback)
+        await p.home(c)
+        err, answer, _, _ = await p.call("iphone_type_text", {"text": "蓝牙", "replace": True, "submit": True})
+        check("#159", "replacement without a keyboard is refused", err and says(answer, dev.NO_KEYBOARD), answer)
+    else:
+        print(f"SKIP [{c}] #159 replacement needs native control", flush=True)
+
+    await p.ok(c, "iphone_launch_app", {"app": dev.CLOCK})
+    tabs = await p.clock_tabs(c)
+    if not tabs:
+        return
+    for limit in (1, 500):
+        res = await asyncio.wait_for(p.s.call_tool("iphone_list_elements", {"limit": limit}), 30)
+        data = res.structured_content or {}
+        count = len(data.get("elements", []))
+        matched = data.get("matched_count")
+        expected = limit == 1
+        check("#160", f"element limit {limit} reports truncation",
+              not res.is_error and isinstance(matched, int) and matched > 1 and count == min(matched, limit)
+              and data.get("truncated") is expected,
+              f"returned={count} matched={matched} truncated={data.get('truncated')}")
+
+    target = {"text": tabs[0].label, "state": "disappeared", "timeout": 2}
+    err, answer, dt, _ = await p.call("iphone_wait_for", target)
+    check("#161", f"still-visible Clock tab times out ({dt:.2f}s)",
+          err and says(answer, dev.T("没消失", "did not disappear")), answer)
+    await p.home(c)
+    err, answer, dt, _ = await p.call("iphone_wait_for", target)
+    check("#161", f"Clock tab is gone after leaving the app ({dt:.2f}s)",
+          not err and says(answer, dev.T("已消失", "Disappeared")), answer)
 
 
 async def fresh(p: Phone):
@@ -371,7 +419,8 @@ async def lock(p: Phone):
 
 
 SCENARIOS = {
-    "tools": tools, "typing": typing, "fresh": fresh, "batch": batch, "menu": menu, "idle": idle, "url": url, "lock": lock
+    "tools": tools, "typing": typing, "editing": editing, "fresh": fresh, "batch": batch,
+    "menu": menu, "idle": idle, "url": url, "lock": lock
 }
 OPT_IN = {"lock": "--lock", "url": "--url"}
 

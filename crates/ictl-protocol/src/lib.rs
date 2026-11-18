@@ -142,6 +142,11 @@ pub enum Request {
         text: String,
         submit: bool,
     },
+    /// A separate operation so an older daemon cannot silently insert the text instead.
+    ReplaceText {
+        text: String,
+        submit: bool,
+    },
     PressButton {
         button: String,
     },
@@ -175,6 +180,10 @@ pub enum Request {
     AlertCheck,
     /// 等包含 `text` 的元素出现，最多等 `timeout_ms`（代替 agent 反复截图轮询）
     WaitFor {
+        text: String,
+        timeout_ms: u64,
+    },
+    WaitForDisappearance {
         text: String,
         timeout_ms: u64,
     },
@@ -386,6 +395,11 @@ pub enum Data {
     Status(StatusData),
     Elements {
         elements: Vec<ElementData>,
+        /// Matches in the observed tree before the caller's limit. Older daemons do not report this.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        matched_count: Option<usize>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        truncated: Option<bool>,
     },
     Apps {
         apps: Vec<AppData>,
@@ -461,6 +475,7 @@ impl Request {
             | Self::LongPress { .. }
             | Self::Swipe { .. }
             | Self::TypeText { .. }
+            | Self::ReplaceText { .. }
             | Self::PressButton { .. }
             | Self::Touch { .. }
             | Self::LaunchApp { .. }
@@ -478,6 +493,7 @@ impl Request {
             | Self::Settle { .. }
             | Self::AlertCheck
             | Self::WaitFor { .. }
+            | Self::WaitForDisappearance { .. }
             | Self::Daemon
             | Self::Doctor
             | Self::Resign { .. }
@@ -1018,7 +1034,9 @@ mod tests {
         assert!(s.contains(r#""data":{"type":"status","wda_ready":true"#), "{s}");
         assert_eq!(serde_json::from_str::<Response>(&s).unwrap(), r);
         let el = ElementData { kind: "Button".into(), label: "OK".into(), x: 1.0, y: 2.0, width: 3.0, height: 4.0 };
-        let v = serde_json::to_value(Data::Elements { elements: vec![el] }).unwrap();
+        let v =
+            serde_json::to_value(Data::Elements { elements: vec![el], matched_count: Some(1), truncated: Some(false) })
+                .unwrap();
         assert_eq!(v["elements"][0]["type"], "Button", "the page reads `type`");
         assert!(!serde_json::to_string(&Response::text_with("x", Outcome::default())).unwrap().contains("data"));
     }

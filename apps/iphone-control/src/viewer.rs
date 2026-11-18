@@ -2159,7 +2159,7 @@ mod tests {
                 height: h,
             })
             .collect();
-        let els = element_list(Some(protocol::Data::Elements { elements }));
+        let els = element_list(Some(protocol::Data::Elements { elements, matched_count: None, truncated: None }));
         assert_eq!(
             els[0],
             json!({"type": "Button", "label": "今天", "x": 33.0, "y": 861.0, "width": 56.0, "height": 38.0})

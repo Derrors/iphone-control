@@ -409,9 +409,16 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> Session<S> {
             let objects: Vec<ObjectRef> = chunk.iter().map(|(o, _)| *o).collect();
             let got = self.attributes_of(&objects).await?;
             for (o, depth) in chunk {
-                let Some(a) = got.get(&o) else { continue };
+                let Some(a) = got.get(&o) else {
+                    complete = false;
+                    continue;
+                };
                 let (e, kids) = tree::element(Some(o), a, None, depth);
-                if (depth > 0 && e.traits & prune != 0) || depth >= 40 {
+                if depth > 0 && e.traits & prune != 0 {
+                    continue;
+                }
+                if depth >= 40 {
+                    complete &= kids.is_empty();
                     continue;
                 }
                 for k in kids {
@@ -433,15 +440,15 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> Session<S> {
         limit: usize,
         budget: Duration,
         prune: u64,
-    ) -> Result<Vec<Element>> {
-        let (mut els, _) = self.walk(root, limit + 1, budget, prune).await?;
+    ) -> Result<(Vec<Element>, bool)> {
+        let (mut els, complete) = self.walk(root, limit + 1, budget, prune).await?;
         if !els.is_empty() {
             els.remove(0);
         }
         for e in &mut els {
             e.parent = e.parent.and_then(|p| p.checked_sub(1));
         }
-        Ok(els)
+        Ok((els, complete))
     }
 
     /// Tells the phone this client no longer needs accessibility (it then closes the connection)

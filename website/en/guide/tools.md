@@ -8,8 +8,8 @@ The MCP server provides 17 tools, 23 with the [developer tools](#developer-tools
 |---|---|
 | `iphone_status` | Ready or not, native or WDA, locked or not, foreground app, screen size |
 | `iphone_screenshot` | Screenshot; with `x`, `y`, `width`, `height` it returns an enlarged region for small text and icons |
-| `iphone_list_elements` | Elements with text: type, text, center, size; `filter` by text or type |
-| `iphone_wait_for` | Wait until some text appears (page loaded, dialog shown); text inside input fields doesn't count. `timeout` defaults to 5 seconds, max 30 |
+| `iphone_list_elements` | Elements with text: type, text, center, size; `filter` by text or type. Structured output includes `matched_count` in the observed tree and `truncated` when `limit` omitted matches |
+| `iphone_wait_for` | Wait for text to appear by default. With `state: "disappeared"`, wait for a screen without a match. Edited values in input fields do not count. `timeout` defaults to 5 seconds, max 30 |
 | `iphone_list_apps` | Installed apps; read-only, no `then` |
 
 With [auto-unlock](./auto-unlock) on, `iphone_screenshot`, `iphone_list_elements` and `iphone_wait_for` also unlock a locked phone first. They are marked read-only because they don't change what's on screen. `iphone_status` and `iphone_list_apps` don't unlock it.
@@ -22,7 +22,7 @@ With [auto-unlock](./auto-unlock) on, `iphone_screenshot`, `iphone_list_elements
 | `iphone_tap_element` | Tap by text; if the center is covered by a floating bar or the keyboard it taps a visible part, and if it's fully covered it doesn't tap. With `scroll` (`down` / `up`) it scrolls slowly and looks again when the element isn't on screen, until it is found, the list ends or `max_scrolls` (default 8) is reached |
 | `iphone_long_press` | Long press; `seconds` defaults to 1, max 10 |
 | `iphone_swipe` | Swipe; returns once the list has stopped scrolling. `seconds` defaults to 0.3, max 10. `hold` holds still at the start for that many seconds before moving, to drag things that need a long press first (home-screen icons, reorderable rows); about 0.6 works |
-| `iphone_type_text` | Type into the focused field (Chinese supported), read it back and fix dropped characters; `submit` presses Return |
+| `iphone_type_text` | Type into the focused field (Chinese supported), read it back and fix dropped characters; `submit` presses Return. With native control, `replace: true` replaces a focused, readable field with non-empty text and verifies the whole value before pressing Return |
 | `iphone_press_button` | `home`, `volume_up`, `volume_down`, `lock` |
 | `iphone_launch_app` / `iphone_terminate_app` | Launch / quit an app by name (e.g. `设置`) or bundle id |
 | `iphone_open_url` | Open a link or URL scheme |

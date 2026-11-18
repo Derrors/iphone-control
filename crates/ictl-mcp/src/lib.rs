@@ -317,7 +317,7 @@ WDA 不可用时会说明哪些功能受影响(读元素、按名字点击、启
                 json!({
                     "filter": {"type": "string", "default": "",
                         "description": ictl_l10n::tr!("只返回类型/标签/名字/值里包含这段文字的元素(不区分大小写),例如 SearchField、Button、登录", "Only return elements whose type/label/name/value contains this text (case-insensitive), e.g. SearchField, Button, Login")},
-                    "limit": {"type": "integer", "default": 150, "description": ictl_l10n::tr!("最多列几个,多出的只报数量", "Maximum number of elements to list; the rest are only counted")}
+                    "limit": {"type": "integer", "default": 150, "description": ictl_l10n::tr!("最多列几个,结构化结果包含匹配总数和截断标记", "Maximum number of elements to return; structured output reports the count and whether it was truncated")}
                 }),
                 &[],
             ),
@@ -418,17 +418,18 @@ WDA 不可用时改用 CoreDevice HID(iOS 27 起;结果里注明「经 HID」)�
         t(
             "iphone_type_text",
             action_desc(
-                ictl_l10n::tr!("在当前获得焦点的输入框里输入文字(支持中文),从光标处输入,不会清空原有内容。submit=true 时末尾按回车。\n\n\
+                ictl_l10n::tr!("在当前获得焦点的输入框里输入文字(支持中文),默认从光标处输入。原生控制可用 replace=true 替换当前普通输入框的全文。submit=true 时末尾按回车。\n\n\
 何时用:搜索框、表单、聊天框等。要先点中输入框让键盘弹出;屏幕上没有键盘时报错,什么都不输。\
 回车可能会发送消息或提交表单,发送前先向用户确认。\n\n\
 行为:输完会读回输入框核对,少了结尾几个字会自动补上;对不上就报错,也不按回车。\
-WDA 不可用时改用 HID(iOS 27 起):美式键盘上的英文和符号直接按键;中文等经剪贴板粘贴,手机会弹「允许粘贴」,要截图后点它才粘得进去(剪贴板 45 秒后还原)。", "Type text into the focused text field (any language, including Chinese) at the cursor, without clearing what is already there. With submit=true it presses Return at the end.\n\nWhen to use: search boxes, forms, chat fields. Tap the field first so the keyboard comes up; with no keyboard on screen it fails and types nothing. Return may send a message or submit a form, so ask the user before sending.\n\nBehavior: it reads the field back afterwards; dropped trailing characters are typed again. If it still doesn't match, it reports an error and doesn't press Return. If WDA is unavailable it uses HID instead (iOS 27+): English letters and symbols of a US keyboard are typed as keys, anything else is pasted through the pasteboard, and the phone asks to “Allow Paste”: take a screenshot and tap it to let the text in (the pasteboard is put back after 45 s)."),
+WDA 不可用时改用 HID(iOS 27 起):美式键盘上的英文和符号直接按键;中文等经剪贴板粘贴,手机会弹「允许粘贴」,要截图后点它才粘得进去(剪贴板 45 秒后还原)。", "Type text into the focused text field (any language, including Chinese) at the cursor by default. On native control, replace=true replaces the contents of a readable focused field. With submit=true it presses Return at the end.\n\nWhen to use: search boxes, forms, chat fields. Tap the field first so the keyboard comes up; with no keyboard on screen it fails and types nothing. Return may send a message or submit a form, so ask the user before sending.\n\nBehavior: it reads the field back afterwards; dropped trailing characters are typed again. If it still doesn't match, it reports an error and doesn't press Return. If WDA is unavailable it uses HID instead (iOS 27+): English letters and symbols of a US keyboard are typed as keys, anything else is pasted through the pasteboard, and the phone asks to “Allow Paste”: take a screenshot and tap it to let the text in (the pasteboard is put back after 45 s)."),
                 ictl_l10n::tr!("已输入 4 个字符,并按了回车", "Typed 4 characters and pressed Return"),
                 true,
             ),
             schema(
                 with_then(json!({
                     "text": {"type": "string", "description": ictl_l10n::tr!("要输入的文字", "the text to type")},
+                    "replace": {"type": "boolean", "default": false, "description": ictl_l10n::tr!("替换当前聚焦输入框的全文。仅原生控制、普通可读输入框，文字不能为空；默认在光标处输入", "replace all text in the focused field (native control, readable non-password fields, non-empty text); defaults to typing at the cursor")},
                     "submit": {"type": "boolean", "default": false, "description": ictl_l10n::tr!("输完后按回车(搜索、发送、提交)", "press Return afterwards (search, send, submit)")}
                 })),
                 &["text"],
@@ -507,14 +508,15 @@ WDA 不可用时改用 HID(iOS 27 起):美式键盘上的英文和符号直接�
         ),
         t(
             "iphone_wait_for",
-            ictl_l10n::tr!("等包含某段文字的界面元素出现(例如页面加载完、搜索结果出来、弹窗出现),出现就立即返回找到的元素和用时;超时报错。\n\n\
+            ictl_l10n::tr!("等含指定文字的元素出现或消失。默认等出现；state=disappeared 时等当前界面没有匹配项。超时报错。\n\n\
 何时用:操作后要等加载时代替反复截图轮询,每 0.3 秒查一次,不占上下文。输入框里的字不算(刚输入的搜索词不会被当成结果)。\
-需要 WDA。只读:不改变界面,但配置了锁屏密码时会先解锁。", "Wait until a UI element containing some text appears (a page finished loading, search results arrived, an alert appeared); returns the element and the time taken as soon as it appears, or an error on timeout.\n\nWhen to use: after an action, to wait for loading instead of polling with screenshots; it checks every 0.3 s and uses no context meanwhile. Text inside input fields doesn't count (a search term just typed isn't taken for a result). Needs WDA. Read-only: doesn't change the screen, but unlocks the phone first if a passcode is configured.")
+只读:不改变界面,但配置了锁屏密码时会先解锁。", "Wait for visible UI text to appear (the default), or use state=disappeared to wait for a screen without a match. Returns an error on timeout.\n\nWhen to use: after an action, to wait for loading instead of polling with screenshots; it checks every 0.3 s and uses no context meanwhile. Text inside input fields doesn't count (a search term just typed isn't taken for a result). Read-only: doesn't change the screen, but unlocks the phone first if a passcode is configured.")
                 .into(),
             schema(
                 json!({
                     "text": {"type": "string", "description": ictl_l10n::tr!("要等的文字,元素的标签/名字/值包含它就算出现", "the text to wait for; it counts as appeared when an element's label/name/value contains it")},
-                    "timeout": {"type": "number", "default": 5, "description": ictl_l10n::tr!("最多等几秒(不超过 30)", "maximum seconds to wait (up to 30)")}
+                    "timeout": {"type": "number", "default": 5, "description": ictl_l10n::tr!("最多等几秒(不超过 30)", "maximum seconds to wait (up to 30)")},
+                    "state": {"type": "string", "enum": ["appeared", "disappeared"], "default": "appeared", "description": ictl_l10n::tr!("等文字出现或从当前界面消失", "wait for the text to appear or disappear from the visible screen")}
                 }),
                 &["text"],
             ),
@@ -702,7 +704,18 @@ pub fn to_request(name: &str, args: &Map<String, Value>) -> Result<Request, Stri
             seconds: a.f_or("seconds", 0.3)?,
             hold: a.f_or("hold", 0.0)?,
         },
-        "iphone_type_text" => Request::TypeText { text: a.s("text")?, submit: a.b_or("submit", false)? },
+        "iphone_type_text" => {
+            let text = a.s("text")?;
+            let submit = a.b_or("submit", false)?;
+            if a.b_or("replace", false)? {
+                if text.is_empty() {
+                    return Err(ictl_l10n::tr!("替换文字不能为空", "Replacement text must not be empty").into());
+                }
+                Request::ReplaceText { text, submit }
+            } else {
+                Request::TypeText { text, submit }
+            }
+        }
         "iphone_press_button" => Request::PressButton { button: a.s("button")? },
         "iphone_list_apps" => Request::ListApps { include_system: a.b_or("include_system", false)? },
         "iphone_launch_app" => Request::LaunchApp { app: a.s("app")? },
@@ -741,7 +754,19 @@ pub fn to_request(name: &str, args: &Map<String, Value>) -> Result<Request, Stri
                     ictl_l10n::tr!("timeout 要在 0 到 30 秒之间", "timeout must be between 0 and 30 seconds").into()
                 );
             }
-            Request::WaitFor { text: a.s("text")?, timeout_ms: (secs * 1000.0) as u64 }
+            let text = a.s("text")?;
+            let timeout_ms = (secs * 1000.0) as u64;
+            match a.s_or("state", "appeared")?.as_str() {
+                "appeared" => Request::WaitFor { text, timeout_ms },
+                "disappeared" => Request::WaitForDisappearance { text, timeout_ms },
+                _ => {
+                    return Err(ictl_l10n::tr!(
+                        "state 只能是 appeared 或 disappeared",
+                        "state must be appeared or disappeared"
+                    )
+                    .into());
+                }
+            }
         }
         other => return Err(ictl_l10n::trf!("未知工具 {other}", "unknown tool {other}")),
     })
@@ -903,6 +928,7 @@ pub fn wants_alert_check(req: &Request) -> bool {
         | Request::LongPress { .. }
         | Request::Swipe { .. }
         | Request::TypeText { .. }
+        | Request::ReplaceText { .. }
         | Request::LaunchApp { .. }
         | Request::OpenUrl { .. } => true,
         // 按键见 PressButton 自己的弹窗处理；切换设备后新设备的 WDA 还没起来，查不了弹窗；
@@ -923,6 +949,7 @@ pub fn wants_alert_check(req: &Request) -> bool {
         | Request::Settle { .. }
         | Request::AlertCheck
         | Request::WaitFor { .. }
+        | Request::WaitForDisappearance { .. }
         | Request::Daemon
         | Request::Doctor
         | Request::Resign { .. }
@@ -949,7 +976,13 @@ pub fn wants_alert_check(req: &Request) -> bool {
 /// 守护进程响应 → MCP 结果。错误走工具错误（is_error），文字原样给客户端
 pub fn to_result(r: Response) -> CallToolResult {
     match r {
-        Response::Text { text, .. } => CallToolResult::success(vec![ContentBlock::text(text)]),
+        Response::Text { text, data, .. } => {
+            let mut result = CallToolResult::success(vec![ContentBlock::text(text)]);
+            if let Some(data @ protocol::Data::Elements { .. }) = data {
+                result.structured_content = serde_json::to_value(data).ok();
+            }
+            result
+        }
         Response::Image { jpeg_base64, caption } => {
             CallToolResult::success(vec![ContentBlock::image(jpeg_base64, "image/jpeg"), ContentBlock::text(caption)])
         }
@@ -1572,6 +1605,38 @@ mod tests {
             Request::WaitFor { text: "x".into(), timeout_ms: 5000 }
         );
         assert!(to_request("iphone_wait_for", &args(json!({"text": "x", "timeout": 60}))).is_err());
+    }
+
+    #[test]
+    fn text_replacement_is_forwarded_only_when_requested() {
+        let changed = to_request("iphone_type_text", &args(json!({"text": "蓝牙", "replace": true}))).unwrap();
+        assert_eq!(serde_json::to_value(changed).unwrap()["op"], "replace_text");
+        let default = to_request("iphone_type_text", &args(json!({"text": "蓝牙"}))).unwrap();
+        assert_eq!(serde_json::to_value(default).unwrap()["op"], "type_text");
+    }
+
+    #[test]
+    fn wait_for_accepts_disappeared_and_rejects_unknown_state() {
+        let req = to_request("iphone_wait_for", &args(json!({"text": "设置", "state": "disappeared"}))).unwrap();
+        assert_eq!(serde_json::to_value(req).unwrap()["op"], "wait_for_disappearance");
+        assert!(to_request("iphone_wait_for", &args(json!({"text": "设置", "state": "any"}))).is_err());
+    }
+
+    #[test]
+    fn element_limit_is_reported_in_structured_content() {
+        let reply: Response = serde_json::from_value(json!({
+            "kind": "text", "text": "one element, 16 more",
+            "data": {
+                "type": "elements",
+                "elements": [{"type":"Button","label":"设置","x":16,"y":16,"width":44,"height":44}],
+                "matched_count": 17, "truncated": true
+            }
+        }))
+        .unwrap();
+        let result = serde_json::to_value(to_result(reply)).unwrap();
+        assert_eq!(result["structuredContent"]["elements"].as_array().unwrap().len(), 1);
+        assert_eq!(result["structuredContent"]["matched_count"], 17);
+        assert_eq!(result["structuredContent"]["truncated"], true);
     }
 
     #[test]

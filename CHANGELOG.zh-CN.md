@@ -6,6 +6,12 @@
 
 ## [Unreleased]
 
+### 新功能
+
+- 原生控制的 `iphone_type_text` 支持 `replace: true`，核对替换后的输入框全文后才按回车。
+- `iphone_list_elements` 的结构化结果会说明匹配数量和是否被 `limit` 截断。
+- `iphone_wait_for` 支持等待文字消失；读屏不完整时不会误报成功。
+
 ## [0.2.9] - 2026-11-18
 
 ### 修复

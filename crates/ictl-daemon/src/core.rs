@@ -1216,7 +1216,7 @@ impl Daemon {
                 .list_elements(g, &filter, limit, Duration::from_millis(max_age_ms), keep_locked)
                 .await
                 .map(|(text, elements)| {
-                    data = Some(crate::protocol::Data::Elements { elements });
+                    data = Some(elements);
                     text
                 }),
             Request::Tap { x, y, count } => self.tap(g, x, y, count, view).await,
@@ -1238,6 +1238,7 @@ impl Daemon {
                 self.swipe(g, crate::tools::Stroke { from, to, seconds, hold }, view, watched).await
             }
             Request::TypeText { text, submit } => self.type_text(g, &text, submit).await,
+            Request::ReplaceText { text, submit } => Box::pin(self.replace_text(g, &text, submit)).await,
             Request::PressButton { button } => self.press_button(g, &button, watched).await,
             Request::Touch { phase, x, y } => {
                 return self
@@ -1268,7 +1269,12 @@ impl Daemon {
                 data = Some(crate::protocol::Data::Alert { text: alert });
                 text
             }),
-            Request::WaitFor { text, timeout_ms } => self.wait_for(g, &text, Duration::from_millis(timeout_ms)).await,
+            Request::WaitFor { text, timeout_ms } => {
+                self.wait_for(g, &text, Duration::from_millis(timeout_ms), false).await
+            }
+            Request::WaitForDisappearance { text, timeout_ms } => {
+                self.wait_for(g, &text, Duration::from_millis(timeout_ms), true).await
+            }
             Request::Doctor => Ok(self.doctor(g).await),
             Request::UnlockReset => {
                 let _ = std::fs::remove_file(self.cfg.unlock_disabled_flag());
@@ -1357,6 +1363,7 @@ fn lane(req: &Request) -> Lane {
         | Request::LongPress { .. }
         | Request::Swipe { .. }
         | Request::TypeText { .. }
+        | Request::ReplaceText { .. }
         | Request::PressButton { .. }
         | Request::Touch { .. }
         | Request::ListApps { .. }
@@ -1366,6 +1373,7 @@ fn lane(req: &Request) -> Lane {
         | Request::Settle { .. }
         | Request::AlertCheck
         | Request::WaitFor { .. }
+        | Request::WaitForDisappearance { .. }
         | Request::Doctor
         | Request::UnlockReset
         | Request::ListDevices
@@ -1497,7 +1505,9 @@ fn check_request(req: &Request) -> Result<(), String> {
         Request::Settle { max_ms } if *max_ms > MAX_WAIT_MS => {
             return Err(ictl_l10n::trf!("max_ms 不能超过 {MAX_WAIT_MS}", "max_ms can't exceed {MAX_WAIT_MS}"));
         }
-        Request::WaitFor { timeout_ms, .. } if *timeout_ms > MAX_WAIT_MS => {
+        Request::WaitFor { timeout_ms, .. } | Request::WaitForDisappearance { timeout_ms, .. }
+            if *timeout_ms > MAX_WAIT_MS =>
+        {
             return Err(ictl_l10n::trf!(
                 "timeout 不能超过 {} 秒",
                 "timeout can't exceed {} seconds",
@@ -1507,7 +1517,11 @@ fn check_request(req: &Request) -> Result<(), String> {
         Request::Touch { x, y, .. } if !x.is_finite() || !y.is_finite() => {
             return Err(ictl_l10n::tr!("x、y 要是有效的数", "x and y must be valid numbers").into());
         }
-        Request::WaitFor { text, .. } if text.is_empty() => {
+        Request::WaitFor { text, .. }
+        | Request::WaitForDisappearance { text, .. }
+        | Request::ReplaceText { text, .. }
+            if text.is_empty() =>
+        {
             return Err(ictl_l10n::tr!("text 不能为空", "text can't be empty").into());
         }
         Request::AppLogs { since_secs, limit, .. } if *since_secs > 3600 || *limit == 0 || *limit > 1000 => {

@@ -178,7 +178,12 @@ pub(super) async fn apps(ctx: &Ctx, system: bool) -> Result<Value, String> {
 /// `keep_locked`: a read-only visitor, for whom a locked phone isn't unlocked
 pub(super) async fn elements(ctx: &Ctx, filter: &str, keep_locked: bool) -> Result<Value, String> {
     let req = Request::ListElements { filter: filter.to_owned(), limit: ELEMENT_LIMIT, max_age_ms: 0, keep_locked };
-    Ok(json!({"elements": element_list(data_of(&ctx.socket, req).await?)}))
+    match data_of(&ctx.socket, req).await? {
+        Some(protocol::Data::Elements { elements, matched_count, truncated }) => Ok(json!({
+            "elements": elements, "matched_count": matched_count, "truncated": truncated,
+        })),
+        _ => Ok(json!({"elements": []})),
+    }
 }
 
 /// A system alert on the phone (a permission prompt and the like): `{ alert: null }` or
@@ -204,7 +209,7 @@ pub(super) async fn alert(ctx: &Ctx, keep_locked: bool) -> Result<Value, String>
 /// The elements in a [`protocol::Data::Elements`] as the page's JSON: `{ type, label, x, y, width, height }`
 pub(super) fn element_list(data: Option<protocol::Data>) -> Vec<Value> {
     match data {
-        Some(protocol::Data::Elements { elements }) => {
+        Some(protocol::Data::Elements { elements, .. }) => {
             elements.iter().filter_map(|e| serde_json::to_value(e).ok()).collect()
         }
         _ => Vec::new(),

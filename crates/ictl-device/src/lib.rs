@@ -117,6 +117,10 @@ pub enum DeviceError {
     /// 手机上的服务没在限定时间内应答。调用方应丢掉隧道重建
     #[error("{}", ictl_l10n::trf!("超时：{0}", "Timed out: {0}", .0))]
     Timeout(String),
+    /// 无障碍服务（remoteAXService）没在限定时间内应答：连接、握手或请求超时。读出来和 [`Self::Timeout`] 一样。
+    /// 手机上的 axauditd 卡住时就是这样，重连、重建隧道都没用，要结束它（[`Tunnel::restart_ax_daemon`]）
+    #[error("{}", ictl_l10n::trf!("超时：{0}", "Timed out: {0}", .0))]
+    AxUnanswered(String),
     /// 调用方给的参数不合法（例如 HID 不能输入的字符）。与连接无关，不需要重建会话
     #[error("{0}")]
     InvalidInput(String),

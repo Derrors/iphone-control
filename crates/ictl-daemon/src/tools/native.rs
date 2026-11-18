@@ -15,6 +15,8 @@ use crate::config::IosBackend;
 
 /// A read of the screen waits at most this long for a tree (the first one of a session comes in about a second)
 pub(crate) const AX_WAIT: Duration = Duration::from_secs(5);
+/// 无障碍服务不应答时，同一台设备这么久内最多重启一次 axauditd：重启了还不行就照常报错，不反复结束它
+pub(crate) const AX_RESTART_EVERY: Duration = Duration::from_secs(60);
 /// After an action, the screen is first read this long after it started: an app reacts to a tap within about
 /// 0.1 s, a page slides in within about 0.35 s (the second read, which confirms, comes about 0.2 s later)
 const REACT: Duration = Duration::from_millis(300);
@@ -119,16 +121,50 @@ impl Daemon {
         overlays: bool,
     ) -> crate::error::Result<ictl_device::ax::AxScreen> {
         let device = g.device.clone().ok_or(ictl_l10n::tr!("手机未连接", "Phone not connected"))?;
-        let t = self
-            .ensure_tunnel(g, &device)
-            .await
-            .map_err(|e| ictl_l10n::trf!("读界面失败（建隧道）：{e}", "Reading the screen failed (tunnel): {e}"))?;
-        let r = t.ax_screen(wait, overlays).await;
-        if r.is_err() {
-            t.close_ax().await;
+        let mut restarted = false;
+        loop {
+            let t = self
+                .ensure_tunnel(g, &device)
+                .await
+                .map_err(|e| ictl_l10n::trf!("读界面失败（建隧道）：{e}", "Reading the screen failed (tunnel): {e}"))?;
+            let r = t.ax_screen(wait, overlays).await;
+            if r.is_err() {
+                t.close_ax().await;
+            }
+            g.ax_used = Some(Instant::now());
+            if let Err(ictl_device::DeviceError::AxUnanswered(e)) = &r
+                && !restarted
+                && Box::pin(self.restart_stuck_ax(g, &device, e)).await
+            {
+                restarted = true;
+                continue;
+            }
+            return Ok(r.map_err(|e| ictl_l10n::trf!("读界面失败：{e}", "Reading the screen failed: {e}"))?);
         }
-        g.ax_used = Some(Instant::now());
-        Ok(r.map_err(|e| ictl_l10n::trf!("读界面失败：{e}", "Reading the screen failed: {e}"))?)
+    }
+
+    /// remoteAXService didn't answer: unless that was already tried within [`AX_RESTART_EVERY`], end axauditd on the
+    /// phone ([`ictl_device::Tunnel::restart_ax_daemon`]). Whether it was ended, so the read is worth repeating
+    async fn restart_stuck_ax(&self, g: &mut Inner, device: &ictl_device::Device, why: &str) -> bool {
+        if g.dev.ax_restarted.is_some_and(|t| t.elapsed() < AX_RESTART_EVERY) {
+            return false;
+        }
+        g.dev.ax_restarted = Some(Instant::now());
+        let Ok(t) = self.ensure_tunnel(g, device).await else { return false };
+        match t.restart_ax_daemon().await {
+            Ok(n) if n > 0 => {
+                self.log.log(&ictl_l10n::log_trf!(
+                    "无障碍服务没有应答（{why}），已重启手机上的 axauditd",
+                    "The accessibility service didn't answer ({why}), restarted axauditd on the phone"
+                ));
+                true
+            }
+            Ok(_) => false,
+            Err(e) => {
+                tracing::info!("{}", ictl_l10n::log_trf!("重启 axauditd 失败：{e}", "Restarting axauditd failed: {e}"));
+                false
+            }
+        }
     }
 
     /// A read as WDA-style XML, the screen (as turned now) and the frontmost app's process
@@ -200,12 +236,23 @@ impl Daemon {
     /// The frontmost app's bundle ID (one request, no walk)
     pub(crate) async fn native_foreground(&self, g: &mut Inner) -> crate::error::Result<String> {
         let device = g.device.clone().ok_or(ictl_l10n::tr!("手机未连接", "Phone not connected"))?;
-        let t = self.ensure_tunnel(g, &device).await?;
-        let r = t.ax_frontmost_pid(AX_WAIT).await;
-        if r.is_err() {
-            t.close_ax().await;
-        }
-        g.ax_used = Some(Instant::now());
+        let mut restarted = false;
+        let r = loop {
+            let t = self.ensure_tunnel(g, &device).await?;
+            let r = t.ax_frontmost_pid(AX_WAIT).await;
+            if r.is_err() {
+                t.close_ax().await;
+            }
+            g.ax_used = Some(Instant::now());
+            if let Err(ictl_device::DeviceError::AxUnanswered(e)) = &r
+                && !restarted
+                && Box::pin(self.restart_stuck_ax(g, &device, e)).await
+            {
+                restarted = true;
+                continue;
+            }
+            break r;
+        };
         let pid = r.map_err(|e| ictl_l10n::trf!("读前台 App 失败：{e}", "Reading the foreground app failed: {e}"))?;
         self.bundle_of_pid(g, pid).await
     }

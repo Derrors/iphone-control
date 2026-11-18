@@ -6,6 +6,10 @@ What changed in each release, one line per change. Versions follow [Semantic Ver
 
 ## [Unreleased]
 
+### Fixes
+
+- With native control (iOS 27), reading the screen no longer keeps failing until the phone is replugged when the phone's accessibility service stops answering; it is restarted on its own (#152).
+
 ## [0.2.8] - 2026-11-18
 
 ### New

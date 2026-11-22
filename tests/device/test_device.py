@@ -41,6 +41,28 @@ class DeviceTests(unittest.TestCase):
         text = 'Button "甲" value="1" @(10,54) 20x36\nButton "乙" value="1" @(40,54) 20x36\nButton "丙" @(70,54) 20x36'
         self.assertEqual(dev.tabs(text), [])
 
+    def test_tab_bar_excludes_separate_toolbar_buttons_on_same_row(self):
+        text = (
+            'Button "编辑" @(42,54) 59x36\n'
+            'Button "世界时钟" value="1" @(404,54) 101x36\n'
+            'Button "闹钟" @(488,54) 67x36\n'
+            'Button "秒表" @(554,54) 67x36\n'
+            'Button "计时器" @(628,54) 84x36\n'
+            'Button "添加" @(992,54) 36x36'
+        )
+        self.assertEqual([e.label for e in dev.tabs(text)], ["世界时钟", "闹钟", "秒表", "计时器"])
+
+    def test_selected_done_button_is_not_mistaken_for_a_tab(self):
+        text = (
+            'Button "完成" value="1" @(42,54) 59x36\n'
+            'Button "世界时钟" @(404,54) 101x36\n'
+            'Button "闹钟" @(488,54) 67x36\n'
+            'Button "秒表" @(554,54) 67x36\n'
+            'Button "计时器" @(628,54) 84x36\n'
+            'Button "添加" @(992,54) 36x36'
+        )
+        self.assertEqual(dev.tabs(text), [])
+
     def test_ipad_twofold_region_is_valid(self):
         self.assertTrue(dev.enlarged_region((682, 80), 341, 40))
         self.assertTrue(dev.enlarged_region((600, 168), 143, 40))
@@ -80,6 +102,13 @@ class DeviceTests(unittest.TestCase):
             self.assertEqual(dev.unlock_seconds(text), 8.5)
             self.assertEqual(dev.judge({"max_s": 1}, text, False, 9.2, []), [])
             self.assertTrue(dev.judge({"max_s": 1}, text, False, 10, []))
+
+    def test_manual_unlock_stops_only_on_an_explicit_error(self):
+        for text in dev.MANUAL_UNLOCK:
+            self.assertTrue(dev.manual_unlock_required(text, True))
+            self.assertFalse(dev.manual_unlock_required(text, False))
+        for text in ("", "WDA unavailable", "Not found", "调用方已取消"):
+            self.assertFalse(dev.manual_unlock_required(text, True))
 
     def test_unavailable_status_is_not_ready_even_with_screen_size(self):
         self.assertTrue(dev.ready("Screen: 1024x768 points"))

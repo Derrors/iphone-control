@@ -9,6 +9,8 @@ a phone that locked itself while idle would otherwise make one step 8 to 15 seco
 slower when it takes over 20 % and over 0.1 s longer, or over 0.5 s longer (CONTRIBUTING.md, "Required tests",
 part 2): those are marked SLOWER and need a reason in the pull request. Exit code 1 if any step is slower or the
 two runs didn't do the same steps. No dependencies beyond the standard library.
+
+失败步骤、空轮次、各轮步骤不一致的输入直接返回 1，不把失败的快速返回或丢弃不完整轮次当作性能提升。
 """
 
 import json
@@ -19,12 +21,17 @@ import sys
 def medians(path: str):
     with open(path, encoding="utf-8") as f:
         data = json.load(f)
-    runs = [r for r in data["runs"] if r]
+    runs = data["runs"]
+    if not runs or any(not r for r in runs):
+        raise ValueError(f"{path}：没有完整记录的轮次或包含空轮次，比较不可用")
     steps = [(s["tool"], json.dumps(s["args"], ensure_ascii=False, sort_keys=True)) for s in runs[0]]
-    same = [r for r in runs if [(s["tool"], json.dumps(s["args"], ensure_ascii=False, sort_keys=True)) for s in r] == steps]
-    times = [statistics.median(max(r[i]["seconds"] - r[i].get("unlock_seconds", 0), 0) for r in same) for i in range(len(steps))]
+    if any([(s["tool"], json.dumps(s["args"], ensure_ascii=False, sort_keys=True)) for s in r] != steps for r in runs):
+        raise ValueError(f"{path}：各轮步骤不一致，不能丢弃不完整轮次后比较")
     failed = sum(not s["ok"] for r in runs for s in r)
-    return data.get("device", "?"), steps, times, len(same), len(runs), failed
+    if failed:
+        raise ValueError(f"{path}：包含 {failed} 个失败步骤，不能作为性能比较数据")
+    times = [statistics.median(max(r[i]["seconds"] - r[i].get("unlock_seconds", 0), 0) for r in runs) for i in range(len(steps))]
+    return data.get("device", "?"), steps, times, len(runs), len(runs), failed
 
 
 def slower(base: float, new: float) -> bool:
@@ -36,7 +43,11 @@ def main() -> int:
     if len(sys.argv) != 3:
         print(__doc__)
         return 2
-    (dev_a, steps_a, t_a, n_a, all_a, bad_a), (dev_b, steps_b, t_b, n_b, all_b, bad_b) = map(medians, sys.argv[1:])
+    try:
+        (dev_a, steps_a, t_a, n_a, all_a, bad_a), (dev_b, steps_b, t_b, n_b, all_b, bad_b) = map(medians, sys.argv[1:])
+    except (OSError, ValueError) as e:
+        print(f"比较不可用：{e}")
+        return 1
     print(f"base: {sys.argv[1]}  {dev_a}  ({n_a} of {all_a} runs, {bad_a} failed steps)")
     print(f"new:  {sys.argv[2]}  {dev_b}  ({n_b} of {all_b} runs, {bad_b} failed steps)")
     wrong = 0

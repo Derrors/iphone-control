@@ -64,6 +64,7 @@ class Runner:
         self.records: list[dict] = []
         self.quiet = False
         self.sizes: list[tuple[int, int] | None] = []  # the pictures in the last answer
+        self.last_status = ""  # 保留准备阶段的原始状态，避免把未取得尺寸的默认值误认为设备返回了 0×0。
 
     def fail(self, name: str, why: str):
         """A check the step's own expectations don't cover"""
@@ -106,6 +107,10 @@ class Runner:
         flag = "".join(f"\n  FAILED: {w}" for w in wrong) if wrong else ""
         head = f"=== {name} {json.dumps(args, ensure_ascii=False)} {dt:.2f}s{' ERROR' if res.is_error else ''}"
         print(head + "\n" + "\n".join(out) + flag, flush=True)
+        if dev.manual_unlock_required(text, bool(res.is_error)):
+            if not wrong:
+                self.fail(name, "人工解锁阻塞不能作为预期拒绝的通过结果")
+            raise dev.ManualUnlockRequired(text)
         return text
 
     async def look(self, with_apps: bool = True) -> dev.Device:
@@ -114,6 +119,7 @@ class Runner:
         try:
             d = dev.Device()
             status = await self.step("iphone_status")
+            self.last_status = status
             d.model, d.ios, d.udid = dev.controlled(await self.step("iphone_list_devices"), status)
             dev.read_status(d, status)
             if with_apps:
@@ -179,6 +185,7 @@ async def main() -> int:
     params = StdioServerParameters(command=cmd[0], args=cmd[1:], env=dict(os.environ))
     t0 = time.time()
     runs = []
+    blocked = False
     async with connect(params) as session:
         await session.initialize()
         r = Runner(session, shots)
@@ -190,24 +197,31 @@ async def main() -> int:
         print(f"### {d.line()}", flush=True)
         if not steps and not (d.w and d.h):
             print("--- the screen's size is unknown (is the daemon ready? `iphone-control status`)", flush=True)
+            print("--- 准备阶段的原始 iphone_status 响应（0×0 摘要也可能仅表示未取得尺寸字段）：\n" + r.last_status, flush=True)
             return 1
-        for i in range(a.repeat):
-            if a.repeat > 1:
-                print(f"### run {i + 1} of {a.repeat}", flush=True)
-            r.records = []
-            if steps:
-                for name, args, *expect in steps:
-                    if name == "sleep":
-                        await asyncio.sleep(float(args))
-                    else:
-                        await r.step(name, args, **(expect[0] if expect else {}))
-            else:
-                await default_steps(r, d)
-            runs.append(r.records)
-        now = await r.look(with_apps=False)
-        if now.udid != d.udid:
-            r.failed += 1
-            print(f"FAILED: the device changed during the run: it was {d.udid}, now {now.udid or 'none'}", flush=True)
+        try:
+            for i in range(a.repeat):
+                if a.repeat > 1:
+                    print(f"### run {i + 1} of {a.repeat}", flush=True)
+                r.records = []
+                if steps:
+                    for name, args, *expect in steps:
+                        if name == "sleep":
+                            await asyncio.sleep(float(args))
+                        else:
+                            await r.step(name, args, **(expect[0] if expect else {}))
+                else:
+                    await default_steps(r, d)
+                runs.append(r.records)
+        except dev.ManualUnlockRequired:
+            blocked = True
+            runs.append(r.records)  # 保留失败的部分轮次，不再发送后续操作或下一轮。
+            print("ABORT: manual unlock required；剩余步骤未执行，需要在设备上人工解锁", flush=True)
+        if not blocked:
+            now = await r.look(with_apps=False)
+            if now.udid != d.udid:
+                r.failed += 1
+                print(f"FAILED: the device changed during the run: it was {d.udid}, now {now.udid or 'none'}", flush=True)
     if a.json:
         with open(a.json, "w", encoding="utf-8") as f:
             json.dump({"device": d.line(), "command": shlex.join(cmd), "runs": runs}, f, ensure_ascii=False, indent=1)

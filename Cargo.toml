@@ -55,7 +55,7 @@ idevice = { version = "=0.1.68", default-features = false, features = [
 rmcp = { version = "=3.10.0", features = ["server", "transport-io", "transport-streamable-http-server"] }
 http = "=1.5.0"
 http-body-util = "=0.1.5"
-bytes = "=1.12.1"
+bytes = "=1.12.2"
 tokio = { version = "=1.54.1", features = ["full"] }
 # rustls-no-provider：不编进 aws-lc-rs（C 代码，编译慢、体积大）；idevice/plume_core 用 ring，入口处显式装 ring 为默认 provider
 reqwest = { version = "=0.13.5", default-features = false, features = ["form", "rustls-no-provider"] }
@@ -65,8 +65,8 @@ tokio-rustls = { version = "=0.26.6", default-features = false, features = ["rin
 rcgen = { version = "=0.14.10", default-features = false, features = ["ring", "pem"] }
 quick-xml = "=0.42.0"
 image = { version = "=0.25.10", default-features = false, features = ["png", "jpeg"] }
-clap = { version = "=4.6.7", features = ["derive", "env"] }
-clap_complete = "=4.6.11"
+clap = { version = "=4.6.8", features = ["derive", "env"] }
+clap_complete = "=4.6.12"
 console = "=0.16.6"
 termion = "=4.0.6"
 serde = { version = "=1.0.229", features = ["derive"] }
@@ -76,13 +76,13 @@ tracing = "=0.1.44"
 tracing-subscriber = { version = "=0.3.23", features = ["env-filter"] }
 base64 = "=0.23.1"
 anyhow = "=1.0.104"
-plist = "=1.10.3"
-uuid = { version = "=1.29.2", features = ["v4"] }
+plist = "=1.10.4"
+uuid = { version = "=1.29.3", features = ["v4"] }
 # 和 plume_core 同一份：比对证书和本机签名私钥的公钥（ictl-sign）
 rsa = "=0.9.10"
 x509-certificate = "=0.24.0"
-zip = { version = "=9.5.1", default-features = false, features = ["deflate"] }
-regex = "=1.13.1"
+zip = { version = "=9.7.1", default-features = false, features = ["deflate"] }
+regex = "=1.13.2"
 libc = "=0.2.191"
 sha2 = "=0.11.1"
 

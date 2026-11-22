@@ -92,6 +92,8 @@ class Phone:
         res = await asyncio.wait_for(self.s.call_tool(name, args or {}), timeout)
         dt = time.time() - t
         text = "\n".join(c.text for c in res.content if c.type == "text")
+        if dev.manual_unlock_required(text, bool(res.is_error)):
+            raise dev.ManualUnlockRequired(text)
         sizes = [dev.jpeg_size(base64.b64decode(c.data)) for c in res.content if c.type == "image"]
         return bool(res.is_error), text, dt, sizes
 
@@ -474,6 +476,10 @@ async def main() -> int:
             t = time.time()
             try:
                 await SCENARIOS[name](p)
+            except dev.ManualUnlockRequired as e:
+                check(name, "manual unlock required", False, str(e))
+                print("ABORT: manual unlock required；剩余场景未执行，需要在设备上人工解锁", flush=True)
+                break
             except Exception as e:  # noqa: BLE001 - a scenario that blew up is a failure, the next one still runs
                 traceback.print_exc()
                 check(name, f"scenario raised {type(e).__name__}", False, str(e))

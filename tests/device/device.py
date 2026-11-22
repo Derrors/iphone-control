@@ -27,6 +27,15 @@ APPEARED = T("已出现", "Appeared")
 NO_KEYBOARD = T("屏幕上没有键盘", "No keyboard on screen")
 AFTER = T("操作后的界面", "after the action")
 UNAVAILABLE = T("WDA 不可用", "WDA unavailable")  # the phone can't be controlled right now: not an answer to the call
+MANUAL_UNLOCK = T("需要人工解锁", "unlock it by hand")
+
+
+class ManualUnlockRequired(RuntimeError):
+    """当前调用已结束且明确要求人工解锁；记录失败后停止后续操作。"""
+
+
+def manual_unlock_required(text: str, is_error: bool) -> bool:
+    return is_error and any(s in text for s in MANUAL_UNLOCK)
 
 
 def ready(status_text: str) -> bool:
@@ -71,17 +80,30 @@ def elements(text: str) -> list[Element]:
 
 
 def tabs(text: str) -> list[Element]:
-    """A tab bar's buttons: a row of three or more buttons of which exactly one says it is selected (value 1; the
-    others say 0 natively, nothing through WDA). Found by what they say about themselves, not by their names, which
-    follow the phone's language, nor by where the bar is (the bottom on an iPhone, the top on an iPad)"""
+    """找水平相邻的一组标签按钮，不按文字或顶部/底部位置判断。
+
+    iPad 的工具栏按钮和标签可能在同一行，必须先按间距分组，不能把远处的编辑/添加算作标签。
+    每组至少三个按钮且仅一个 value=1；原生未选中时为 0，WDA 则可能不返回 value。
+    """
     rows: dict[tuple[float, float], list[Element]] = {}
     for e in elements(text):
         if e.kind == "Button":
             rows.setdefault((e.y, e.h), []).append(e)
+    candidates = []
     for row in rows.values():
-        if len(row) >= 3 and sum(e.value == "1" for e in row) == 1 and all(e.value in ("0", "1", None) for e in row):
-            return sorted(row, key=lambda e: e.x)
-    return []
+        groups: list[list[Element]] = []
+        right = 0.0
+        for e in sorted(row, key=lambda e: e.x):
+            if not groups or e.x - e.w / 2 > right + e.h:
+                groups.append([e])
+                right = e.x + e.w / 2
+            else:
+                groups[-1].append(e)
+                right = max(right, e.x + e.w / 2)
+        for group in groups:
+            if len(group) >= 3 and sum(e.value == "1" for e in group) == 1 and all(e.value in ("0", "1", None) for e in group):
+                candidates.append(group)
+    return max(candidates, key=len, default=[])
 
 
 @dataclass

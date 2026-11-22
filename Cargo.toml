@@ -81,7 +81,7 @@ uuid = { version = "=1.29.3", features = ["v4"] }
 # 和 plume_core 同一份：比对证书和本机签名私钥的公钥（ictl-sign）
 rsa = "=0.9.10"
 x509-certificate = "=0.24.0"
-zip = { version = "=9.7.1", default-features = false, features = ["deflate"] }
+zip = { version = "=9.7.3", default-features = false, features = ["deflate"] }
 regex = "=1.13.2"
 libc = "=0.2.191"
 sha2 = "=0.11.1"

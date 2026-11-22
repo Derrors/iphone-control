@@ -10,6 +10,9 @@ updates:
     ignore:
       # git dependency pinned to an upstream commit until the next release (docs/decisions.md D1)
       - dependency-name: idevice
+      # 和 vendor 的 plume_core / apple-codesign 共用同一份 rsa 0.9，避免 Cargo.lock 出现两套 rsa 及 RustCrypto 依赖
+      - dependency-name: rsa
+        versions: [">= 0.10.0"]
     groups:
       minor-and-patch:
         update-types: [minor, patch]

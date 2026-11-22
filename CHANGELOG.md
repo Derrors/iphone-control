@@ -6,6 +6,8 @@ What changed in each release, one line per change. Versions follow [Semantic Ver
 
 ## [Unreleased]
 
+## [0.2.10] - 2026-11-22
+
 ### Upgrade notes
 
 - MCP tools now refuse an argument they don't take, and do nothing, instead of ignoring it. A misspelt argument, or one from a newer version, used to run the call with the default and report success: `iphone_wait_for` with `state: "disappeared"` answered that the text had appeared (#158). The error names the arguments the tool takes. This includes `then` on tools that don't list it, and on the steps of `iphone_batch` (the batch's own `then` applies).
@@ -13,8 +15,8 @@ What changed in each release, one line per change. Versions follow [Semantic Ver
 ### New
 
 - `iphone_type_text` supports `replace: true` (empty text empties the field) and verifies the full field value before pressing Return. With native control, when it fails, the old text is left unselected; through WDA (iOS 26 and earlier, or `ICTL_IOS_BACKEND=wda`) the field is cleared first, so a failure there says the old text is gone (#162).
-- `iphone_list_elements` reports the match count and whether `limit` truncated the list in its structured result.
-- `iphone_wait_for` can wait for text to disappear without mistaking an incomplete screen read for success.
+- `iphone_list_elements` reports the match count and whether `limit` truncated the list in its structured result (#159).
+- `iphone_wait_for` can wait for text to disappear without mistaking an incomplete screen read for success (#159).
 
 ## [0.2.9] - 2026-11-18
 
@@ -342,7 +344,8 @@ First public release.
 - `setup`, `doctor`, `status` and `mcp-config`.
 - Docker image and prebuilt Linux binaries.
 
-[Unreleased]: https://github.com/Derrors/iphone-control/compare/v0.2.9...HEAD
+[Unreleased]: https://github.com/Derrors/iphone-control/compare/v0.2.10...HEAD
+[0.2.10]: https://github.com/Derrors/iphone-control/compare/v0.2.9...v0.2.10
 [0.2.9]: https://github.com/Derrors/iphone-control/compare/v0.2.8...v0.2.9
 [0.2.8]: https://github.com/Derrors/iphone-control/compare/v0.2.7...v0.2.8
 [0.2.7]: https://github.com/Derrors/iphone-control/compare/v0.2.6...v0.2.7

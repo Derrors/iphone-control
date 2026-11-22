@@ -6,6 +6,8 @@
 
 ## [Unreleased]
 
+## [0.2.10] - 2026-11-22
+
 ### 升级注意事项
 
 - MCP 工具收到不认识的参数时改为报错、什么都不做，不再忽略。以前参数名拼错、或者用了新版本才有的参数，调用会按默认行为执行并报成功：`iphone_wait_for` 带 `state: "disappeared"` 时直接回答文字已出现（#158）。报错里会列出这个工具接受的参数。没有声明 `then` 的工具传 `then`、`iphone_batch` 的单个步骤里传 `then` 也会报错（批量的 `then` 写在批量本身）。
@@ -13,8 +15,8 @@
 ### 新功能
 
 - `iphone_type_text` 支持 `replace: true`（文字为空时清空输入框），核对替换后的输入框全文后才按回车。原生控制下替换失败时会取消全选，原文保留；经 WDA（iOS 26 及以前，或 `ICTL_IOS_BACKEND=wda`）时先清空再输入，失败时会说明原文已删掉（#162）。
-- `iphone_list_elements` 的结构化结果会说明匹配数量和是否被 `limit` 截断。
-- `iphone_wait_for` 支持等待文字消失；读屏不完整时不会误报成功。
+- `iphone_list_elements` 的结构化结果会说明匹配数量和是否被 `limit` 截断（#159）。
+- `iphone_wait_for` 支持等待文字消失；读屏不完整时不会误报成功（#159）。
 
 ## [0.2.9] - 2026-11-18
 
@@ -342,7 +344,8 @@
 - `setup`、`doctor`、`status`、`mcp-config`。
 - Docker 镜像和预编译的 Linux 二进制。
 
-[Unreleased]: https://github.com/Derrors/iphone-control/compare/v0.2.9...HEAD
+[Unreleased]: https://github.com/Derrors/iphone-control/compare/v0.2.10...HEAD
+[0.2.10]: https://github.com/Derrors/iphone-control/compare/v0.2.9...v0.2.10
 [0.2.9]: https://github.com/Derrors/iphone-control/compare/v0.2.8...v0.2.9
 [0.2.8]: https://github.com/Derrors/iphone-control/compare/v0.2.7...v0.2.8
 [0.2.7]: https://github.com/Derrors/iphone-control/compare/v0.2.6...v0.2.7

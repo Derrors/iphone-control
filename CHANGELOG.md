@@ -6,6 +6,8 @@ What changed in each release, one line per change. Versions follow [Semantic Ver
 
 ## [Unreleased]
 
+## [0.2.12] - 2026-11-24
+
 ### New
 
 - Agents can read across several screens of a list and stop at a matching row without tapping it (#170).
@@ -355,7 +357,8 @@ First public release.
 - `setup`, `doctor`, `status` and `mcp-config`.
 - Docker image and prebuilt Linux binaries.
 
-[Unreleased]: https://github.com/Derrors/iphone-control/compare/v0.2.11...HEAD
+[Unreleased]: https://github.com/Derrors/iphone-control/compare/v0.2.12...HEAD
+[0.2.12]: https://github.com/Derrors/iphone-control/compare/v0.2.11...v0.2.12
 [0.2.11]: https://github.com/Derrors/iphone-control/compare/v0.2.10...v0.2.11
 [0.2.10]: https://github.com/Derrors/iphone-control/compare/v0.2.9...v0.2.10
 [0.2.9]: https://github.com/Derrors/iphone-control/compare/v0.2.8...v0.2.9

@@ -91,6 +91,17 @@ where
     Ok(())
 }
 
+struct ForwardError {
+    message: String,
+    delivery: protocol::Delivery,
+}
+
+impl From<String> for ForwardError {
+    fn from(message: String) -> Self {
+        Self { message, delivery: protocol::Delivery::Unknown }
+    }
+}
+
 struct Link {
     remote: Remote,
     task: Option<String>,
@@ -123,26 +134,61 @@ impl Link {
         if let Err(e) = self.send(&msg, id.as_ref()).await {
             match id {
                 Some(id) => {
-                    let _ = self.tx.send(rpc_error(id, -32603, &e));
+                    let reply = if msg["method"] == "tools/call"
+                        && msg["params"]["name"].as_str().is_some_and(ictl_mcp::reports_input)
+                    {
+                        let hint = if e.delivery == protocol::Delivery::NotSent {
+                            ictl_l10n::tr!("输入未发出", "The input was not sent")
+                        } else {
+                            ictl_l10n::tr!(
+                                "未收到远端工具结果；先读屏确认，再决定是否重试",
+                                "No remote tool result; inspect the screen before retrying"
+                            )
+                        };
+                        json!({"jsonrpc": "2.0", "id": id, "error": {
+                            "code": -32603,
+                            "message": ictl_l10n::trf!(
+                                "{}。{hint}",
+                                "{}. {hint}",
+                                e.message.trim_end_matches(['.', '。'])
+                            ),
+                            "data": {"delivery": e.delivery, "stage": "transport"}
+                        }})
+                        .to_string()
+                    } else {
+                        rpc_error(id, -32603, &e.message)
+                    };
+                    let _ = self.tx.send(reply);
                 }
                 // a notification has nobody to tell but the log (stdout is the protocol)
-                None => eprintln!("iphone-control mcp --url: {e}"),
+                None => eprintln!("iphone-control mcp --url: {}", e.message),
             }
         }
     }
 
-    async fn send(&self, msg: &Value, id: Option<&Value>) -> Result<(), String> {
+    async fn send(&self, msg: &Value, id: Option<&Value>) -> Result<(), ForwardError> {
         let r = self.remote.request(reqwest::Method::POST, "/mcp");
         let r = self.with_headers(r).header(reqwest::header::ACCEPT, "application/json, text/event-stream").json(msg);
-        let resp = r.send().await.map_err(|e| format!("{}: {e}", self.remote.base()))?;
+        let resp = r.send().await.map_err(|e| ForwardError {
+            delivery: if e.is_connect() || e.is_builder() {
+                protocol::Delivery::NotSent
+            } else {
+                protocol::Delivery::Unknown
+            },
+            message: format!("{}: {e}", self.remote.base()),
+        })?;
         if let Some(sid) = resp.headers().get("mcp-session-id").and_then(|v| v.to_str().ok()) {
             self.session().id = Some(sid.to_owned());
         }
         if resp.status() == reqwest::StatusCode::ACCEPTED {
-            return Ok(());
+            return missing_reply(id);
         }
         if !resp.status().is_success() {
-            return Err(remote::failure(resp).await);
+            let delivery = match resp.status().as_u16() {
+                401 | 403 | 404 => protocol::Delivery::NotSent,
+                _ => protocol::Delivery::Unknown,
+            };
+            return Err(ForwardError { message: remote::failure(resp).await, delivery });
         }
         let initialize = msg["method"] == "initialize";
         let pass = |v: Value| {
@@ -165,24 +211,26 @@ impl Link {
                 if let Ok(v) = serde_json::from_str::<Value>(&data)
                     && pass(v)
                 {
-                    break;
+                    return Ok(());
                 }
             }
-            return Ok(());
+            return missing_reply(id);
         }
         let text = resp.text().await.map_err(|e| e.to_string())?;
         if text.trim().is_empty() {
-            return Ok(());
+            return missing_reply(id);
         }
-        match serde_json::from_str::<Value>(&text).map_err(|e| e.to_string())? {
-            Value::Array(batch) => batch.into_iter().for_each(|v| {
-                pass(v);
-            }),
-            v => {
-                pass(v);
+        let reply = serde_json::from_str::<Value>(&text).map_err(|e| e.to_string())?;
+        let mut answered = false;
+        match reply {
+            Value::Array(messages) => {
+                for message in messages {
+                    answered |= pass(message);
+                }
             }
+            message => answered = pass(message),
         }
-        Ok(())
+        if answered { Ok(()) } else { missing_reply(id) }
     }
 
     /// Ends the session on the viewer (best effort)
@@ -195,6 +243,81 @@ impl Link {
     }
 }
 
+/// Notifications and client responses have no corresponding JSON-RPC response.
+fn missing_reply(id: Option<&Value>) -> Result<(), ForwardError> {
+    if id.is_some() {
+        Err(ictl_l10n::tr!(
+            "控制台关闭了响应，没有对应的 JSON-RPC 回复",
+            "viewer closed the response without a matching JSON-RPC reply"
+        )
+        .to_owned()
+        .into())
+    } else {
+        Ok(())
+    }
+}
+
 fn rpc_error(id: Value, code: i64, message: &str) -> String {
     json!({"jsonrpc": "2.0", "id": id, "error": {"code": code, "message": message}}).to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::io::AsyncReadExt;
+
+    #[tokio::test]
+    async fn rejected_or_unreachable_input_is_not_sent_but_a_gateway_failure_is_unknown() {
+        for (status, delivery) in [
+            (None, "not_sent"),
+            (Some(401), "not_sent"),
+            (Some(403), "not_sent"),
+            (Some(404), "not_sent"),
+            (Some(502), "unknown"),
+        ] {
+            let server = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let url = format!("http://{}", server.local_addr().unwrap());
+            if let Some(status) = status {
+                tokio::spawn(async move {
+                    let (mut socket, _) = server.accept().await.unwrap();
+                    let mut buf = [0; 4096];
+                    assert!(socket.read(&mut buf).await.unwrap() > 0);
+                    socket
+                        .write_all(format!("HTTP/1.1 {status} Error\r\nContent-Length: 0\r\n\r\n").as_bytes())
+                        .await
+                        .unwrap();
+                });
+            } else {
+                drop(server);
+            }
+            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+            let link =
+                Link { remote: Remote::new(&url, None, None).unwrap(), task: None, session: Mutex::default(), tx };
+            link.forward(json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"iphone_tap"}})).await;
+            let reply: Value = serde_json::from_str(&rx.try_recv().unwrap()).unwrap();
+            assert_eq!(reply["error"]["data"]["delivery"], delivery);
+        }
+    }
+
+    #[tokio::test]
+    async fn interrupted_tool_reply_reports_unknown_instead_of_hanging_or_retrying() {
+        let server = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", server.local_addr().unwrap());
+        let peer = tokio::spawn(async move {
+            let (mut socket, _) = server.accept().await.unwrap();
+            let mut buf = [0; 4096];
+            assert!(socket.read(&mut buf).await.unwrap() > 0);
+            socket
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: 0\r\n\r\n")
+                .await
+                .unwrap();
+        });
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let link = Link { remote: Remote::new(&url, None, None).unwrap(), task: None, session: Mutex::default(), tx };
+        link.forward(json!({"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"iphone_tap"}})).await;
+        let reply: Value = serde_json::from_str(&rx.try_recv().expect("client must receive a terminal reply")).unwrap();
+        assert_eq!(reply["id"], 7);
+        assert_eq!(reply["error"]["data"]["delivery"], "unknown");
+        peer.await.unwrap();
+    }
 }

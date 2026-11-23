@@ -1,6 +1,6 @@
 # MCP tools
 
-The MCP server (`iphone-control mcp`) exposes 17 tools (23 with the [developer tools](#developer-tools-opt-in)). The tool descriptions the agent sees, and every result text, are in Simplified Chinese by default, or in English with `IPHONE_CONTROL_LANG=en` (see [configuration](https://derrors.github.io/iphone-control/en/guide/configuration)); this page is the English reference. The definitions live in [`crates/ictl-mcp/src/lib.rs`](../crates/ictl-mcp/src/lib.rs).
+The MCP server (`iphone-control mcp`) exposes 18 tools (24 with the [developer tools](#developer-tools-opt-in)). The tool descriptions the agent sees, and every result text, are in Simplified Chinese by default, or in English with `IPHONE_CONTROL_LANG=en` (see [configuration](https://derrors.github.io/iphone-control/en/guide/configuration)); this page is the English reference. The definitions live in [`crates/ictl-mcp/src/lib.rs`](../crates/ictl-mcp/src/lib.rs).
 
 Coordinates are in **points**, the same unit as the pixels of a full-screen `iphone_screenshot` (for example 430×932 on an iPhone 15 Pro Max), so an agent can read a position off a screenshot and tap it directly. Coordinates follow the current screen orientation: after a rotation the same spot has different coordinates, so take a new screenshot. Screen sizes differ per device (an iPad mini 5 is 768×1024 in portrait); don't assume 430×932.
 
@@ -19,6 +19,7 @@ Coordinates are in **points**, the same unit as the pixels of a full-screen `iph
 | Tool | Parameters | Notes |
 |---|---|---|
 | `iphone_tap` | `x`, `y`, `count` (default 1, max 10) | For targets without text (icons, games, maps); falls back to HID when WDA is down. `count` taps the same point that many times in one gesture, about 0.1 s apart: 2 is a double tap (also turns on Caps Lock on the keyboard's Shift key); for hidden entries that need several taps in a short time, which separate calls or `iphone_batch` are too slow for |
+| `iphone_scroll_collect` | `scroll` (down by default, or up), `filter`, `until`, `max_scrolls` (default 8, max 15), `limit` (default/max 150), `x` | Collects rows in travel order and merges overlapping rows on adjacent screens. Identical accessibility rows can make the overlap ambiguous. Swipes in the middle of the screen, or at `x`: an iPad split view (Settings, Mail) scrolls only the column swiped in, so for the sidebar give an `x` inside it; the column that didn't move isn't collected again. Stops on a visible text match (`found`), an unchanged screen (`end`), `max_scrolls`, or the row `limit`. An interrupted scan returns its collected rows with `interrupted` if the caller is still connected. The matched element includes an uncovered `point` in the final viewport. The phone stays there without a tap. |
 | `iphone_tap_element` | `text`, `index` (default 0), `scroll` (`down` / `up`), `max_scrolls` (default 8, max 15) | Exact label or name first, then substring. If the element's center is covered (floating toolbar, keyboard, overlay), taps an uncovered part of it; if it is fully covered, does not tap and says so. With `scroll`, when it isn't on screen (or is fully covered) it scrolls a slow third of the screen at a time without momentum and looks again, until it is found, the screen stops changing (the end of the list) or `max_scrolls` is reached; the result says how many scrolls it took |
 | `iphone_long_press` | `x`, `y`, `seconds` (default 1, max 10) | Holds one finger still, then lifts: context menus, home-screen quick actions, text selection |
 | `iphone_swipe` | `from_x`, `from_y`, `to_x`, `to_y`, `seconds` (default 0.3, max 10), `hold` (default 0) | Returns after the list has stopped scrolling (up to 2.5 s). Swipe up (`from_y` > `to_y`) to see content further down. `hold` holds the finger still at the start for that many seconds before moving, to drag things that have to be long-pressed first (home-screen icons, reorderable rows); about 0.6 works, under 0.5 usually doesn't pick anything up. `seconds` + `hold` is at most 10 |
@@ -27,6 +28,8 @@ Coordinates are in **points**, the same unit as the pixels of a full-screen `iph
 | `iphone_launch_app` | `app` (bundle id or display name, e.g. `设置`) | Cold-launches the app, or brings it back to where it was if it is already running. Waits until it is in the foreground; returns early and says so if a system alert is blocking it |
 | `iphone_terminate_app` | `app` | Force-quits, like swiping it away in the app switcher; unsaved input is lost. No error if it wasn't running |
 | `iphone_open_url` | `url` | Web pages open in the default browser; URL schemes open their app |
+
+Taps, long presses, swipes and text input report the delivery of the requested input in `structuredContent.delivery`. With `not_sent` you can reconsider the input and retry. With `unknown`, inspect the phone first because the input may already have taken effect. With `sent`, the input was dispatched. When using `then`, check `readback` separately.
 
 ## Several devices
 
@@ -77,7 +80,7 @@ Every tool carries MCP annotations: the six read-only tools (`iphone_status`, `i
 
 ## Returning the screen after an action: `then`
 
-The tools under *Acting* and `iphone_batch` accept the following options. `iphone_select_device` does not: use `iphone_status` after switching to check that WDA is ready.
+The input tools under *Acting* and `iphone_batch` accept the following options. `iphone_scroll_collect` returns its own collection and final match. `iphone_select_device` does not: use `iphone_status` after switching to check that WDA is ready.
 
 | Parameter | Meaning |
 |---|---|

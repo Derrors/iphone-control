@@ -11,7 +11,7 @@
     <a href="https://github.com/Derrors/iphone-control/releases/latest"><img src="https://img.shields.io/github/v/release/Derrors/iphone-control?style=flat" alt="Release"></a>
     <img src="https://img.shields.io/badge/iOS-27%2B%20recommended%20%C2%B7%2017%2B%20supported-black?style=flat&logo=apple" alt="iOS: 27+ recommended, 17+ supported">
     <img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS-0E7490?style=flat" alt="Platform: Linux | macOS">
-    <img src="https://img.shields.io/badge/MCP-17%20tools-8A2BE2?style=flat" alt="MCP">
+    <img src="https://img.shields.io/badge/MCP-18%20tools-8A2BE2?style=flat" alt="MCP">
     <a href="Cargo.toml"><img src="https://img.shields.io/badge/Rust-1.89%2B-CE422B?style=flat&logo=rust&logoColor=white" alt="Rust"></a>
     <a href="LICENSE"><img src="https://img.shields.io/github/license/Derrors/iphone-control?style=flat" alt="License"></a>
     <a href="https://m8ven.ai/mcp/derrors-iphone-control-1pcmse?s=readme"><img src="https://m8ven.ai/badge/mcp/derrors-iphone-control-1pcmse?variant=verified" alt="M8ven verified"></a>
@@ -66,7 +66,7 @@ Device control has two routes, picked by iOS version:
 ## Features
 
 <p align="center">
-  <img src="docs/images/features.svg" alt="Device control (core): native on iOS 27+, 17 MCP tools, fewer round trips, runs unattended, a person in charge, doctor and alerts. Access: on this machine, remotely. Control page (optional)" width="900">
+  <img src="docs/images/features.svg" alt="Device control (core): native on iOS 27+, 18 MCP tools, fewer round trips, runs unattended, a person in charge, doctor and alerts. Access: on this machine, remotely. Control page (optional)" width="900">
 </p>
 
 **Device control (core)**

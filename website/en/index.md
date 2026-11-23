@@ -22,7 +22,7 @@ hero:
 features:
   - icon: 🤖
     title: Tools for agents
-    details: Screenshots, on-screen elements, tap by text, swipe, typing (Chinese too), apps, waiting for pages, multi-step batches — 17 MCP tools; actions can return the settled screen
+    details: Screenshots, on-screen elements, tap by text, swipe, typing (Chinese too), apps, waiting for pages, multi-step batches — 18 MCP tools; actions can return the settled screen
   - icon: ⚡
     title: Native on iOS 27
     details: iOS 27 and later are controlled natively by default — nothing installed on the phone, no Apple ID, no signing, ready in seconds. Recommended

@@ -89,13 +89,12 @@ impl Daemon {
         view: Option<&str>,
     ) -> crate::error::Result<String> {
         if !(1..=MAX_TAP_COUNT).contains(&count) {
-            return Err(ictl_l10n::trf!(
+            return Err(Error::preflight(ictl_l10n::trf!(
                 "count 要是 1 到 {MAX_TAP_COUNT} 的整数",
                 "count must be a whole number from 1 to {MAX_TAP_COUNT}"
-            )
-            .into());
+            )));
         }
-        self.prepare_coordinates(g, view, true).await?;
+        self.prepare_coordinates(g, view, true).await.map_err(Error::preflight)?;
         let pos = format!("({},{})", fmt_g(x), fmt_g(y));
         let times = if count > 1 { ictl_l10n::trf!(",连点 {count} 下", ", {count} times") } else { String::new() };
         if let Some(w) = self.wda(g) {
@@ -104,15 +103,15 @@ impl Daemon {
             match r {
                 Ok(()) => return Ok(ictl_l10n::trf!("已点击 {pos}{times}", "Tapped {pos}{times}")),
                 Err(WdaError::Unavailable(_)) if view.is_none() => {}
-                Err(e) => return Err(e.into()),
+                Err(e) => return Err(Error::wda_input(e)),
             }
         }
         // natively HID is the way, not a fallback: the page's view was checked above as through WDA
         let native = self.native(g);
         if !native && view.is_some() {
-            return Err(wda_down(&g.state, g.info.as_ref()).into());
+            return Err(Error::preflight(wda_down(&g.state, g.info.as_ref())));
         }
-        let rot = self.hid_touch_rotation(g).await?;
+        let rot = self.hid_touch_rotation(g).await.map_err(Error::preflight)?;
         self.hid_do(g, move |h| {
             Box::pin(async move {
                 h.rotation = rot;
@@ -216,6 +215,7 @@ impl Daemon {
                         return Err(Response::Error {
                             message: wda_down(&g.state, g.info.as_ref()),
                             retry_as_gesture: true,
+                            failure: None,
                         });
                     }
                     None => self.hid_touch_rotation(g).await.map_err(Response::error)?,
@@ -247,6 +247,7 @@ impl Daemon {
                     return Err(Response::Error {
                         message: message.into(),
                         retry_as_gesture: phase == TouchPhase::Down,
+                        failure: None,
                     });
                 }
             },
@@ -263,10 +264,14 @@ impl Daemon {
         Ok(())
     }
 
-    /// 边滑边找的一次慢滑（[`search_stroke`]），等停下后读一棵新树
-    async fn search_scroll(&self, g: &mut Inner, down: bool) -> crate::error::Result<Tree> {
-        let screen = self.screen(g).await?;
-        let (from, to) = search_stroke(screen.width, screen.height, down);
+    /// 边滑边找的一次慢滑（[`search_stroke`]），等停下后读一棵新树。`x`：在这个横坐标上滑（iPad 分栏界面的左栏），
+    /// 不给就是屏幕正中
+    pub(super) async fn search_scroll(&self, g: &mut Inner, down: bool, x: Option<f64>) -> crate::error::Result<Tree> {
+        let screen = self.screen(g).await.map_err(Error::preflight)?;
+        let (mut from, mut to) = search_stroke(screen.width, screen.height, down);
+        if let Some(x) = x {
+            (from.0, to.0) = (x, x);
+        }
         Box::pin(self.swipe(g, Stroke { from, to, seconds: SEARCH_SWIPE_SECONDS, hold: 0.0 }, None, false)).await?;
         self.tree(g, Duration::ZERO).await
     }
@@ -279,14 +284,21 @@ impl Daemon {
         max_age: Duration,
         scroll: Option<crate::protocol::ScrollSearch>,
     ) -> crate::error::Result<(String, bool)> {
-        self.ensure_unlocked(g).await?;
-        let mut tree = self.tree(g, max_age).await?;
+        self.ensure_unlocked(g).await.map_err(Error::preflight)?;
+        let mut tree = self.tree(g, max_age).await.map_err(Error::preflight)?;
         // 屏幕上没有、又要边滑边找：慢滑一小段（不带惯性，不会把要找的甩过去）、等停下再读树，
         // 找到文字完全相同的或滑到底为止。一路上记下第一次看到包含它的是滑了几次的时候
         let mut scrolled = 0;
         let mut back = 0;
         let mut at_end = false;
         if let Some(s) = scroll {
+            let failed_scroll = |e: Error, completed: u32| {
+                let message = ictl_l10n::trf!(
+                    "查找目标时滚动失败（此前已完成 {completed} 次滑动），尚未点击目标；请查看屏幕：{e}",
+                    "Scroll search failed after {completed} completed swipes; the target was not tapped. Inspect the screen: {e}"
+                );
+                e.with_message(message)
+            };
             let mut partial_at = None;
             loop {
                 if reachable_exact(&tree, text, index) {
@@ -298,7 +310,8 @@ impl Daemon {
                 if at_end || scrolled >= s.max {
                     break;
                 }
-                let next = Box::pin(self.search_scroll(g, s.down)).await?;
+                let next =
+                    Box::pin(self.search_scroll(g, s.down, None)).await.map_err(|e| failed_scroll(e, scrolled))?;
                 scrolled += 1;
                 at_end = next.close_to(&tree, STILL_TOLERANCE);
                 tree = next;
@@ -309,7 +322,9 @@ impl Daemon {
                 && let Some(k) = partial_at
             {
                 while back <= scrolled - k && !reachable(&tree, text, index) {
-                    tree = Box::pin(self.search_scroll(g, !s.down)).await?;
+                    tree = Box::pin(self.search_scroll(g, !s.down, None))
+                        .await
+                        .map_err(|e| failed_scroll(e, scrolled + back))?;
                     back += 1;
                 }
             }
@@ -415,12 +430,17 @@ impl Daemon {
         seconds: f64,
         view: Option<&str>,
     ) -> crate::error::Result<String> {
-        self.prepare_coordinates(g, view, true).await?;
+        self.prepare_coordinates(g, view, true).await.map_err(Error::preflight)?;
         let native = self.native(g);
         match self.wda(g) {
-            Some(w) => w.touch_and_hold(x, y, seconds).await?,
+            Some(w) => w.touch_and_hold(x, y, seconds).await.map_err(Error::wda_input)?,
             None if native => Box::pin(self.native_long_press(g, x, y, seconds)).await?,
-            None => self.require_wda(g)?.touch_and_hold(x, y, seconds).await?,
+            None => self
+                .require_wda(g)
+                .map_err(Error::preflight)?
+                .touch_and_hold(x, y, seconds)
+                .await
+                .map_err(Error::wda_input)?,
         }
         Ok(ictl_l10n::trf!("已长按 ({},{}) {} 秒", "Long-pressed ({},{}) for {} s", fmt_g(x), fmt_g(y), fmt_g(seconds)))
     }
@@ -433,7 +453,7 @@ impl Daemon {
         watched: bool,
     ) -> crate::error::Result<String> {
         let Stroke { from, to, seconds, hold } = stroke;
-        self.prepare_coordinates(g, view, true).await?;
+        self.prepare_coordinates(g, view, true).await.map_err(Error::preflight)?;
         let mut desc = format!("({},{}) → ({},{})", fmt_g(from.0), fmt_g(from.1), fmt_g(to.0), fmt_g(to.1));
         if hold > 0.0 {
             desc = ictl_l10n::trf!("{desc},先按住 {} 秒", "{desc}, held {} s first", fmt_g(hold));
@@ -455,14 +475,14 @@ impl Daemon {
                     return Ok(ictl_l10n::trf!("已滑动 {desc}{note}", "Swiped {desc}{note}"));
                 }
                 Err(WdaError::Unavailable(_)) if view.is_none() => {}
-                Err(e) => return Err(e.into()),
+                Err(e) => return Err(Error::wda_input(e)),
             }
         }
         let native = self.native(g);
         if view.is_some() && !native {
-            return Err(wda_down(&g.state, g.info.as_ref()).into());
+            return Err(Error::preflight(wda_down(&g.state, g.info.as_ref())));
         }
-        let rot = self.hid_touch_rotation(g).await?;
+        let rot = self.hid_touch_rotation(g).await.map_err(Error::preflight)?;
         self.hid_do(g, move |h| {
             Box::pin(async move {
                 h.rotation = rot;
@@ -484,44 +504,82 @@ impl Daemon {
         Ok(ictl_l10n::trf!("已滑动 {desc}{note}", "Swiped {desc}{note}"))
     }
 
-    pub(crate) async fn type_text(&self, g: &mut Inner, text: &str, submit: bool) -> crate::error::Result<String> {
-        self.ensure_unlocked(g).await?;
+    pub(crate) async fn type_text(
+        &self,
+        g: &mut Inner,
+        text: &str,
+        submit: bool,
+        field_verified: &mut Option<bool>,
+    ) -> crate::error::Result<String> {
+        self.ensure_unlocked(g).await.map_err(Error::preflight)?;
         let n = text.chars().count();
+        *field_verified = (!text.is_empty()).then_some(false);
         if let Some(w) = self.wda(g) {
             // /wda/keys 没有输入框获得焦点时也返回成功，其实什么都没输：先看屏幕上有没有键盘
+            let mut before = None;
             let typed = match w.keyboard_shown().await {
                 Ok(false) => {
-                    return Err(
-                        ictl_l10n::tr!("屏幕上没有键盘(没有输入框获得焦点),什么都没输;先点一下输入框,截图确认键盘出来了再输入", "No keyboard on screen (no text field has focus), nothing typed; tap a text field first and check with a screenshot that the keyboard is up").into(),
-                    );
+                    return Err(Error::preflight(ictl_l10n::tr!(
+                        "屏幕上没有键盘(没有输入框获得焦点),什么都没输;先点一下输入框,截图确认键盘出来了再输入",
+                        "No keyboard on screen (no text field has focus), nothing typed; tap a text field first and check with a screenshot that the keyboard is up"
+                    )));
                 }
                 Ok(true) if text.is_empty() => Ok(()),
-                Ok(true) => w.keys(text).await,
-                Err(e) => Err(e),
+                Ok(true) => {
+                    if text.chars().any(|c| !c.is_control()) {
+                        before = readable_focus(w).await;
+                    }
+                    w.keys(text).await
+                }
+                Err(e @ WdaError::Unavailable(_)) => Err(e),
+                Err(e) => return Err(Error::preflight(e)),
             };
             match typed {
                 Ok(()) => {
                     // 有的 App 边输入边刷新输入框，会吞掉一部分字（高德搜索框「故宫博物院」只剩「故宫博」），WDA 照样报成功：
                     // 输完读回输入框核对，少了结尾几个字就补上；对不上就不按回车
-                    let note = match verify_typed(w, text).await {
-                        Typed::Ok | Typed::Unknown => String::new(),
+                    let field = verify_typed(w, before.as_ref(), text).await;
+                    if !text.is_empty() {
+                        *field_verified = Some(matches!(field, Typed::Ok | Typed::Fixed(_)));
+                    }
+                    let note = match field {
+                        Typed::Ok => String::new(),
+                        Typed::Unknown if text.chars().any(|c| !c.is_control()) => ictl_l10n::tr!(
+                            "(无法读回输入框，请查看屏幕确认)",
+                            " (field contents could not be verified; inspect the screen)"
+                        )
+                        .into(),
+                        Typed::Unknown => String::new(),
                         Typed::Fixed(k) => ictl_l10n::trf!(
                             "(第一次有 {k} 个字没输进去,已补上)",
                             " ({k} characters were dropped the first time and typed again)"
                         ),
+                        Typed::FocusChanged => {
+                            return Err(Error::readback(ictl_l10n::tr!(
+                                "输入后焦点已改变，请查看屏幕确认；未再输入或按回车",
+                                "Focus changed after typing. Inspect the screen; no further keys or Return were sent."
+                            )));
+                        }
                         Typed::Mismatch(now) => {
-                            return Err(ictl_l10n::trf!(
+                            return Err(Error::readback(ictl_l10n::trf!(
                                 "输入了 {n} 个字符,但输入框里现在是「{now}」,和要输入的「{text}」对不上(App 可能吞掉了部分字符){};截图确认后再处理",
                                 "Typed {n} characters, but the field now contains “{now}”, which doesn't match “{text}” (the app may have swallowed some characters){}; check with a screenshot before going on",
                                 if submit { ictl_l10n::tr!(",没有按回车", ", Return not pressed") } else { "" }
-                            ).into());
+                            )));
                         }
                     };
                     if submit {
                         w.keys("\n").await.map_err(|e| {
-                            ictl_l10n::trf!(
-                                "文字已输入{note},按回车失败:{e}",
-                                "Text typed{note}, pressing Return failed: {e}"
+                            if text.is_empty() {
+                                return Error::wda_input(e);
+                            }
+                            Error::action(
+                                Delivery::Sent,
+                                FailureStage::Send,
+                                ictl_l10n::trf!(
+                                    "文字已输入{note},按回车失败:{e}",
+                                    "Text typed{note}, pressing Return failed: {e}"
+                                ),
                             )
                         })?;
                     }
@@ -532,11 +590,11 @@ impl Daemon {
                     ));
                 }
                 Err(WdaError::Unavailable(_)) => {}
-                Err(e) => return Err(e.into()),
+                Err(e) => return Err(Error::wda_input(e)),
             }
         }
         if self.native(g) {
-            return Box::pin(self.native_type(g, text, submit)).await;
+            return Box::pin(self.native_type(g, text, submit, field_verified)).await;
         }
         let payload = if submit { format!("{text}\n") } else { text.to_owned() };
         // 美式键盘按得出来的直接按键，不动剪贴板
@@ -549,15 +607,20 @@ impl Daemon {
 
     /// Replaces the text of the focused field (`replace: true`; empty `text` empties it), and presses Return only once
     /// the field reads back as exactly `text`: through WDA ([`wda_replace`]), or natively ([`Daemon::native_replace`])
-    pub(crate) async fn replace_text(&self, g: &mut Inner, text: &str, submit: bool) -> crate::error::Result<String> {
-        self.ensure_unlocked(g).await?;
+    pub(crate) async fn replace_text(
+        &self,
+        g: &mut Inner,
+        text: &str,
+        submit: bool,
+    ) -> crate::error::Result<(String, Delivery)> {
+        self.ensure_unlocked(g).await.map_err(Error::preflight)?;
         let native = self.native(g);
         if let Some(w) = self.wda(g) {
             match wda_replace(w, text, submit).await {
                 Ok(m) => return Ok(m),
                 Err(WdaReplace::Failed(e)) => return Err(e),
                 // WDA went away before anything was changed
-                Err(WdaReplace::Untouched(e)) if !native => return Err(e.into()),
+                Err(WdaReplace::Untouched(e)) if !native => return Err(Error::wda_input(e)),
                 Err(WdaReplace::Untouched(_)) => {}
             }
         }
@@ -565,7 +628,7 @@ impl Daemon {
             return Box::pin(self.native_replace(g, text, submit)).await;
         }
         // no HID way: the field can't be read without WDA
-        Err(wda_down(&g.state, g.info.as_ref()).into())
+        Err(Error::preflight(wda_down(&g.state, g.info.as_ref())))
     }
 
     /// HID 输入中文等按不出来的文字：经剪贴板粘贴（[`ictl_device::Tunnel::paste_text`]）。
@@ -576,15 +639,19 @@ impl Daemon {
     async fn hid_paste(&self, g: &mut Inner, text: &str, submit: bool) -> crate::error::Result<String> {
         let n = text.chars().count();
         self.restore_pasteboard(g, false).await;
-        self.hid(g).await?;
+        self.hid(g).await.map_err(|e| Error::action(Delivery::NotSent, FailureStage::Connect, e))?;
         let r = Box::pin(g.tunnel.as_mut().expect("hid() 刚建好隧道").paste_text(text)).await;
         g.hid_used = Some(Instant::now());
         let pending = match r {
             Ok(p) => p,
-            Err(e @ DeviceError::InvalidInput(_)) => return Err(e.into()),
+            Err(e @ (DeviceError::InvalidInput(_) | DeviceError::PasteNotSent(_))) => return Err(Error::preflight(e)),
             Err(e) => {
                 drop_tunnel(g).await;
-                return Err(ictl_l10n::trf!("HID 粘贴失败:{e}", "HID paste failed: {e}").into());
+                return Err(Error::action(
+                    Delivery::Unknown,
+                    FailureStage::Send,
+                    ictl_l10n::trf!("HID 粘贴失败:{e}", "HID paste failed: {e}"),
+                ));
             }
         };
         let saved = pending.is_some();
@@ -711,51 +778,39 @@ pub(super) async fn wda_replace<T: ictl_wda::http::Transport>(
     w: &mut WdaClient<T>,
     text: &str,
     submit: bool,
-) -> Result<String, WdaReplace> {
+) -> Result<(String, Delivery), WdaReplace> {
     use WdaReplace::{Failed, Untouched};
     // not sent: nothing changed
     let untouched = |e: WdaError| match e {
         WdaError::Unavailable(_) => Untouched(e),
-        e => Failed(e.into()),
+        e => Failed(Error::preflight(e)),
     };
     if !w.keyboard_shown().await.map_err(untouched)? {
-        return Err(Failed(
-            ictl_l10n::tr!(
-                "屏幕上没有键盘，先点一下要替换的输入框",
-                "No keyboard on screen; tap the field you want to replace first"
-            )
-            .into(),
-        ));
+        return Err(Failed(Error::preflight(ictl_l10n::tr!(
+            "屏幕上没有键盘，先点一下要替换的输入框",
+            "No keyboard on screen; tap the field you want to replace first"
+        ))));
     }
     let field = match w.focused_field().await.map_err(untouched)? {
         Some(f) if REPLACEABLE.contains(&f.kind.as_str()) => f,
         Some(f) if f.kind == "SecureTextField" => {
-            return Err(Failed(
-                ictl_l10n::tr!(
-                    "获得焦点的是密码框，读不出内容、核对不了，没有替换",
-                    "The focused field is a password field: it can't be read back, so nothing was replaced"
-                )
-                .into(),
-            ));
+            return Err(Failed(Error::preflight(ictl_l10n::tr!(
+                "获得焦点的是密码框，读不出内容、核对不了，没有替换",
+                "The focused field is a password field: it can't be read back, so nothing was replaced"
+            ))));
         }
         Some(f) => {
-            return Err(Failed(
-                ictl_l10n::trf!(
-                    "获得焦点的是 {}，不是普通输入框，没有替换",
-                    "The focused element is a {}, not a text field; nothing was replaced",
-                    f.kind
-                )
-                .into(),
-            ));
+            return Err(Failed(Error::preflight(ictl_l10n::trf!(
+                "获得焦点的是 {}，不是普通输入框，没有替换",
+                "The focused element is a {}, not a text field; nothing was replaced",
+                f.kind
+            ))));
         }
         None => {
-            return Err(Failed(
-                ictl_l10n::tr!(
-                    "无法确认当前聚焦的是可读的普通输入框，没有替换文字",
-                    "Couldn't identify a readable focused text field; no text was replaced"
-                )
-                .into(),
-            ));
+            return Err(Failed(Error::preflight(ictl_l10n::tr!(
+                "无法确认当前聚焦的是可读的普通输入框，没有替换文字",
+                "Couldn't identify a readable focused text field; no text was replaced"
+            ))));
         }
     };
     let old = w.field_text(&field).await.map_err(untouched)?;
@@ -766,34 +821,34 @@ pub(super) async fn wda_replace<T: ictl_wda::http::Transport>(
         if !old.is_empty() {
             w.clear(&field.id).await.map_err(|e| match e {
                 WdaError::Unavailable(_) => Untouched(e),
-                e => Failed(
-                    ictl_l10n::trf!(
+                e => {
+                    let message = ictl_l10n::trf!(
                         "清空输入框失败（{e}），原来的文字可能已经删掉了一部分{not_submitted}；截图确认",
                         "Emptying the field failed ({e}); some of the old text may be gone{not_submitted}; check with a screenshot"
-                    )
-                    .into(),
-                ),
+                    );
+                    Failed(Error::wda_input(e).with_message(message))
+                }
             })?;
         }
         if !text.is_empty() {
             w.keys(text).await.map_err(|e| {
-                Failed(
-                    ictl_l10n::trf!(
-                        "{gone}，输入新文字失败（{e}）{not_submitted}；截图确认",
-                        "{gone}, typing the new text failed ({e}){not_submitted}; check with a screenshot"
-                    )
-                    .into(),
-                )
+                let message = ictl_l10n::trf!(
+                    "{gone}，输入新文字失败（{e}）{not_submitted}；截图确认",
+                    "{gone}, typing the new text failed ({e}){not_submitted}; check with a screenshot"
+                );
+                let cause = Error::wda_input(e);
+                Failed(if old.is_empty() {
+                    cause.with_message(message)
+                } else {
+                    Error::action(Delivery::Unknown, FailureStage::Send, message)
+                })
             })?;
         }
         let unread = |e: WdaError| {
-            Failed(
-                ictl_l10n::trf!(
-                    "{gone}，替换后读不回输入框（{e}）{not_submitted}；截图确认",
-                    "{gone}, and the field couldn't be read back after the replacement ({e}){not_submitted}; check with a screenshot"
-                )
-                .into(),
-            )
+            Failed(Error::readback(ictl_l10n::trf!(
+                "{gone}，替换后读不回输入框（{e}）{not_submitted}；截图确认",
+                "{gone}, and the field couldn't be read back after the replacement ({e}){not_submitted}; check with a screenshot"
+            )))
         };
         let mut now = String::new();
         for attempt in 0..READBACK_TRIES {
@@ -807,7 +862,7 @@ pub(super) async fn wda_replace<T: ictl_wda::http::Transport>(
         }
         // the app dropped the last characters (as typing sees, `verify_typed`): typed again one by one
         if now != text
-            && let Some(rest) = text.strip_prefix(now.as_str()).filter(|r| !r.is_empty() && !now.is_empty())
+            && let Some(rest) = repairable_suffix(text, &now)
         {
             for c in rest.chars() {
                 w.keys(&c.to_string()).await.map_err(unread)?;
@@ -821,27 +876,27 @@ pub(super) async fn wda_replace<T: ictl_wda::http::Transport>(
             now = w.field_text(&field).await.map_err(unread)?;
         }
         if now != text {
-            return Err(Failed(
-                ictl_l10n::trf!(
-                    "{gone}，但输入框里现在是「{now}」，和要替换成的「{text}」对不上{not_submitted}；截图确认后再处理",
-                    "{gone}, but the field now holds “{now}”, which doesn't match “{text}”{not_submitted}; check with a screenshot before going on"
-                )
-                .into(),
-            ));
+            return Err(Failed(Error::readback(ictl_l10n::trf!(
+                "{gone}，但输入框里现在是「{now}」，和要替换成的「{text}」对不上{not_submitted}；截图确认后再处理",
+                "{gone}, but the field now holds “{now}”, which doesn't match “{text}”{not_submitted}; check with a screenshot before going on"
+            ))));
         }
     }
     if submit {
         w.keys("\n").await.map_err(|e| {
-            Failed(
-                ictl_l10n::trf!(
-                    "已替换为「{text}」{note}，按回车失败：{e}",
-                    "Replaced the field with “{text}”{note}, pressing Return failed: {e}"
-                )
-                .into(),
-            )
+            let message = ictl_l10n::trf!(
+                "已替换为「{text}」{note}，按回车失败：{e}",
+                "Replaced the field with “{text}”{note}, pressing Return failed: {e}"
+            );
+            Failed(if old == text {
+                Error::wda_input(e).with_message(message)
+            } else {
+                Error::action(Delivery::Sent, FailureStage::Send, message)
+            })
         })?;
     }
-    Ok(replaced(text, submit, &note))
+    let delivery = if old != text || submit { Delivery::Sent } else { Delivery::NotSent };
+    Ok((replaced(text, submit, &note), delivery))
 }
 
 /// What a replacement that went through says ([`Daemon::replace_text`])
@@ -875,67 +930,152 @@ pub(super) enum Typed {
     Fixed(usize),
     /// 对不上（输入框里现在的内容）
     Mismatch(String),
+    FocusChanged,
 }
 
-pub(super) fn squash(s: &str) -> String {
+/// Verification requires the entire requested insertion in the observed field. Existing digits or
+/// an unrelated field changing cannot supply part of the evidence. Phone numbers may gain display spaces.
+pub(super) fn newly_typed(before: &str, now: &str, text: &str) -> bool {
+    fn inserted(before: &str, now: &str, text: &str) -> bool {
+        if text.is_empty() || now.len().checked_sub(before.len()) != Some(text.len()) {
+            return false;
+        }
+        now.match_indices(text)
+            .any(|(i, _)| before.get(..i) == Some(&now[..i]) && before.get(i..) == Some(&now[i + text.len()..]))
+    }
+    if text.bytes().all(|b| b.is_ascii_digit()) {
+        let digits = |s: &str| s.split_whitespace().collect::<String>();
+        inserted(&digits(before), &digits(now), text)
+    } else {
+        inserted(before, now, text)
+    }
+}
+
+/// The text arrived, but not the whitespace it was sent with: a single-line field turns a pasted newline into a
+/// space («北京\n» reads «北京 », «北京\n上海» reads «北京 上海»; Spotlight, iPhone 15 Pro Max, iOS 27.2.1), and leading
+/// or trailing whitespace can be dropped. [`newly_typed`] with all whitespace left out
+pub(super) fn typed_but_whitespace(before: &str, now: &str, text: &str) -> bool {
+    let text = bare(text);
+    !text.is_empty() && newly_typed(&bare(before), &bare(now), &text)
+}
+
+/// `s` without its whitespace
+pub(super) fn bare(s: &str) -> String {
     s.chars().filter(|c| !c.is_whitespace()).collect()
 }
 
-/// 输入框里的内容有没有包含刚输入的文字（忽略空白：手机号之类会被自动加空格）
-pub(super) fn typed_into(values: &[String], text: &str) -> bool {
-    let want = squash(text);
-    values.iter().any(|v| squash(v).contains(&want))
-}
-
-/// 输入框结尾是 `text` 的前几个字（后面的丢了）：返回输进去了几个字
-pub(super) fn typed_prefix(values: &[String], text: &str) -> Option<usize> {
-    let chars: Vec<char> = text.chars().collect();
-    values
-        .iter()
-        .filter_map(|v| {
-            let v = squash(v);
-            (1..chars.len()).rev().find(|&k| {
-                let p = squash(&chars[..k].iter().collect::<String>());
-                !p.is_empty() && v.ends_with(&p)
-            })
-        })
-        .max()
-}
-
-pub(super) async fn verify_typed(w: &mut WdaClient<DeviceTransport>, text: &str) -> Typed {
-    if squash(text).is_empty() {
-        return Typed::Unknown;
+/// Repair only an observed append of the exact leading characters, stable across two fresh reads.
+pub(super) fn missing_suffix<'a>(before: &str, first: &str, second: &str, text: &'a str) -> Option<&'a str> {
+    if !text.is_empty() && text.bytes().all(|b| b.is_ascii_digit()) {
+        let strip_spaces = |s: &str| s.split_whitespace().collect::<String>();
+        let first = strip_spaces(first);
+        let second = strip_spaces(second);
+        if first != second {
+            return None;
+        }
+        return repairable_suffix(text, second.strip_prefix(&strip_spaces(before))?);
     }
-    let mut values = None;
-    // 树可能比输入框慢一拍：第一次对不上隔一下再读一次，确认真的少了再补，免得补重
+    if first != second {
+        return None;
+    }
+    repairable_suffix(text, second.strip_prefix(before)?)
+}
+
+/// A missing Return or Tab can mean the first one already submitted or moved focus.
+fn repairable_suffix<'a>(text: &'a str, observed: &str) -> Option<&'a str> {
+    if observed.is_empty() || text.chars().any(char::is_control) {
+        return None;
+    }
+    text.strip_prefix(observed).filter(|rest| !rest.is_empty() && !rest.chars().any(char::is_whitespace))
+}
+
+/// The focused field before typing: which element it is, its placeholder, and its exact value, whitespace included
+pub(super) struct Focus {
+    field: ictl_wda::client::FocusedField,
+    value: String,
+}
+
+/// Four requests: the element, its type and placeholder ([`WdaClient::focused_field`]), its value. [`reread`] takes two
+async fn readable_focus<T: ictl_wda::http::Transport>(w: &mut WdaClient<T>) -> Option<Focus> {
+    let field = w.focused_field().await.ok()??;
+    if !REPLACEABLE.contains(&field.kind.as_str()) {
+        return None;
+    }
+    let value = w.field_text(&field).await.ok()?;
+    Some(Focus { field, value })
+}
+
+/// What [`reread`] found
+enum Reread {
+    Value(String),
+    /// Another readable field has focus now
+    Moved,
+    /// No readable field has focus, or WDA didn't answer
+    Unreadable,
+}
+
+/// The field [`readable_focus`] found, once more. Its type and placeholder don't change, so only which element has
+/// focus and its value are asked: two requests instead of four (each about 0.15 s through WDA on an iPad mini 5)
+async fn reread<T: ictl_wda::http::Transport>(w: &mut WdaClient<T>, f: &Focus) -> Reread {
+    match w.active_element().await {
+        Ok(Some(id)) if id == f.field.id => {}
+        // as `readable_focus` judges it: another text field (focus changed) or anything else (can't tell)
+        Ok(Some(_)) => {
+            return match w.focused_field().await {
+                Ok(Some(o)) if REPLACEABLE.contains(&o.kind.as_str()) => Reread::Moved,
+                _ => Reread::Unreadable,
+            };
+        }
+        Ok(None) | Err(_) => return Reread::Unreadable,
+    }
+    w.field_text(&f.field).await.map_or(Reread::Unreadable, Reread::Value)
+}
+
+async fn verify_typed<T: ictl_wda::http::Transport>(w: &mut WdaClient<T>, before: Option<&Focus>, text: &str) -> Typed {
+    let Some(f) = before else { return Typed::Unknown };
+    let before = f.value.as_str();
+    let mut reads = Vec::with_capacity(2);
     for attempt in 0..2 {
         if attempt > 0 {
             tokio::time::sleep(Duration::from_millis(300)).await;
         }
-        let Some(v) = w.elements().await.ok().and_then(|e| elements::field_values(&e)) else { return Typed::Unknown };
-        if v.is_empty() {
-            return Typed::Unknown;
-        }
-        if typed_into(&v, text) {
+        let now = match reread(w, f).await {
+            Reread::Value(now) => now,
+            Reread::Moved => return Typed::FocusChanged,
+            Reread::Unreadable => return Typed::Unknown,
+        };
+        if newly_typed(before, &now, text) {
             return Typed::Ok;
         }
-        values = Some(v);
+        if typed_but_whitespace(before, &now, text) {
+            // The visible text arrived, but the field cannot confirm the whitespace it was sent with.
+            return Typed::Unknown;
+        }
+        if now.contains(text) && (now == before || !now.starts_with(before)) {
+            // Replacing a selection (a search field keeps its last search, selected) can't be told apart from the
+            // text having been there, and reading again can't tell either: answer now. Reading twice more and waiting
+            // in between made typing into Spotlight about 1.8 s slower through WDA (iPad mini 5)
+            return Typed::Unknown;
+        }
+        reads.push(now);
     }
-    let values = values.unwrap_or_default();
-    let shown = || values.iter().find(|v| !v.is_empty()).cloned().unwrap_or_default();
-    let Some(k) = typed_prefix(&values, text) else { return Typed::Mismatch(shown()) };
-    // 剩下的一个字一个字慢慢补
-    let rest: Vec<char> = text.chars().skip(k).collect();
-    for c in &rest {
+    let Some(rest) = missing_suffix(before, &reads[0], &reads[1], text) else {
+        return Typed::Mismatch(reads.pop().unwrap());
+    };
+    for (i, c) in rest.chars().enumerate() {
+        if i > 0 && !w.active_element().await.ok().flatten().is_some_and(|id| id == f.field.id) {
+            return Typed::FocusChanged;
+        }
         if w.keys(&c.to_string()).await.is_err() {
-            return Typed::Mismatch(shown());
+            return Typed::Mismatch(reads.pop().unwrap());
         }
         tokio::time::sleep(Duration::from_millis(150)).await;
     }
-    match w.elements().await.ok().and_then(|e| elements::field_values(&e)) {
-        Some(v) if typed_into(&v, text) => Typed::Fixed(rest.len()),
-        Some(v) => Typed::Mismatch(v.into_iter().find(|v| !v.is_empty()).unwrap_or_default()),
-        None => Typed::Unknown,
+    match reread(w, f).await {
+        Reread::Moved => Typed::FocusChanged,
+        Reread::Value(now) if newly_typed(before, &now, text) => Typed::Fixed(rest.chars().count()),
+        Reread::Value(now) => Typed::Mismatch(now),
+        Reread::Unreadable => Typed::Unknown,
     }
 }
 
@@ -958,6 +1098,8 @@ mod tests {
         mangle: fn(&str) -> String,
         /// the field doesn't answer at all (WDA gone)
         gone: bool,
+        /// its text is selected: the next keys replace it (a search field keeps its last search, selected)
+        selected: bool,
         /// requests as `METHOD path`, and the text of every `/wda/keys`
         seen: Vec<String>,
         keys: Vec<String>,
@@ -973,6 +1115,7 @@ mod tests {
                 drop_next: 0,
                 mangle: str::to_owned,
                 gone: false,
+                selected: false,
                 seen: vec![],
                 keys: vec![],
             }))
@@ -1015,6 +1158,9 @@ mod tests {
                     let typed: String = body["value"].as_array().unwrap().iter().map(|c| c.as_str().unwrap()).collect();
                     f.keys.push(typed.clone());
                     if typed != "\n" {
+                        if std::mem::take(&mut f.selected) {
+                            f.value.clear();
+                        }
                         let keep = typed.chars().count().saturating_sub(std::mem::take(&mut f.drop_next));
                         let typed: String = typed.chars().take(keep).collect();
                         let typed = (f.mangle)(&typed);
@@ -1029,10 +1175,52 @@ mod tests {
 
     async fn replace(f: &Fake, text: &str, submit: bool) -> Result<String, String> {
         let mut w = WdaClient::new(f);
-        wda_replace(&mut w, text, submit).await.map_err(|e| match e {
+        wda_replace(&mut w, text, submit).await.map(|(message, _)| message).map_err(|e| match e {
             WdaReplace::Untouched(e) => format!("untouched: {e}"),
             WdaReplace::Failed(e) => e.to_string(),
         })
+    }
+
+    #[tokio::test]
+    async fn a_single_line_field_never_receives_a_second_return_during_repair() {
+        // a newline dropped, or turned into a space (Spotlight does that with pasted text)
+        let mangles: [fn(&str) -> String; 2] = [|s| s.trim_end().to_owned(), |s| s.replace('\n', " ")];
+        for mangle in mangles {
+            let f = Fake::new("TextField", "");
+            f.0.lock().unwrap().mangle = mangle;
+            let mut w = WdaClient::new(&f);
+            let before = readable_focus(&mut w).await.unwrap();
+            w.keys("hi\n").await.unwrap();
+            assert_eq!(verify_typed(&mut w, Some(&before), "hi\n").await, Typed::Unknown);
+            assert_eq!(f.0.lock().unwrap().keys, ["hi\n"]);
+        }
+
+        let f = Fake::new("TextField", "");
+        f.0.lock().unwrap().mangle = |s| s.trim_end().to_owned();
+        assert!(replace(&f, "hi\n", false).await.is_err());
+        assert_eq!(f.0.lock().unwrap().keys, ["hi\n"]);
+    }
+
+    /// Typing over a selection can't be told apart from the text having been there, and reading again can't tell
+    /// either: one reread of the field already known (which element has focus, its value) answers, with no wait and no
+    /// second read (they made typing into Spotlight about 1.8 s slower through WDA on an iPad mini 5)
+    #[tokio::test]
+    async fn typing_over_a_selection_is_judged_after_one_reread() {
+        for (old, text) in [("设置", "设置"), ("wifi", "设置")] {
+            let f = Fake::new("SearchField", old);
+            f.0.lock().unwrap().selected = true;
+            let mut w = WdaClient::new(&f);
+            let before = readable_focus(&mut w).await.unwrap();
+            w.keys(text).await.unwrap();
+            let asked = f.0.lock().unwrap().seen.len();
+            assert_eq!(verify_typed(&mut w, Some(&before), text).await, Typed::Unknown);
+            let field = f.0.into_inner().unwrap();
+            assert_eq!(field.value, text);
+            assert_eq!(
+                field.seen[asked..],
+                ["GET /session/S/element/active", "GET /session/S/element/F/attribute/value"]
+            );
+        }
     }
 
     #[tokio::test]
@@ -1051,6 +1239,26 @@ mod tests {
         assert_eq!(replace(&f, "", false).await.unwrap(), "已清空输入框");
         let f = f.0.into_inner().unwrap();
         assert_eq!((f.value.as_str(), f.keys.len()), ("", 0));
+    }
+
+    #[tokio::test]
+    async fn replacement_reports_noop_and_field_mismatch_separately() {
+        let f = Fake::new("TextField", "same");
+        let mut w = WdaClient::new(&f);
+        for (text, submit, expected) in
+            [("same", false, Delivery::NotSent), ("same", true, Delivery::Sent), ("", false, Delivery::Sent)]
+        {
+            let Ok((_, delivery)) = wda_replace(&mut w, text, submit).await else { panic!("replacement failed") };
+            assert_eq!(delivery, expected);
+        }
+        f.0.lock().unwrap().mangle = |s| s.to_uppercase();
+        let Err(WdaReplace::Failed(e)) = wda_replace(&mut w, "mismatch", true).await else {
+            panic!("expected a verification failure")
+        };
+        let response = e.response();
+        let req = crate::protocol::Request::ReplaceText { text: "mismatch".into(), submit: true };
+        assert_eq!(response.delivery(&req), Delivery::Sent);
+        assert_eq!(response.field_readback(&req), Some("failed"));
     }
 
     /// The field already holds the text (or, emptying, reads its placeholder): nothing is cleared or typed

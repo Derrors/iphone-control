@@ -14,6 +14,8 @@ Scenarios (the numbers are regression cases):
            selecting the device already selected, an enlarged region (#16), then=screenshot
   typing   typing with no keyboard up is refused and types nothing (#32); the same text typed twice into
            Spotlight counts as typed the second time too (#143)
+  delivery one Clock tab tap reports delivery and returns its selected state; a missing target leaves it selected
+  collect  find a Clock tab without tapping it, then collect Settings rows from two different viewports
   editing  replace and empty focused text, natively (#159) and through WDA (#162), read element-limit metadata (#160),
            and wait for a visible Clock tab to disappear (#161)
   fresh    a tap right after a cold start isn't swallowed (#13); then=elements shows the page after the tap,
@@ -33,7 +35,7 @@ Scenarios (the numbers are regression cases):
 (`iphone-control devices` says whether one is saved; `iphone-control passcode set` saves it), the phone counts a
 wrong attempt and automatic unlocking is switched off. Make sure of it, then pass --lock.
 
-Everything else is harmless by design: Home, Clock, Spotlight, screenshots. Nothing is sent, bought, deleted or
+Everything else is harmless by design: Home, Clock, Spotlight, scrolling Settings, screenshots. Nothing is sent, bought, deleted or
 changed. Environment: MCP_CMD, MCP_URL, SHOTS_DIR as for run.py. Exit code 1 if any check failed. Paste the output
 into the pull request (CONTRIBUTING.md, "Required tests").
 """
@@ -87,13 +89,17 @@ class Phone:
         self.s = session
         self.d = d
 
-    async def call(self, name: str, args: dict | None = None, timeout: float = 90):
-        t = time.time()
+    async def result(self, name: str, args: dict | None = None, timeout: float = 90):
         res = await asyncio.wait_for(self.s.call_tool(name, args or {}), timeout)
-        dt = time.time() - t
         text = "\n".join(c.text for c in res.content if c.type == "text")
         if dev.manual_unlock_required(text, bool(res.is_error)):
             raise dev.ManualUnlockRequired(text)
+        return res, text
+
+    async def call(self, name: str, args: dict | None = None, timeout: float = 90):
+        t = time.time()
+        res, text = await self.result(name, args, timeout)
+        dt = time.time() - t
         sizes = [dev.jpeg_size(base64.b64decode(c.data)) for c in res.content if c.type == "image"]
         return bool(res.is_error), text, dt, sizes
 
@@ -213,10 +219,12 @@ async def editing(p: Phone):
                      spotlight_queries(before) == ["wifi"], before):
             return
         for wanted in ("wi", "蓝牙"):
-            err, answer, dt, _ = await p.call("iphone_type_text", {"text": wanted, "replace": True})
+            res, answer = await p.result("iphone_type_text", {"text": wanted, "replace": True})
+            data = res.structured_content or {}
             readback = await p.ok(c, "iphone_list_elements", {"filter": "SearchField"})
-            if not check("#159", f"replace the focused Spotlight query with {wanted!r} ({dt:.2f}s)",
-                         not err and spotlight_queries(readback) == [wanted], answer if err else readback):
+            if not check("#159", f"replace the focused Spotlight query with {wanted!r} and verify its field",
+                         not res.is_error and data.get("delivery") == "sent" and data.get("readback", {}).get("field") == "verified"
+                         and spotlight_queries(readback) == [wanted], f"delivery={data.get('delivery')} readback={data.get('readback')} {answer}"):
                 return
         # empty text empties it; the empty field reads its placeholder as its value
         err, answer, dt, _ = await p.call("iphone_type_text", {"text": "", "replace": True})
@@ -252,6 +260,86 @@ async def editing(p: Phone):
     err, answer, dt, _ = await p.call("iphone_wait_for", target)
     check("#161", f"Clock tab is gone after leaving the app ({dt:.2f}s)",
           not err and says(answer, dev.T("已消失", "Disappeared")), answer)
+
+
+async def delivery(p: Phone):
+    c = "delivery"
+    await p.ok(c, "iphone_launch_app", {"app": dev.CLOCK})
+    tabs = await p.clock_tabs(c)
+    if not tabs:
+        return
+    was = next(t for t in tabs if t.value == "1")
+    target = next(t for t in tabs if t.value != "1")
+    try:
+        res, text = await p.result("iphone_tap", {"x": target.x, "y": target.y, "then": "elements", "then_filter": "Button"})
+        data = res.structured_content or {}
+        check(c, "one tap reports sent, reads the screen and selects the requested Clock tab",
+              not res.is_error and data.get("delivery") == "sent" and data.get("readback", {}).get("screen") == "ok"
+              and any(e.get("label") == target.label for e in data.get("elements", []))
+              and selected(text, target.label), f"delivery={data.get('delivery')} readback={data.get('readback')} {text}")
+
+        res, text = await p.result("iphone_tap_element", {"text": MISSING})
+        data = res.structured_content or {}
+        now = await p.clock_tabs(c)
+        check(c, "a missing tap target reports not_sent and leaves the tab selected",
+              not res.is_error and says(text, dev.NOT_FOUND) and data.get("delivery") == "not_sent"
+              and any(t.label == target.label and t.value == "1" for t in now), f"delivery={data.get('delivery')} {text}")
+    finally:
+        await p.ok(c, "iphone_tap_element", {"text": was.label})
+        await p.home(c)
+
+
+def list_rows(items: list[dict]) -> set[tuple[str, str]]:
+    # Across native and WDA a Settings row can be a button, cell or its text child.
+    return {(e["type"], e["label"]) for e in items
+            if e.get("type") in ("Button", "Cell", "StaticText") and e.get("label")}
+
+
+async def collect(p: Phone):
+    c = "collect"
+    try:
+        await p.ok(c, "iphone_launch_app", {"app": dev.CLOCK})
+        tabs = await p.clock_tabs(c)
+        if not tabs:
+            return
+        was = next(t for t in tabs if t.value == "1")
+        target = next(t for t in tabs if t.value != "1")
+        res, text = await p.result("iphone_scroll_collect", {"until": target.label})
+        data = res.structured_content or {}
+        check(c, "a visible Clock tab is found on the first screen",
+              not res.is_error and data.get("stop_reason") == "found" and data.get("scrolls") == 0
+              and (data.get("matched") or {}).get("label") == target.label, text)
+        now = await p.clock_tabs(c)
+        check(c, "finding the tab leaves the original tab selected",
+              any(t.label == was.label and t.value == "1" for t in now))
+
+        await p.ok(c, "iphone_launch_app", {"app": dev.SETTINGS})
+        for direction in ("down", "up"):
+            before, _ = await p.result("iphone_list_elements", {"limit": 500})
+            res, text = await p.result("iphone_scroll_collect", {"scroll": direction, "until": MISSING, "max_scrolls": 1})
+            after, _ = await p.result("iphone_list_elements", {"limit": 500})
+            data = res.structured_content or {}
+            if not check(c, f"one scroll {direction} stops at the bound or the list end with no match",
+                         not res.is_error and data.get("stop_reason") in ("max_scrolls", "end")
+                         and data.get("scrolls") == 1 and data.get("matched") is None, text.splitlines()[0] if text else ""):
+                return
+            start = before.structured_content or {}
+            end = after.structured_content or {}
+            if not check(c, "both independent viewport reads are complete",
+                         not before.is_error and not after.is_error and start.get("truncated") is False
+                         and end.get("truncated") is False):
+                return
+            first, last = list_rows(start["elements"]), list_rows(end["elements"])
+            collected = list_rows(data["rows"])
+            old, new = (first - last) & collected, (last - first) & collected
+            if first - last and last - first:
+                check(c, "the collection includes rows unique to each independently observed viewport",
+                      bool(old and new), f"{len(old)} first-screen-only, {len(new)} final-screen-only")
+                return
+            # Settings may reopen at the bottom. Try the opposite direction once.
+        check(c, "one collection includes rows unique to each independently observed viewport", False)
+    finally:
+        await p.home(c)
 
 
 async def fresh(p: Phone):
@@ -433,7 +521,7 @@ async def lock(p: Phone):
 
 SCENARIOS = {
     "tools": tools, "typing": typing, "editing": editing, "fresh": fresh, "batch": batch,
-    "menu": menu, "idle": idle, "url": url, "lock": lock
+    "delivery": delivery, "collect": collect, "menu": menu, "idle": idle, "url": url, "lock": lock
 }
 OPT_IN = {"lock": "--lock", "url": "--url"}
 

@@ -1391,7 +1391,7 @@ fn action_result(req: &Request, result: Result<Response, impl std::fmt::Display>
             json!({"ok": !missed, "message": text})
         }
         Ok(Response::Image { caption, .. }) => json!({"ok": true, "message": caption}),
-        Ok(Response::Error { message, retry_as_gesture }) => json!({"ok": false, "message": message,
+        Ok(Response::Error { message, retry_as_gesture, .. }) => json!({"ok": false, "message": message,
             "retry_as_gesture": retry_as_gesture && matches!(req, Request::Touch { phase: TouchPhase::Down, .. })}),
         Err(e) => json!({"ok": false, "message": e.to_string()}),
     }
@@ -1913,7 +1913,8 @@ mod tests {
         let ctx = test_ctx(temp.path(), &socket);
         for (phase, daemon_retry, allow) in [("down", false, false), ("down", true, true), ("move", true, false)] {
             let body = json!({"phase":phase, "x":1, "y":2, "view":"portrait"});
-            let reply = Response::Error { message: "touch failed".into(), retry_as_gesture: daemon_retry };
+            let reply =
+                Response::Error { message: "touch failed".into(), retry_as_gesture: daemon_retry, failure: None };
             // The result comes directly from the action, with no follow-up status request.
             let ((_, result), req) = tokio::time::timeout(Duration::from_secs(3), async {
                 tokio::join!(

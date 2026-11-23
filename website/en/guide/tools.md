@@ -1,6 +1,6 @@
 # Tools
 
-The MCP server provides 17 tools, 23 with the [developer tools](#developer-tools-opt-in). Coordinates are in **points**, matching the pixels of a full-screen screenshot (430×932 on an iPhone 15 Pro Max), so the agent can tap what it reads off a screenshot. Coordinates follow the screen orientation: after a rotation the same spot has different coordinates, so take a new screenshot. Screen sizes differ per device; an iPad mini 5 is 768×1024 in portrait.
+The MCP server provides 18 tools, 24 with the [developer tools](#developer-tools-opt-in). Coordinates are in **points**, matching the pixels of a full-screen screenshot (430×932 on an iPhone 15 Pro Max), so the agent can tap what it reads off a screenshot. Coordinates follow the screen orientation: after a rotation the same spot has different coordinates, so take a new screenshot. Screen sizes differ per device; an iPad mini 5 is 768×1024 in portrait.
 
 ## Looking at the screen
 
@@ -19,6 +19,7 @@ With [auto-unlock](./auto-unlock) on, `iphone_screenshot`, `iphone_list_elements
 | Tool | What it does |
 |---|---|
 | `iphone_tap` | Tap coordinates; `count` taps the same point several times (double tap, entries that need quick repeated taps) |
+| `iphone_scroll_collect` | Scroll through a list, collect matching rows and optionally stop when text appears. Swipes in the middle of the screen; on an iPad split view (Settings, Mail) `x` picks the column to scroll, such as the sidebar. On pause or takeover, a connected caller receives the rows collected so far and the stop reason `interrupted`. The phone stays on the final viewport. |
 | `iphone_tap_element` | Tap by text; if the center is covered by a floating bar or the keyboard it taps a visible part, and if it's fully covered it doesn't tap. With `scroll` (`down` / `up`) it scrolls slowly and looks again when the element isn't on screen, until it is found, the list ends or `max_scrolls` (default 8) is reached |
 | `iphone_long_press` | Long press; `seconds` defaults to 1, max 10 |
 | `iphone_swipe` | Swipe; returns once the list has stopped scrolling. `seconds` defaults to 0.3, max 10. `hold` holds still at the start for that many seconds before moving, to drag things that need a long press first (home-screen icons, reorderable rows); about 0.6 works |
@@ -27,6 +28,8 @@ With [auto-unlock](./auto-unlock) on, `iphone_screenshot`, `iphone_list_elements
 | `iphone_launch_app` / `iphone_terminate_app` | Launch / quit an app by name (e.g. `设置`) or bundle id |
 | `iphone_open_url` | Open a link or URL scheme |
 | `iphone_batch` | Run up to 20 steps in one call, stopping at the first error. When every step is a coordinate tap, `one_gesture` taps them in turn within one gesture, for pressing keys on one keyboard. If the MCP client cancels the call, the remaining steps don't run; with no device selected, it also stops with an error if the controlled device changes |
+
+Taps, long presses, swipes and text input report the delivery of the requested input in `structuredContent.delivery`. With `not_sent` you can reconsider the input and retry. With `unknown`, inspect the phone first because the input may already have taken effect. With `sent`, the input was dispatched. When using `then`, check `readback` separately.
 
 ## Several devices
 

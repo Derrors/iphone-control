@@ -393,12 +393,32 @@ fn clip(s: &str, max: usize, keep: usize) -> String {
 }
 
 impl Element {
+    /// Inside a scroll area's content (a list's rows, a page): what a swipe moves. Bars, a scroll area itself and
+    /// what lies outside one don't move with it. A tree read natively has no scroll areas: nothing is
+    pub fn in_scroll(&self) -> bool {
+        self.layer == Layer::Scroll
+    }
+
+    /// `needle` is already lowercase so a page of elements can share it.
+    pub fn matches_filter(&self, needle: &str) -> bool {
+        self.contains_text(needle) || self.kind.to_lowercase().contains(needle)
+    }
+
+    pub fn contains_text(&self, needle: &str) -> bool {
+        needle.is_empty() || self.haystack().contains(needle)
+    }
+
     fn haystack(&self) -> String {
         format!("{} {} {}", self.label, self.name, self.value).to_lowercase()
     }
 
     /// 与 toolkit 相同的一行描述：`Button "显示与亮度" id="..." @(215,676) 390x53`。超长的文字和标识截断
     pub fn describe(&self) -> String {
+        format!("{} @({},{}) {}x{}", self.describe_text(), self.center.0, self.center.1, self.size.0, self.size.1)
+    }
+
+    /// Text and identifier without a position. Suitable for rows collected from earlier viewports.
+    pub fn describe_text(&self) -> String {
         let text =
             [&self.label, &self.name, &self.value].into_iter().find(|s| !s.is_empty()).cloned().unwrap_or_default();
         let mut s = format!("{} \"{}\"", self.kind, clip(&text, 80, 60));
@@ -414,7 +434,7 @@ impl Element {
             let v: String = self.value.chars().take(60).collect();
             s += &format!(" value=\"{v}\"");
         }
-        s + &format!(" @({},{}) {}x{}", self.center.0, self.center.1, self.size.0, self.size.1)
+        s
     }
 }
 
@@ -673,7 +693,7 @@ pub fn parse_tree(xml: &str, view: impl Into<View>) -> Tree {
 /// 类型/标签/名字/值里包含 `text` 的元素（不区分大小写）。列元素时筛选用，可以按类型筛（如 `SearchField`）
 pub fn filter<'a>(elements: &'a [Element], text: &str) -> Vec<&'a Element> {
     let t = text.to_lowercase();
-    elements.iter().filter(|e| e.haystack().contains(&t) || e.kind.to_lowercase().contains(&t)).collect()
+    elements.iter().filter(|e| e.matches_filter(&t)).collect()
 }
 
 /// 按文字找元素：先找标签或名字完全相同的，没有再找标签/名字/值包含该文字的（不看类型）
@@ -683,7 +703,7 @@ pub fn find<'a>(elements: &'a [Element], text: &str) -> Vec<&'a Element> {
         return exact;
     }
     let t = text.to_lowercase();
-    elements.iter().filter(|e| e.haystack().contains(&t)).collect()
+    elements.iter().filter(|e| e.contains_text(&t)).collect()
 }
 
 /// 等某段文字出现时用：同 [`find`]，但不算输入框里的内容（刚输入的搜索词不能算「结果出来了」）

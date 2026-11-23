@@ -6,6 +6,10 @@ What changed in each release, one line per change. Versions follow [Semantic Ver
 
 ## [Unreleased]
 
+### Fixes
+
+- `iphone-control login` and the setup wizard no longer fail with HTTP 403 from Apple before the password is checked. The `X-MMe-Client-Info` header sent to Apple was lowercased (`mac os x`), which Apple now rejects (#171).
+
 ## [0.2.10] - 2026-11-22
 
 ### Upgrade notes

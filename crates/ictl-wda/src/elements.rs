@@ -393,6 +393,12 @@ fn clip(s: &str, max: usize, keep: usize) -> String {
 }
 
 impl Element {
+    /// Inside a scroll area's content (a list's rows, a page): what a swipe moves. Bars, a scroll area itself and
+    /// what lies outside one don't move with it. A tree read natively has no scroll areas: nothing is
+    pub fn in_scroll(&self) -> bool {
+        self.layer == Layer::Scroll
+    }
+
     /// `needle` is already lowercase so a page of elements can share it.
     pub fn matches_filter(&self, needle: &str) -> bool {
         self.contains_text(needle) || self.kind.to_lowercase().contains(needle)

@@ -264,10 +264,14 @@ impl Daemon {
         Ok(())
     }
 
-    /// 边滑边找的一次慢滑（[`search_stroke`]），等停下后读一棵新树
-    pub(super) async fn search_scroll(&self, g: &mut Inner, down: bool) -> crate::error::Result<Tree> {
+    /// 边滑边找的一次慢滑（[`search_stroke`]），等停下后读一棵新树。`x`：在这个横坐标上滑（iPad 分栏界面的左栏），
+    /// 不给就是屏幕正中
+    pub(super) async fn search_scroll(&self, g: &mut Inner, down: bool, x: Option<f64>) -> crate::error::Result<Tree> {
         let screen = self.screen(g).await.map_err(Error::preflight)?;
-        let (from, to) = search_stroke(screen.width, screen.height, down);
+        let (mut from, mut to) = search_stroke(screen.width, screen.height, down);
+        if let Some(x) = x {
+            (from.0, to.0) = (x, x);
+        }
         Box::pin(self.swipe(g, Stroke { from, to, seconds: SEARCH_SWIPE_SECONDS, hold: 0.0 }, None, false)).await?;
         self.tree(g, Duration::ZERO).await
     }
@@ -306,7 +310,8 @@ impl Daemon {
                 if at_end || scrolled >= s.max {
                     break;
                 }
-                let next = Box::pin(self.search_scroll(g, s.down)).await.map_err(|e| failed_scroll(e, scrolled))?;
+                let next =
+                    Box::pin(self.search_scroll(g, s.down, None)).await.map_err(|e| failed_scroll(e, scrolled))?;
                 scrolled += 1;
                 at_end = next.close_to(&tree, STILL_TOLERANCE);
                 tree = next;
@@ -317,7 +322,7 @@ impl Daemon {
                 && let Some(k) = partial_at
             {
                 while back <= scrolled - k && !reachable(&tree, text, index) {
-                    tree = Box::pin(self.search_scroll(g, !s.down))
+                    tree = Box::pin(self.search_scroll(g, !s.down, None))
                         .await
                         .map_err(|e| failed_scroll(e, scrolled + back))?;
                     back += 1;
@@ -946,6 +951,19 @@ pub(super) fn newly_typed(before: &str, now: &str, text: &str) -> bool {
     }
 }
 
+/// The text arrived, but not the whitespace it was sent with: a single-line field turns a pasted newline into a
+/// space («北京\n» reads «北京 », «北京\n上海» reads «北京 上海»; Spotlight, iPhone 15 Pro Max, iOS 27.2.1), and leading
+/// or trailing whitespace can be dropped. [`newly_typed`] with all whitespace left out
+pub(super) fn typed_but_whitespace(before: &str, now: &str, text: &str) -> bool {
+    let text = bare(text);
+    !text.is_empty() && newly_typed(&bare(before), &bare(now), &text)
+}
+
+/// `s` without its whitespace
+pub(super) fn bare(s: &str) -> String {
+    s.chars().filter(|c| !c.is_whitespace()).collect()
+}
+
 /// Repair only an observed append of the exact leading characters, stable across two fresh reads.
 pub(super) fn missing_suffix<'a>(before: &str, first: &str, second: &str, text: &'a str) -> Option<&'a str> {
     if !text.is_empty() && text.bytes().all(|b| b.is_ascii_digit()) {
@@ -971,49 +989,81 @@ fn repairable_suffix<'a>(text: &'a str, observed: &str) -> Option<&'a str> {
     text.strip_prefix(observed).filter(|rest| !rest.is_empty() && !rest.chars().any(char::is_whitespace))
 }
 
-/// Keep the focused field's identity and exact value, including whitespace.
-async fn readable_focus<T: ictl_wda::http::Transport>(w: &mut WdaClient<T>) -> Option<(String, String)> {
-    let f = w.focused_field().await.ok()??;
-    if !REPLACEABLE.contains(&f.kind.as_str()) {
-        return None;
-    }
-    let value = w.field_text(&f).await.ok()?;
-    Some((f.id, value))
+/// The focused field before typing: which element it is, its placeholder, and its exact value, whitespace included
+pub(super) struct Focus {
+    field: ictl_wda::client::FocusedField,
+    value: String,
 }
 
-async fn verify_typed<T: ictl_wda::http::Transport>(
-    w: &mut WdaClient<T>,
-    before: Option<&(String, String)>,
-    text: &str,
-) -> Typed {
-    let Some((id, before)) = before else { return Typed::Unknown };
+/// Four requests: the element, its type and placeholder ([`WdaClient::focused_field`]), its value. [`reread`] takes two
+async fn readable_focus<T: ictl_wda::http::Transport>(w: &mut WdaClient<T>) -> Option<Focus> {
+    let field = w.focused_field().await.ok()??;
+    if !REPLACEABLE.contains(&field.kind.as_str()) {
+        return None;
+    }
+    let value = w.field_text(&field).await.ok()?;
+    Some(Focus { field, value })
+}
+
+/// What [`reread`] found
+enum Reread {
+    Value(String),
+    /// Another readable field has focus now
+    Moved,
+    /// No readable field has focus, or WDA didn't answer
+    Unreadable,
+}
+
+/// The field [`readable_focus`] found, once more. Its type and placeholder don't change, so only which element has
+/// focus and its value are asked: two requests instead of four (each about 0.15 s through WDA on an iPad mini 5)
+async fn reread<T: ictl_wda::http::Transport>(w: &mut WdaClient<T>, f: &Focus) -> Reread {
+    match w.active_element().await {
+        Ok(Some(id)) if id == f.field.id => {}
+        // as `readable_focus` judges it: another text field (focus changed) or anything else (can't tell)
+        Ok(Some(_)) => {
+            return match w.focused_field().await {
+                Ok(Some(o)) if REPLACEABLE.contains(&o.kind.as_str()) => Reread::Moved,
+                _ => Reread::Unreadable,
+            };
+        }
+        Ok(None) | Err(_) => return Reread::Unreadable,
+    }
+    w.field_text(&f.field).await.map_or(Reread::Unreadable, Reread::Value)
+}
+
+async fn verify_typed<T: ictl_wda::http::Transport>(w: &mut WdaClient<T>, before: Option<&Focus>, text: &str) -> Typed {
+    let Some(f) = before else { return Typed::Unknown };
+    let before = f.value.as_str();
     let mut reads = Vec::with_capacity(2);
     for attempt in 0..2 {
         if attempt > 0 {
             tokio::time::sleep(Duration::from_millis(300)).await;
         }
-        let Some((now_id, now)) = readable_focus(w).await else { return Typed::Unknown };
-        if now_id != *id {
-            return Typed::FocusChanged;
-        }
+        let now = match reread(w, f).await {
+            Reread::Value(now) => now,
+            Reread::Moved => return Typed::FocusChanged,
+            Reread::Unreadable => return Typed::Unknown,
+        };
         if newly_typed(before, &now, text) {
             return Typed::Ok;
         }
-        if text != text.trim() && newly_typed(before, &now, text.trim()) {
-            // The visible text arrived, but the field cannot confirm the surrounding whitespace.
+        if typed_but_whitespace(before, &now, text) {
+            // The visible text arrived, but the field cannot confirm the whitespace it was sent with.
+            return Typed::Unknown;
+        }
+        if now.contains(text) && (now == before || !now.starts_with(before)) {
+            // Replacing a selection (a search field keeps its last search, selected) can't be told apart from the
+            // text having been there, and reading again can't tell either: answer now. Reading twice more and waiting
+            // in between made typing into Spotlight about 1.8 s slower through WDA (iPad mini 5)
             return Typed::Unknown;
         }
         reads.push(now);
     }
     let Some(rest) = missing_suffix(before, &reads[0], &reads[1], text) else {
-        return if reads[1].contains(text) && (reads[1] == *before || !reads[1].starts_with(before.as_str())) {
-            Typed::Unknown // replacing a selection with its original contents is indistinguishable
-        } else {
-            Typed::Mismatch(reads.pop().unwrap())
-        };
+        return Typed::Mismatch(reads.pop().unwrap());
     };
     for (i, c) in rest.chars().enumerate() {
-        if i > 0 && !w.focused_field().await.ok().flatten().is_some_and(|f| f.id == *id) {
+        if i > 0 && !w.active_element().await.ok().flatten().is_some_and(|id| id == f.field.id) {
             return Typed::FocusChanged;
         }
         if w.keys(&c.to_string()).await.is_err() {
@@ -1021,11 +1071,11 @@ async fn verify_typed<T: ictl_wda::http::Transport>(
         }
         tokio::time::sleep(Duration::from_millis(150)).await;
     }
-    match readable_focus(w).await {
-        Some((now_id, _)) if now_id != *id => Typed::FocusChanged,
-        Some((_, now)) if newly_typed(before, &now, text) => Typed::Fixed(rest.chars().count()),
-        Some((_, now)) => Typed::Mismatch(now),
-        None => Typed::Unknown,
+    match reread(w, f).await {
+        Reread::Moved => Typed::FocusChanged,
+        Reread::Value(now) if newly_typed(before, &now, text) => Typed::Fixed(rest.chars().count()),
+        Reread::Value(now) => Typed::Mismatch(now),
+        Reread::Unreadable => Typed::Unknown,
     }
 }
 
@@ -1048,6 +1098,8 @@ mod tests {
         mangle: fn(&str) -> String,
         /// the field doesn't answer at all (WDA gone)
         gone: bool,
+        /// its text is selected: the next keys replace it (a search field keeps its last search, selected)
+        selected: bool,
         /// requests as `METHOD path`, and the text of every `/wda/keys`
         seen: Vec<String>,
         keys: Vec<String>,
@@ -1063,6 +1115,7 @@ mod tests {
                 drop_next: 0,
                 mangle: str::to_owned,
                 gone: false,
+                selected: false,
                 seen: vec![],
                 keys: vec![],
             }))
@@ -1105,6 +1158,9 @@ mod tests {
                     let typed: String = body["value"].as_array().unwrap().iter().map(|c| c.as_str().unwrap()).collect();
                     f.keys.push(typed.clone());
                     if typed != "\n" {
+                        if std::mem::take(&mut f.selected) {
+                            f.value.clear();
+                        }
                         let keep = typed.chars().count().saturating_sub(std::mem::take(&mut f.drop_next));
                         let typed: String = typed.chars().take(keep).collect();
                         let typed = (f.mangle)(&typed);
@@ -1127,18 +1183,44 @@ mod tests {
 
     #[tokio::test]
     async fn a_single_line_field_never_receives_a_second_return_during_repair() {
-        let f = Fake::new("TextField", "");
-        f.0.lock().unwrap().mangle = |s| s.trim_end().to_owned();
-        let mut w = WdaClient::new(&f);
-        let before = readable_focus(&mut w).await.unwrap();
-        w.keys("hi\n").await.unwrap();
-        assert_eq!(verify_typed(&mut w, Some(&before), "hi\n").await, Typed::Unknown);
-        assert_eq!(f.0.lock().unwrap().keys, ["hi\n"]);
+        // a newline dropped, or turned into a space (Spotlight does that with pasted text)
+        let mangles: [fn(&str) -> String; 2] = [|s| s.trim_end().to_owned(), |s| s.replace('\n', " ")];
+        for mangle in mangles {
+            let f = Fake::new("TextField", "");
+            f.0.lock().unwrap().mangle = mangle;
+            let mut w = WdaClient::new(&f);
+            let before = readable_focus(&mut w).await.unwrap();
+            w.keys("hi\n").await.unwrap();
+            assert_eq!(verify_typed(&mut w, Some(&before), "hi\n").await, Typed::Unknown);
+            assert_eq!(f.0.lock().unwrap().keys, ["hi\n"]);
+        }
 
         let f = Fake::new("TextField", "");
         f.0.lock().unwrap().mangle = |s| s.trim_end().to_owned();
         assert!(replace(&f, "hi\n", false).await.is_err());
         assert_eq!(f.0.lock().unwrap().keys, ["hi\n"]);
+    }
+
+    /// Typing over a selection can't be told apart from the text having been there, and reading again can't tell
+    /// either: one reread of the field already known (which element has focus, its value) answers, with no wait and no
+    /// second read (they made typing into Spotlight about 1.8 s slower through WDA on an iPad mini 5)
+    #[tokio::test]
+    async fn typing_over_a_selection_is_judged_after_one_reread() {
+        for (old, text) in [("设置", "设置"), ("wifi", "设置")] {
+            let f = Fake::new("SearchField", old);
+            f.0.lock().unwrap().selected = true;
+            let mut w = WdaClient::new(&f);
+            let before = readable_focus(&mut w).await.unwrap();
+            w.keys(text).await.unwrap();
+            let asked = f.0.lock().unwrap().seen.len();
+            assert_eq!(verify_typed(&mut w, Some(&before), text).await, Typed::Unknown);
+            let field = f.0.into_inner().unwrap();
+            assert_eq!(field.value, text);
+            assert_eq!(
+                field.seen[asked..],
+                ["GET /session/S/element/active", "GET /session/S/element/F/attribute/value"]
+            );
+        }
     }
 
     #[tokio::test]

@@ -999,16 +999,21 @@ impl<T: Transport> WdaClient<T> {
 
     /// The element with keyboard focus (`GET /element/active`); None when no element has it
     pub async fn focused_field(&mut self) -> Result<Option<FocusedField>> {
-        let v = match self.in_session("GET", "/element/active", None, DEFAULT_TIMEOUT).await {
-            Ok(v) => v,
-            Err(WdaError::Remote { kind, .. }) if kind.contains("no such element") => return Ok(None),
-            Err(e) => return Err(e),
-        };
-        let Some(id) = element_id(&v) else { return Ok(None) };
+        let Some(id) = self.active_element().await? else { return Ok(None) };
         let kind = self.attribute(&id, "type").await?;
         let kind = kind.strip_prefix("XCUIElementType").unwrap_or(&kind).to_owned();
         let placeholder = self.attribute(&id, "placeholderValue").await?;
         Ok(Some(FocusedField { id, kind, placeholder }))
+    }
+
+    /// The id of the element with keyboard focus (`GET /element/active`), one request; nothing has focus: `None`.
+    /// Rereading a field already known ([`Self::focused_field`] takes three) only needs this and its value
+    pub async fn active_element(&mut self) -> Result<Option<String>> {
+        match self.in_session("GET", "/element/active", None, DEFAULT_TIMEOUT).await {
+            Ok(v) => Ok(element_id(&v)),
+            Err(WdaError::Remote { kind, .. }) if kind.contains("no such element") => Ok(None),
+            Err(e) => Err(e),
+        }
     }
 
     /// An attribute of an element as text; a missing one (`null`) reads as empty

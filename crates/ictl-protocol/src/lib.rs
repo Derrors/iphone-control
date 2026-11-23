@@ -55,7 +55,7 @@ pub const MAX_SEARCH_SCROLLS: u32 = 15;
 pub const MAX_SCROLL_ROWS: usize = 150;
 
 /// Bounds and matching rules for a standalone list scan.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ScrollCollect {
     pub down: bool,
@@ -63,6 +63,10 @@ pub struct ScrollCollect {
     pub filter: String,
     pub until: String,
     pub limit: usize,
+    /// Where to swipe across, in points from the left; the middle of the screen if not given. An iPad split view
+    /// scrolls the column swiped in: the sidebar needs an x inside it
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub x: Option<f64>,
 }
 
 fn is_zero(v: &f64) -> bool {

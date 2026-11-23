@@ -68,16 +68,18 @@ enum Pasted {
     Missing,
 }
 
-/// Compare only the original focused field's raw value, preserving whitespace.
+/// Compare only the original focused field's raw value, preserving whitespace. Whitespace the field changed (a
+/// single-line field turns a pasted newline into a space) makes it [`Pasted::Trimmed`], not missing
 fn paste_seen(now: Option<&str>, old: &str, wanted: &str) -> Pasted {
     let Some(now) = now else { return Pasted::Unreadable };
+    let shown = input::bare(wanted);
     if input::newly_typed(old, now, wanted) {
         Pasted::Typed
-    } else if wanted != wanted.trim() && input::newly_typed(old, now, wanted.trim()) {
+    } else if input::typed_but_whitespace(old, now, wanted) {
         Pasted::Trimmed
-    } else if now == old && !wanted.trim().is_empty() && old.contains(wanted.trim()) {
+    } else if now == old && !shown.is_empty() && input::bare(old).contains(&shown) {
         Pasted::Unchanged
-    } else if now.contains(wanted) && !now.starts_with(old) {
+    } else if !shown.is_empty() && input::bare(now).contains(&shown) && !now.starts_with(old) {
         Pasted::Unreadable // a selection may have been replaced
     } else {
         Pasted::Missing
@@ -1272,6 +1274,11 @@ mod tests {
         assert_eq!(paste_seen(None, "", "设置"), Pasted::Unreadable);
         assert_eq!(paste_seen(Some("北京"), "", "北京\n"), Pasted::Trimmed);
         assert_eq!(paste_seen(Some("北京"), "", " 北京 "), Pasted::Trimmed);
+        // what Spotlight's single-line field makes of a pasted newline (iPhone 15 Pro Max, iOS 27.2.1): a space
+        assert_eq!(paste_seen(Some("北京 "), "", "北京\n"), Pasted::Trimmed);
+        assert_eq!(paste_seen(Some("北京 上海"), "", "北京\n上海"), Pasted::Trimmed);
+        assert_eq!(paste_seen(Some("abc def "), "abc", " def\n"), Pasted::Trimmed);
+        assert_eq!(paste_seen(Some("北京 "), "设置", "北京\n"), Pasted::Unreadable);
         assert_eq!(paste_seen(Some("北京"), "北京", "北京 "), Pasted::Unchanged);
         assert_eq!(paste_seen(Some(""), "", " "), Pasted::Missing);
     }

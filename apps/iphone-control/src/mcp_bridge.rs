@@ -147,7 +147,11 @@ impl Link {
                         };
                         json!({"jsonrpc": "2.0", "id": id, "error": {
                             "code": -32603,
-                            "message": format!("{}. {hint}", e.message.trim_end_matches(['.', '。'])),
+                            "message": ictl_l10n::trf!(
+                                "{}。{hint}",
+                                "{}. {hint}",
+                                e.message.trim_end_matches(['.', '。'])
+                            ),
                             "data": {"delivery": e.delivery, "stage": "transport"}
                         }})
                         .to_string()
@@ -242,7 +246,12 @@ impl Link {
 /// Notifications and client responses have no corresponding JSON-RPC response.
 fn missing_reply(id: Option<&Value>) -> Result<(), ForwardError> {
     if id.is_some() {
-        Err(String::from("viewer closed the response without a matching JSON-RPC reply").into())
+        Err(ictl_l10n::tr!(
+            "控制台关闭了响应，没有对应的 JSON-RPC 回复",
+            "viewer closed the response without a matching JSON-RPC reply"
+        )
+        .to_owned()
+        .into())
     } else {
         Ok(())
     }

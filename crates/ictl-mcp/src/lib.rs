@@ -333,7 +333,8 @@ WDA 不可用时会说明哪些功能受影响(读元素、按名字点击、启
                 "until": {"type": "string", "description": ictl_l10n::tr!("可见元素的文字、标识或值包含这段文字时停止，不区分大小写", "stop at a visible label, name or value containing this text, case-insensitive")},
                 "filter": {"type": "string", "description": ictl_l10n::tr!("只收集类型或文字包含它的行。与 until 独立", "collect rows whose type or text contains this string, independent of until")},
                 "limit": {"type": "integer", "minimum": 1, "maximum": protocol::MAX_SCROLL_ROWS, "default": protocol::MAX_SCROLL_ROWS, "description": ictl_l10n::tr!("最多收集几行", "stop after collecting this many rows")},
-                "max_scrolls": {"type": "integer", "minimum": 1, "maximum": protocol::MAX_SEARCH_SCROLLS, "default": 8, "description": ictl_l10n::tr!("最多滚动几次", "maximum number of scrolls")}
+                "max_scrolls": {"type": "integer", "minimum": 1, "maximum": protocol::MAX_SEARCH_SCROLLS, "default": 8, "description": ictl_l10n::tr!("最多滚动几次", "maximum number of scrolls")},
+                "x": {"type": "number", "minimum": 0, "description": ictl_l10n::tr!("在哪个横坐标上下滑（点），默认屏幕正中。iPad 分栏界面（设置、邮件）只滚动手指所在的那一栏：要滚左栏，给左栏里的横坐标", "where to swipe across, in points from the left; the middle of the screen by default. An iPad split view (Settings, Mail) scrolls only the column swiped in: for the sidebar, an x inside it")}
             }), &[]),
             acting(ictl_l10n::tr!("滚动收集文字", "Scroll and collect text"), false, false),
         ),
@@ -718,12 +719,17 @@ pub fn to_request(name: &str, args: &Map<String, Value>) -> Result<Request, Stri
                 ));
             }
             let scroll = checked_scroll(&a.s_or("scroll", "down")?, a.u_or("max_scrolls", 8)?)?;
+            let x = a.opt_f("x")?;
+            if x.is_some_and(|x| !x.is_finite() || x < 0.0) {
+                return Err(ictl_l10n::tr!("x 不能是负数", "x can't be negative").into());
+            }
             Request::ScrollCollect(protocol::ScrollCollect {
                 down: scroll.down,
                 max_scrolls: scroll.max,
                 until: a.s_or("until", "")?,
                 filter: a.s_or("filter", "")?,
                 limit,
+                x,
             })
         }
         "iphone_tap" => Request::Tap { x: a.f("x")?, y: a.f("y")?, count: a.count("count")? },
@@ -1823,8 +1829,12 @@ mod tests {
                 filter: "Cell".into(),
                 until: "General".into(),
                 limit: 3,
+                x: None,
             })
         );
+        // an iPad split view's sidebar
+        let Request::ScrollCollect(scan) = req(json!({"x": 160})).unwrap() else { panic!() };
+        assert_eq!(scan.x, Some(160.0));
         assert!(r.is_device_action());
         assert!(req(json!({})).is_ok());
         for bad in [
@@ -1834,6 +1844,8 @@ mod tests {
             json!({"limit":0}),
             json!({"limit":151}),
             json!({"limit":2.5}),
+            json!({"x":-1}),
+            json!({"x":"sidebar"}),
             json!({"max_scroll":2}),
         ] {
             assert!(req(bad.clone()).is_err(), "{bad}");

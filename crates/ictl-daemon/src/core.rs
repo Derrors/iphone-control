@@ -1526,6 +1526,9 @@ fn check_request(req: &Request) -> Result<(), String> {
         {
             return Err(ictl_l10n::tr!("超出滚动或行数上限", "scroll or row limit is out of range").into());
         }
+        Request::ScrollCollect(scan) if scan.x.is_some_and(|x| !x.is_finite() || x < 0.0) => {
+            return Err(ictl_l10n::tr!("x 不能是负数", "x can't be negative").into());
+        }
         Request::WebEval { expression, timeout_ms, .. }
             if expression.trim().is_empty() || *timeout_ms > MAX_WEB_EVAL_MS =>
         {
@@ -1597,6 +1600,7 @@ pub(crate) mod tests {
             filter: String::new(),
             until: String::new(),
             limit: 1,
+            x: None,
         };
         let req = Request::ScrollCollect(scan.clone());
         assert!(check_request(&req).is_ok());
@@ -1610,6 +1614,11 @@ pub(crate) mod tests {
             scan.max_scrolls = max;
             scan.limit = limit;
             assert!(check_request(&Request::ScrollCollect(scan.clone())).is_err());
+        }
+        (scan.max_scrolls, scan.limit) = (1, 1);
+        for (x, ok) in [(Some(160.0), true), (Some(0.0), true), (Some(-1.0), false), (Some(f64::NAN), false)] {
+            scan.x = x;
+            assert_eq!(check_request(&Request::ScrollCollect(scan.clone())).is_ok(), ok, "{x:?}");
         }
     }
 

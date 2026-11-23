@@ -6,6 +6,8 @@
 
 ## [Unreleased]
 
+## [0.2.11] - 2026-11-23
+
 ### 修复
 
 - `iphone-control login` 和设置向导不再在核对密码之前就收到苹果的 HTTP 403。发给苹果的 `X-MMe-Client-Info` 头被转成了小写（`mac os x`），苹果现在会拒绝这样的请求（#171）。
@@ -348,7 +350,8 @@
 - `setup`、`doctor`、`status`、`mcp-config`。
 - Docker 镜像和预编译的 Linux 二进制。
 
-[Unreleased]: https://github.com/Derrors/iphone-control/compare/v0.2.10...HEAD
+[Unreleased]: https://github.com/Derrors/iphone-control/compare/v0.2.11...HEAD
+[0.2.11]: https://github.com/Derrors/iphone-control/compare/v0.2.10...v0.2.11
 [0.2.10]: https://github.com/Derrors/iphone-control/compare/v0.2.9...v0.2.10
 [0.2.9]: https://github.com/Derrors/iphone-control/compare/v0.2.8...v0.2.9
 [0.2.8]: https://github.com/Derrors/iphone-control/compare/v0.2.7...v0.2.8

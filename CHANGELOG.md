@@ -6,6 +6,8 @@ What changed in each release, one line per change. Versions follow [Semantic Ver
 
 ## [Unreleased]
 
+## [0.2.11] - 2026-11-23
+
 ### Fixes
 
 - `iphone-control login` and the setup wizard no longer fail with HTTP 403 from Apple before the password is checked. The `X-MMe-Client-Info` header sent to Apple was lowercased (`mac os x`), which Apple now rejects (#171).
@@ -348,7 +350,8 @@ First public release.
 - `setup`, `doctor`, `status` and `mcp-config`.
 - Docker image and prebuilt Linux binaries.
 
-[Unreleased]: https://github.com/Derrors/iphone-control/compare/v0.2.10...HEAD
+[Unreleased]: https://github.com/Derrors/iphone-control/compare/v0.2.11...HEAD
+[0.2.11]: https://github.com/Derrors/iphone-control/compare/v0.2.10...v0.2.11
 [0.2.10]: https://github.com/Derrors/iphone-control/compare/v0.2.9...v0.2.10
 [0.2.9]: https://github.com/Derrors/iphone-control/compare/v0.2.8...v0.2.9
 [0.2.8]: https://github.com/Derrors/iphone-control/compare/v0.2.7...v0.2.8

@@ -372,6 +372,31 @@ mod tests {
         let default = AccountDir { dir: PathBuf::from("/tmp/x"), anisette_url: None };
         assert_eq!(default.anisette().anisette_url_v3(), "https://mac-ani.jkcoxson.com");
     }
+
+    /// 取 anisette 头只有名字不分大小写，值要原样发：`X-MMe-Client-Info` 里的 `Mac OS X` 变成小写，
+    /// 苹果 GSA 直接回 403，登录失败（#171）。plume_core 在 vendor 里、不在 workspace，测试放在这里才会在 CI 跑
+    #[test]
+    fn anisette_header_values_keep_their_case() {
+        use plume_core::auth::anisette_data::AnisetteData;
+        let anisette = AnisetteData {
+            base_headers: std::collections::HashMap::from([
+                (
+                    "X-Mme-Client-Info".to_owned(),
+                    "<MacBookPro13,3> <Mac OS X;10.12.6;16G29> <com.apple.AuthKit/1 (com.apple.dt.Xcode/3594.4.19)>"
+                        .to_owned(),
+                ),
+                ("X-Apple-Locale".to_owned(), "en_US".to_owned()),
+            ]),
+            generated_at: SystemTime::now(),
+            config: AnisetteConfiguration::default(),
+        };
+        assert_eq!(
+            anisette.get_header("x-mme-client-info").unwrap(),
+            "<MacBookPro13,3> <Mac OS X;10.12.6;16G29> <com.apple.AuthKit/1 (com.apple.akd/1.0)>"
+        );
+        assert_eq!(anisette.get_header("x-apple-locale").unwrap(), "en_US");
+        assert_eq!(anisette.get_header("X-Apple-Locale").unwrap(), "en_US");
+    }
     use std::time::{Duration, SystemTime};
 
     #[test]

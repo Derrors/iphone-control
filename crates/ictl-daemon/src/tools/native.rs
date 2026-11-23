@@ -58,6 +58,8 @@ enum PasteTarget<'a> {
 enum Pasted {
     /// A field changed and now holds the text
     Typed,
+    /// The field shows the insertion with surrounding whitespace removed.
+    Trimmed,
     /// A field held the text before and still does, unchanged: the paste replaced the same text, or didn't go in
     Unchanged,
     /// A password field is on screen: its value can't be read
@@ -71,7 +73,9 @@ fn paste_seen(now: Option<&str>, old: &str, wanted: &str) -> Pasted {
     let Some(now) = now else { return Pasted::Unreadable };
     if input::newly_typed(old, now, wanted) {
         Pasted::Typed
-    } else if now == old && old.contains(wanted) {
+    } else if wanted != wanted.trim() && input::newly_typed(old, now, wanted.trim()) {
+        Pasted::Trimmed
+    } else if now == old && !wanted.trim().is_empty() && old.contains(wanted.trim()) {
         Pasted::Unchanged
     } else if now.contains(wanted) && !now.starts_with(old) {
         Pasted::Unreadable // a selection may have been replaced
@@ -645,7 +649,7 @@ impl Daemon {
             }
             match typed {
                 Pasted::Typed => *field_verified = Some(true),
-                Pasted::Unreadable => {
+                Pasted::Trimmed | Pasted::Unreadable => {
                     note += ictl_l10n::tr!(
                         "(无法核对输入框内容，请查看屏幕确认)",
                         " (field contents could not be verified; inspect the screen)"
@@ -805,9 +809,7 @@ impl Daemon {
             let typed = loop {
                 let screen = self.ax_snapshot(g, AX_WAIT, true).await.map_err(Error::readback)?;
                 let tree = self.snapshot_tree(g, &screen).await.map_err(Error::readback)?;
-                if answered.is_none()
-                    && let Some((x, y)) = paste_allow(&tree)
-                {
+                if let Some((x, y)) = paste_allow(&tree) {
                     self.native_tap(g, x, y).await.map_err(|e| Error::action(Delivery::Sent, FailureStage::Send, e))?;
                     answered = Some(Instant::now());
                     tokio::time::sleep(Duration::from_millis(300)).await;
@@ -824,7 +826,7 @@ impl Daemon {
                     PasteTarget::Replace(object) => replacement_seen(&screen, object, text),
                 };
                 match seen {
-                    Pasted::Typed => break seen,
+                    Pasted::Typed | Pasted::Trimmed => break seen,
                     // only once the prompt was answered: before that, the paste hasn't gone in yet
                     Pasted::Unchanged if answered.is_some_and(|t| t.elapsed() >= PASTE_SAME_SETTLE) => break seen,
                     // never asked: iOS asks for every paste of ours, so nothing may have been pasted at all
@@ -1268,5 +1270,9 @@ mod tests {
         assert_eq!(paste_seen(Some("时钟"), "时钟", "设置"), Pasted::Missing);
         assert_eq!(paste_seen(Some("11"), "1", "11"), Pasted::Missing);
         assert_eq!(paste_seen(None, "", "设置"), Pasted::Unreadable);
+        assert_eq!(paste_seen(Some("北京"), "", "北京\n"), Pasted::Trimmed);
+        assert_eq!(paste_seen(Some("北京"), "", " 北京 "), Pasted::Trimmed);
+        assert_eq!(paste_seen(Some("北京"), "北京", "北京 "), Pasted::Unchanged);
+        assert_eq!(paste_seen(Some(""), "", " "), Pasted::Missing);
     }
 }

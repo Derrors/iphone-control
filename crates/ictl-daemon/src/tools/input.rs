@@ -266,7 +266,7 @@ impl Daemon {
 
     /// 边滑边找的一次慢滑（[`search_stroke`]），等停下后读一棵新树
     pub(super) async fn search_scroll(&self, g: &mut Inner, down: bool) -> crate::error::Result<Tree> {
-        let screen = self.screen(g).await?;
+        let screen = self.screen(g).await.map_err(Error::preflight)?;
         let (from, to) = search_stroke(screen.width, screen.height, down);
         Box::pin(self.swipe(g, Stroke { from, to, seconds: SEARCH_SWIPE_SECONDS, hold: 0.0 }, None, false)).await?;
         self.tree(g, Duration::ZERO).await
@@ -288,6 +288,13 @@ impl Daemon {
         let mut back = 0;
         let mut at_end = false;
         if let Some(s) = scroll {
+            let failed_scroll = |e: Error, completed: u32| {
+                let message = ictl_l10n::trf!(
+                    "查找目标时滚动失败（此前已完成 {completed} 次滑动），尚未点击目标；请查看屏幕：{e}",
+                    "Scroll search failed after {completed} completed swipes; the target was not tapped. Inspect the screen: {e}"
+                );
+                e.with_message(message)
+            };
             let mut partial_at = None;
             loop {
                 if reachable_exact(&tree, text, index) {
@@ -299,7 +306,7 @@ impl Daemon {
                 if at_end || scrolled >= s.max {
                     break;
                 }
-                let next = Box::pin(self.search_scroll(g, s.down)).await.map_err(Error::preflight)?;
+                let next = Box::pin(self.search_scroll(g, s.down)).await.map_err(|e| failed_scroll(e, scrolled))?;
                 scrolled += 1;
                 at_end = next.close_to(&tree, STILL_TOLERANCE);
                 tree = next;
@@ -310,7 +317,9 @@ impl Daemon {
                 && let Some(k) = partial_at
             {
                 while back <= scrolled - k && !reachable(&tree, text, index) {
-                    tree = Box::pin(self.search_scroll(g, !s.down)).await.map_err(Error::preflight)?;
+                    tree = Box::pin(self.search_scroll(g, !s.down))
+                        .await
+                        .map_err(|e| failed_scroll(e, scrolled + back))?;
                     back += 1;
                 }
             }
@@ -848,7 +857,7 @@ pub(super) async fn wda_replace<T: ictl_wda::http::Transport>(
         }
         // the app dropped the last characters (as typing sees, `verify_typed`): typed again one by one
         if now != text
-            && let Some(rest) = text.strip_prefix(now.as_str()).filter(|r| !r.is_empty() && !now.is_empty())
+            && let Some(rest) = repairable_suffix(text, &now)
         {
             for c in rest.chars() {
                 w.keys(&c.to_string()).await.map_err(unread)?;
@@ -939,18 +948,31 @@ pub(super) fn newly_typed(before: &str, now: &str, text: &str) -> bool {
 
 /// Repair only an observed append of the exact leading characters, stable across two fresh reads.
 pub(super) fn missing_suffix<'a>(before: &str, first: &str, second: &str, text: &'a str) -> Option<&'a str> {
+    if !text.is_empty() && text.bytes().all(|b| b.is_ascii_digit()) {
+        let strip_spaces = |s: &str| s.split_whitespace().collect::<String>();
+        let first = strip_spaces(first);
+        let second = strip_spaces(second);
+        if first != second {
+            return None;
+        }
+        return repairable_suffix(text, second.strip_prefix(&strip_spaces(before))?);
+    }
     if first != second {
         return None;
     }
-    let added = second.strip_prefix(before)?;
-    if added.is_empty() {
+    repairable_suffix(text, second.strip_prefix(before)?)
+}
+
+/// A missing Return or Tab can mean the first one already submitted or moved focus.
+fn repairable_suffix<'a>(text: &'a str, observed: &str) -> Option<&'a str> {
+    if observed.is_empty() || text.chars().any(char::is_control) {
         return None;
     }
-    text.strip_prefix(added).filter(|rest| !rest.is_empty())
+    text.strip_prefix(observed).filter(|rest| !rest.is_empty() && !rest.chars().any(char::is_whitespace))
 }
 
 /// Keep the focused field's identity and exact value, including whitespace.
-async fn readable_focus(w: &mut WdaClient<DeviceTransport>) -> Option<(String, String)> {
+async fn readable_focus<T: ictl_wda::http::Transport>(w: &mut WdaClient<T>) -> Option<(String, String)> {
     let f = w.focused_field().await.ok()??;
     if !REPLACEABLE.contains(&f.kind.as_str()) {
         return None;
@@ -959,7 +981,11 @@ async fn readable_focus(w: &mut WdaClient<DeviceTransport>) -> Option<(String, S
     Some((f.id, value))
 }
 
-async fn verify_typed(w: &mut WdaClient<DeviceTransport>, before: Option<&(String, String)>, text: &str) -> Typed {
+async fn verify_typed<T: ictl_wda::http::Transport>(
+    w: &mut WdaClient<T>,
+    before: Option<&(String, String)>,
+    text: &str,
+) -> Typed {
     let Some((id, before)) = before else { return Typed::Unknown };
     let mut reads = Vec::with_capacity(2);
     for attempt in 0..2 {
@@ -972,6 +998,10 @@ async fn verify_typed(w: &mut WdaClient<DeviceTransport>, before: Option<&(Strin
         }
         if newly_typed(before, &now, text) {
             return Typed::Ok;
+        }
+        if text != text.trim() && newly_typed(before, &now, text.trim()) {
+            // The visible text arrived, but the field cannot confirm the surrounding whitespace.
+            return Typed::Unknown;
         }
         reads.push(now);
     }
@@ -1093,6 +1123,22 @@ mod tests {
             WdaReplace::Untouched(e) => format!("untouched: {e}"),
             WdaReplace::Failed(e) => e.to_string(),
         })
+    }
+
+    #[tokio::test]
+    async fn a_single_line_field_never_receives_a_second_return_during_repair() {
+        let f = Fake::new("TextField", "");
+        f.0.lock().unwrap().mangle = |s| s.trim_end().to_owned();
+        let mut w = WdaClient::new(&f);
+        let before = readable_focus(&mut w).await.unwrap();
+        w.keys("hi\n").await.unwrap();
+        assert_eq!(verify_typed(&mut w, Some(&before), "hi\n").await, Typed::Unknown);
+        assert_eq!(f.0.lock().unwrap().keys, ["hi\n"]);
+
+        let f = Fake::new("TextField", "");
+        f.0.lock().unwrap().mangle = |s| s.trim_end().to_owned();
+        assert!(replace(&f, "hi\n", false).await.is_err());
+        assert_eq!(f.0.lock().unwrap().keys, ["hi\n"]);
     }
 
     #[tokio::test]

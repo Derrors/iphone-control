@@ -36,8 +36,10 @@ impl Daemon {
             }
             let end = previous.as_ref().is_some_and(|p| unchanged_viewport(p, &tree));
             if let Some(reason) = stop_reason(matched.is_some(), rows.len() == limit, end, scrolls == scan.max_scrolls)
+                .or_else(|| (!may_continue()).then_some(ScrollStop::Interrupted))
             {
                 let why = match reason {
+                    ScrollStop::Interrupted => ictl_l10n::tr!("滚动已中断", "collection interrupted"),
                     ScrollStop::Found => ictl_l10n::tr!("找到目标", "found the target"),
                     ScrollStop::End => {
                         ictl_l10n::tr!("滚动后可见内容没有变化", "visible content stayed the same after scrolling")
@@ -66,14 +68,6 @@ impl Daemon {
                 }
                 text += &self.snapshot_note(g);
                 return Ok((text, Data::ScrollCollection { stop_reason: reason, scrolls, rows, matched }));
-            }
-            // Let a gesture finish. A cancellation, pause or takeover prevents the next one.
-            if !may_continue() {
-                return Err(ictl_l10n::trf!(
-                    "滚动已中断，已滑动 {scrolls} 次",
-                    "Collection interrupted after {scrolls} scrolls"
-                )
-                .into());
             }
             previous = Some(tree);
             tree = Box::pin(self.search_scroll(g, scan.down)).await?;

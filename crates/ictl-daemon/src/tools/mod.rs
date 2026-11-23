@@ -680,5 +680,11 @@ mod tests {
         assert_eq!(missing_suffix("abc故宫", "abc故宫", "abc故宫", "故宫博物院"), None);
         assert_eq!(missing_suffix("", "故", "故宫", "故宫博物院"), None);
         assert_eq!(missing_suffix("abc", "def故宫", "def故宫", "故宫博物院"), None);
+        for text in ["hi\n", "hi\t", "hi ", "hi\nmore"] {
+            assert_eq!(missing_suffix("", "hi", "hi", text), None);
+        }
+        assert_eq!(missing_suffix("", "138 0013 8", "13800138", "13800138000"), Some("000"));
+        assert_eq!(missing_suffix("138 00", "138 0013 8", "13800138", "138000"), Some("000"));
+        assert_eq!(missing_suffix("", "138 00", "138001", "13800138"), None);
     }
 }

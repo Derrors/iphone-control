@@ -428,7 +428,7 @@ impl<T: Transport> WdaClient<T> {
         let body = body.map(|b| b.to_string().into_bytes());
         let (status, raw) = self.transport.send(method, path, body, timeout).await.map_err(|e| match e.kind() {
             std::io::ErrorKind::TimedOut => WdaError::Timeout(e.to_string()),
-            crate::http::WRITE_FAILED => WdaError::Write(e.to_string()),
+            crate::http::WRITE_FAILED if acts(method, path) => WdaError::Write(e.to_string()),
             crate::http::AFTER_SENT => WdaError::Interrupted(e.to_string()),
             _ => WdaError::Unavailable(e.to_string()),
         })?;
@@ -1523,7 +1523,12 @@ mod tests {
         }
         let kind = |k| async move { WdaClient::new(Fails(k)).active_app().await };
         assert!(matches!(kind(crate::http::AFTER_SENT).await, Err(WdaError::Interrupted(_))));
-        assert!(matches!(kind(crate::http::WRITE_FAILED).await, Err(WdaError::Write(_))));
+        assert!(matches!(kind(crate::http::WRITE_FAILED).await, Err(WdaError::Unavailable(_))));
+        let client = WdaClient::new(Fails(crate::http::WRITE_FAILED));
+        for (path, acts) in [("/session/1/element", false), ("/session/1/wda/keys", true)] {
+            let error = client.send("POST", path, None, Duration::from_secs(1)).await.unwrap_err();
+            assert!(if acts { matches!(error, WdaError::Write(_)) } else { matches!(error, WdaError::Unavailable(_)) });
+        }
         assert!(matches!(kind(std::io::ErrorKind::TimedOut).await, Err(WdaError::Timeout(_))));
         assert!(matches!(kind(std::io::ErrorKind::NotConnected).await, Err(WdaError::Unavailable(_))));
         // 应答了但不是 JSON：WDA 收到了请求

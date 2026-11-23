@@ -167,3 +167,4 @@
 | 161 | 等待文字消失的请求被当成等待出现 | `state: "disappeared"` 等待可读界面不再匹配，读取失败或未读完整不算成功 | 单测 `disappearance_requires_a_readable_complete_screen_without_the_target` + 真机脚本 `scenarios.py editing` |
 | 162 | 经 WDA 控制（iOS 26 及以前，或 `ICTL_IOS_BACKEND=wda`）时 `replace: true` 直接拒绝，调用方只能在光标处输入，得到 `wifi 蓝牙` | 经 WDA 取聚焦元素（`/element/active`），只接受普通可读输入框（密码框拒绝），WDA `clear` 后按键输入，读回同一个元素的全文一致才按回车，结尾丢字补一次；空输入框读出占位文字算空；清空后再失败时明说原文已删掉；WDA 在动手前就连不上时，原生控制可用则改走原生 | 单测 `replaces_the_focused_field_then_presses_return`、`a_mismatch_is_refused_without_return`、`focused_field_reads_its_type_and_placeholder` + 真机脚本 `scenarios.py editing`（WDA 设备） |
 | 163 | Viewer 已收到输入请求，返回结果前连接中断，客户端可能一直等待或重复输入 | 客户端结束该调用，报告投递状态未知，提示先查看手机 | 单测 `interrupted_tool_reply_reports_unknown_instead_of_hanging_or_retrying` |
+| 164 | WDA 输入以换行结尾，单行框只显示正文，补字可能再按一次回车 | 核对同一输入框，不自动重发回车、制表符或无法确认的空白；数字框格式化后仍可补齐缺失的数字 | 单测 `a_single_line_field_never_receives_a_second_return_during_repair`、`input_repair_requires_a_stable_new_prefix` |

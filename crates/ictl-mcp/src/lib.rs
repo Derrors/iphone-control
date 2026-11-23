@@ -1137,6 +1137,23 @@ fn input_error(
     result
 }
 
+fn add_delivery_hint(message: &mut String, delivery: Delivery) {
+    let lower = message.to_ascii_lowercase();
+    let already_guided =
+        ["inspect the screen", "take a screenshot", "check with a screenshot", "查看屏幕", "截图确认", "截图看看"]
+            .iter()
+            .any(|hint| lower.contains(hint));
+    message.truncate(message.trim_end().trim_end_matches(['.', '。']).len());
+    message.push_str(match delivery {
+        Delivery::NotSent => ictl_l10n::tr!("。目标输入未发出。", ". The requested input was not sent."),
+        Delivery::Unknown => ictl_l10n::tr!("。输入可能已送达。", ". Input may have reached the phone."),
+        Delivery::Sent => ictl_l10n::tr!("。输入已发出。", ". Input was sent."),
+    });
+    if !already_guided && delivery != Delivery::NotSent {
+        message.push_str(ictl_l10n::tr!("请先查看屏幕再决定下一步。", " Inspect the screen before retrying."));
+    }
+}
+
 struct InputResult<'a> {
     delivery: Delivery,
     stage: Option<FailureStage>,
@@ -1311,17 +1328,7 @@ impl McpServer {
         }
         Ok(match (resp, input) {
             (Response::Error { mut message, .. }, Some(input)) => {
-                message += match input.delivery {
-                    Delivery::NotSent => ictl_l10n::tr!("。目标输入未发出。", ". The requested input was not sent."),
-                    Delivery::Unknown => ictl_l10n::tr!(
-                        "。输入可能已送达，请先查看屏幕再决定下一步。",
-                        ". Input may have reached the phone. Inspect the screen before retrying."
-                    ),
-                    Delivery::Sent => ictl_l10n::tr!(
-                        "。输入已发出，请查看屏幕再决定下一步。",
-                        ". Input was sent. Inspect the screen before retrying."
-                    ),
-                };
+                add_delivery_hint(&mut message, input.delivery);
                 self.finish(message, true, then, false, false, Some(input)).await
             }
             (Response::Text { text, outcome, .. }, input) if req.is_device_action() => {
@@ -1689,6 +1696,20 @@ mod tests {
 
     /// With IPHONE_CONTROL_LANG=en nothing the agent reads up front is Chinese: instructions, tool
     /// descriptions, titles and parameter docs (only examples of Chinese input may stay)
+    #[test]
+    fn delivery_hints_do_not_repeat_punctuation_or_existing_screen_guidance() {
+        ictl_l10n::with_lang(ictl_l10n::Lang::En, || {
+            let mut message = "Focus changed. Inspect the screen.".to_owned();
+            add_delivery_hint(&mut message, Delivery::Sent);
+            assert_eq!(message, "Focus changed. Inspect the screen. Input was sent.");
+        });
+        ictl_l10n::with_lang(ictl_l10n::Lang::Zh, || {
+            let mut message = "请求超时，请先截图确认。".to_owned();
+            add_delivery_hint(&mut message, Delivery::Unknown);
+            assert_eq!(message, "请求超时，请先截图确认。输入可能已送达。");
+        });
+    }
+
     #[test]
     fn english_tool_definitions_have_no_chinese() {
         use ictl_l10n::{Lang, with_lang};

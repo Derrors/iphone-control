@@ -124,6 +124,9 @@ pub enum DeviceError {
     /// 调用方给的参数不合法（例如 HID 不能输入的字符）。与连接无关，不需要重建会话
     #[error("{0}")]
     InvalidInput(String),
+    /// Preparing the pasteboard failed before the paste shortcut was sent.
+    #[error("{0}")]
+    PasteNotSent(String),
     /// 手机拒绝启动 App（[`Tunnel::launch_in_background`] 回了 NSError）。签名证书被吊销时就是这样：
     /// 手机日志里 amfid 报 `The identity used to sign the executable is no longer valid`
     #[error("{}", ictl_l10n::trf!("手机拒绝启动（NSError code {0}）", "The phone refused to launch it (NSError code {0})", .0))]
@@ -782,7 +785,7 @@ impl Tunnel {
         })
         .await
         .map_err(|e| {
-            DeviceError::Idevice(ictl_l10n::trf!(
+            DeviceError::PasteNotSent(ictl_l10n::trf!(
                 "文字写不进剪贴板，没有粘贴：{e}",
                 "The text couldn't be put on the pasteboard; nothing was pasted: {e}"
             ))
@@ -792,7 +795,7 @@ impl Tunnel {
             if let Some(items) = &saved {
                 write_back(adapter, handshake, items).await;
             }
-            return Err(DeviceError::Idevice(
+            return Err(DeviceError::PasteNotSent(
                 ictl_l10n::tr!(
                     "文字写进剪贴板后读回来对不上，没有粘贴",
                     "The text read back from the pasteboard didn't match what was written; nothing was pasted"

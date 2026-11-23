@@ -428,6 +428,7 @@ impl<T: Transport> WdaClient<T> {
         let body = body.map(|b| b.to_string().into_bytes());
         let (status, raw) = self.transport.send(method, path, body, timeout).await.map_err(|e| match e.kind() {
             std::io::ErrorKind::TimedOut => WdaError::Timeout(e.to_string()),
+            crate::http::WRITE_FAILED => WdaError::Write(e.to_string()),
             crate::http::AFTER_SENT => WdaError::Interrupted(e.to_string()),
             _ => WdaError::Unavailable(e.to_string()),
         })?;
@@ -507,12 +508,15 @@ impl<T: Transport> WdaClient<T> {
         timeout: Duration,
     ) -> Result<Value> {
         for attempt in 0..2 {
-            let sid = self.session_id().await?;
-            let abandon = acts(method, path).then_some(sid.as_str());
+            let input = acts(method, path);
+            let sid = self.session_id().await.map_err(|e| if input { e.before_input() } else { e })?;
+            let abandon = input.then_some(sid.as_str());
             let r =
                 self.call_or_abandon(method, &format!("/session/{sid}{path}"), body.clone(), timeout, abandon).await;
             match r {
-                Err(WdaError::Remote { kind, .. }) if attempt == 0 && kind.contains("session") => self.session = None,
+                Err(WdaError::Remote { kind, .. }) if attempt == 0 && kind == "invalid session id" => {
+                    self.session = None
+                }
                 Err(e) if abandon.is_some() && e.no_answer() => {
                     self.forget_session();
                     return Err(e);
@@ -908,8 +912,8 @@ impl<T: Transport> WdaClient<T> {
     /// only to change them again right after would cost two round trips
     /// `hold_ms` > 0 holds the finger still at `from` first ([`drag_steps`])
     pub async fn swipe_into_polling(&mut self, from: (f64, f64), to: (f64, f64), hold_ms: u64, ms: u64) -> Result<()> {
-        self.baseline().await?;
-        self.set_idle_settings(IdleSettings::NO_COOL_OFF).await?;
+        self.baseline().await.map_err(WdaError::before_input)?;
+        self.set_idle_settings(IdleSettings::NO_COOL_OFF).await.map_err(WdaError::before_input)?;
         let r = self.actions(&drag_steps(from, to, hold_ms, ms)).await;
         if r.is_err() {
             self.end_polling().await;
@@ -957,8 +961,8 @@ impl<T: Transport> WdaClient<T> {
     }
 
     async fn quick_actions(&mut self, body: Value, during: IdleSettings) -> Result<()> {
-        let baseline = self.baseline().await?;
-        self.set_idle_settings(during).await?;
+        let baseline = self.baseline().await.map_err(WdaError::before_input)?;
+        self.set_idle_settings(during).await.map_err(WdaError::before_input)?;
         let r = self.post("/actions", body).await.map(drop);
         if let Err(e) = self.set_idle_settings(baseline).await {
             tracing::warn!(
@@ -1519,6 +1523,7 @@ mod tests {
         }
         let kind = |k| async move { WdaClient::new(Fails(k)).active_app().await };
         assert!(matches!(kind(crate::http::AFTER_SENT).await, Err(WdaError::Interrupted(_))));
+        assert!(matches!(kind(crate::http::WRITE_FAILED).await, Err(WdaError::Write(_))));
         assert!(matches!(kind(std::io::ErrorKind::TimedOut).await, Err(WdaError::Timeout(_))));
         assert!(matches!(kind(std::io::ErrorKind::NotConnected).await, Err(WdaError::Unavailable(_))));
         // 应答了但不是 JSON：WDA 收到了请求

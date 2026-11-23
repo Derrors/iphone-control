@@ -7,7 +7,7 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use ictl_protocol::{self as protocol, MAX_TAP_COUNT, Request, Response};
+use ictl_protocol::{self as protocol, Delivery, FailureStage, MAX_TAP_COUNT, Request, Response};
 use rmcp::{
     ErrorData, RoleServer, ServerHandler, ServiceExt,
     model::{
@@ -137,7 +137,7 @@ pub fn dev_tools_enabled() -> bool {
         .is_ok_and(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
 }
 
-/// The tools this server lists: the 17 standard ones, plus the developer tools when switched on
+/// The tools this server lists: the 18 standard ones, plus the developer tools when switched on
 pub fn tools() -> Vec<Tool> {
     tools_with(dev_tools_enabled())
 }
@@ -270,7 +270,7 @@ fn dev_tools() -> Vec<Tool> {
     ]
 }
 
-/// 17 个工具的定义（toolkit 的 13 个 + iphone_wait_for、iphone_batch、iphone_list_devices、iphone_select_device）。
+/// 18 个工具的定义（toolkit 的 13 个 + iphone_wait_for、iphone_batch、iphone_list_devices、iphone_select_device、iphone_scroll_collect）。
 /// 描述可以改写，但工具名、参数、默认返回不改（docs/decisions.md D10）
 fn standard_tools() -> Vec<Tool> {
     let t = |name: &'static str, desc: String, s: Map<String, Value>, a: ToolAnnotations| {
@@ -324,6 +324,19 @@ WDA 不可用时会说明哪些功能受影响(读元素、按名字点击、启
             looking(ictl_l10n::tr!("列出界面元素", "List UI elements")),
         )
         .with_raw_output_schema(std::sync::Arc::new(elements_output_schema())),
+        t(
+            "iphone_scroll_collect",
+            ictl_l10n::tr!("收集连续几屏里可见的文字行，合并相邻屏的重叠内容。可用 until 找到文字就停在当前屏。只滑动，不点击。返回 rows、scrolls、stop_reason，以及找到时当前屏上的 matched。",
+                "Collect visible text rows across overlapping viewports. Use until to stop with a matching element on screen. Only scrolls, never taps. Returns rows, scrolls, stop_reason and the matched element on the final viewport.").into(),
+            schema(json!({
+                "scroll": {"type": "string", "enum": ["down", "up"], "default": "down", "description": ictl_l10n::tr!("往下或往上找", "look further down or up the list")},
+                "until": {"type": "string", "description": ictl_l10n::tr!("可见元素的文字、标识或值包含这段文字时停止，不区分大小写", "stop at a visible label, name or value containing this text, case-insensitive")},
+                "filter": {"type": "string", "description": ictl_l10n::tr!("只收集类型或文字包含它的行。与 until 独立", "collect rows whose type or text contains this string, independent of until")},
+                "limit": {"type": "integer", "minimum": 1, "maximum": protocol::MAX_SCROLL_ROWS, "default": protocol::MAX_SCROLL_ROWS, "description": ictl_l10n::tr!("最多收集几行", "stop after collecting this many rows")},
+                "max_scrolls": {"type": "integer", "minimum": 1, "maximum": protocol::MAX_SEARCH_SCROLLS, "default": 8, "description": ictl_l10n::tr!("最多滚动几次", "maximum number of scrolls")}
+            }), &[]),
+            acting(ictl_l10n::tr!("滚动收集文字", "Scroll and collect text"), false, false),
+        ),
         t(
             "iphone_tap",
             action_desc(
@@ -651,7 +664,11 @@ fn scroll_search(a: &Args) -> Result<Option<ictl_protocol::ScrollSearch>, String
     if dir.is_empty() {
         return Ok(None);
     }
-    let down = match dir.as_str() {
+    checked_scroll(&dir, max).map(Some)
+}
+
+fn checked_scroll(dir: &str, max: usize) -> Result<protocol::ScrollSearch, String> {
+    let down = match dir {
         "down" => true,
         "up" => false,
         _ => return Err(ictl_l10n::trf!("参数 scroll 要是 down 或 up", "parameter scroll must be down or up")),
@@ -663,7 +680,7 @@ fn scroll_search(a: &Args) -> Result<Option<ictl_protocol::ScrollSearch>, String
             ictl_protocol::MAX_SEARCH_SCROLLS
         ));
     }
-    Ok(Some(ictl_protocol::ScrollSearch { down, max: max as u32 }))
+    Ok(protocol::ScrollSearch { down, max: max as u32 })
 }
 
 pub fn to_request(name: &str, args: &Map<String, Value>) -> Result<Request, String> {
@@ -691,6 +708,24 @@ pub fn to_request(name: &str, args: &Map<String, Value>) -> Result<Request, Stri
             max_age_ms: 0,
             keep_locked: false,
         },
+        "iphone_scroll_collect" => {
+            let limit = a.u_or("limit", protocol::MAX_SCROLL_ROWS)?;
+            if !(1..=protocol::MAX_SCROLL_ROWS).contains(&limit) {
+                return Err(ictl_l10n::trf!(
+                    "limit 要在 1 到 {} 之间",
+                    "limit must be between 1 and {}",
+                    protocol::MAX_SCROLL_ROWS
+                ));
+            }
+            let scroll = checked_scroll(&a.s_or("scroll", "down")?, a.u_or("max_scrolls", 8)?)?;
+            Request::ScrollCollect(protocol::ScrollCollect {
+                down: scroll.down,
+                max_scrolls: scroll.max,
+                until: a.s_or("until", "")?,
+                filter: a.s_or("filter", "")?,
+                limit,
+            })
+        }
         "iphone_tap" => Request::Tap { x: a.f("x")?, y: a.f("y")?, count: a.count("count")? },
         "iphone_tap_element" => Request::TapElement {
             text: a.s("text")?,
@@ -997,6 +1032,7 @@ pub fn wants_alert_check(req: &Request) -> bool {
         | Request::Status
         | Request::ScreenStream
         | Request::Screenshot { .. }
+        | Request::ScrollCollect(_)
         | Request::ListElements { .. }
         | Request::ListApps { .. }
         | Request::Settle { .. }
@@ -1026,7 +1062,7 @@ pub fn wants_alert_check(req: &Request) -> bool {
     }
 }
 
-/// The shape of [`with_elements`]' structured content, declared as `iphone_list_elements`' output schema (action
+/// The shape of [`with_element_data`]' structured content, declared as `iphone_list_elements`' output schema (action
 /// tools give it with then=elements, but not always: a declared schema would oblige every result to carry it).
 /// `matched_count` and `truncated` are left out by a daemon older than them
 fn elements_output_schema() -> Map<String, Value> {
@@ -1051,8 +1087,8 @@ fn elements_output_schema() -> Map<String, Value> {
     v.as_object().cloned().unwrap_or_default()
 }
 
-fn with_elements(mut result: CallToolResult, data: Option<protocol::Data>) -> CallToolResult {
-    if let Some(data @ protocol::Data::Elements { .. }) = data {
+fn with_element_data(mut result: CallToolResult, data: Option<protocol::Data>) -> CallToolResult {
+    if let Some(data @ (protocol::Data::Elements { .. } | protocol::Data::ScrollCollection { .. })) = data {
         result.structured_content = serde_json::to_value(data).ok();
     }
     result
@@ -1062,13 +1098,50 @@ fn with_elements(mut result: CallToolResult, data: Option<protocol::Data>) -> Ca
 pub fn to_result(r: Response) -> CallToolResult {
     match r {
         Response::Text { text, data, .. } => {
-            with_elements(CallToolResult::success(vec![ContentBlock::text(text)]), data)
+            with_element_data(CallToolResult::success(vec![ContentBlock::text(text)]), data)
         }
         Response::Image { jpeg_base64, caption } => {
             CallToolResult::success(vec![ContentBlock::image(jpeg_base64, "image/jpeg"), ContentBlock::text(caption)])
         }
         Response::Error { message, .. } => CallToolResult::error(vec![ContentBlock::text(message)]),
     }
+}
+
+/// Tools that expose delivery of their primary tap, gesture, or text input.
+pub fn reports_input(name: &str) -> bool {
+    matches!(name, "iphone_tap" | "iphone_tap_element" | "iphone_type_text" | "iphone_swipe" | "iphone_long_press")
+}
+
+fn input_error(
+    message: impl Into<String>,
+    name: &str,
+    delivery: Delivery,
+    stage: Option<FailureStage>,
+) -> CallToolResult {
+    let mut message = message.into();
+    if !reports_input(name) {
+        return to_result(Response::error(message));
+    }
+    if delivery == Delivery::Unknown {
+        message += ictl_l10n::tr!(
+            "。输入可能已送达，请先查看屏幕再决定下一步。",
+            ". Input may have reached the phone. Inspect the screen before retrying."
+        );
+    }
+    let mut result = to_result(Response::error(message));
+    result.structured_content =
+        Some(json!({"delivery": delivery, "readback": {"screen": "not_requested", "settle": "not_requested"}}));
+    if let Some(stage) = stage {
+        result.structured_content.as_mut().unwrap()["stage"] = json!(stage);
+    }
+    result
+}
+
+struct InputResult<'a> {
+    delivery: Delivery,
+    stage: Option<FailureStage>,
+    field: Option<&'static str>,
+    udid: Option<&'a str>,
 }
 
 #[derive(Debug, Clone)]
@@ -1142,6 +1215,7 @@ impl McpServer {
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, ErrorData> {
         // working for a task: the daemon holds or refuses the calls; announce each so the page shows the tool
+        let name = request.name.clone();
         let args = request.arguments.clone().unwrap_or_default();
         let work = async {
             if request.name == task::CONFIRM_TOOL {
@@ -1164,12 +1238,14 @@ impl McpServer {
                     }
                     r
                 }
-                task::Before::Refuse(m) => Ok(CallToolResult::error(vec![ContentBlock::text(m)]).into()),
+                task::Before::Refuse(m) => {
+                    Ok(input_error(m, &name, Delivery::NotSent, Some(FailureStage::Preflight)).into())
+                }
             }
         };
         tokio::select! {
             r = work => r,
-            _ = context.ct.cancelled() => Ok(to_result(Response::error(ictl_l10n::tr!("调用已取消", "Call cancelled"))).into()),
+            _ = context.ct.cancelled() => Ok(input_error(ictl_l10n::tr!("调用已取消", "Call cancelled"), &name, Delivery::Unknown, None).into()),
         }
     }
 
@@ -1180,20 +1256,21 @@ impl McpServer {
     ) -> Result<CallToolResponse, ErrorData> {
         // rmcp 收到取消通知只是置这个令牌，不会中止处理：自己停下。丢掉进行中的调用会断开到守护进程的连接，
         // 守护进程那边还在排队的请求随之放弃（protocol::call），iphone_batch 剩下的步骤也不再执行
+        let name = request.name.clone();
         tokio::select! {
             r = self.call_tool_inner(request) => r,
-            _ = context.ct.cancelled() => Ok(to_result(Response::error(ictl_l10n::tr!("调用已取消", "Call cancelled"))).into()),
+            _ = context.ct.cancelled() => Ok(input_error(ictl_l10n::tr!("调用已取消", "Call cancelled"), &name, Delivery::Unknown, None).into()),
         }
     }
 
     async fn call_tool_inner(&self, request: CallToolRequestParams) -> Result<CallToolResponse, ErrorData> {
         let args = request.arguments.unwrap_or_default();
         if let Err(e) = check_args(&request.name, &args, &[], true) {
-            return Ok(to_result(Response::error(e)).into());
+            return Ok(input_error(e, &request.name, Delivery::NotSent, Some(FailureStage::Preflight)).into());
         }
         let then = match parse_then(&args) {
             Ok(t) => t,
-            Err(e) => return Ok(to_result(Response::error(e)).into()),
+            Err(e) => return Ok(input_error(e, &request.name, Delivery::NotSent, Some(FailureStage::Preflight)).into()),
         };
         if request.name == "iphone_batch" {
             return Ok(self.batch(&args, then).await.into());
@@ -1208,19 +1285,53 @@ impl McpServer {
         }
         let req = match to_request(&request.name, &args) {
             Ok(r) => r,
-            Err(e) => return Ok(to_result(Response::error(e)).into()),
+            Err(e) => return Ok(input_error(e, &request.name, Delivery::NotSent, Some(FailureStage::Preflight)).into()),
         };
         // then 只对操作类工具有意义；看界面的工具本身就是返回界面
-        let resp = self.call(&req).await;
-        Ok(match resp {
-            Response::Text { text, outcome, .. } if req.is_device_action() => {
+        // A single input and its readbacks must all apply to the same device. Tasks already pin theirs.
+        let udid = if req.reports_delivery() && !protocol::in_task() {
+            match self.controlled_udid().await {
+                Ok(id) => Some(id),
+                Err((message, stage)) => {
+                    return Ok(input_error(message, &request.name, Delivery::NotSent, Some(stage)).into());
+                }
+            }
+        } else {
+            None
+        };
+        let resp = self.call_on(&req, udid.as_deref()).await;
+        let input = req.reports_delivery().then(|| InputResult {
+            delivery: resp.delivery(&req),
+            stage: resp.failure_stage(),
+            field: resp.field_readback(&req),
+            udid: udid.as_deref(),
+        });
+        if matches!(req, Request::ScrollCollect(_)) {
+            return Ok(to_result(resp).into());
+        }
+        Ok(match (resp, input) {
+            (Response::Error { mut message, .. }, Some(input)) => {
+                message += match input.delivery {
+                    Delivery::NotSent => ictl_l10n::tr!("。目标输入未发出。", ". The requested input was not sent."),
+                    Delivery::Unknown => ictl_l10n::tr!(
+                        "。输入可能已送达，请先查看屏幕再决定下一步。",
+                        ". Input may have reached the phone. Inspect the screen before retrying."
+                    ),
+                    Delivery::Sent => ictl_l10n::tr!(
+                        "。输入已发出，请查看屏幕再决定下一步。",
+                        ". Input was sent. Inspect the screen before retrying."
+                    ),
+                };
+                self.finish(message, true, then, false, false, Some(input)).await
+            }
+            (Response::Text { text, outcome, .. }, input) if req.is_device_action() => {
                 // 结果里已经说了有弹窗（启动 App 被挡）就不再查
                 let check = wants_alert_check(&req) && !protocol::alert_reported(&text, outcome);
                 // 按名字没点到东西：界面没动过，不用等它稳定，直接给界面（按名字点击刚读过的树）
                 let settle = !tap_missed(&text, outcome);
-                self.finish(text, false, then, check, settle).await
+                self.finish(text, false, then, check, settle, input).await
             }
-            resp => to_result(resp),
+            (resp, _) => to_result(resp),
         }
         .into())
     }
@@ -1236,12 +1347,18 @@ impl McpServer {
         let wait = if matches!(req, Request::InstallApp { .. }) { 660 } else { 150 };
         // in a task the daemon holds calls while the user has paused or taken over, as long as that takes
         let wait = (!protocol::in_task()).then(|| Duration::from_secs(wait));
-        protocol::call_expecting(&self.socket, req, wait, expect_udid).await.unwrap_or_else(|e| {
-            Response::error(ictl_l10n::trf!(
-                "连不上守护进程({}):{e};确认守护进程在运行(iphone-control status)",
-                "Can't reach the daemon ({}): {e}; make sure the daemon is running (iphone-control status)",
-                self.socket.display()
-            ))
+        protocol::exchange_on(&self.socket, req, wait, expect_udid, None, None).await.unwrap_or_else(|e| {
+            let reason = e.source;
+            let message = if e.failure.stage == FailureStage::Connect {
+                ictl_l10n::trf!(
+                    "连不上守护进程({}):{reason};确认守护进程在运行(iphone-control status)",
+                    "Can't reach the daemon ({}): {reason}; make sure the daemon is running (iphone-control status)",
+                    self.socket.display()
+                )
+            } else {
+                ictl_l10n::trf!("守护进程请求失败: {reason}", "Daemon request failed: {reason}")
+            };
+            Response::error(message).with_failure(e.failure.delivery, e.failure.stage)
         })
     }
 
@@ -1254,75 +1371,122 @@ impl McpServer {
         opts: ThenOpts,
         alert_check: bool,
         settle: bool,
+        input: Option<InputResult<'_>>,
     ) -> CallToolResult {
-        let done = |blocks: Vec<ContentBlock>| {
-            if failed { CallToolResult::error(blocks) } else { CallToolResult::success(blocks) }
-        };
-        let then = opts.then;
-        if then == Then::None {
-            if alert_check && let Response::Text { text: t, .. } = self.call(&Request::AlertCheck).await {
-                text += &t;
-            }
-            return done(vec![ContentBlock::text(text)]);
-        }
-        if settle {
-            match self.call(&Request::Settle { max_ms: opts.settle_ms }).await {
-                Response::Text { text: t, .. } => text += &format!("\n{t}"),
-                Response::Error { message, .. } => {
-                    text += &ictl_l10n::trf!(
-                        "\n(等界面稳定失败:{message})",
-                        "\n(waiting for the screen to settle failed: {message})"
-                    )
+        let expect_udid = input.as_ref().and_then(|i| i.udid);
+        let mut elements = None;
+        let mut readback = json!({"settle": "not_requested", "screen": "not_requested"});
+        let mut image = None;
+        if opts.then == Then::None {
+            if alert_check {
+                match self.call_on(&Request::AlertCheck, expect_udid).await {
+                    Response::Text { text: t, .. } => {
+                        text += &t;
+                        readback["alert"] = "ok".into();
+                    }
+                    Response::Error { message, .. } if input.is_some() => {
+                        text += &ictl_l10n::trf!("\n(检查弹窗失败:{message})", "\n(alert check failed: {message})");
+                        readback["alert"] = "failed".into();
+                    }
+                    _ => readback["alert"] = "failed".into(),
                 }
-                Response::Image { .. } => {}
             }
-        }
-        match then {
-            Then::Elements(filter) => {
-                // Settle 刚读过元素树，直接用它
-                match self
-                    .call(&Request::ListElements {
-                        filter,
-                        limit: THEN_LIMIT,
-                        max_age_ms: THEN_SETTLE_MS,
-                        keep_locked: false,
-                    })
-                    .await
-                {
-                    Response::Text { text: t, data, .. } => {
-                        text +=
-                            &ictl_l10n::trf!("\n--- 操作后的界面 ---\n{t}", "\n--- Screen after the action ---\n{t}");
-                        let result = done(vec![ContentBlock::text(text)]);
-                        return with_elements(result, data);
+        } else {
+            if settle {
+                match self.call_on(&Request::Settle { max_ms: opts.settle_ms }, expect_udid).await {
+                    Response::Text { text: t, .. } => {
+                        text += &format!("\n{t}");
+                        readback["settle"] = "ok".into();
                     }
                     Response::Error { message, .. } => {
-                        text += &ictl_l10n::trf!("\n(读界面失败:{message})", "\n(reading the screen failed: {message})")
+                        text += &ictl_l10n::trf!(
+                            "\n(等界面稳定失败:{message})",
+                            "\n(waiting for the screen to settle failed: {message})"
+                        );
+                        readback["settle"] = "failed".into();
                     }
-                    Response::Image { .. } => {}
+                    _ => readback["settle"] = "failed".into(),
                 }
-                done(vec![ContentBlock::text(text)])
             }
-            Then::Screenshot(region) => match self.call(&Request::Screenshot { region }).await {
-                Response::Image { jpeg_base64, caption } => done(vec![
-                    ContentBlock::text(text),
-                    ContentBlock::image(jpeg_base64, "image/jpeg"),
-                    ContentBlock::text(caption),
-                ]),
-                Response::Error { message, .. } => done(vec![ContentBlock::text(ictl_l10n::trf!(
-                    "{text}\n(截图失败:{message})",
-                    "{text}\n(screenshot failed: {message})"
-                ))]),
-                Response::Text { text: t, .. } => done(vec![ContentBlock::text(format!("{text}\n{t}"))]),
-            },
-            Then::None => unreachable!("上面已返回"),
+            let read = match opts.then {
+                Then::Elements(filter) => {
+                    Request::ListElements { filter, limit: THEN_LIMIT, max_age_ms: THEN_SETTLE_MS, keep_locked: false }
+                }
+                Then::Screenshot(region) => Request::Screenshot { region },
+                Then::None => unreachable!(),
+            };
+            let screen = match self.call_on(&read, expect_udid).await {
+                Response::Text { text: t, data, .. } if matches!(read, Request::ListElements { .. }) => {
+                    elements = data;
+                    text += &ictl_l10n::trf!("\n--- 操作后的界面 ---\n{t}", "\n--- Screen after the action ---\n{t}");
+                    "ok"
+                }
+                Response::Image { jpeg_base64, caption } if matches!(read, Request::Screenshot { .. }) => {
+                    image = Some((jpeg_base64, caption));
+                    "ok"
+                }
+                Response::Error { message, .. } => {
+                    text += &ictl_l10n::trf!("\n(读界面失败:{message})", "\n(reading the screen failed: {message})");
+                    "failed"
+                }
+                _ => {
+                    text += ictl_l10n::tr!("\n(未收到请求的界面)", "\n(The requested screen was not returned.)");
+                    "failed"
+                }
+            };
+            readback["screen"] = screen.into();
         }
+        let read_failed = readback.as_object().unwrap().values().any(|v| v == "failed");
+        if input.is_some() && read_failed && !failed {
+            text += ictl_l10n::tr!(
+                "\n请单独读取屏幕确认结果，避免重复之前的输入。",
+                "\nRead the screen separately before repeating any input."
+            );
+        }
+        let mut blocks = vec![ContentBlock::text(text)];
+        if let Some((jpeg, caption)) = image {
+            blocks.push(ContentBlock::image(jpeg, "image/jpeg"));
+            blocks.push(ContentBlock::text(caption));
+        }
+        let mut result = if failed { CallToolResult::error(blocks) } else { CallToolResult::success(blocks) };
+        result = with_element_data(result, elements);
+        if let Some(input) = input {
+            let data = result.structured_content.get_or_insert_with(|| json!({}));
+            data["delivery"] = json!(input.delivery);
+            data["readback"] = readback;
+            if let Some(field) = input.field {
+                data["readback"]["field"] = field.into();
+            }
+            if let Some(stage) = input.stage.or_else(|| (read_failed && !failed).then_some(FailureStage::Readback)) {
+                data["stage"] = json!(stage);
+            }
+        }
+        result
     }
 
-    /// 守护进程正在控制的设备的 UDID；读不到（没接设备、连不上）返回 None
-    async fn controlled_udid(&self) -> Option<String> {
-        let Response::Text { text, .. } = self.call(&Request::Daemon).await else { return None };
-        let v: Value = serde_json::from_str(&text).ok()?;
-        v["device"]["udid"].as_str().filter(|u| !u.is_empty()).map(str::to_owned)
+    /// The cached daemon snapshot includes device.udid on older daemons as well.
+    async fn controlled_udid(&self) -> Result<String, (String, FailureStage)> {
+        match self.call(&Request::Daemon).await {
+            Response::Text { text, .. } => {
+                if let Ok(snapshot) = serde_json::from_str::<Value>(&text)
+                    && let Some(id) = snapshot["device"]["udid"].as_str().filter(|id| !id.is_empty())
+                {
+                    return Ok(id.to_owned());
+                }
+            }
+            Response::Error { message, failure, .. } => {
+                return Err((message, failure.map_or(FailureStage::Preflight, |f| f.stage)));
+            }
+            Response::Image { .. } => {}
+        }
+        Err((
+            ictl_l10n::tr!(
+                "无法确定当前控制的设备，操作未执行",
+                "Cannot identify the controlled device; action not sent"
+            )
+            .into(),
+            FailureStage::Preflight,
+        ))
     }
 
     /// 按顺序执行；某一步出错就停，说明是第几步、后面几步没执行。出错时也按 then 附上当前界面，方便看停在哪
@@ -1333,7 +1497,7 @@ impl McpServer {
         };
         let total = steps.len();
         // 每一步都要求还是开始时控制的那台：自动选设备时拔掉它会改控另一台，剩下的步骤不能落到那台上
-        let udid = self.controlled_udid().await;
+        let udid = self.controlled_udid().await.ok();
         let mut lines = Vec::new();
         // 最后一步是不是需要查弹窗的操作
         let mut check = false;
@@ -1357,7 +1521,7 @@ impl McpServer {
                                 total - n
                             ));
                         }
-                        return self.finish(lines.join("\n"), true, then, false, true).await;
+                        return self.finish(lines.join("\n"), true, then, false, true, None).await;
                     }
                     Response::Text { text, outcome, .. } => {
                         check = wants_alert_check(&req) && !protocol::alert_reported(&text, outcome);
@@ -1373,12 +1537,12 @@ impl McpServer {
                                 total - n
                             ));
                         }
-                        return self.finish(lines.join("\n"), true, then, true, true).await;
+                        return self.finish(lines.join("\n"), true, then, true, true, None).await;
                     }
                 },
             }
         }
-        self.finish(lines.join("\n"), false, then, check, true).await
+        self.finish(lines.join("\n"), false, then, check, true, None).await
     }
 }
 
@@ -1395,6 +1559,128 @@ mod tests {
 
     fn args(v: Value) -> Map<String, Value> {
         v.as_object().cloned().unwrap()
+    }
+
+    #[tokio::test]
+    async fn input_delivery_is_independent_of_field_and_screen_readback() {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+        let socket = PathBuf::from(format!("/tmp/ictl-single-input-{}.sock", std::process::id()));
+        let server = McpServer { socket: socket.clone(), task: false };
+        let call = |name, args: Value| {
+            let req = CallToolRequestParams::new(name).with_arguments(args.as_object().unwrap().clone());
+            let server = &server;
+            async move {
+                let CallToolResponse::Complete(result) = server.call_tool_inner(req).await.unwrap() else { panic!() };
+                result
+            }
+        };
+        let tap = json!({"x": 1, "y": 2});
+        let unavailable = call("iphone_tap", tap.clone()).await;
+        let data = unavailable.structured_content.unwrap();
+        assert_eq!(data["delivery"], "not_sent");
+        assert_eq!(data["stage"], "connect");
+
+        let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+        let exchanges = [
+            ("tap", None), // request reached daemon, reply lost
+            ("tap", Some(Response::text("Tapped"))),
+            ("settle", Some(Response::text("Settled"))),
+            ("screenshot", Some(Response::error("controlled device changed to phone-B"))),
+            ("tap", Some(Response::text("Tapped"))),
+            ("settle", Some(Response::error("lost settle"))),
+            (
+                "list_elements",
+                Some(Response::text_data(
+                    "items",
+                    Default::default(),
+                    Some(protocol::Data::Elements { elements: vec![], matched_count: Some(3), truncated: Some(true) }),
+                )),
+            ),
+            (
+                "type_text",
+                Some(Response::text_with(
+                    "Typed",
+                    protocol::Outcome { field_verified: Some(false), ..Default::default() },
+                )),
+            ),
+            ("alert_check", Some(Response::text(""))),
+            ("type_text", Some(Response::error("field mismatch").with_failure(Delivery::Sent, FailureStage::Readback))),
+            (
+                "tap_element",
+                Some(Response::text_with("No match", protocol::Outcome { tapped_nothing: true, ..Default::default() })),
+            ),
+            ("alert_check", Some(Response::text(""))),
+        ];
+        let daemon = async {
+            let mut first_snapshot = true;
+            for (op, reply) in exchanges {
+                let mut peer = loop {
+                    let (mut peer, _) = listener.accept().await.unwrap();
+                    let mut line = String::new();
+                    BufReader::new(&mut peer).read_line(&mut line).await.unwrap();
+                    let request: Value = serde_json::from_str(&line).unwrap();
+                    if request["op"] == "daemon" {
+                        // Old daemon snapshot: only the controlled device's UDID is needed.
+                        let snapshot = if std::mem::take(&mut first_snapshot) {
+                            Response::text(r#"{"device":null}"#)
+                        } else {
+                            Response::text(r#"{"device":{"udid":"phone-A"}}"#)
+                        };
+                        peer.write_all(format!("{}\n", json!(snapshot)).as_bytes()).await.unwrap();
+                        continue;
+                    }
+                    assert_eq!(request["op"], op);
+                    assert_eq!(request[protocol::EXPECT_UDID], "phone-A", "{request}");
+                    break peer;
+                };
+                if let Some(reply) = reply {
+                    peer.write_all(format!("{}\n", json!(reply)).as_bytes()).await.unwrap();
+                }
+            }
+        };
+        let actions = async {
+            let missing = call("iphone_tap", tap.clone()).await;
+            let data = missing.structured_content.unwrap();
+            assert_eq!(data["delivery"], "not_sent");
+            assert_eq!(data["stage"], "preflight");
+
+            let lost = call("iphone_tap", tap).await;
+            assert_eq!(lost.is_error, Some(true));
+            let data = lost.structured_content.unwrap();
+            assert_eq!(data["delivery"], "unknown");
+            assert_eq!(data["stage"], "reply");
+
+            let tapped = call("iphone_tap", json!({"x":1,"y":2,"then":"screenshot"})).await;
+            assert_ne!(tapped.is_error, Some(true));
+            let data = tapped.structured_content.unwrap();
+            assert_eq!(data["delivery"], "sent");
+            assert_eq!(data["stage"], "readback");
+            assert_eq!(data["readback"], json!({"settle":"ok", "screen":"failed"}));
+
+            let listed = call("iphone_tap", json!({"x":1,"y":2,"then":"elements"})).await;
+            assert_ne!(listed.is_error, Some(true));
+            let data = listed.structured_content.unwrap();
+            assert_eq!(data["delivery"], "sent");
+            assert_eq!(data["readback"], json!({"settle":"failed", "screen":"ok"}));
+            assert_eq!(data["matched_count"], 3);
+            assert_eq!(data["truncated"], true);
+
+            let text = json!({"text":"x"});
+            let typed = call("iphone_type_text", text.clone()).await.structured_content.unwrap();
+            assert_eq!(typed["delivery"], "sent");
+            assert_eq!(typed["readback"]["field"], "unverified");
+            let mismatch = call("iphone_type_text", text.clone()).await;
+            assert_eq!(mismatch.is_error, Some(true));
+            let data = mismatch.structured_content.unwrap();
+            assert_eq!(data["delivery"], "sent");
+            assert_eq!(data["readback"]["field"], "failed");
+
+            let missed = call("iphone_tap_element", text).await;
+            assert_ne!(missed.is_error, Some(true));
+            assert_eq!(missed.structured_content.unwrap()["delivery"], "not_sent");
+        };
+        tokio::time::timeout(Duration::from_secs(4), async { tokio::join!(daemon, actions) }).await.unwrap();
+        std::fs::remove_file(socket).unwrap();
     }
 
     fn has_cjk(s: &str) -> bool {
@@ -1500,6 +1786,59 @@ mod tests {
     }
 
     #[test]
+    fn scroll_collection_is_bounded_and_changes_the_viewport() {
+        let req = |v| {
+            let args = args(v);
+            check_args("iphone_scroll_collect", &args, &[], true)?;
+            to_request("iphone_scroll_collect", &args)
+        };
+        let r =
+            req(json!({"scroll": "up", "max_scrolls": 1, "filter": "Cell", "until": "General", "limit": 3})).unwrap();
+        assert_eq!(
+            r,
+            Request::ScrollCollect(protocol::ScrollCollect {
+                down: false,
+                max_scrolls: 1,
+                filter: "Cell".into(),
+                until: "General".into(),
+                limit: 3,
+            })
+        );
+        assert!(r.is_device_action());
+        assert!(req(json!({})).is_ok());
+        for bad in [
+            json!({"scroll":"left"}),
+            json!({"max_scrolls":0}),
+            json!({"max_scrolls":16}),
+            json!({"limit":0}),
+            json!({"limit":151}),
+            json!({"limit":2.5}),
+            json!({"max_scroll":2}),
+        ] {
+            assert!(req(bad.clone()).is_err(), "{bad}");
+        }
+        let result = to_result(Response::text_data(
+            "row limit reached",
+            Default::default(),
+            Some(protocol::Data::ScrollCollection {
+                stop_reason: protocol::ScrollStop::Limit,
+                scrolls: 2,
+                rows: vec![protocol::ScrollRow {
+                    kind: "Cell".into(),
+                    label: "One".into(),
+                    name: "".into(),
+                    value: "".into(),
+                }],
+                matched: None,
+            }),
+        ));
+        let data = result.structured_content.unwrap();
+        assert_eq!(data["stop_reason"], "limit");
+        assert_eq!(data["rows"][0]["label"], "One");
+        assert!(data["matched"].is_null());
+    }
+
+    #[test]
     fn alert_check_after_actions_but_not_buttons_or_reads() {
         assert!(wants_alert_check(&Request::Swipe { from: (0.0, 0.0), to: (1.0, 1.0), seconds: 0.3, hold: 0.0 }));
         assert!(wants_alert_check(&Request::LaunchApp { app: "微信".into() }));
@@ -1511,14 +1850,15 @@ mod tests {
     #[test]
     fn toolkit_tools_plus_wait_for_batch_and_devices() {
         let names: Vec<_> = tools().iter().map(|t| t.name.to_string()).collect();
-        assert_eq!(names.len(), 17);
+        assert_eq!(names.len(), 18);
         // the developer tools only with IPHONE_CONTROL_DEV_TOOLS
-        let dev: Vec<_> = tools_with(true).iter().skip(17).map(|t| t.name.to_string()).collect();
+        let dev: Vec<_> = tools_with(true).iter().skip(18).map(|t| t.name.to_string()).collect();
         assert_eq!(dev, DEV_TOOLS);
-        assert_eq!(tools_with(false).len(), 17);
+        assert_eq!(tools_with(false).len(), 18);
         for n in [
             "iphone_status",
             "iphone_screenshot",
+            "iphone_scroll_collect",
             "iphone_tap_element",
             "iphone_open_url",
             "iphone_list_devices",

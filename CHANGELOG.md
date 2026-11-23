@@ -6,6 +6,11 @@ What changed in each release, one line per change. Versions follow [Semantic Ver
 
 ## [Unreleased]
 
+### New
+
+- Agents can read across several screens of a list and stop at a matching row without tapping it.
+- Tap, swipe and text input results now distinguish a sent input from one that never went out or whose delivery is uncertain.
+
 ## [0.2.10] - 2026-11-22
 
 ### Upgrade notes

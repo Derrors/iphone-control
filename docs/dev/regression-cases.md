@@ -51,7 +51,7 @@
 | 45 | WDA 在横屏时就绪，记下的是横屏尺寸，之后 HID 换算错 | state.json 只存竖放尺寸和对应的 UDID，换算时再按当前方向转 | 真机（iOS 27，横屏下启动 WDA，再让它掉线后点击） |
 | 46 | 浏览器里的其他网页向 `viewer` 发请求，借它操作手机 | 操作要求 `Origin` 是页面本身、内容类型是 JSON；`Host` 必须是回环地址 | 单测（`actions_need_own_origin_and_json`） |
 | 47 | `viewer` 开着时 `select` 到别的设备，点击落到用户没在看的手机上 | 每个操作带启动时的 UDID，守护进程控制的不是这台就拒绝 | 单测（`request_for_another_device_is_refused`）+ 真机（`viewer` 开着时 `select` 另一台，再点击） |
-| 48 | 不需要开发者工具的 agent 多读工具说明，或没开时也能调用 | 开关关闭时工具列表还是 17 个，调用这些工具报错并说明要设 `IPHONE_CONTROL_DEV_TOOLS=1` | 单测（工具列表：`toolkit_tools_plus_wait_for_batch_and_devices`）；调用被拒：代码审查（`call_tool` 里的判断，还没有单测） |
+| 48 | 不需要开发者工具的 agent 多读工具说明，或没开时也能调用 | 开关关闭时工具列表有 18 个，调用这些工具报错并说明要设 `IPHONE_CONTROL_DEV_TOOLS=1` | 单测（工具列表：`toolkit_tools_plus_wait_for_batch_and_devices`）；调用被拒：代码审查（`call_tool` 里的判断，还没有单测） |
 | 49 | os_log 开着 Debug 时手机上每个进程都产生 Debug 消息（约 650 行/秒），手势变慢、失败 | 只要默认、Error、Fault 级别（约 80 行/秒） | 真机（`iphone_app_logs` 采集时跑回归脚本默认步骤，和不采集时对比耗时） |
 | 50 | 日志采集的缓冲把内存撑大（全部进程，每秒几十行） | 行数和总量都封顶（20,000 行、8 MB），单行截断，结果说明最早一行是多久前 | 单测（`buffer_is_bounded_by_size`） |
 | 51 | 每次调用重开 Web Inspector 连接：约 8 秒一次，几轮后手机不再报告 Safari，要重启 Safari | 复用一条连接；只有连接层的错误才重开，页面超时或页面报错不断开 | 单测（`only_a_page_timeout_keeps_the_connection`）+ 真机（连续多次 `iphone_web_targets`、`iphone_web_eval` 都快且找得到页面；重启 Safari 后仍能找到） |
@@ -166,3 +166,4 @@
 | 160 | 元素列表超出 `limit` 时机器无法从结构化结果判断是否截断 | 同时返回本次匹配数和截断标记，保留原有文本结果 | 单测 `element_limit_is_reported_in_structured_content` + 真机脚本 `scenarios.py editing` |
 | 161 | 等待文字消失的请求被当成等待出现 | `state: "disappeared"` 等待可读界面不再匹配，读取失败或未读完整不算成功 | 单测 `disappearance_requires_a_readable_complete_screen_without_the_target` + 真机脚本 `scenarios.py editing` |
 | 162 | 经 WDA 控制（iOS 26 及以前，或 `ICTL_IOS_BACKEND=wda`）时 `replace: true` 直接拒绝，调用方只能在光标处输入，得到 `wifi 蓝牙` | 经 WDA 取聚焦元素（`/element/active`），只接受普通可读输入框（密码框拒绝），WDA `clear` 后按键输入，读回同一个元素的全文一致才按回车，结尾丢字补一次；空输入框读出占位文字算空；清空后再失败时明说原文已删掉；WDA 在动手前就连不上时，原生控制可用则改走原生 | 单测 `replaces_the_focused_field_then_presses_return`、`a_mismatch_is_refused_without_return`、`focused_field_reads_its_type_and_placeholder` + 真机脚本 `scenarios.py editing`（WDA 设备） |
+| 163 | Viewer 已收到输入请求，返回结果前连接中断，客户端可能一直等待或重复输入 | 客户端结束该调用，报告投递状态未知，提示先查看手机 | 单测 `interrupted_tool_reply_reports_unknown_instead_of_hanging_or_retrying` |

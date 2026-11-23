@@ -24,7 +24,7 @@ use crate::config::Config;
 use crate::eventlog::EventLog;
 use crate::machine::{Backoff, DeviceState, Misses};
 use crate::notify::{self, Dedup, Event};
-use crate::protocol::{Request, Response};
+use crate::protocol::{Delivery, FailureStage, Request, Response};
 use crate::supervise::StartOutcome;
 use crate::watchdog::Heartbeat;
 
@@ -906,7 +906,7 @@ impl Daemon {
             return Response::text(serde_json::to_string_pretty(&s).unwrap_or_default());
         }
         if let Err(e) = check_request(&req) {
-            return Response::error(e);
+            return Response::error(e).with_failure(Delivery::NotSent, FailureStage::Preflight);
         }
         if let Some(r) = self.tasks.handle(&req, ctx.task.as_deref(), ctx.peer, &mut ctx.gone).await {
             return r;
@@ -915,7 +915,7 @@ impl Daemon {
         let (admission, waited) =
             match self.tasks.admit(&req, ctx.task.as_deref(), &mut ctx.expect_udid, &mut ctx.gone).await {
                 Ok(a) => a,
-                Err(r) => return r,
+                Err(r) => return r.with_failure(Delivery::NotSent, FailureStage::Preflight),
             };
         // a task limited to some apps: outside them, the action waits for the user (docs/task-control.md §2.6)
         let mut asked = false;
@@ -924,7 +924,7 @@ impl Daemon {
         {
             match self.scope_gate(t, &req, ctx.task_step, &mut ctx.gone).await {
                 Ok(a) => asked = a,
-                Err(r) => return r,
+                Err(r) => return r.with_failure(Delivery::NotSent, FailureStage::Preflight),
             }
         }
         // held while the task was paused or waiting for the user: the time in the queue starts now
@@ -1139,12 +1139,12 @@ impl Daemon {
             // still let through now that it holds the lock: the task may have been paused or taken over meanwhile
             match self.lock_admitted(&self.inner, &req, admission, &mut queued_at, &mut ctx.gone).await {
                 Ok(g) => g,
-                Err(r) => return r,
+                Err(r) => return r.with_failure(Delivery::NotSent, FailureStage::Preflight),
             }
         };
         let g = &mut *g;
         if let Err(r) = admit(&req, queued_at, &ctx, g.device.as_ref().map(|d| d.udid.as_str())) {
-            return r;
+            return r.with_failure(Delivery::NotSent, FailureStage::Preflight);
         }
         let view = ctx.expect_view.as_deref();
         // 改变界面的操作做完后缓存的元素树就作废；只有调用方声明「不改变布局」的按名字点击（max_age_ms > 0）保留
@@ -1155,6 +1155,10 @@ impl Daemon {
         if g.wda.as_ref().is_some_and(|w| w.stalled()) {
             self.restart_stalled_wda(g).await;
         }
+        let mut may_continue = |req: &Request| {
+            !ctx.gone.as_mut().is_some_and(|rx| rx.try_recv().is_ok())
+                && matches!(self.tasks.still(admission, req), crate::tasks::Still::Admitted)
+        };
         let response = if background {
             // an action that comes meanwhile gets the phone at once: the check is read-only, dropping it is safe
             let action = self.give_way.notified();
@@ -1164,7 +1168,7 @@ impl Daemon {
                 gave_way()
             } else {
                 tokio::select! {
-                    r = Box::pin(self.dispatch(g, req, view, ctx.watched)) => r,
+                    r = Box::pin(self.dispatch(g, req, view, ctx.watched, &mut may_continue)) => r,
                     () = action => gave_way(),
                 }
             }
@@ -1178,7 +1182,7 @@ impl Daemon {
                 g.dev.acted_at = Some(Instant::now());
             }
             // boxed, like the request in `handle`: two of its large state machine on the stack overflowed a test thread
-            let r = Box::pin(self.dispatch(g, req, view, ctx.watched)).await;
+            let r = Box::pin(self.dispatch(g, req, view, ctx.watched, &mut may_continue)).await;
             if acted {
                 g.dev.seen = Default::default();
                 *self.last_action.lock().unwrap_or_else(|p| p.into_inner()) = Some(Instant::now());
@@ -1192,7 +1196,14 @@ impl Daemon {
         response
     }
 
-    async fn dispatch(&self, g: &mut Inner, req: Request, view: Option<&str>, watched: bool) -> Response {
+    async fn dispatch(
+        &self,
+        g: &mut Inner,
+        req: Request,
+        view: Option<&str>,
+        watched: bool,
+        may_continue: &mut dyn FnMut(&Request) -> bool,
+    ) -> Response {
         // what the text reports, for clients that act on it (Response::Text.outcome)
         let mut outcome = crate::protocol::Outcome::default();
         // the same facts as data, for programs (Response::Text.data)
@@ -1219,6 +1230,12 @@ impl Daemon {
                     data = Some(elements);
                     text
                 }),
+            Request::ScrollCollect(ref scan) => {
+                self.scroll_collect(g, scan, || may_continue(&req)).await.map(|(text, collection)| {
+                    data = Some(collection);
+                    text
+                })
+            }
             Request::Tap { x, y, count } => self.tap(g, x, y, count, view).await,
             Request::TapSequence { points } => self.tap_sequence(g, &points).await,
             Request::TapElement { text, index, max_age_ms, scroll } => {
@@ -1237,8 +1254,14 @@ impl Daemon {
             Request::Swipe { from, to, seconds, hold } => {
                 self.swipe(g, crate::tools::Stroke { from, to, seconds, hold }, view, watched).await
             }
-            Request::TypeText { text, submit } => self.type_text(g, &text, submit).await,
-            Request::ReplaceText { text, submit } => Box::pin(self.replace_text(g, &text, submit)).await,
+            Request::TypeText { text, submit } => self.type_text(g, &text, submit, &mut outcome.field_verified).await,
+            Request::ReplaceText { text, submit } => {
+                Box::pin(self.replace_text(g, &text, submit)).await.map(|(message, delivery)| {
+                    outcome.delivery = Some(delivery);
+                    outcome.field_verified = Some(true);
+                    message
+                })
+            }
             Request::PressButton { button } => self.press_button(g, &button, watched).await,
             Request::Touch { phase, x, y } => {
                 return self
@@ -1305,7 +1328,7 @@ impl Daemon {
             | Request::TaskNote { .. }
             | Request::TaskFinish { .. } => unreachable!("other lanes"),
         };
-        let r = r.map(|t| Response::text_data(t, outcome, data)).unwrap_or_else(Response::error);
+        let r = r.map(|t| Response::text_data(t, outcome, data)).unwrap_or_else(crate::error::Error::response);
         with_unlock_note(r, g.dev.unlocked.take())
     }
 
@@ -1359,6 +1382,7 @@ fn lane(req: &Request) -> Lane {
         | Request::ListElements { .. }
         | Request::Tap { .. }
         | Request::TapSequence { .. }
+        | Request::ScrollCollect(_)
         | Request::TapElement { .. }
         | Request::LongPress { .. }
         | Request::Swipe { .. }
@@ -1401,7 +1425,9 @@ fn with_unlock_note(r: Response, unlocked: Option<Duration>) -> Response {
     match r {
         Response::Text { text, outcome, data } => Response::Text { text: add(text), outcome, data },
         Response::Image { jpeg_base64, caption } => Response::Image { jpeg_base64, caption: add(caption) },
-        Response::Error { message, retry_as_gesture } => Response::Error { message: add(message), retry_as_gesture },
+        Response::Error { message, retry_as_gesture, failure } => {
+            Response::Error { message: add(message), retry_as_gesture, failure }
+        }
     }
 }
 
@@ -1494,6 +1520,12 @@ fn admit(req: &Request, queued_at: Instant, ctx: &CallCtx, controlled: Option<&s
 fn check_request(req: &Request) -> Result<(), String> {
     req.check_required_text()?;
     match req {
+        Request::ScrollCollect(scan)
+            if !(1..=crate::protocol::MAX_SEARCH_SCROLLS).contains(&scan.max_scrolls)
+                || !(1..=crate::protocol::MAX_SCROLL_ROWS).contains(&scan.limit) =>
+        {
+            return Err(ictl_l10n::tr!("超出滚动或行数上限", "scroll or row limit is out of range").into());
+        }
         Request::WebEval { expression, timeout_ms, .. }
             if expression.trim().is_empty() || *timeout_ms > MAX_WEB_EVAL_MS =>
         {
@@ -1556,6 +1588,30 @@ fn check_request(req: &Request) -> Result<(), String> {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+
+    #[test]
+    fn raw_scroll_collect_validates_scope_and_bounds() {
+        let mut scan = crate::protocol::ScrollCollect {
+            down: true,
+            max_scrolls: 1,
+            filter: String::new(),
+            until: String::new(),
+            limit: 1,
+        };
+        let req = Request::ScrollCollect(scan.clone());
+        assert!(check_request(&req).is_ok());
+        assert_eq!(crate::tasks::scope_check(&req), Some(crate::tasks::Check::Foreground));
+        assert!(!crate::tasks::observes(&req), "this cannot clear a takeover's observation requirement");
+        let mut wire = serde_json::to_value(&req).unwrap();
+        assert_eq!(serde_json::from_value::<Request>(wire.clone()).unwrap(), req);
+        wire["scroll"] = serde_json::json!("sideways");
+        assert!(serde_json::from_value::<Request>(wire).is_err(), "unknown direct protocol fields must fail");
+        for (max, limit) in [(0, 1), (16, 1), (1, 0), (1, 151)] {
+            scan.max_scrolls = max;
+            scan.limit = limit;
+            assert!(check_request(&Request::ScrollCollect(scan.clone())).is_err());
+        }
+    }
 
     /// Each device keeps its own background WDA: switching to another device and back attaches to it again, and
     /// `service stop` sees all of them. The last one is still written the old way for older versions
@@ -1729,7 +1785,7 @@ pub(crate) mod tests {
         let (d, dir) = test_daemon("previous-view");
         let ctx = CallCtx { expect_view: Some("old-view".into()), ..Default::default() };
         let r = d.handle(Request::Tap { x: 3.0, y: 4.0, count: 1 }, Instant::now(), ctx).await;
-        assert!(matches!(r, Response::Error { message, retry_as_gesture: false } if message.contains("画面")));
+        assert!(matches!(r, Response::Error { message, retry_as_gesture: false, .. } if message.contains("画面")));
         std::fs::remove_dir_all(dir).unwrap();
     }
 
@@ -1768,7 +1824,7 @@ pub(crate) mod tests {
             assert_eq!(g.dev.display.as_ref().unwrap().id, id);
             let stale = d.touch(&mut g, phase, 20., 50., Some("old")).await.unwrap_err();
             assert!(
-                matches!(stale, Response::Error { message, retry_as_gesture: false } if message.contains("画面") || message.contains("display changed"))
+                matches!(stale, Response::Error { message, retry_as_gesture: false, .. } if message.contains("画面") || message.contains("display changed"))
             );
         }
         std::fs::remove_dir_all(dir).unwrap();
@@ -1784,7 +1840,9 @@ pub(crate) mod tests {
         drop(g);
         let req = Request::Touch { phase: crate::protocol::TouchPhase::Down, x: 20.0, y: 50.0 };
         let response = d.handle(req, Instant::now(), ctx).await;
-        assert!(matches!(response, Response::Error { message, retry_as_gesture: false } if message.contains("画面")));
+        assert!(
+            matches!(response, Response::Error { message, retry_as_gesture: false, .. } if message.contains("画面"))
+        );
         let g = d.inner.lock().await;
         assert!(g.dev.display.is_none());
         assert!(g.dev.touch_rotation.is_none());

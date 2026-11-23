@@ -11,7 +11,7 @@
     <a href="https://github.com/Derrors/iphone-control/releases/latest"><img src="https://img.shields.io/github/v/release/Derrors/iphone-control?style=flat" alt="Release"></a>
     <img src="https://img.shields.io/badge/iOS-27%2B%20%E6%8E%A8%E8%8D%90%20%C2%B7%2017%2B%20%E5%8F%AF%E7%94%A8-black?style=flat&logo=apple" alt="iOS：推荐 27+，17+ 可用">
     <img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS-0E7490?style=flat" alt="平台：Linux | macOS">
-    <img src="https://img.shields.io/badge/MCP-17%20tools-8A2BE2?style=flat" alt="MCP">
+    <img src="https://img.shields.io/badge/MCP-18%20tools-8A2BE2?style=flat" alt="MCP">
     <a href="Cargo.toml"><img src="https://img.shields.io/badge/Rust-1.89%2B-CE422B?style=flat&logo=rust&logoColor=white" alt="Rust"></a>
     <a href="LICENSE"><img src="https://img.shields.io/github/license/Derrors/iphone-control?style=flat" alt="License"></a>
     <a href="https://m8ven.ai/mcp/derrors-iphone-control-1pcmse?s=readme"><img src="https://m8ven.ai/badge/mcp/derrors-iphone-control-1pcmse?variant=verified" alt="M8ven 已验证"></a>
@@ -66,7 +66,7 @@ iphone-control 在 Linux 或 macOS 上用**一个 Rust 二进制**把这些事�
 ## 功能特性
 
 <p align="center">
-  <img src="docs/images/features.zh-CN.svg" alt="设备控制（核心）：iOS 27 原生控制、17 个 MCP 工具、少走往返、无人值守、人工把关、诊断与通知。接入：本机接入、远程接入。控制台（可选）" width="900">
+  <img src="docs/images/features.zh-CN.svg" alt="设备控制（核心）：iOS 27 原生控制、18 个 MCP 工具、少走往返、无人值守、人工把关、诊断与通知。接入：本机接入、远程接入。控制台（可选）" width="900">
 </p>
 
 **设备控制（核心）**

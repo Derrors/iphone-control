@@ -52,6 +52,18 @@ pub struct ScrollSearch {
 
 /// [`ScrollSearch::max`] 的上限：每次慢滑加等列表停下约 2.5 秒，滑满 15 次也就半分钟出头
 pub const MAX_SEARCH_SCROLLS: u32 = 15;
+pub const MAX_SCROLL_ROWS: usize = 150;
+
+/// Bounds and matching rules for a standalone list scan.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ScrollCollect {
+    pub down: bool,
+    pub max_scrolls: u32,
+    pub filter: String,
+    pub until: String,
+    pub limit: usize,
+}
 
 fn is_zero(v: &f64) -> bool {
     *v == 0.0
@@ -104,6 +116,8 @@ pub enum Request {
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         keep_locked: bool,
     },
+    /// Inspect successive visible viewports, leaving a matching element on screen.
+    ScrollCollect(ScrollCollect),
     Tap {
         x: f64,
         y: f64,
@@ -373,7 +387,34 @@ pub enum Response {
         /// The touch Down could not open a HID session and sent no contact report.
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         retry_as_gesture: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        failure: Option<ActionFailure>,
     },
+}
+
+/// Delivery of the requested input. Acknowledging the input does not verify its effect on screen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Delivery {
+    NotSent,
+    Unknown,
+    Sent,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FailureStage {
+    Preflight,
+    Connect,
+    Send,
+    Reply,
+    Readback,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ActionFailure {
+    pub delivery: Delivery,
+    pub stage: FailureStage,
 }
 
 /// Facts about a [`Response::Text`] that clients act on (see [`tapped_nothing`], [`alert_reported`])
@@ -385,6 +426,12 @@ pub struct Outcome {
     /// The text already reports a system alert blocking the screen
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub alert_reported: bool,
+    /// Non-empty text input: whether a subsequent field read saw the requested text.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub field_verified: Option<bool>,
+    /// A replacement can verify the desired value without sending any input.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delivery: Option<Delivery>,
 }
 
 /// What [`Request::Status`], [`Request::ListElements`], [`Request::ListApps`] and [`Request::AlertCheck`] report, as
@@ -400,6 +447,12 @@ pub enum Data {
         matched_count: Option<usize>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         truncated: Option<bool>,
+    },
+    ScrollCollection {
+        stop_reason: ScrollStop,
+        scrolls: u32,
+        rows: Vec<ScrollRow>,
+        matched: Option<Box<ScrollMatch>>,
     },
     Apps {
         apps: Vec<AppData>,
@@ -441,6 +494,34 @@ pub struct ElementData {
     pub height: f64,
 }
 
+/// The names are stable across daemon and MCP languages.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ScrollStop {
+    Found,
+    End,
+    MaxScrolls,
+    Limit,
+}
+
+/// The matched element's visible bounds and an uncovered point in the final viewport.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ScrollMatch {
+    #[serde(flatten)]
+    pub element: ElementData,
+    pub point: (f64, f64),
+}
+
+/// A row observed along the way. Its original screen coordinates can already be stale.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ScrollRow {
+    #[serde(rename = "type")]
+    pub kind: String,
+    pub label: String,
+    pub name: String,
+    pub value: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AppData {
     pub name: String,
@@ -460,11 +541,70 @@ impl Response {
         Self::Text { text: s.into(), outcome: Some(outcome), data }
     }
     pub fn error(s: impl Into<String>) -> Self {
-        Self::Error { message: s.into(), retry_as_gesture: false }
+        Self::Error { message: s.into(), retry_as_gesture: false, failure: None }
+    }
+    pub fn with_failure(mut self, delivery: Delivery, stage: FailureStage) -> Self {
+        if let Self::Error { failure, .. } = &mut self {
+            *failure = Some(ActionFailure { delivery, stage });
+        }
+        self
+    }
+
+    pub fn failure_stage(&self) -> Option<FailureStage> {
+        match self {
+            Self::Error { failure, .. } => failure.map(|f| f.stage),
+            _ => None,
+        }
+    }
+
+    pub fn field_readback(&self, req: &Request) -> Option<&'static str> {
+        if !matches!(req, Request::ReplaceText { .. })
+            && !matches!(req, Request::TypeText { text, .. } if !text.is_empty())
+        {
+            return None;
+        }
+        match self {
+            Self::Text { outcome: Some(o), .. } => o.field_verified.map(|v| if v { "verified" } else { "unverified" }),
+            Self::Error { failure: Some(f), .. } if f.stage == FailureStage::Readback => Some("failed"),
+            _ => None,
+        }
+    }
+
+    /// For callers reporting a device action. Older daemons have no error classification.
+    pub fn delivery(&self, req: &Request) -> Delivery {
+        match self {
+            Self::Text { text, outcome, .. }
+                if matches!(req, Request::TapElement { .. }) && tapped_nothing(text, *outcome) =>
+            {
+                Delivery::NotSent
+            }
+            Self::Text { .. } if matches!(req, Request::TypeText { text, submit: false } if text.is_empty()) => {
+                Delivery::NotSent
+            }
+            Self::Text { outcome, .. } if matches!(req, Request::ReplaceText { .. }) => {
+                outcome.and_then(|o| o.delivery).unwrap_or(Delivery::Unknown)
+            }
+            Self::Text { .. } if req.reports_delivery() => Delivery::Sent,
+            Self::Error { failure: Some(f), .. } => f.delivery,
+            _ => Delivery::Unknown,
+        }
     }
 }
 
 impl Request {
+    /// Inputs whose normal reply acknowledges sending the requested gesture or text.
+    pub fn reports_delivery(&self) -> bool {
+        matches!(
+            self,
+            Self::Tap { .. }
+                | Self::TapElement { .. }
+                | Self::TypeText { .. }
+                | Self::ReplaceText { .. }
+                | Self::Swipe { .. }
+                | Self::LongPress { .. }
+        )
+    }
+
     /// Shared by the daemon and the MCP batch preflight, before any earlier steps run.
     pub fn check_required_text(&self) -> Result<(), String> {
         match self {
@@ -481,6 +621,7 @@ impl Request {
     pub fn is_device_action(&self) -> bool {
         match self {
             Self::Tap { .. }
+            | Self::ScrollCollect(_)
             | Self::TapElement { .. }
             | Self::TapSequence { .. }
             | Self::LongPress { .. }
@@ -757,7 +898,7 @@ pub async fn call_background(
     req: &Request,
     timeout: Option<std::time::Duration>,
 ) -> std::io::Result<Response> {
-    exchange_on(socket, req, timeout, None, None, Some(BACKGROUND)).await
+    exchange_on(socket, req, timeout, None, None, Some(BACKGROUND)).await.map_err(|e| e.source)
 }
 
 /// 同 [`call`]；`expect_udid` 见 [`EXPECT_UDID`]
@@ -767,7 +908,7 @@ pub async fn call_expecting(
     timeout: Option<std::time::Duration>,
     expect_udid: Option<&str>,
 ) -> std::io::Result<Response> {
-    exchange_on(socket, req, timeout, expect_udid, None, None).await
+    exchange_on(socket, req, timeout, expect_udid, None, None).await.map_err(|e| e.source)
 }
 
 /// [`call_expecting`] for someone watching the screen ([`WATCHED`])
@@ -777,7 +918,7 @@ pub async fn call_watched(
     timeout: Option<std::time::Duration>,
     expect_udid: Option<&str>,
 ) -> std::io::Result<Response> {
-    exchange_on(socket, req, timeout, expect_udid, None, Some(WATCHED)).await
+    exchange_on(socket, req, timeout, expect_udid, None, Some(WATCHED)).await.map_err(|e| e.source)
 }
 
 /// Send a coordinate action only if this device and its measured geometry still match. Only the control page sends
@@ -789,21 +930,32 @@ pub async fn call_in_view(
     udid: &str,
     view: &str,
 ) -> std::io::Result<Response> {
-    exchange_on(socket, req, timeout, Some(udid), Some(view), Some(WATCHED)).await
+    exchange_on(socket, req, timeout, Some(udid), Some(view), Some(WATCHED)).await.map_err(|e| e.source)
 }
 
-async fn exchange_on(
+/// Transport failure with the phase of this single exchange. Once writing begins, a missing
+/// reply cannot tell the caller whether the daemon acted.
+#[derive(Debug)]
+pub struct ExchangeError {
+    pub source: std::io::Error,
+    pub failure: ActionFailure,
+}
+
+/// Like the convenience call functions above, retaining transport phase for action results.
+pub async fn exchange_on(
     socket: &std::path::Path,
     req: &Request,
     timeout: Option<std::time::Duration>,
     expect_udid: Option<&str>,
     expect_view: Option<&str>,
     flag: Option<&str>,
-) -> std::io::Result<Response> {
+) -> Result<Response, ExchangeError> {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    let mut stage = FailureStage::Connect;
     let exchange = async {
         let stream = connect(socket).await?;
         let (r, mut w) = stream.into_split();
+        stage = FailureStage::Preflight;
         let mut v = serde_json::to_value(req)?;
         if let Some(o) = v.as_object_mut() {
             o.insert(CANCEL_ON_CLOSE.into(), true.into());
@@ -822,20 +974,29 @@ async fn exchange_on(
         }
         let mut line = v.to_string();
         line.push('\n');
+        stage = FailureStage::Send;
         w.write_all(line.as_bytes()).await?;
+        stage = FailureStage::Reply;
         let mut resp = String::new();
         BufReader::new(r).read_line(&mut resp).await?;
         serde_json::from_str(&resp).map_err(std::io::Error::other)
     };
-    match timeout {
+    let result = match timeout {
         None => exchange.await,
-        Some(t) => tokio::time::timeout(t, exchange).await.map_err(|_| {
-            std::io::Error::new(
+        Some(t) => tokio::time::timeout(t, exchange).await.unwrap_or_else(|_| {
+            Err(std::io::Error::new(
                 std::io::ErrorKind::TimedOut,
                 ictl_l10n::trf!("守护进程 {} 秒内没有应答（可能正忙，例如正在启动 WDA 或重签）", "The daemon didn't answer within {} seconds (it may be busy, for example starting WDA or re-signing)", t.as_secs()),
-            )
-        })?,
-    }
+            ))
+        }),
+    };
+    result.map_err(|source| {
+        let delivery = match stage {
+            FailureStage::Connect | FailureStage::Preflight => Delivery::NotSent,
+            _ => Delivery::Unknown,
+        };
+        ExchangeError { source, failure: ActionFailure { delivery, stage } }
+    })
 }
 
 fn add_task_keys(o: &mut serde_json::Map<String, serde_json::Value>) {
@@ -939,6 +1100,14 @@ pub async fn task_list(socket: &std::path::Path) -> Result<Vec<TaskInfo>, String
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn empty_input_only_sends_a_key_with_submit() {
+        let reply = Response::text("ok");
+        for (submit, delivery) in [(false, Delivery::NotSent), (true, Delivery::Sent)] {
+            assert_eq!(reply.delivery(&Request::TypeText { text: String::new(), submit }), delivery);
+        }
+    }
 
     /// 不带 count 的点击（旧版本客户端）按 1 下；count 为 1 时不写进请求，旧版本守护进程收到的和以前一样
     #[test]

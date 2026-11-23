@@ -15,7 +15,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 ///
 /// 错误的 kind 区分请求有没有送到 WDA（决定能不能退到 HID 重做）：
 /// [`ErrorKind::TimedOut`](std::io::ErrorKind::TimedOut) 是发出后没在时限内应答，
-/// [`AFTER_SENT`] 是发出后连接断了或响应不完整、看不懂；其他 kind 都表示请求没送到
+/// [`AFTER_SENT`] 是读应答出错，[注入请求写入失败](WRITE_FAILED) 也可能已经送达；其他 kind 都表示请求没送到
 pub trait Transport: Send + Sync {
     fn send(
         &self,
@@ -43,7 +43,10 @@ impl DeviceTransport {
 /// 连上之后的超时是「请求已发出、手机可能还在执行」，不能退到 HID 重做一遍
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// 请求已经整个发出、之后读响应出错的 kind：WDA 可能已经执行了这个操作
+/// Writing or flushing failed after opening the device connection.
+pub const WRITE_FAILED: std::io::ErrorKind = std::io::ErrorKind::BrokenPipe;
+
+/// Failure while reading the reply to a written request.
 pub const AFTER_SENT: std::io::ErrorKind = std::io::ErrorKind::ConnectionAborted;
 
 fn after_sent(e: std::io::Error) -> std::io::Error {
@@ -111,11 +114,13 @@ impl DeviceTransport {
                 ictl_l10n::tr!("连接没有套接字", "the connection has no socket"),
             )
         })?;
+        let mut written = false;
         let fut = async {
-            // 没写完 WDA 不会处理（HTTP 请求不完整），算没送到
-            let not_sent = |e: std::io::Error| std::io::Error::new(std::io::ErrorKind::NotConnected, e.to_string());
-            sock.write_all(&req).await.map_err(not_sent)?;
-            sock.flush().await.map_err(not_sent)?;
+            // After writing starts, a failed write/flush isn't evidence that the phone didn't act.
+            let write_failed = |e: std::io::Error| std::io::Error::new(WRITE_FAILED, e);
+            sock.write_all(&req).await.map_err(write_failed)?;
+            sock.flush().await.map_err(write_failed)?;
+            written = true;
             // WDA 收到 `Connection: close` 也不关连接，不能读到 EOF：读够一个完整响应就停。
             // 头部只解析一次；正文按 Content-Length 判断，chunked 只在收到结束块后才完整解一次
             let mut buf = Vec::new();
@@ -143,7 +148,7 @@ impl DeviceTransport {
         };
         tokio::time::timeout(timeout, fut).await.map_err(|_| {
             std::io::Error::new(
-                std::io::ErrorKind::TimedOut,
+                if written { std::io::ErrorKind::TimedOut } else { WRITE_FAILED },
                 ictl_l10n::trf!("请求超时（{} 秒）", "request timed out ({} s)", timeout.as_secs_f64()),
             )
         })?

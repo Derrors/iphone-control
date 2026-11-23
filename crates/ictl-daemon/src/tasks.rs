@@ -221,6 +221,7 @@ pub fn scope_check(req: &Request) -> Option<Check> {
         Request::OpenUrl { url } => Some(Check::Url(url.clone())),
         Request::Tap { .. }
         | Request::TapSequence { .. }
+        | Request::ScrollCollect(_)
         | Request::TapElement { .. }
         | Request::LongPress { .. }
         | Request::Swipe { .. }

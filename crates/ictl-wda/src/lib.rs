@@ -20,6 +20,12 @@ pub enum WdaError {
     /// 连不上 WDA（runner 没了、端口不通）：可以退到 HID 重做
     #[error("{}", ictl_l10n::trf!("WDA 不可用：{0}", "WDA unavailable: {0}", .0))]
     Unavailable(String),
+    /// Writing or flushing failed after the connection opened. Replaying could duplicate input.
+    #[error("{}", ictl_l10n::trf!("写入 WDA 请求失败：{0}", "Writing the WDA request failed: {0}", .0))]
+    Write(String),
+    /// A preparatory WDA call failed before the requested input was dispatched.
+    #[error(transparent)]
+    BeforeInput(Box<WdaError>),
     /// 请求已经发出但没在时限内应答：手机可能还在执行，不能退到 HID 再做一遍
     #[error("{}", ictl_l10n::trf!("WDA 请求超时（请求已发出，手机可能仍在执行，先截图确认）：{0}", "WDA request timed out (it was sent, the phone may still be carrying it out; take a screenshot first): {0}", .0))]
     Timeout(String),
@@ -43,9 +49,15 @@ pub enum WdaError {
 pub type Result<T> = std::result::Result<T, WdaError>;
 
 impl WdaError {
+    pub(crate) fn before_input(self) -> Self {
+        match self {
+            Self::Unavailable(_) | Self::BeforeInput(_) => self,
+            e => Self::BeforeInput(Box::new(e)),
+        }
+    }
     /// 请求送到了 WDA，却没有完整的应答（超时，或应答到一半断了）。WDA 回了一个错误不算：它还在办事
     pub fn no_answer(&self) -> bool {
-        matches!(self, Self::Timeout(_) | Self::Interrupted(_))
+        matches!(self, Self::Timeout(_) | Self::Interrupted(_) | Self::Write(_))
     }
 }
 

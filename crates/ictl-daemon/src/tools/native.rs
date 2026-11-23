@@ -49,7 +49,7 @@ fn native_for(backend: IosBackend, info: Option<&DeviceInfo>) -> bool {
 }
 
 enum PasteTarget<'a> {
-    Append(Option<&'a [String]>),
+    Append(Option<(ictl_ax::ObjectRef, &'a str)>),
     Replace(ictl_ax::ObjectRef),
 }
 
@@ -66,15 +66,25 @@ enum Pasted {
     Missing,
 }
 
-/// One read of the fields after a paste, against `old`, theirs before it (None: a password field)
-fn paste_seen(now: Option<&[String]>, old: Option<&[String]>, wanted: &str) -> Pasted {
-    let (Some(now), Some(old)) = (now, old) else { return Pasted::Unreadable };
-    if !now.iter().any(|v| v.contains(wanted)) {
-        Pasted::Missing
-    } else if now != old {
+/// Compare only the original focused field's raw value, preserving whitespace.
+fn paste_seen(now: Option<&str>, old: &str, wanted: &str) -> Pasted {
+    let Some(now) = now else { return Pasted::Unreadable };
+    if input::newly_typed(old, now, wanted) {
         Pasted::Typed
-    } else {
+    } else if now == old && old.contains(wanted) {
         Pasted::Unchanged
+    } else if now.contains(wanted) && !now.starts_with(old) {
+        Pasted::Unreadable // a selection may have been replaced
+    } else {
+        Pasted::Missing
+    }
+}
+
+fn append_seen(field: Option<&ictl_ax::Element>, object: ictl_ax::ObjectRef, old: &str, wanted: &str) -> Pasted {
+    match field {
+        Some(f) if f.object == Some(object) => paste_seen(Some(shown_text(f)), old, wanted),
+        Some(_) => Pasted::Missing,
+        None => Pasted::Unreadable,
     }
 }
 
@@ -580,7 +590,7 @@ impl Daemon {
 
     /// A tap at a point through HID, the interface's rotation read first
     pub(crate) async fn native_tap(&self, g: &mut Inner, x: f64, y: f64) -> crate::error::Result<()> {
-        let rot = self.hid_touch_rotation(g).await?;
+        let rot = self.hid_touch_rotation(g).await.map_err(Error::preflight)?;
         self.hid_do(g, move |h| {
             Box::pin(async move {
                 h.rotation = rot;
@@ -597,7 +607,7 @@ impl Daemon {
         y: f64,
         seconds: f64,
     ) -> crate::error::Result<()> {
-        let rot = self.hid_touch_rotation(g).await?;
+        let rot = self.hid_touch_rotation(g).await.map_err(Error::preflight)?;
         self.hid_do(g, move |h| {
             Box::pin(async move {
                 h.rotation = rot;
@@ -611,29 +621,34 @@ impl Daemon {
     /// pasteboard is put back and Return pressed. Not as keys: HID keys go through the hardware keyboard's input
     /// source, which composed them as pinyin with the on-screen keyboard showing English («wifi» became marked
     /// pinyin «w i f i»), and the "next keyboard" button names the keyboard it switches to, not the one shown
-    pub(crate) async fn native_type(&self, g: &mut Inner, text: &str, submit: bool) -> crate::error::Result<String> {
+    pub(crate) async fn native_type(
+        &self,
+        g: &mut Inner,
+        text: &str,
+        submit: bool,
+        field_verified: &mut Option<bool>,
+    ) -> crate::error::Result<String> {
         let n = text.chars().count();
-        let before = self.ax_tree_app(g).await?;
-        if !keyboard_up(&before) {
-            return Err(ictl_l10n::tr!(
+        let before = self.ax_snapshot(g, AX_WAIT, false).await.map_err(Error::preflight)?;
+        if !keyboard_up(&self.snapshot_tree(g, &before).await.map_err(Error::preflight)?) {
+            return Err(Error::preflight(ictl_l10n::tr!(
                 "屏幕上没有键盘(没有输入框获得焦点),什么都没输;先点一下输入框,截图确认键盘出来了再输入",
                 "No keyboard on screen (no text field has focus), nothing typed; tap a text field first and check with a screenshot that the keyboard is up"
-            )
-            .into());
+            )));
         }
-        let old = elements::field_values(&before.elements);
+        let old = focused_text_field(&before).and_then(|f| Some((f.object?, shown_text(f))));
         let mut note = String::new();
         if !text.is_empty() {
-            let (typed, prompt) = self.native_paste(g, text, PasteTarget::Append(old.as_deref())).await?;
+            let (typed, prompt) = self.native_paste(g, text, PasteTarget::Append(old)).await?;
             if prompt {
                 note += ictl_l10n::tr!("(已替你点了「允许粘贴」)", " (“Allow Paste” was tapped for you)");
             }
             match typed {
-                Pasted::Typed => {}
+                Pasted::Typed => *field_verified = Some(true),
                 Pasted::Unreadable => {
                     note += ictl_l10n::tr!(
-                        "(这是密码框,读不出内容,截图确认输进去了)",
-                        " (a password field: its contents can't be read back, check with a screenshot)"
+                        "(无法核对输入框内容，请查看屏幕确认)",
+                        " (field contents could not be verified; inspect the screen)"
                     )
                 }
                 // the same text, selected, replaced by the paste (a search field keeping the last search)
@@ -644,19 +659,25 @@ impl Daemon {
                     )
                 }
                 Pasted::Missing => {
-                    return Err(ictl_l10n::trf!(
+                    return Err(Error::readback(ictl_l10n::trf!(
                         "粘贴了 {n} 个字符,但 {} 秒内输入框里没有这段文字{};截图看看:输入框可能没有焦点,或 App 不接受粘贴",
                         "Pasted {n} characters, but the field didn't show the text within {} s{}; take a screenshot: the field may not have focus, or the app doesn't take pastes",
                         PASTE_WAIT.as_secs(),
                         if submit { ictl_l10n::tr!(",没有按回车", ", Return not pressed") } else { "" }
-                    )
-                    .into());
+                    )));
                 }
             }
         }
         if submit {
             self.hid_do(g, |h| Box::pin(async move { h.type_ascii("\n").await })).await.map_err(|e| {
-                ictl_l10n::trf!("文字已输入{note},按回车失败:{e}", "Text typed{note}, pressing Return failed: {e}")
+                if text.is_empty() {
+                    return e;
+                }
+                Error::action(
+                    Delivery::Sent,
+                    FailureStage::Send,
+                    ictl_l10n::trf!("文字已输入{note},按回车失败:{e}", "Text typed{note}, pressing Return failed: {e}"),
+                )
             })?;
         }
         Ok(ictl_l10n::trf!(
@@ -668,57 +689,65 @@ impl Daemon {
 
     /// Replaces a single focused, readable field natively ([`Daemon::replace_text`]). Verifies the full value before
     /// sending Return
-    pub(crate) async fn native_replace(&self, g: &mut Inner, text: &str, submit: bool) -> crate::error::Result<String> {
-        let before = self.ax_snapshot(g, AX_WAIT, false).await?;
-        if !keyboard_up(&self.snapshot_tree(g, &before).await?) {
-            return Err(ictl_l10n::tr!(
+    pub(crate) async fn native_replace(
+        &self,
+        g: &mut Inner,
+        text: &str,
+        submit: bool,
+    ) -> crate::error::Result<(String, Delivery)> {
+        let before = self.ax_snapshot(g, AX_WAIT, false).await.map_err(Error::preflight)?;
+        if !keyboard_up(&self.snapshot_tree(g, &before).await.map_err(Error::preflight)?) {
+            return Err(Error::preflight(ictl_l10n::tr!(
                 "屏幕上没有键盘，先点一下要替换的输入框",
                 "No keyboard on screen; tap the field you want to replace first"
-            )
-            .into());
+            )));
         }
-        let (target, old) =
-            focused_text_field(&before).and_then(|f| Some((f.object?, shown_text(f)))).ok_or_else(|| {
+        let (target, old) = focused_text_field(&before)
+            .and_then(|f| Some((f.object?, shown_text(f))))
+            .ok_or_else(|| {
                 ictl_l10n::tr!(
                     "无法确认当前聚焦的是可读的普通输入框，没有替换文字",
                     "Couldn't identify a readable focused text field; no text was replaced"
                 )
-            })?;
+            })
+            .map_err(Error::preflight)?;
         if old != text {
             let result = async {
                 self.hid_do(g, |h| Box::pin(h.select_all())).await?;
                 let seen = if text.is_empty() {
                     // emptying: Delete takes the selection, nothing is pasted (no paste prompt)
                     self.hid_do(g, |h| Box::pin(h.delete_backward())).await?;
-                    self.native_field_emptied(g, target).await?
+                    self.native_field_emptied(g, target).await.map_err(Error::readback)?
                 } else {
                     self.native_paste(g, text, PasteTarget::Replace(target)).await?.0
                 };
                 if seen != Pasted::Typed {
-                    return Err(ictl_l10n::tr!(
+                    return Err(Error::readback(ictl_l10n::tr!(
                         "替换后无法核对输入框全文，未按回车；请查看手机界面",
                         "Couldn't verify the full field value after the replacement; Return was not pressed"
-                    )
-                    .into());
+                    )));
                 }
                 Ok(())
             }
             .await;
             if let Err(err) = result {
                 if let Err(cause) = self.collapse_field_selection(g, target).await {
-                    return Err(ictl_l10n::trf!(
+                    let message = ictl_l10n::trf!(
                         "{err}（无法收起原输入框的选区，请在重试前查看屏幕：{cause}）",
                         "{err} (couldn't collapse the original selection; inspect the screen before retrying: {cause})"
-                    )
-                    .into());
+                    );
+                    return Err(err.with_message(message));
                 }
                 return Err(err);
             }
         }
         if submit {
-            self.hid_do(g, |h| Box::pin(h.type_ascii("\n"))).await?;
+            self.hid_do(g, |h| Box::pin(h.type_ascii("\n")))
+                .await
+                .map_err(|e| if old == text { e } else { Error::action(Delivery::Sent, FailureStage::Send, e) })?;
         }
-        Ok(input::replaced(text, submit, ""))
+        let delivery = if old != text || submit { Delivery::Sent } else { Delivery::NotSent };
+        Ok((input::replaced(text, submit, ""), delivery))
     }
 
     /// After select all and Delete: `target` reads as empty within [`CLEAR_WAIT`]
@@ -753,15 +782,19 @@ impl Daemon {
     ) -> crate::error::Result<(Pasted, bool)> {
         // a paste through the WDA-down path may still wait to be put back
         self.restore_pasteboard(g, false).await;
-        self.hid(g).await?;
+        self.hid(g).await.map_err(|e| Error::action(Delivery::NotSent, FailureStage::Connect, e))?;
         let r = Box::pin(g.tunnel.as_mut().expect("hid() 刚建好隧道").paste_text(text)).await;
         g.hid_used = Some(Instant::now());
         let pending = match r {
             Ok(p) => p,
-            Err(e @ DeviceError::InvalidInput(_)) => return Err(e.into()),
+            Err(e @ (DeviceError::InvalidInput(_) | DeviceError::PasteNotSent(_))) => return Err(Error::preflight(e)),
             Err(e) => {
                 drop_tunnel(g).await;
-                return Err(ictl_l10n::trf!("粘贴失败:{e}", "Paste failed: {e}").into());
+                return Err(Error::action(
+                    Delivery::Unknown,
+                    FailureStage::Send,
+                    ictl_l10n::trf!("粘贴失败:{e}", "Paste failed: {e}"),
+                ));
             }
         };
         g.dev.pending_paste = pending.map(|p| (Instant::now(), p));
@@ -770,10 +803,12 @@ impl Daemon {
             // when the paste prompt was last answered
             let mut answered: Option<Instant> = None;
             let typed = loop {
-                let screen = self.ax_snapshot(g, AX_WAIT, true).await?;
-                let tree = self.snapshot_tree(g, &screen).await?;
-                if let Some((x, y)) = paste_allow(&tree) {
-                    self.native_tap(g, x, y).await?;
+                let screen = self.ax_snapshot(g, AX_WAIT, true).await.map_err(Error::readback)?;
+                let tree = self.snapshot_tree(g, &screen).await.map_err(Error::readback)?;
+                if answered.is_none()
+                    && let Some((x, y)) = paste_allow(&tree)
+                {
+                    self.native_tap(g, x, y).await.map_err(|e| Error::action(Delivery::Sent, FailureStage::Send, e))?;
                     answered = Some(Instant::now());
                     tokio::time::sleep(Duration::from_millis(300)).await;
                     if Instant::now() >= deadline {
@@ -782,9 +817,10 @@ impl Daemon {
                     continue;
                 }
                 let seen = match target {
-                    PasteTarget::Append(old) => {
-                        paste_seen(elements::field_values(&tree.elements).as_deref(), old, text.trim())
+                    PasteTarget::Append(Some((object, old))) => {
+                        append_seen(focused_text_field(&screen), object, old, text)
                     }
+                    PasteTarget::Append(None) => Pasted::Unreadable,
                     PasteTarget::Replace(object) => replacement_seen(&screen, object, text),
                 };
                 match seen {
@@ -1217,15 +1253,20 @@ mod tests {
 
     #[test]
     fn a_paste_that_replaced_the_same_text_is_told_apart_from_one_that_missed() {
-        let v = |s: &[&str]| s.iter().map(|s| s.to_string()).collect::<Vec<_>>();
-        // into an empty field, and after text already there
-        assert_eq!(paste_seen(Some(&v(&["设置"])), Some(&v(&[""])), "设置"), Pasted::Typed);
-        assert_eq!(paste_seen(Some(&v(&["设置设置"])), Some(&v(&["设置"])), "设置"), Pasted::Typed);
-        // Spotlight's last search, selected, replaced by the same text: nothing changes
-        assert_eq!(paste_seen(Some(&v(&["设置"])), Some(&v(&["设置"])), "设置"), Pasted::Unchanged);
-        assert_eq!(paste_seen(Some(&v(&["时钟"])), Some(&v(&["时钟"])), "设置"), Pasted::Missing);
-        assert_eq!(paste_seen(Some(&v(&[""])), Some(&v(&[""])), "设置"), Pasted::Missing);
-        assert_eq!(paste_seen(None, Some(&v(&[""])), "设置"), Pasted::Unreadable);
-        assert_eq!(paste_seen(Some(&v(&["设置"])), None, "设置"), Pasted::Unreadable);
+        let mut f = ictl_ax::Element {
+            object: Some(ictl_ax::ObjectRef { id: 1, pid: 2, is_app: false }),
+            value: "设置".into(),
+            ..Default::default()
+        };
+        let original = f.object.unwrap();
+        assert_eq!(append_seen(Some(&f), original, "", "设置"), Pasted::Typed);
+        f.object.as_mut().unwrap().id += 1;
+        assert_eq!(append_seen(Some(&f), original, "", "设置"), Pasted::Missing);
+        assert_eq!(paste_seen(Some("设置"), "", "设置"), Pasted::Typed);
+        assert_eq!(paste_seen(Some("设置设置"), "设置", "设置"), Pasted::Typed);
+        assert_eq!(paste_seen(Some("设置"), "设置", "设置"), Pasted::Unchanged);
+        assert_eq!(paste_seen(Some("时钟"), "时钟", "设置"), Pasted::Missing);
+        assert_eq!(paste_seen(Some("11"), "1", "11"), Pasted::Missing);
+        assert_eq!(paste_seen(None, "", "设置"), Pasted::Unreadable);
     }
 }

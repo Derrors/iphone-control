@@ -5,6 +5,7 @@ mod keys;
 mod launch;
 mod native;
 mod observe;
+mod scroll;
 
 pub(crate) use input::Stroke;
 
@@ -21,9 +22,11 @@ use ictl_wda::http::DeviceTransport;
 use ictl_wda::{Launch, WdaClient, WdaError};
 
 use crate::core::{Daemon, Inner, drop_tunnel, hid_supported, wda_down};
+use crate::error::Error;
 use crate::imaging::{self, fmt_g};
 use crate::notify::Event;
 use crate::protocol::{ALERT_BLOCKING, Response, TAP_MISSED, TouchPhase};
+use crate::protocol::{Delivery, FailureStage};
 use crate::protocol::{ElementData, StatusData};
 pub(crate) use native::AX_WAIT;
 use observe::*;
@@ -158,12 +161,12 @@ impl Daemon {
     /// A tap at a point: through WDA, or natively through HID
     async fn tap_at(&self, g: &mut Inner, x: f64, y: f64) -> crate::error::Result<()> {
         if let Some(w) = self.wda(g) {
-            return Ok(w.tap(x, y).await?);
+            return w.tap(x, y).await.map_err(Error::wda_input);
         }
         if self.native(g) {
             return Box::pin(self.native_tap(g, x, y)).await;
         }
-        Ok(self.require_wda(g)?.tap(x, y).await?)
+        self.require_wda(g).map_err(Error::preflight)?.tap(x, y).await.map_err(Error::wda_input)
     }
 
     /// 经隧道截图（WDA 不可用时）。失败就丢掉隧道，下次重建
@@ -220,15 +223,19 @@ impl Daemon {
         )
             -> std::pin::Pin<Box<dyn std::future::Future<Output = ictl_device::Result<()>> + Send + 'h>>,
     {
-        let r = f(self.hid(g).await?).await;
+        let r = f(self.hid(g).await.map_err(|e| Error::action(Delivery::NotSent, FailureStage::Connect, e))?).await;
         g.hid_used = Some(Instant::now());
         match r {
             Ok(()) => Ok(()),
             // 参数问题（例如不能输入的字符），连接没坏，不用重建
-            Err(e @ DeviceError::InvalidInput(_)) => Err(e.into()),
+            Err(e @ DeviceError::InvalidInput(_)) => Err(Error::preflight(e)),
             Err(e) => {
                 drop_tunnel(g).await;
-                Err(ictl_l10n::trf!("HID 命令失败: {e}", "HID command failed: {e}").into())
+                Err(Error::action(
+                    Delivery::Unknown,
+                    FailureStage::Send,
+                    ictl_l10n::trf!("HID 命令失败: {e}", "HID command failed: {e}"),
+                ))
             }
         }
     }
@@ -623,7 +630,7 @@ mod tests {
         assert!(down(&swipe), "{swipe}");
         // a finger: the same, and the page may still send the whole gesture once WDA is back
         match d.touch(&mut g, TouchPhase::Down, 20., 50., None).await {
-            Err(Response::Error { message, retry_as_gesture: true }) => assert!(down(&message), "{message}"),
+            Err(Response::Error { message, retry_as_gesture: true, .. }) => assert!(down(&message), "{message}"),
             other => panic!("{other:?}"),
         }
         assert!(g.dev.touch_rotation.is_none());
@@ -646,10 +653,6 @@ mod tests {
         assert!(hid_rotation(100, 100, fresh(Portrait)).is_err());
     }
 
-    fn v(s: &[&str]) -> Vec<String> {
-        s.iter().map(|x| x.to_string()).collect()
-    }
-
     #[test]
     fn no_match_with_filter_names_the_filter() {
         assert_eq!(no_elements_text("", 0), "没有找到带文字的元素");
@@ -659,19 +662,23 @@ mod tests {
     }
 
     #[test]
-    fn typed_text_is_found_ignoring_spaces() {
-        assert!(typed_into(&v(&["搜索", "红烧肉做法"]), "红烧肉做法"));
-        assert!(typed_into(&v(&["130 1234 5678"]), "13012345678"));
-        assert!(!typed_into(&v(&["故宫博"]), "故宫博物院"));
+    fn input_readback_requires_new_evidence_in_the_same_field() {
+        assert!(newly_typed("", "130 1234 5678", "13012345678"));
+        assert!(!newly_typed("", "helloworld", "hello world"));
+        assert!(!newly_typed("", "hello", "hello "));
+        assert!(newly_typed("", "hello world", "hello world"));
+        assert!(!newly_typed("1", "11", "11"));
+        assert!(newly_typed("ab", "a测b", "测"));
+        assert!(newly_typed("abc", "abcabc", "abc"));
+        assert!(!newly_typed("abc", "abc", "abc"));
+        assert!(!newly_typed("", "故宫博", "故宫博物院"));
     }
 
     #[test]
-    fn dropped_tail_is_detected_after_existing_text() {
-        assert_eq!(typed_prefix(&v(&["故宫博"]), "故宫博物院"), Some(3));
-        // 输入框原来就有字
-        assert_eq!(typed_prefix(&v(&["abc故宫"]), "故宫博物院"), Some(2));
-        // 一个字都没进去（或者是占位文字）：不猜，报对不上
-        assert_eq!(typed_prefix(&v(&["搜索"]), "故宫博物院"), None);
-        assert_eq!(typed_prefix(&v(&[""]), "故宫"), None);
+    fn input_repair_requires_a_stable_new_prefix() {
+        assert_eq!(missing_suffix("abc", "abc故宫", "abc故宫", "故宫博物院"), Some("博物院"));
+        assert_eq!(missing_suffix("abc故宫", "abc故宫", "abc故宫", "故宫博物院"), None);
+        assert_eq!(missing_suffix("", "故", "故宫", "故宫博物院"), None);
+        assert_eq!(missing_suffix("abc", "def故宫", "def故宫", "故宫博物院"), None);
     }
 }

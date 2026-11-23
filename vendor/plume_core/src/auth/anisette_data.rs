@@ -101,7 +101,9 @@ impl AnisetteData {
         let headers = self
             .generate_headers(true, true, true)
             .iter()
-            .map(|(k, v)| (k.to_lowercase(), v.to_lowercase()))
+            // iphone-control: only the name is case-insensitive. Upstream lowercased the value too, so
+            // X-MMe-Client-Info went out as `<mac os x;…>` and Apple's GSA has answered 403 since 2026-11 (#171)
+            .map(|(k, v)| (k.to_lowercase(), v.clone()))
             .collect::<HashMap<String, String>>();
 
         match headers.get(&header.to_lowercase()) {

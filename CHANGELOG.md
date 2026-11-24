@@ -6,13 +6,15 @@ What changed in each release, one line per change. Versions follow [Semantic Ver
 
 ## [Unreleased]
 
+## [0.2.14] - 2026-11-24
+
 ### New
 
-- Intel Macs (macOS 11+) get prebuilt binaries: install with the one-line script or Homebrew, upgrade with `iphone-control update` (#181). The package is cross-compiled and not yet tested on a real Intel Mac; reports are welcome.
+- Intel Macs (macOS 11+) can install with the one-line script or Homebrew and upgrade with `iphone-control update`; these builds haven't been tested on a real Intel Mac yet, so reports are welcome (#182).
 
 ### Fixes
 
-- WebDriverAgent on the phone now listens on the phone itself only: other devices on the same Wi-Fi can no longer reach its port 8100 (the unauthenticated control API) or 9100 (the picture). After upgrading, a WDA an older version launched in the background is launched again once.
+- Other devices on the same Wi-Fi can no longer reach WebDriverAgent on the phone; a WebDriverAgent started by an older version restarts once after upgrading (#180).
 
 ## [0.2.13] - 2026-11-24
 
@@ -371,7 +373,8 @@ First public release.
 - `setup`, `doctor`, `status` and `mcp-config`.
 - Docker image and prebuilt Linux binaries.
 
-[Unreleased]: https://github.com/Derrors/iphone-control/compare/v0.2.13...HEAD
+[Unreleased]: https://github.com/Derrors/iphone-control/compare/v0.2.14...HEAD
+[0.2.14]: https://github.com/Derrors/iphone-control/compare/v0.2.13...v0.2.14
 [0.2.13]: https://github.com/Derrors/iphone-control/compare/v0.2.12...v0.2.13
 [0.2.12]: https://github.com/Derrors/iphone-control/compare/v0.2.11...v0.2.12
 [0.2.11]: https://github.com/Derrors/iphone-control/compare/v0.2.10...v0.2.11

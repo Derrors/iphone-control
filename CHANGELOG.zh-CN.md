@@ -6,13 +6,15 @@
 
 ## [Unreleased]
 
+## [0.2.14] - 2026-11-24
+
 ### 新功能
 
-- Intel 芯片的 Mac（macOS 11 及以上）有了预编译版本，可以用一行命令、Homebrew 安装，也能用 `iphone-control update` 升级（#181）。这个包是交叉编译的，还没在真正的 Intel Mac 上测过，遇到问题欢迎反馈。
+- Intel 芯片的 Mac（macOS 11 及以上）可以用一行命令或 Homebrew 安装，也能用 `iphone-control update` 升级；这些版本还没在真正的 Intel Mac 上测过，遇到问题欢迎反馈（#182）。
 
 ### 修复
 
-- 手机上的 WebDriverAgent 只在手机本机监听，同一 Wi-Fi 里的其他设备不能再访问它的 8100（没有认证的操作接口）和 9100（画面）端口。升级后，旧版本在后台启动的 WDA 会被重新启动一次。
+- 同一 Wi-Fi 里的其他设备不能再访问手机上的 WebDriverAgent；旧版本启动的 WebDriverAgent 在升级后会重启一次（#180）。
 
 ## [0.2.13] - 2026-11-24
 
@@ -371,7 +373,8 @@
 - `setup`、`doctor`、`status`、`mcp-config`。
 - Docker 镜像和预编译的 Linux 二进制。
 
-[Unreleased]: https://github.com/Derrors/iphone-control/compare/v0.2.13...HEAD
+[Unreleased]: https://github.com/Derrors/iphone-control/compare/v0.2.14...HEAD
+[0.2.14]: https://github.com/Derrors/iphone-control/compare/v0.2.13...v0.2.14
 [0.2.13]: https://github.com/Derrors/iphone-control/compare/v0.2.12...v0.2.13
 [0.2.12]: https://github.com/Derrors/iphone-control/compare/v0.2.11...v0.2.12
 [0.2.11]: https://github.com/Derrors/iphone-control/compare/v0.2.10...v0.2.11

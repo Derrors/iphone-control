@@ -151,6 +151,11 @@ impl Config {
     pub fn ddi_cache(&self) -> PathBuf {
         self.data_dir.join("ddi")
     }
+    /// The cache of the image a phone takes: `ddi/personalized/` for the classic personalized image (iOS 17–18),
+    /// `ddi/` for the cryptex one
+    pub fn ddi_cache_for(&self, legacy: bool) -> PathBuf {
+        if legacy { self.ddi_cache().join("personalized") } else { self.ddi_cache() }
+    }
     /// 旧版本的锁屏密码：只有一份，不知道是哪台设备的。USB 上只接着一台时归到那台名下（见
     /// [`crate::core::Daemon::adopt_legacy_passcode`]），接着多台时不用，免得把一台的密码输进另一台
     pub fn legacy_passcode_file(&self) -> PathBuf {

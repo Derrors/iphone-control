@@ -52,8 +52,8 @@ Notification variables: see [Notifications](./notifications).
 | Variable | Meaning |
 |---|---|
 | `ICTL_ANISETTE_URL` | Your own anisette server (the default is a public third-party one; see [Security](./security)) |
-| `ICTL_DDI_URL` | Developer Disk Image download URL; the default is a community-maintained mirror |
-| `ICTL_DDI_DIR` | A Developer Disk Image directory you extracted from Xcode. The daemon doesn't download anything or delete its files, and the error names any missing file. When unset, the `ddi/` cache in the data directory is used, and it is deleted and downloaded again after 3 failed mounts in a row |
+| `ICTL_DDI_URL` | Developer Disk Image download URL; the default is a community-maintained mirror. The classic personalized image for iOS 17–18 is downloaded from the sibling `Xcode_iOS_DDI_Personalized` directory |
+| `ICTL_DDI_DIR` | A Developer Disk Image directory you extracted from Xcode. The daemon doesn't download anything or delete its files, and the error names any missing file. iOS 17–18 take the classic personalized image (`BuildManifest.plist`, `Image.dmg`, `Image.dmg.trustcache`). When unset, the `ddi/` cache in the data directory is used (`ddi/personalized/` for iOS 17–18), and it is deleted and downloaded again after 3 failed mounts in a row |
 | `ICTL_IOS_BACKEND` | How phones on iOS 27 and later are driven. `auto` (the default) and `native`: natively, without WDA: HID for touches, the accessibility service to read the screen, the pasteboard to type. `wda`: still through WDA. iOS 26 and earlier always use WDA |
 | `ICTL_WDA_UNSIGNED` | Path of the unsigned WDA. Default: `wda/WDA-unsigned.ipa` in the data directory, downloaded before the first signing. A path you set yourself is not downloaded |
 | `SCREEN_W` / `SCREEN_H` | Screen size in points for the HID fallback, used only while WDA is down and there is no record of this device's size: WDA has never connected, or you switched to a device without one. It applies to every device, so take care with several |

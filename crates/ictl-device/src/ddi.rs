@@ -15,17 +15,31 @@ pub const DEFAULT_BASE_URL: &str =
 pub const FILES: [&str; 5] =
     ["BuildManifest.plist", "Image.dmg", "Image.dmg.trustcache", "Image.dmg.cryptex_info", "Image.dmg.root_hash"];
 
+/// iOS 17–18: the classic personalized image (mounted through `mobile_image_mounter`), next to the cryptex one
+/// in the same upstream repository
+pub const PERSONALIZED_FILES: [&str; 3] = ["BuildManifest.plist", "Image.dmg", "Image.dmg.trustcache"];
+
+/// Where the classic personalized image is downloaded from: the `Xcode_iOS_DDI_Personalized` directory next to
+/// the cryptex one (`ICTL_DDI_URL` points at a mirror of the upstream layout)
+pub fn personalized_url(base_url: &str) -> String {
+    let base = base_url.trim_end_matches('/');
+    match base.rsplit_once('/') {
+        Some((parent, _)) => format!("{parent}/Xcode_iOS_DDI_Personalized"),
+        None => base.to_owned(),
+    }
+}
+
 /// 记录缓存来自哪个下载地址：换了地址就整套重新下载，免得新旧文件混在一起
 const SOURCE_STAMP: &str = ".source";
 
 /// 缓存是否完整
-pub fn cache_complete(dir: &Path) -> bool {
-    FILES.iter().all(|f| dir.join(f).is_file())
+pub fn cache_complete(dir: &Path, files: &[&str]) -> bool {
+    files.iter().all(|f| dir.join(f).is_file())
 }
 
 /// 用户自己提供的目录（`ICTL_DDI_DIR`）：不下载、不改动，只检查文件齐不齐
-pub fn require_complete(dir: &Path) -> Result<PathBuf> {
-    let missing: Vec<&str> = FILES.iter().copied().filter(|f| !dir.join(f).is_file()).collect();
+pub fn require_complete(dir: &Path, files: &[&str]) -> Result<PathBuf> {
+    let missing: Vec<&str> = files.iter().copied().filter(|f| !dir.join(f).is_file()).collect();
     if missing.is_empty() {
         return Ok(dir.to_owned());
     }
@@ -41,15 +55,15 @@ pub fn require_complete(dir: &Path) -> Result<PathBuf> {
 }
 
 /// 删掉缓存（挂载反复失败时调用，下次重新下载）。只用于守护进程自己下载的缓存目录
-pub fn invalidate(dir: &Path) {
-    for f in FILES.iter().chain([&SOURCE_STAMP]) {
+pub fn invalidate(dir: &Path, files: &[&str]) {
+    for f in files.iter().chain([&SOURCE_STAMP]) {
         let _ = std::fs::remove_file(dir.join(f));
     }
 }
 
 /// 确保 `dir` 里有完整的 DDI，缺的从 `base_url` 下载；返回该目录。
 /// 下载先写临时文件再改名，中途失败不会留下半个文件。
-pub async fn ensure_cache(dir: &Path, base_url: &str) -> Result<PathBuf> {
+pub async fn ensure_cache(dir: &Path, base_url: &str, files: &[&str]) -> Result<PathBuf> {
     let stamp = std::fs::read_to_string(dir.join(SOURCE_STAMP)).ok();
     if stamp.as_deref().is_some_and(|s| s.trim() != base_url) {
         tracing::info!(
@@ -59,9 +73,9 @@ pub async fn ensure_cache(dir: &Path, base_url: &str) -> Result<PathBuf> {
                 "The developer disk image download URL changed, downloading again"
             )
         );
-        invalidate(dir);
+        invalidate(dir, files);
     }
-    if cache_complete(dir) {
+    if cache_complete(dir, files) {
         if stamp.is_none() {
             // 早期版本下载的缓存没有记录来源：认作当前地址
             let _ = std::fs::write(dir.join(SOURCE_STAMP), base_url);
@@ -73,7 +87,7 @@ pub async fn ensure_cache(dir: &Path, base_url: &str) -> Result<PathBuf> {
         .timeout(std::time::Duration::from_secs(600))
         .build()
         .map_err(|e| DeviceError::Download(e.to_string()))?;
-    for name in FILES {
+    for &name in files {
         let dest = dir.join(name);
         if dest.is_file() {
             continue;
@@ -106,14 +120,36 @@ mod tests {
         for f in &FILES[..4] {
             std::fs::write(dir.join(f), b"x").unwrap();
         }
-        assert!(!cache_complete(&dir));
+        assert!(!cache_complete(&dir, &FILES));
         std::fs::write(dir.join(FILES[4]), b"x").unwrap();
-        assert!(cache_complete(&dir));
-        assert!(require_complete(&dir).is_ok());
-        invalidate(&dir);
-        assert!(!cache_complete(&dir));
-        let e = require_complete(&dir).unwrap_err().to_string();
+        assert!(cache_complete(&dir, &FILES));
+        assert!(require_complete(&dir, &FILES).is_ok());
+        invalidate(&dir, &FILES);
+        assert!(!cache_complete(&dir, &FILES));
+        let e = require_complete(&dir, &FILES).unwrap_err().to_string();
         assert!(e.contains("BuildManifest.plist") && e.contains("Image.dmg.root_hash"), "{e}");
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn the_personalized_image_needs_its_three_files_and_sits_next_to_the_cryptex_one() {
+        let dir = std::env::temp_dir().join(format!("ictl-ddi-personalized-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        for f in &PERSONALIZED_FILES[..2] {
+            std::fs::write(dir.join(f), b"x").unwrap();
+        }
+        let e = require_complete(&dir, &PERSONALIZED_FILES).unwrap_err().to_string();
+        assert!(e.contains("Image.dmg.trustcache") && !e.contains("cryptex_info"), "{e}");
+        std::fs::write(dir.join(PERSONALIZED_FILES[2]), b"x").unwrap();
+        assert!(cache_complete(&dir, &PERSONALIZED_FILES) && !cache_complete(&dir, &FILES));
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(
+            personalized_url(DEFAULT_BASE_URL),
+            "https://raw.githubusercontent.com/doronz88/DeveloperDiskImage/main/PersonalizedImages/Xcode_iOS_DDI_Personalized"
+        );
+        assert_eq!(
+            personalized_url("https://mirror.example/ddi/Xcode_iOS_DDI_Cryptex/"),
+            "https://mirror.example/ddi/Xcode_iOS_DDI_Personalized"
+        );
     }
 }

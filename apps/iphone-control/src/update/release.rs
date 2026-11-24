@@ -129,7 +129,7 @@ pub(super) fn read(dir: &Path) -> Result<Cache> {
 }
 
 pub(super) fn write_json(path: &Path, data: &impl Serialize) -> Result<()> {
-    fs::create_dir_all(path.parent().context("missing update state directory")?)?;
+    fs::create_dir_all(path.parent().context(ictl_l10n::tr!("缺少更新的状态目录", "missing update state directory"))?)?;
     super::write_json_atomic(path, data)
 }
 

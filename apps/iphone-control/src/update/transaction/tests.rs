@@ -351,3 +351,26 @@ fn a_release_without_unattended_mark_is_not_a_failure() {
     assert!(e.to_string().ends_with("iphone-control update"), "{e}");
     assert_eq!(failure_status(&anyhow::anyhow!("archive digest mismatch")), "failed");
 }
+
+/// Idle MCP servers of this version don't keep an update waiting; anything else named iphone-control does
+#[test]
+fn only_mcp_servers_idle_without_the_lease() {
+    for args in [
+        "iphone-control mcp",
+        "/home/u/.local/bin/iphone-control mcp",
+        "iphone-control --socket /run/x.sock mcp",
+        "iphone-control --data-dir=/d --socket=/s mcp --url https://h:8200",
+    ] {
+        assert!(idles_without_lease(args), "{args}");
+    }
+    for args in [
+        "iphone-control",
+        "iphone-control viewer",
+        "iphone-control mcp-config",
+        "iphone-control setup",
+        "iphone-control --socket mcp viewer",
+        "iphone-control task run claude mcp",
+    ] {
+        assert!(!idles_without_lease(args), "{args}");
+    }
+}

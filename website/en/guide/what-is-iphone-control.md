@@ -28,7 +28,7 @@ The core is device control: a long-running daemon owns the phone and keeps servi
 
 | | |
 |---|---|
-| Host | Linux, x86_64 or arm64: one-command install, Homebrew or a .deb (Debian 12+, Ubuntu 22.04+), with the system usbmuxd; or build from source with Rust 1.89+<br>macOS, Apple Silicon: one-command install or Homebrew, or build from source, see [macOS](../deploy/macos)<br>No Windows |
+| Host | Linux, x86_64 or arm64: one-command install, Homebrew or a .deb (Debian 12+, Ubuntu 22.04+), with the system usbmuxd; or build from source with Rust 1.89+<br>macOS 11+, Apple Silicon or Intel (Intel packages from 0.2.14): one-command install or Homebrew, or build from source, see [macOS](../deploy/macos)<br>No Windows |
 | Phone | iPhone or iPad, iOS 17 or later. **iOS 27 or later recommended** (native control); iOS 17–26 through WebDriverAgent |
 | Verified on | iPhone 15 Pro Max, iOS 27.2.1, native control (Linux)<br>iPhone 15 Pro Max, iOS 27.0.1, WDA (Linux, macOS)<br>iPhone 12 mini, iOS 26.4.1 (Linux)<br>iPad mini 5, iOS 26.6.1 (Linux) |
 | Account | None on iOS 27 and later (native control); on iOS 26 and earlier a free Apple ID, a dedicated one recommended |
@@ -57,7 +57,7 @@ The CLI, `doctor` output and MCP tool results are in Simplified Chinese by defau
 
 **macOS**
 
-- Prebuilt binaries are for Apple Silicon only; an Intel Mac needs a build from source and is untested.
+- Intel Mac packages come with 0.2.14 and later; they are cross-compiled on Apple Silicon and were only tested under Rosetta, not yet on a real Intel Mac.
 - The prebuilt binary isn't notarized; a copy downloaded with a browser needs its quarantine flag removed first.
 - Set the phone's charging limit to 100%: with the 80% limit, USB drops about once a minute.
 

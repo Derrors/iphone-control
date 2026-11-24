@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SLUG = r"[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9][A-Za-z0-9_.-]*"
 NUMBER = r"(?:0|[1-9][0-9]*)"
 STABLE = rf"v{NUMBER}\.{NUMBER}\.{NUMBER}"
-TARGETS = ("linux-x86_64", "linux-aarch64", "macos-arm64")
+TARGETS = ("linux-x86_64", "linux-aarch64", "macos-arm64", "macos-x86_64")
 DEB_ARCH = {"linux-x86_64": "amd64", "linux-aarch64": "arm64"}
 # 0.2.2's updater refuses a manifest without these two fields and installs only when `rollback_from` is its own
 # version (rollback was removed after it). Written into archive manifests so 0.2.2 can still upgrade with

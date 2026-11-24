@@ -1,10 +1,11 @@
 #!/bin/sh
 # Prints the Homebrew formula for one release:
-#   packaging/homebrew/formula.sh v0.2.1 <sha256 macos-arm64> <sha256 linux-x86_64> <sha256 linux-aarch64>
+#   packaging/homebrew/formula.sh v0.2.1 <sha256 macos-arm64> <sha256 macos-x86_64> <sha256 linux-x86_64> \
+#     <sha256 linux-aarch64>
 # The formula installs the prebuilt binary from the GitHub release; `brew services start iphone-control` runs the
 # daemon (launchd on macOS, systemd on Linux) with the settings in ~/.config/iphone-control/env.
 set -eu
-[ $# -eq 4 ] || { echo "usage: $0 vX.Y.Z SHA_MACOS_ARM64 SHA_LINUX_X86_64 SHA_LINUX_AARCH64" >&2; exit 2; }
+[ $# -eq 5 ] || { echo "usage: $0 vX.Y.Z SHA_MACOS_ARM64 SHA_MACOS_X86_64 SHA_LINUX_X86_64 SHA_LINUX_AARCH64" >&2; exit 2; }
 tag="$1"
 repo="${ICTL_UPDATE_PUBLISHER:?set the release publisher as owner/repo}"
 base="https://github.com/$repo/releases/download/$tag/iphone-control-$tag"
@@ -16,21 +17,25 @@ class IphoneControl < Formula
   license "MIT"
 
   on_macos do
-    depends_on arch: :arm64
+    depends_on macos: :big_sur
     on_arm do
       url "$base-macos-arm64.tar.gz"
       sha256 "$2"
+    end
+    on_intel do
+      url "$base-macos-x86_64.tar.gz"
+      sha256 "$3"
     end
   end
 
   on_linux do
     on_intel do
       url "$base-linux-x86_64.tar.gz"
-      sha256 "$3"
+      sha256 "$4"
     end
     on_arm do
       url "$base-linux-aarch64.tar.gz"
-      sha256 "$4"
+      sha256 "$5"
     end
   end
 

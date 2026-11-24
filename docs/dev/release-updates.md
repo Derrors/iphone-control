@@ -22,7 +22,7 @@ openssl genpkey -algorithm ED25519 -out signing-key.pem
 openssl pkey -in signing-key.pem -pubout -outform DER | tail -c 32 | od -An -v -tx1 | tr -d ' \n'
 ```
 
-The stable tag must match the workspace package version, e.g. `v0.2.1` for `0.2.1`. The workflow checks the uploaded archives against the build output before signing the manifest bytes for each target. Linux and Apple Silicon macOS have independent signing jobs. During a partial release, a platform can have an archive before its signed manifest appears.
+The stable tag must match the workspace package version, e.g. `v0.2.1` for `0.2.1`. The workflow checks the uploaded archives against the build output before signing the manifest bytes for each target. Linux and macOS (Apple Silicon and Intel) have independent signing jobs. During a partial release, a platform can have an archive before its signed manifest appears.
 
 ## Roll out a release
 

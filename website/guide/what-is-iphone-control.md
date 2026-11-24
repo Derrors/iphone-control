@@ -28,7 +28,7 @@ iphone-control 让 AI agent（例如 Claude）操作一台用数据线接在 Lin
 
 | | |
 |---|---|
-| 主机 | Linux，x86_64 或 arm64：一行命令安装、Homebrew 或 deb 包（Debian 12+、Ubuntu 22.04+），要系统的 usbmuxd；也可以用 Rust 1.89+ 从源码编译<br>macOS，Apple Silicon：一行命令安装或 Homebrew，也可以从源码编译，见 [macOS](../deploy/macos)<br>不支持 Windows |
+| 主机 | Linux，x86_64 或 arm64：一行命令安装、Homebrew 或 deb 包（Debian 12+、Ubuntu 22.04+），要系统的 usbmuxd；也可以用 Rust 1.89+ 从源码编译<br>macOS 11 及以上，Apple Silicon 或 Intel（Intel 的包从 0.2.14 起提供）：一行命令安装或 Homebrew，也可以从源码编译，见 [macOS](../deploy/macos)<br>不支持 Windows |
 | 手机 | iPhone 或 iPad，iOS 17 及以上。**推荐 iOS 27 及以上**（原生控制）；iOS 17–26 经 WebDriverAgent |
 | 已在真机验证 | iPhone 15 Pro Max，iOS 27.2.1，原生控制（Linux）<br>iPhone 15 Pro Max，iOS 27.0.1，WDA（Linux、macOS）<br>iPhone 12 mini，iOS 26.4.1（Linux）<br>iPad mini 5，iOS 26.6.1（Linux） |
 | 账号 | iOS 27 及以上（原生控制）不需要；iOS 26 及以下要一个免费 Apple ID，建议专门注册一个 |
@@ -57,7 +57,7 @@ iphone-control 让 AI agent（例如 Claude）操作一台用数据线接在 Lin
 
 **macOS**
 
-- 预编译版本只支持 Apple Silicon；Intel Mac 要从源码编译，没测过。
+- Intel Mac 的包从 0.2.14 起提供，是在 Apple Silicon 上交叉编译的，只在 Rosetta 下跑过测试，还没在真正的 Intel Mac 上用过。
 - 预编译二进制没有经过苹果公证，用浏览器下载的要先去掉隔离标记。
 - 手机的充电上限要改成 100%，开着「80% 上限」时 USB 大约每分钟断开一次。
 

@@ -49,7 +49,7 @@ Talking to the phone over USB goes through the system's usbmuxd: `sudo apt insta
 On Linux with ffmpeg installed, the control page's picture is H.264, about 1/15 of the traffic, which is much smoother through a tunnel or over the internet: `sudo apt install ffmpeg`. On macOS it is H.264 without installing anything. See [the control page's picture](./cli#viewer-picture).
 :::
 
-Intel Macs have no prebuilt binary and need a build from source, as does development. See [Build from Source](../deploy/source).
+The one-line installer and Homebrew work on Apple Silicon and Intel Macs (Intel packages from 0.2.14). Development runs from source; see [Build from Source](../deploy/source).
 
 ### Upstream v0.2.0 script installation and migration {#legacy-script}
 

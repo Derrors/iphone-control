@@ -105,6 +105,7 @@
   - 原生安装更简单：不用 root、不用 Docker、不用 USB 直通，macOS 和 Linux 是同一套步骤；Mac 上本来就不能用 Docker（Docker Desktop 不支持 USB 直通）。
   - 少一套要维护的东西：自管 usbmuxd、容器没有 udev 的热插拔兜底、镜像构建和 SBOM、`docker exec` 形式的注册命令都不要了。
 - **代价**：Docker 用户要迁移（数据目录拷到 `~/.local/share/iphone-control`，`.env` 改成 `~/.config/iphone-control/env`，手机可能要重新信任，见更新日志的升级注意事项）；Linux 上要自己装 usbmuxd；不能再用容器把它和宿主机隔离开，守护进程的权限就是登录用户的权限；Intel Mac 没有预编译版本，要从源码编译。
+- **补充（2026-11-24）**：Intel Mac 有了预编译包（`macos-x86_64`，#181），install.sh、Homebrew、`iphone-control update` 都支持。在 Apple Silicon 的 runner 上交叉编译，不用越来越少的 Intel runner；Rosetta 下跑一遍 `--version`。最低系统和 Apple Silicon 一样是 macOS 11，写在 `.cargo/config.toml`：Rust 对 x86_64 的默认是 10.12，这时链接 CoreMedia 会带进一个经 `@rpath` 找的 Swift 库，程序起不来。代价：没有 Intel Mac 做真机验证，只在 Rosetta 下跑过全部单测；VideoToolbox 在 Intel 上用的是另一套硬件编码器，画质参数没测过。
 - **重新评估**：有人需要在无人值守的服务器上隔离运行、又不用控制台的 AI 任务时。
 
 ## D15：控制台画面用 H.264，调用外部 ffmpeg，显卡编码优先（2026-11-11）

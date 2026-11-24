@@ -1,6 +1,6 @@
 # Build from Source
 
-Usually you don't need this: the one-line installer, Homebrew and the .deb all install the program built for the release; see [Getting Started](../guide/getting-started#install). Build from source on machines without a prebuilt package (Intel Macs) and for development. On a Mac, see [macOS](./macos).
+Usually you don't need this: the one-line installer, Homebrew and the .deb all install the program built for the release; see [Getting Started](../guide/getting-started#install). Build from source on machines without a prebuilt package (Intel Macs before 0.2.14) and for development. On a Mac, see [macOS](./macos).
 
 ## Requirements
 

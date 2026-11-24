@@ -3,12 +3,12 @@
 iphone-control 也能直接跑在 Mac 上：用 macOS 自带的 usbmuxd，不需要 Xcode，也不需要付费开发者账号。和 Linux 上基本一样，区别见文末的[已知差异](#已知差异)。
 
 ::: info 验证情况
-已在 MacBook Pro（Apple M3 Pro）/ macOS 26.6.2 + iPhone 15 Pro Max / iOS 27.0.1 上验证：安装向导、当时的全部 MCP 工具、开着 Finder 连续操作、同一条隧道连续 30 分钟、拔插和手机重启后自动恢复。这次验证早于 0.1.3，多设备工具（`iphone_list_devices`、`iphone_select_device`）没有在 macOS 上验证过。Intel Mac 还没测过。验证步骤和结果见 [macOS 真机验证](https://github.com/Derrors/iphone-control/blob/main/docs/dev/macos-verification.md)。
+已在 MacBook Pro（Apple M3 Pro）/ macOS 26.6.2 + iPhone 15 Pro Max / iOS 27.0.1 上验证：安装向导、当时的全部 MCP 工具、开着 Finder 连续操作、同一条隧道连续 30 分钟、拔插和手机重启后自动恢复。这次验证早于 0.1.3，多设备工具（`iphone_list_devices`、`iphone_select_device`）没有在 macOS 上验证过。Intel Mac 的包从 0.2.14 起提供，是在 Apple Silicon 上交叉编译的，只在 Rosetta 下跑过测试，还没在真正的 Intel Mac 上用过。验证步骤和结果见 [macOS 真机验证](https://github.com/Derrors/iphone-control/blob/main/docs/dev/macos-verification.md)。
 :::
 
 ## 需要
 
-- Apple Silicon 的 Mac。用脚本安装时，PATH 中需要有 Python 3 和 OpenSSL 3。Intel Mac 要从源码编译，需 Xcode 命令行工具和 Rust 1.89 以上。
+- macOS 11 及以上的 Mac，Apple Silicon 或 Intel（Intel 的包从 0.2.14 起提供；更早的版本要从源码编译，需 Xcode 命令行工具和 Rust 1.89 以上）。用脚本安装时，PATH 中需要有 Python 3 和 OpenSSL 3。
 - 一部 iPhone 或 iPad，用能**传数据**的线连接。推荐 iOS 27 及以上（原生控制）；iOS 17 起都能用
 - iOS 26 及以下还要一个免费 Apple ID（建议专门注册一个）
 
@@ -33,7 +33,7 @@ brew services start iphone-control      # 守护进程常驻，登录后自动�
 
 服务同样读取 `~/.config/iphone-control/env`，日志在 `$(brew --prefix)/var/log/iphone-control.log`。设置模板在 `$(brew --prefix)/opt/iphone-control/share/iphone-control/env.example`。
 
-### 从源码编译（Intel Mac）
+### 从源码编译
 
 需要 Xcode 命令行工具和 Rust 1.89 以上，M3 Pro 上约 2 分半：
 
@@ -137,11 +137,11 @@ rm -rf ~/.local/share/iphone-control ~/.config/iphone-control   # 会删掉 Appl
 
 | | Linux | macOS |
 |---|---|---|
-| 安装 | 一行命令、Homebrew、deb 或从源码编译 | 一行命令、Homebrew 或从源码编译（只有 Apple Silicon 的包） |
+| 安装 | 一行命令、Homebrew、deb 或从源码编译 | 一行命令、Homebrew 或从源码编译（Apple Silicon 和 Intel 的包） |
 | 常驻 | systemd 用户服务 | launchd 用户服务 |
 | usbmuxd | 系统包，插上手机时由 udev 拉起 | macOS 自带，一直在运行 |
 | 数据目录 | `~/.local/share/iphone-control` | 同左（不是 Mac 习惯的 `~/Library/Application Support`） |
 | 控制接口 | `$XDG_RUNTIME_DIR/iphone-control/ctl.sock` | `~/.local/share/iphone-control/ctl.sock` |
 | 配对记录 | `/var/lib/lockdown` | `/var/db/lockdown`（和 Finder 共用） |
 
-还没在 Mac 上验证过的：Xcode 的「设备与模拟器」窗口开着时会不会抢连接、手机第一次在这台 Mac 上配对的流程、iPad、接多台设备、Intel Mac。遇到问题欢迎[反馈](https://github.com/Derrors/iphone-control/issues)。
+还没在 Mac 上验证过的：Xcode 的「设备与模拟器」窗口开着时会不会抢连接、手机第一次在这台 Mac 上配对的流程、iPad、接多台设备、真正的 Intel Mac（Intel 的包只在 Rosetta 下测过）。遇到问题欢迎[反馈](https://github.com/Derrors/iphone-control/issues)。

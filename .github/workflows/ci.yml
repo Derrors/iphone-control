@@ -64,7 +64,8 @@ jobs:
       - name: Terminal menus (PTY)
         run: python3 tests/terminal.py --binary target/debug/iphone-control --test-dir target/debug/deps
 
-  # macOS（Apple Silicon）上能编译、测试通过；格式和平台无关，上面已经查过
+  # macOS（Apple Silicon）上能编译、测试通过；格式和平台无关，上面已经查过。Intel Mac 的发布包在同一台机器上交叉编译，
+  # 这里也查一遍 x86_64 能编译（只 check，不链接、不跑测试）
   macos:
     needs: [changes]
     # changes 在 main 的推送上会跳过，这时照样跑
@@ -75,10 +76,12 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.99.1
         with:
           components: clippy
+          targets: x86_64-apple-darwin
       - uses: Swatinem/rust-cache@v2
       # --all-features：默认不编的 debug-cmds（调试子命令）也要能编译
       - run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
       - run: cargo test --workspace --all-features --locked
+      - run: cargo clippy --workspace --all-targets --all-features --locked --target x86_64-apple-darwin -- -D warnings
 
   # macOS 上的终端菜单 PTY 回归。不在规则集的必过检查里：它靠两个进程之间的时间差模拟按键，
   # 忙的 macOS runner 上调度一卡就会误报（Linux 上同一个脚本在上面的 rust 里，仍是卡点）。
@@ -136,7 +139,7 @@ jobs:
       - name: Homebrew formula
         run: |
           shellcheck -s sh packaging/homebrew/formula.sh
-          ICTL_UPDATE_PUBLISHER="$GITHUB_REPOSITORY" sh packaging/homebrew/formula.sh v0.0.0 aaa bbb ccc > iphone-control.rb
+          ICTL_UPDATE_PUBLISHER="$GITHUB_REPOSITORY" sh packaging/homebrew/formula.sh v0.0.0 aaa bbb ccc ddd > iphone-control.rb
           grep -F "https://github.com/$GITHUB_REPOSITORY/releases/" iphone-control.rb
           ruby -c iphone-control.rb
 

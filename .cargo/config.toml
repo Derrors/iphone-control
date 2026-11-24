@@ -1,0 +1,5 @@
+# Lowest macOS the binaries run on, for every build (from source, CI, release). Rust's own default is 11.0 on Apple
+# Silicon but 10.12 on Intel, and below 10.14.4 linking CoreMedia pulls in a Swift library through @rpath that isn't
+# found at run time: an Intel build aborted at start. Ignored on other systems.
+[env]
+MACOSX_DEPLOYMENT_TARGET = "11.0"

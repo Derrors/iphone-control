@@ -36,6 +36,7 @@ use idevice::{
     installation_proxy::InstallationProxyClient,
     lockdown::LockdownClient,
     misagent::MisagentClient,
+    mobile_image_mounter::ImageMounter,
     provider::{IdeviceProvider, UsbmuxdProvider},
     rsd::RsdHandshake,
     springboardservices::{InterfaceOrientation, SpringBoardServicesClient},
@@ -420,6 +421,39 @@ impl Device {
             let mut mux = self.provider.addr.connect(0).await?;
             mux.save_pair_record(&self.udid, record.serialize()?).await?;
             Ok(())
+        })
+        .await
+    }
+
+    /// iOS 17–26: the classic personalized image goes through lockdown's `mobile_image_mounter` (cryptexd stalls
+    /// there). Skipped when one is already mounted. The files come from `ICTL_LEGACY_DDI_DIR`: `Image.dmg`,
+    /// `Image.dmg.trustcache`, `BuildManifest.plist`. Returns whether it mounted something
+    pub async fn mount_legacy_ddi(&self) -> Result<bool> {
+        let dir = std::env::var_os("ICTL_LEGACY_DDI_DIR").map(std::path::PathBuf::from).ok_or_else(|| {
+            DeviceError::Idevice(ictl_l10n::tr!(
+                "iOS 17–26 需要经典个性化开发者镜像：把 ICTL_LEGACY_DDI_DIR 设为含 Image.dmg、Image.dmg.trustcache、BuildManifest.plist 的目录",
+                "iOS 17–26 needs the classic personalized developer disk image: set ICTL_LEGACY_DDI_DIR to a directory with Image.dmg, Image.dmg.trustcache and BuildManifest.plist"
+            ).into())
+        })?;
+        limit(ictl_l10n::tr!("挂载开发者镜像", "mount the developer disk image"), Duration::from_secs(180), async {
+            // the chip id first: the mounter must be followed by no lockdown session, but preceded by it is fine
+            let mut lockdown = LockdownClient::connect(&*self.provider).await?;
+            let ecid = lockdown
+                .get_value(Some("UniqueChipID"), None)
+                .await?
+                .as_unsigned_integer()
+                .ok_or_else(|| DeviceError::Idevice("the phone gave no UniqueChipID".into()))?;
+            let mut mounter = ImageMounter::connect(&*self.provider).await?;
+            if mounter.lookup_image("Personalized").await.is_ok() {
+                return Ok(false);
+            }
+            let (image, trustcache, manifest) = (
+                tokio::fs::read(dir.join("Image.dmg")).await?,
+                tokio::fs::read(dir.join("Image.dmg.trustcache")).await?,
+                tokio::fs::read(dir.join("BuildManifest.plist")).await?,
+            );
+            mounter.mount_personalized(&*self.provider, image, trustcache, &manifest, None, ecid).await?;
+            Ok(true)
         })
         .await
     }

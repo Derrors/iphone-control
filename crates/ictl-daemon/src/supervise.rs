@@ -455,7 +455,7 @@ impl Daemon {
         g.preparing = Some(tokio::task::spawn_local(then_wake(wake, async move {
             let _lease = lease;
             let mut t = device.open_tunnel().await.map_err(|e| (e, false))?;
-            let r = ensure_ddi(&mut t, &cache, &url, user_dir.as_deref()).await;
+            let r = ensure_ddi(&device, &mut t, &cache, &url, user_dir.as_deref()).await;
             let stopped = match (&r, known) {
                 (Ok(_), Some(pid)) => Some((device.udid.clone(), detached::stop(&mut t, pid).await)),
                 _ => None,
@@ -617,7 +617,7 @@ impl Daemon {
             type Ready = (Option<String>, Result<Detached, DeviceError>, Option<LogStream>);
             let ddi: Result<Ready, (DeviceError, bool)> = async {
                 let mut t = device.open_tunnel().await.map_err(|e| (e, false))?;
-                let r = ensure_ddi(&mut t, &cache, &url, user_dir.as_deref()).await;
+                let r = ensure_ddi(&device, &mut t, &cache, &url, user_dir.as_deref()).await;
                 let r = match r {
                     Ok(m) => {
                         // 后台启动前先开系统日志流：认「Enable UI Automation」密码框靠它（见 WdaRunner::attach）
@@ -1054,9 +1054,15 @@ fn now_secs() -> u64 {
     std::time::SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs()
 }
 
+/// Whether the phone takes the classic image through mobile_image_mounter (0 = version unreadable: cryptexd, as before)
+fn legacy_ddi(major: u32) -> bool {
+    (1..27).contains(&major)
+}
+
 /// 手机重启后开发者镜像可能掉了：没挂就挂上（返回挂上的版本），已挂载时只是一次查询。
 /// 错误带上「是不是挂载这一步」（才可能是缓存坏了）
 async fn ensure_ddi(
+    device: &Device,
     t: &mut Tunnel,
     cache: &std::path::Path,
     url: &str,
@@ -1064,6 +1070,11 @@ async fn ensure_ddi(
 ) -> Result<Option<String>, (DeviceError, bool)> {
     if t.ddi_mounted().await.map_err(|e| (e, false))?.is_some() {
         return Ok(None);
+    }
+    // iOS 17–26: the classic personalized image via mobile_image_mounter; cryptexd is for iOS 27 only
+    if legacy_ddi(device.info().await.map_err(|e| (e, false))?.major_version()) {
+        let mounted = device.mount_legacy_ddi().await.map_err(|e| (e, true))?;
+        return Ok(mounted.then(|| "personalized".to_owned()));
     }
     let dir = match user_dir {
         Some(d) => ictl_device::ddi::require_complete(d),
@@ -1096,6 +1107,14 @@ async fn open_log(device: &Device) -> Option<LogStream> {
             );
             None
         }
+    }
+}
+
+#[cfg(test)]
+mod ddi_tests {
+    #[test]
+    fn legacy_ddi_below_ios_27_only() {
+        assert!(super::legacy_ddi(18) && !super::legacy_ddi(27) && !super::legacy_ddi(0));
     }
 }
 

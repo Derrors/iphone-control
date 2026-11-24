@@ -42,6 +42,7 @@ idevice = { version = "=0.1.68", default-features = false, features = [
     "core_device",
     "display_stream",
     "cryptexd",
+    "mobile_image_mounter",
     "tss",
     "installation_proxy",
     "springboardservices",

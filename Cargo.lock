@@ -2055,6 +2055,7 @@ dependencies = [
  "ictl-device",
  "ictl-l10n",
  "idevice",
+ "plist",
  "quick-xml",
  "regex",
  "serde_json",

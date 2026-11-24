@@ -25,6 +25,17 @@ use crate::{Result, WdaClient, WdaError, is_automation_pin_error};
 
 pub const WDA_PORT: u16 = 8100;
 
+/// The address WDA listens on, given to it as `USE_IP`. Without it WDA listens on every interface of the phone: with
+/// the phone on Wi-Fi anyone on the network reaches its HTTP server (8100, no authentication) and its MJPEG stream
+/// (9100). usbmuxd's connections arrive on the phone's loopback, so the host still reaches it. WDA 16.15.3 gives it
+/// to both servers (`FBWebServer`: the HTTP server's interface and the MJPEG socket's local endpoint)
+pub const WDA_BIND_IP: &str = "127.0.0.1";
+
+/// Environment WDA is launched with, in the background (`Tunnel::launch_in_background`) or by XCTest
+pub fn launch_env() -> Vec<(&'static str, &'static str)> {
+    vec![("USE_IP", WDA_BIND_IP)]
+}
+
 /// runner 等「Enable UI Automation」密码的时长是 60 秒（runner 自己的超时），多留 5 秒收它的报错
 const AUTOMATION_WAIT: Duration = Duration::from_secs(65);
 /// 连接 installation_proxy、查 runner 的安装信息的时限（idevice 读应答没有超时）
@@ -220,13 +231,17 @@ impl WdaRunner {
                 other => WdaError::StartFailed(other.to_string()),
             })
         };
-        let cfg = tokio::time::timeout(LOOKUP_TIMEOUT, lookup).await.map_err(|_| {
+        let mut cfg = tokio::time::timeout(LOOKUP_TIMEOUT, lookup).await.map_err(|_| {
             WdaError::StartFailed(ictl_l10n::trf!(
                 "查 WDA 安装信息超时（{} 秒）",
                 "querying the WDA install info timed out ({} s)",
                 LOOKUP_TIMEOUT.as_secs()
             ))
         })??;
+        let env = cfg.runner_env.get_or_insert_with(plist::Dictionary::new);
+        for (k, v) in launch_env() {
+            env.insert(k.into(), v.into());
+        }
 
         let progress = Arc::new(Mutex::new(Progress::default()));
         let task = {

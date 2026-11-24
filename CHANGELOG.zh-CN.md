@@ -6,6 +6,12 @@
 
 ## [Unreleased]
 
+## [0.2.13] - 2026-11-24
+
+### 修复
+
+- 系统语言为英语、法语、德语、西班牙语等非中文的 iPhone 也能自动解锁，之前会一位密码都没输入就放弃（#174）。
+
 ## [0.2.12] - 2026-11-24
 
 ### 新功能
@@ -357,7 +363,8 @@
 - `setup`、`doctor`、`status`、`mcp-config`。
 - Docker 镜像和预编译的 Linux 二进制。
 
-[Unreleased]: https://github.com/Derrors/iphone-control/compare/v0.2.12...HEAD
+[Unreleased]: https://github.com/Derrors/iphone-control/compare/v0.2.13...HEAD
+[0.2.13]: https://github.com/Derrors/iphone-control/compare/v0.2.12...v0.2.13
 [0.2.12]: https://github.com/Derrors/iphone-control/compare/v0.2.11...v0.2.12
 [0.2.11]: https://github.com/Derrors/iphone-control/compare/v0.2.10...v0.2.11
 [0.2.10]: https://github.com/Derrors/iphone-control/compare/v0.2.9...v0.2.10

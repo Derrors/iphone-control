@@ -6,6 +6,12 @@ What changed in each release, one line per change. Versions follow [Semantic Ver
 
 ## [Unreleased]
 
+## [0.2.13] - 2026-11-24
+
+### Fixes
+
+- Automatic unlock works on iPhones set to English, French, German, Spanish and other non-Chinese languages; it used to give up without entering a digit (#174).
+
 ## [0.2.12] - 2026-11-24
 
 ### New
@@ -357,7 +363,8 @@ First public release.
 - `setup`, `doctor`, `status` and `mcp-config`.
 - Docker image and prebuilt Linux binaries.
 
-[Unreleased]: https://github.com/Derrors/iphone-control/compare/v0.2.12...HEAD
+[Unreleased]: https://github.com/Derrors/iphone-control/compare/v0.2.13...HEAD
+[0.2.13]: https://github.com/Derrors/iphone-control/compare/v0.2.12...v0.2.13
 [0.2.12]: https://github.com/Derrors/iphone-control/compare/v0.2.11...v0.2.12
 [0.2.11]: https://github.com/Derrors/iphone-control/compare/v0.2.10...v0.2.11
 [0.2.10]: https://github.com/Derrors/iphone-control/compare/v0.2.9...v0.2.10

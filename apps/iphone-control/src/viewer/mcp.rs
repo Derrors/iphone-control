@@ -3,7 +3,8 @@
 //! The same tools as `iphone-control mcp` on stdio, for clients that connect by URL: an agent on another machine
 //! (with `--lan`, over HTTPS), or a client that only speaks HTTP. rmcp's Streamable HTTP server does the protocol
 //! (sessions, SSE); this passes requests the viewer has already read to it and writes its answer back, one request
-//! per connection like the rest of the viewer.
+//! per connection. A request body may come with a length or chunked (some clients and proxies send that); an answer
+//! without a length (an SSE stream) goes out chunked, so its end is explicit and a proxy can tell it from a cut-off.
 //!
 //! Who may call it is who may open the page: the viewer checks the peer address, `Host` and `Sec-Fetch-Site` first,
 //! and here a request that carries an `Origin` (a browser) must come from the page itself. Clients that aren't
@@ -30,20 +31,91 @@ pub async fn serve(svc: &ictl_mcp::HttpService, client: &mut Conn, head: &[u8], 
         return Ok(());
     };
     let (parts, mut body) = svc.handle(req).await.into_parts();
-    client.write_all(response_head(&parts).as_bytes()).await?;
+    let chunked = !parts.headers.contains_key(http::header::CONTENT_LENGTH);
+    client.write_all(response_head(&parts, chunked).as_bytes()).await?;
     client.flush().await?;
     while let Some(frame) = body.frame().await {
         let frame = match frame {
             Ok(f) => f,
             Err(never) => match never {},
         };
-        if let Some(data) = frame.data_ref() {
-            client.write_all(data).await?;
+        if let Some(data) = frame.data_ref()
+            && !data.is_empty()
+        {
+            if chunked {
+                client.write_all(format!("{:x}\r\n", data.len()).as_bytes()).await?;
+                client.write_all(data).await?;
+                client.write_all(b"\r\n").await?;
+            } else {
+                client.write_all(data).await?;
+            }
             // each event goes out now (TLS holds the last record back otherwise)
             client.flush().await?;
         }
     }
+    if chunked {
+        client.write_all(b"0\r\n\r\n").await?;
+        client.flush().await?;
+    }
     Ok(())
+}
+
+/// A chunked request body as far as it came: [`dechunk`]
+#[derive(Debug, PartialEq)]
+pub enum Chunked {
+    /// More is needed
+    Partial,
+    /// The whole body, decoded, and how many bytes of the input it took
+    Done(Vec<u8>, usize),
+    /// Bigger than allowed
+    TooLarge,
+    Invalid,
+}
+
+/// Decodes a chunked body (RFC 9112 7.1) from the start of `raw`: chunk extensions are ignored, trailer fields are
+/// read and dropped. `max` limits the decoded size
+pub fn dechunk(raw: &[u8], max: usize) -> Chunked {
+    let mut out = Vec::new();
+    let mut at = 0;
+    let line = |at: usize| raw[at..].windows(2).position(|w| w == b"\r\n").map(|n| (&raw[at..at + n], at + n + 2));
+    loop {
+        let Some((size_line, next)) = line(at) else {
+            return if raw.len() - at > 1024 { Chunked::Invalid } else { Chunked::Partial };
+        };
+        let Some(size) = std::str::from_utf8(size_line)
+            .ok()
+            .and_then(|l| l.split(';').next())
+            .map(str::trim)
+            .filter(|h| !h.is_empty() && h.len() <= 16)
+            .and_then(|h| usize::from_str_radix(h, 16).ok())
+        else {
+            return Chunked::Invalid;
+        };
+        at = next;
+        if size == 0 {
+            // trailer fields, then the empty line
+            loop {
+                let Some((field, next)) = line(at) else {
+                    return if raw.len() - at > 8192 { Chunked::Invalid } else { Chunked::Partial };
+                };
+                at = next;
+                if field.is_empty() {
+                    return Chunked::Done(out, at);
+                }
+            }
+        }
+        if out.len().saturating_add(size) > max {
+            return Chunked::TooLarge;
+        }
+        if raw.len() < at + size + 2 {
+            return Chunked::Partial;
+        }
+        if &raw[at + size..at + size + 2] != b"\r\n" {
+            return Chunked::Invalid;
+        }
+        out.extend_from_slice(&raw[at..at + size]);
+        at += size + 2;
+    }
 }
 
 /// The request as rmcp takes it
@@ -55,13 +127,17 @@ fn request(head: &[u8], body: Vec<u8>) -> Option<http::Request<Full<Bytes>>> {
     let mut b = http::Request::builder().method(method).uri(target);
     for line in lines.filter(|l| !l.is_empty()) {
         let (k, v) = line.split_once(':')?;
+        // the body is passed whole and decoded: how it was framed on the wire doesn't go along
+        if k.trim().eq_ignore_ascii_case("transfer-encoding") || k.trim().eq_ignore_ascii_case("content-length") {
+            continue;
+        }
         b = b.header(k.trim(), v.trim());
     }
     b.body(Full::new(Bytes::from(body))).ok()
 }
 
-/// Status line and headers; the body ends with the connection (`Connection: close`) unless it has a length
-fn response_head(parts: &http::response::Parts) -> String {
+/// Status line and headers: `chunked` when the answer has no length (a stream). The connection closes after it
+fn response_head(parts: &http::response::Parts, chunked: bool) -> String {
     let mut out =
         format!("HTTP/1.1 {} {}\r\n", parts.status.as_u16(), parts.status.canonical_reason().unwrap_or("Unknown"));
     for (k, v) in &parts.headers {
@@ -69,6 +145,9 @@ fn response_head(parts: &http::response::Parts) -> String {
             continue;
         }
         out.push_str(&format!("{}: {}\r\n", k.as_str(), String::from_utf8_lossy(v.as_bytes())));
+    }
+    if chunked {
+        out.push_str("Transfer-Encoding: chunked\r\n");
     }
     out.push_str("Connection: close\r\n\r\n");
     out
@@ -152,6 +231,34 @@ mod tests {
         assert!(body.contains("iphone_tap") && !body.contains("iphone_confirm"), "a plain client: no confirm tool");
         let (_, body) = exchange(&svc, post(list, &format!("{sid}Iphone-Control-Task-Token: abc\r\n"))).await;
         assert!(body.contains("iphone_confirm"), "a task's agent gets the confirm tool: {body}");
+    }
+
+    #[test]
+    fn chunked_bodies_decode() {
+        let raw = b"4;ext=1\r\nWiki\r\n5\r\npedia\r\n0\r\nX-Trailer: 1\r\n\r\nNEXT";
+        assert_eq!(dechunk(raw, 100), Chunked::Done(b"Wikipedia".to_vec(), raw.len() - 4));
+        for cut in [0, 3, 8, 15, 20, raw.len() - 6] {
+            assert_eq!(dechunk(&raw[..cut], 100), Chunked::Partial, "{cut}");
+        }
+        assert_eq!(dechunk(raw, 8), Chunked::TooLarge);
+        assert_eq!(dechunk(b"zz\r\n", 100), Chunked::Invalid);
+        assert_eq!(dechunk(b"2\r\nabc\r\n", 100), Chunked::Invalid, "chunk longer than its size");
+        assert_eq!(dechunk(&[b'1'; 2000], 100), Chunked::Invalid, "a size line that never ends");
+    }
+
+    /// An SSE answer has no length: it goes out chunked and ends with the last chunk; a JSON one keeps its length
+    #[test]
+    fn streams_are_chunked() {
+        let (stream, _) =
+            http::Response::builder().header("content-type", "text/event-stream").body(()).unwrap().into_parts();
+        let head = response_head(&stream, true);
+        assert!(head.contains("Transfer-Encoding: chunked\r\n") && head.ends_with("Connection: close\r\n\r\n"));
+        let (json, _) = http::Response::builder().header("content-length", "2").body(()).unwrap().into_parts();
+        let head = response_head(&json, false);
+        assert!(head.contains("content-length: 2\r\n") && !head.contains("Transfer-Encoding"));
+        // the request's own framing isn't passed to rmcp
+        let r = request(b"POST /mcp HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked", b"{}".to_vec()).unwrap();
+        assert!(!r.headers().contains_key(http::header::TRANSFER_ENCODING));
     }
 
     #[test]

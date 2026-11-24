@@ -76,6 +76,19 @@ pub struct Agents {
     exe: PathBuf,
     socket: PathBuf,
     workdir: PathBuf,
+    /// The process groups of the agents running now ([`Self::stop_all`])
+    running: std::sync::Mutex<std::collections::HashSet<u32>>,
+}
+
+/// Takes an agent's process group off [`Agents::running`] when its run ends
+struct Running<'a>(&'a Agents, Option<u32>);
+
+impl Drop for Running<'_> {
+    fn drop(&mut self) {
+        if let Some(pid) = self.1 {
+            self.0.running.lock().unwrap_or_else(|p| p.into_inner()).remove(&pid);
+        }
+    }
 }
 
 /// The agent's working directory under `base`: this user's own (0700, not a link). The agent reads what is there
@@ -116,7 +129,22 @@ impl Agents {
     pub fn new(socket: &Path) -> anyhow::Result<Arc<Self>> {
         let base = std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from).filter(|p| p.is_absolute());
         let workdir = private_dir(&base.unwrap_or_else(std::env::temp_dir))?;
-        Ok(Arc::new(Self { exe: std::env::current_exe()?, socket: socket.to_path_buf(), workdir }))
+        Ok(Arc::new(Self {
+            exe: std::env::current_exe()?,
+            socket: socket.to_path_buf(),
+            workdir,
+            running: Default::default(),
+        }))
+    }
+
+    /// Stops every running agent's process group and waits for them to go (the viewer is stopping): SIGTERM, and
+    /// SIGKILL to whatever is left after [`crate::procgroup::GRACE`]
+    pub async fn stop_all(&self) {
+        let groups: Vec<u32> = self.running.lock().unwrap_or_else(|p| p.into_inner()).iter().copied().collect();
+        if !groups.is_empty() {
+            tracing::info!("viewer: stopping {} AI agent(s)", groups.len());
+            crate::procgroup::stop_and_wait(&groups).await;
+        }
     }
 
     /// Opens a task in the daemon and starts the agent on it; `Err` is a message for the page. `apps` limits the
@@ -226,6 +254,10 @@ impl Agents {
         self.as_task(token, Request::TaskAgent).await;
         let mut child = cmd.spawn()?;
         let pid = child.id();
+        if let Some(pid) = pid {
+            self.running.lock().unwrap_or_else(|p| p.into_inner()).insert(pid);
+        }
+        let _running = Running(self, pid);
         let stdout = child.stdout.take().ok_or_else(|| anyhow::anyhow!("no stdout"))?;
         let stderr = child.stderr.take().ok_or_else(|| anyhow::anyhow!("no stderr"))?;
         let errs = tokio::spawn(async move {

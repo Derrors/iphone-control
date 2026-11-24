@@ -5,7 +5,7 @@
 use std::time::Duration;
 
 /// How long a group has after SIGTERM before SIGKILL
-const GRACE: Duration = Duration::from_secs(3);
+pub const GRACE: Duration = Duration::from_secs(3);
 
 /// SIGTERM to the group led by `pid`, SIGKILL [`GRACE`] later if it is still there
 pub fn stop(pid: u32) {
@@ -19,6 +19,24 @@ pub fn stop(pid: u32) {
         tokio::time::sleep(GRACE).await;
         unsafe { libc::kill(-pgid, libc::SIGKILL) };
     });
+}
+
+/// [`stop`] for several groups, waiting for them here instead of in a task (the program is about to exit, which a
+/// task wouldn't outlive): SIGTERM to each, then SIGKILL to those still there after [`GRACE`]
+pub async fn stop_and_wait(leaders: &[u32]) {
+    let groups: Vec<libc::pid_t> =
+        leaders.iter().filter_map(|&p| libc::pid_t::try_from(p).ok()).filter(|&g| g > 1).collect();
+    for &g in &groups {
+        unsafe { libc::kill(-g, libc::SIGTERM) };
+    }
+    let alive = |g: libc::pid_t| unsafe { libc::kill(-g, 0) } == 0;
+    let deadline = tokio::time::Instant::now() + GRACE;
+    while groups.iter().any(|&g| alive(g)) && tokio::time::Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    for &g in groups.iter().filter(|&&g| alive(g)) {
+        unsafe { libc::kill(-g, libc::SIGKILL) };
+    }
 }
 
 #[cfg(test)]
@@ -44,6 +62,24 @@ mod tests {
         while group_alive(pgid) {
             assert!(started.elapsed() < Duration::from_secs(5), "a process of the group is still running");
             tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn stopping_and_waiting_ends_every_group() {
+        use std::os::unix::process::CommandExt;
+        let mut leaders: Vec<_> = (0..2)
+            .map(|_| std::process::Command::new("sh").args(["-c", "sleep 30 & wait"]).process_group(0).spawn().unwrap())
+            .collect();
+        std::thread::sleep(Duration::from_millis(200));
+        let ids: Vec<u32> = leaders.iter().map(std::process::Child::id).collect();
+        tokio::time::timeout(Duration::from_secs(5), super::stop_and_wait(&ids)).await.unwrap();
+        for l in &mut leaders {
+            let started = std::time::Instant::now();
+            while l.try_wait().unwrap().is_none() {
+                assert!(started.elapsed() < Duration::from_secs(5), "still running");
+                std::thread::sleep(Duration::from_millis(20));
+            }
         }
     }
 

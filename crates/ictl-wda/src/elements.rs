@@ -789,12 +789,13 @@ pub fn passcode_field(elements: &[Element]) -> Option<(u32, u32)> {
     elements.iter().filter(|e| e.kind == "SecureTextField").find_map(|e| parse_passcode_value(&e.value))
 }
 
-/// 锁屏密码栏的值形如「共6位数，已输入2位」或英文「6-digit passcode, 2 entered」，返回 (总位数, 已输入位数)
+/// 锁屏密码栏的值形如「共6位数，已输入2位」或英文「0 of 6 values entered」，返回 (总位数, 已输入位数)。
+/// 中文先说总位数，英、法、德、西语先说已输入几位（#174）；已输入位数不会超过总位数，所以大的是总位数，与语言无关
 pub fn parse_passcode_value(value: &str) -> Option<(u32, u32)> {
     static DIGITS: LazyLock<Regex> = LazyLock::new(|| regex(r"\d+"));
     let nums: Vec<u32> = DIGITS.find_iter(value).filter_map(|m| m.as_str().parse().ok()).collect();
     match nums[..] {
-        [total, entered] => Some((total, entered)),
+        [a, b] if a.max(b) > 0 => Some((a.max(b), a.min(b))),
         _ => None,
     }
 }
@@ -1326,6 +1327,14 @@ mod tests {
         assert_eq!(parse_passcode_value("共6位数，已输入0位"), Some((6, 0)));
         assert_eq!(parse_passcode_value("共6位数，已输入2位"), Some((6, 2)));
         assert_eq!(parse_passcode_value("6-digit passcode, 3 entered"), Some((6, 3)));
+        // 英、法、德、西语先说已输入几位（#174）
+        assert_eq!(parse_passcode_value("0 of 6 values entered"), Some((6, 0)));
+        assert_eq!(parse_passcode_value("2 of 6 values entered"), Some((6, 2)));
+        assert_eq!(parse_passcode_value("0 valeur saisie sur 6"), Some((6, 0)));
+        assert_eq!(parse_passcode_value("0 von 6 Werten eingegeben"), Some((6, 0)));
+        assert_eq!(parse_passcode_value("0 de 4 valores introducidos"), Some((4, 0)));
+        assert_eq!(parse_passcode_value("6 of 6 values entered"), Some((6, 6)));
+        assert_eq!(parse_passcode_value("0 0"), None);
         assert_eq!(parse_passcode_value("共4位数"), None);
         assert_eq!(parse_passcode_value(""), None);
     }

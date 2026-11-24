@@ -107,7 +107,7 @@ pub fn kind(e: &Element) -> &'static str {
     let k = typed_kind(e);
     // the lock screen's passcode field reads as a plain text field here (typed or not); WDA calls it a secure one,
     // which is what finds it when unlocking (`ictl_wda::elements::passcode_field`, `cover_sheet`)
-    if k == "TextField" && passcode_value(&e.value) { "SecureTextField" } else { k }
+    if k == "TextField" && is_passcode_field(e) { "SecureTextField" } else { k }
 }
 
 fn typed_kind(e: &Element) -> &'static str {
@@ -139,12 +139,29 @@ fn typed_kind(e: &Element) -> &'static str {
     }
 }
 
-/// A passcode field's value: 「共6位数，已输入2位」, "6-digit passcode, 2 entered" (two numbers, and the words for it)
-fn passcode_value(v: &str) -> bool {
-    let numbers = v.split(|c: char| !c.is_ascii_digit()).filter(|n| !n.is_empty()).count();
-    let lower = v.to_lowercase();
-    numbers == 2 && (v.contains("位") || lower.contains("passcode") || lower.contains("digit"))
+/// The lock screen's passcode field. Its value holds two numbers, how many digits were entered and how many there are,
+/// in either order: 「共6位数，已输入2位」, "0 of 6 values entered", "0 valeur saisie sur 6", "0 von 6 Werten eingegeben".
+/// Known words in the label or the value say so; with none (a language not listed), a 4- or 6-digit total still does
+fn is_passcode_field(e: &Element) -> bool {
+    let numbers: Vec<u32> =
+        e.value.split(|c: char| !c.is_ascii_digit()).filter(|n| !n.is_empty()).filter_map(|n| n.parse().ok()).collect();
+    let [a, b] = numbers[..] else { return false };
+    let total = a.max(b);
+    if total == 0 {
+        return false;
+    }
+    let label = e.label.to_lowercase();
+    let value = e.value.to_lowercase();
+    PASSCODE_LABEL_WORDS.iter().any(|w| label.contains(w))
+        || PASSCODE_VALUE_WORDS.iter().any(|w| value.contains(w))
+        || matches!(total, 4 | 6)
 }
+
+/// Words in the passcode field's label (lowercase): 「密码栏」, "Passcode field", "Champ de code"
+const PASSCODE_LABEL_WORDS: [&str; 3] = ["密码", "passcode", "champ de code"];
+
+/// Words in the passcode field's value (lowercase)
+const PASSCODE_VALUE_WORDS: [&str; 7] = ["位", "passcode", "digit", "entered", "saisie", "eingegeben", "introducido"];
 
 /// At least this many one-character elements make a process the keyboard
 const KEYBOARD_KEYS: usize = 8;
@@ -487,7 +504,20 @@ mod tests {
         assert_eq!(TYPES[49], "TextField");
         assert_eq!(kind(&field("共6位数，已输入0位")), "SecureTextField");
         assert_eq!(kind(&field("6-digit passcode, 2 entered")), "SecureTextField");
+        // English, French, German and Spanish put the entered digits first (#174)
+        assert_eq!(kind(&field("0 of 6 values entered")), "SecureTextField");
+        assert_eq!(kind(&field("0 valeur saisie sur 6")), "SecureTextField");
+        assert_eq!(kind(&field("0 von 6 Werten eingegeben")), "SecureTextField");
+        assert_eq!(kind(&field("0 de 6 valores introducidos")), "SecureTextField");
+        // a language with no known words: a 4- or 6-digit total is enough
+        assert_eq!(kind(&field("6 中 3")), "SecureTextField");
+        // the label alone says so, whatever the total
+        let labelled = Element { label: "Passcode field".into(), ..field("2 / 8") };
+        assert_eq!(kind(&labelled), "SecureTextField");
+        assert_eq!(kind(&field("2 / 8")), "TextField");
         assert_eq!(kind(&field("2 杯咖啡 3 份")), "TextField");
+        assert_eq!(kind(&field("0 0")), "TextField");
+        assert_eq!(kind(&field("1 2 3")), "TextField");
         assert_eq!(kind(&field("hello")), "TextField");
         // untyped, a text field by its traits
         let untyped =

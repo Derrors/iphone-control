@@ -597,7 +597,15 @@ impl Daemon {
                 "Starting WDA (launched in the background, no XCTest session)"
             ));
         }
-        let known = g.persisted.detached_for(&device.udid);
+        let known = g.persisted.adoptable_for(&device.udid);
+        if known.is_none()
+            && let Some(pid) = g.persisted.detached_for(&device.udid)
+        {
+            self.log.log(&ictl_l10n::log_trf!(
+                "手机上的后台 WDA（进程 {pid}）是旧版本启动的，对手机的所有网卡开放：重新启动，只听手机本机",
+                "The background WDA on the phone (pid {pid}) was launched by an older version and listens on every interface of the phone: launching it again, listening on the phone's loopback only"
+            ));
+        }
         let (cache, url, user_dir) = (self.cfg.ddi_cache(), self.cfg.ddi_url.clone(), self.cfg.ddi_dir.clone());
         let Ok(lease) = crate::maintenance::shared() else { return };
         let wake = self.wake.clone();
@@ -1070,7 +1078,7 @@ async fn ensure_ddi(
 async fn prepare_detached(t: &mut Tunnel, known: Option<u64>, bundle: &str) -> Result<Detached, DeviceError> {
     match known {
         Some(pid) if detached::is_wda(&t.processes().await?, pid) => Ok(Detached::Adopted(pid)),
-        _ => Ok(Detached::Launched(t.launch_in_background(bundle).await?)),
+        _ => Ok(Detached::Launched(t.launch_in_background(bundle, &ictl_wda::runner::launch_env()).await?)),
     }
 }
 

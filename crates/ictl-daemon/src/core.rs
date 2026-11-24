@@ -71,6 +71,13 @@ pub struct Persisted {
     /// 占着 8100 端口，新 runner 的 HTTP 服务起不来）。见 [`crate::detached`]
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub detached_wdas: std::collections::BTreeMap<String, u64>,
+    /// The background WDAs launched listening on the phone's loopback only (`USE_IP`, see
+    /// `ictl_wda::runner::WDA_BIND_IP`), by UDID. One in [`Self::detached_wdas`] but not here was launched by an older
+    /// version, listening on every interface (on Wi-Fi anyone on the network could drive the phone): it isn't attached
+    /// to again but launched anew ([`Self::adoptable_for`]). Older versions don't know this field; a WDA they launch
+    /// gets a new pid, so it doesn't match here either
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub loopback_wdas: std::collections::BTreeMap<String, u64>,
     /// Which way Home and locking work on each device, by UDID ([`Self::ways_for`]). Kept here, not only in memory:
     /// after a restart or switching devices the first Home on an iPad mini 5 tried the way that doesn't work there,
     /// waited 2 s for the home screen, then pressed again (4.4 s instead of 0.8)
@@ -168,6 +175,13 @@ impl Persisted {
             .or_else(|| self.detached_wda.as_ref().filter(|d| d.udid.eq_ignore_ascii_case(udid)).map(|d| d.pid))
     }
 
+    /// The background WDA on `udid` that may be attached to again: one this version launched, listening on the
+    /// phone's loopback only. Any other is launched anew, which ends it
+    pub fn adoptable_for(&self, udid: &str) -> Option<u64> {
+        let pid = self.detached_for(udid)?;
+        self.loopback_wdas.iter().any(|(k, p)| k.eq_ignore_ascii_case(udid) && *p == pid).then_some(pid)
+    }
+
     /// Every recorded background WDA: (UDID, pid)
     pub fn detached_all(&self) -> Vec<(String, u64)> {
         let mut all: Vec<_> = self.detached_wdas.iter().map(|(u, p)| (u.clone(), *p)).collect();
@@ -195,7 +209,12 @@ impl Persisted {
             .cloned()
             .unwrap_or_else(|| udid.to_owned());
         let last = Some(DetachedWda { udid: key.clone(), pid });
-        let changed = self.detached_wdas.get(&key) != Some(&pid) || self.detached_wda != last;
+        // this version launches and attaches to loopback-only WDAs alone: whatever is recorded now is one
+        let others = self.loopback_wdas.len();
+        self.loopback_wdas.retain(|k, _| !k.eq_ignore_ascii_case(udid) || *k == key);
+        let loopback_changed =
+            self.loopback_wdas.len() != others || self.loopback_wdas.insert(key.clone(), pid) != Some(pid);
+        let changed = loopback_changed || self.detached_wdas.get(&key) != Some(&pid) || self.detached_wda != last;
         self.detached_wdas.insert(key, pid);
         self.detached_wda = last;
         changed
@@ -206,6 +225,7 @@ impl Persisted {
     pub fn forget_detached(&mut self, udid: &str, pid: Option<u64>) -> bool {
         let before = (self.detached_wdas.len(), self.detached_wda.is_some());
         self.detached_wdas.retain(|k, p| !(k.eq_ignore_ascii_case(udid) && pid.is_none_or(|x| x == *p)));
+        self.loopback_wdas.retain(|k, p| !(k.eq_ignore_ascii_case(udid) && pid.is_none_or(|x| x == *p)));
         if self
             .detached_wda
             .as_ref()
@@ -1644,6 +1664,32 @@ pub(crate) mod tests {
         assert_eq!(p.detached_for("IPHONE"), None);
         assert!(p.forget_detached("ipad", None));
         assert_eq!((p.detached_all(), p.detached_wda), (vec![], None));
+    }
+
+    /// A background WDA launched before WDA was confined to the phone's loopback listens on every interface: it isn't
+    /// attached to again (launching anew ends it). Once this version records it, it is
+    #[test]
+    fn only_a_loopback_only_background_wda_is_attached_to_again() {
+        let mut p: Persisted =
+            serde_json::from_str(r#"{"detached_wdas":{"IPHONE":7},"detached_wda":{"udid":"IPHONE","pid":7}}"#).unwrap();
+        assert_eq!(p.detached_for("IPHONE"), Some(7), "still known: ended when the phone goes native");
+        assert_eq!(p.adoptable_for("IPHONE"), None, "an older version's, listening on every interface");
+
+        assert!(p.record_detached("iphone", 9), "launched anew");
+        assert_eq!(p.adoptable_for("IPHONE"), Some(9));
+        assert!(!p.record_detached("IPHONE", 9), "attached to again: nothing changed");
+        let json = serde_json::to_value(&p).unwrap();
+        assert_eq!(json["loopback_wdas"], serde_json::json!({"IPHONE": 9}));
+        assert_eq!(json["detached_wdas"], serde_json::json!({"IPHONE": 9}), "older versions still find it");
+
+        // an older version launched another (it doesn't know loopback_wdas): not attached to by this one
+        p.detached_wdas.insert("IPHONE".into(), 12);
+        assert_eq!(p.adoptable_for("IPHONE"), None);
+
+        assert!(p.forget_detached("IPHONE", None));
+        assert!(p.loopback_wdas.is_empty());
+        let empty = serde_json::to_value(&p).unwrap();
+        assert!(empty.get("loopback_wdas").is_none(), "not written when empty");
     }
 
     /// A state.json from an older version has only the one record: it is still found, attached to and forgotten

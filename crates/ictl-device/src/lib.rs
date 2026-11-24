@@ -837,10 +837,11 @@ impl Tunnel {
 
     /// 在后台启动一个 App（DVT processcontrol，选项 `ActivateSuspended`），先结束已在运行的实例，返回进程号。
     ///
-    /// 不带任何环境变量和参数。前台启动（CoreDevice appservice，或 processcontrol 不带 `ActivateSuspended`）
+    /// 不带启动参数。前台启动（CoreDevice appservice，或 processcontrol 不带 `ActivateSuspended`）
     /// 锁屏时会被 SpringBoard 拒绝（`RequestDenied … Locked`），后台启动不会（iPhone16,2 / iOS 27.0.1 真机）。
-    /// 用来启动 WDA 时，runner 自己合成测试配置，不需要主机持有 XCTest 会话（见 `docs/dev/wda-dependency-research.md`）
-    pub async fn launch_in_background(&mut self, bundle_id: &str) -> Result<u64> {
+    /// 用来启动 WDA 时，runner 自己合成测试配置，不需要主机持有 XCTest 会话（见 `docs/dev/wda-dependency-research.md`）。
+    /// `env` 是这个进程的环境变量（WDA 的 `USE_IP` 就靠它）
+    pub async fn launch_in_background(&mut self, bundle_id: &str, env: &[(&str, &str)]) -> Result<u64> {
         use idevice::dvt::{message::AuxValue, remote_server::RemoteServerClient};
         limit(ictl_l10n::tr!("后台启动 App", "launch an app in the background"), Duration::from_secs(60), async {
             let mut dvt: RemoteServerClient<Box<dyn idevice::ReadWrite>> =
@@ -857,7 +858,7 @@ impl Tunnel {
                 Some(vec![
                     AuxValue::archived_value(""),
                     AuxValue::archived_value(bundle_id.to_owned()),
-                    AuxValue::archived_value(plist::Dictionary::new()),
+                    AuxValue::archived_value(environment(env)),
                     AuxValue::archived_value(plist::Value::Array(vec![])),
                     AuxValue::archived_value(opts),
                 ]),
@@ -898,9 +899,22 @@ impl Tunnel {
     }
 }
 
+/// A launch's environment as processcontrol takes it
+fn environment(env: &[(&str, &str)]) -> plist::Dictionary {
+    env.iter().map(|(k, v)| ((*k).to_owned(), plist::Value::String((*v).to_owned()))).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_launch_environment_is_a_dictionary_of_strings() {
+        let env = environment(&[("USE_IP", "127.0.0.1")]);
+        assert_eq!(env.len(), 1);
+        assert_eq!(env.get("USE_IP").and_then(plist::Value::as_string), Some("127.0.0.1"));
+        assert!(environment(&[]).is_empty());
+    }
 
     #[test]
     fn springboard_interface_orientation_preserves_all_four_directions() {

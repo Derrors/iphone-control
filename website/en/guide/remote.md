@@ -92,7 +92,7 @@ iphone-control task run --url https://<that machine>:8200 --ca cert.pem -- <comm
 
 The command gets the task's token, `IPHONE_CONTROL_URL` and `IPHONE_CONTROL_MCP_URL`, and **not the login**. Its agent can keep a plain `iphone-control mcp`: seeing `IPHONE_CONTROL_URL`, it bridges to that machine with the task's token only. It can also use `$IPHONE_CONTROL_MCP_URL` with the header `Iphone-Control-Task-Token` over HTTP directly.
 
-**Acting and controlling apart**: the agent has only the task's token, so it acts on the phone for that task but can't pause, resume, take over or approve its own confirmations; a person does that on the control page, or the platform with its login. On the same machine, control requests from the agent's processes (and those they start) are refused as well.
+**Acting and controlling apart**: the agent has only the task's token, so it acts on the phone for that task but can't pause, resume, take over or approve its own confirmations; a person does that on the control page, or the platform with its login. On the same machine, control requests from the agent's processes (and those they start) are refused as well. Over the Unix socket the caller's process is found through `SO_PEERCRED`, on Linux and macOS alike; over the viewer's HTTP API, finding a local process works on Linux only (on macOS only the task-token rule above applies).
 
 **A platform without iphone-control** calls the viewer's API (all with the login token, except the last two):
 
@@ -117,5 +117,5 @@ When frp, nginx or cloudflared forwards the viewer to the internet:
 ## Security
 
 - A token that may operate can watch the screen, control the phone and run tasks with this machine's Claude Code / Codex login: give it only to people you trust, and if it leaks, `viewer token show <name> --new` or `remove` it at once. Give a read-only token to people who only need to watch.
-- Processes of the same system user can read each other's files: an agent on this machine can read the token file, but its control requests are refused by their process. This isn't a strict boundary; for real isolation, run the agent as another system user or in a sandbox.
+- Processes of the same system user can read each other's files: an agent on this machine can read the token file, but its control requests are refused by their process (over the Unix socket that works on Linux and macOS; over the viewer's HTTP API it works on Linux only). This isn't a strict boundary; for real isolation, run the agent as another system user or in a sandbox.
 - See also [Security and Privacy](./security).

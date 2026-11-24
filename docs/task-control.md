@@ -297,7 +297,7 @@ Running → Waiting（等确认）→ Running
 7.1 第 2 条的落地，按用户的决定做了一个令牌（只读和可操作分开留到以后）。和 7.1 不同的一点：**本机也要登录**。frp、nginx、cloudflared、`tailscale serve` 这类反向代理或隧道跑在本机时，公网上每个访问者的连接都来自 `127.0.0.1`，控制台分不清是用户本人还是别人，所以不能「本机免登录」。
 
 - **范围**：经 HTTP 的一切（页面、接口、画面、任务事件、`/mcp`）。Unix socket 上的命令行、stdio 的 `iphone-control mcp`、`task run` 不受影响（socket 是 0600，本来就只有这个用户能连）。
-- **令牌**：第一次启动时用系统随机数生成 256 位，十六进制存在 `<数据目录>/viewer-token`（0600，先写临时文件再改名；7.6 起改为 `viewer-tokens.json`）。`iphone-control viewer token` 显示令牌、本机和局域网的登录链接（`/?token=…`）、`claude mcp add … --header "Authorization: Bearer …"`；`--new` 换新令牌，控制台服务在运行就重启它。令牌不写进启动输出和日志（journal 可能有别人能读）。
+- **令牌**：第一次启动时用系统随机数生成 256 位，十六进制存在 `<数据目录>/viewer-token`（0600，先写临时文件再改名）。7.6 起改存 `<数据目录>/viewer-tokens.json`（`auth::TOKENS_FILE`），旧文件在那时迁移并删除。`iphone-control viewer token` 显示令牌、本机和局域网的登录链接（`/?token=…`）、`claude mcp add … --header "Authorization: Bearer …"`；`--new` 换新令牌，控制台服务在运行就重启它。令牌不写进启动输出和日志（journal 可能有别人能读）。
 - **浏览器**：没登录时 `/` 返回登录页（401）；登录页的表单 `POST /login`（带 `Origin` 时必须是控制台自己），或者点开 `/?token=…` 的链接，成功后 303 回 `/`，地址栏里不留令牌。会话 cookie `ictl_viewer_<端口>`：值是令牌对固定文本的 HMAC-SHA256，看不出令牌，换令牌后自动失效；`HttpOnly`、`SameSite=Lax`（从别处点链接进来也认得，CSRF 靠原有的 `Origin` 和 `Sec-Fetch-Site` 检查）、HTTPS 时加 `Secure`、30 天。页面上的请求遇到 401 就刷新，回到登录页。
 - **程序**：`Authorization: Bearer <令牌>`。`/mcp` 的 401 带 `WWW-Authenticate: Bearer`（RFC 6750）。
 - **限速**：按全局算，不按地址（经反向代理时地址都是 `127.0.0.1`）。一分钟里错 20 次后，这一分钟内错的令牌一律 429；已经登录的会话不受影响。令牌是 256 位随机数，限速只是多一层保险。（最初这一分钟内连正确的令牌也不校验，结果谁能连上页面，就能靠刷错令牌让 `mcp --url`、远端任务都连不上；0.2.4 之后改成正确的令牌总能进。）

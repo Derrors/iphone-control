@@ -42,6 +42,7 @@ fn tap() -> Option<&'static str> {
 pub fn target() -> Option<&'static str> {
     match (std::env::consts::OS, std::env::consts::ARCH) {
         ("macos", "aarch64") => Some("macos-arm64"),
+        ("macos", "x86_64") => Some("macos-x86_64"),
         ("linux", "aarch64") if cfg!(target_env = "gnu") => Some("linux-aarch64"),
         ("linux", "x86_64") if cfg!(target_env = "gnu") => Some("linux-x86_64"),
         _ => None,
@@ -804,6 +805,8 @@ mod tests {
         assert_eq!(for_install("0.2.1", InstallMethod::Unknown, None), Availability::Current);
         assert_eq!(for_install("0.3.0-rc.1", InstallMethod::Unknown, None), Availability::Ahead);
         assert_eq!(for_install("0.2.0", InstallMethod::Managed, Some("macos-arm64")), Availability::PlatformPending);
+        // releases before Intel Mac builds have no macos-x86_64 archive: an Intel Mac waits, it isn't offered another
+        assert_eq!(for_install("0.2.0", InstallMethod::Managed, Some("macos-x86_64")), Availability::PlatformPending);
         assert_eq!(for_install("0.2.0", InstallMethod::Managed, Some("linux-x86_64")), Availability::PlatformPending);
         assert_eq!(for_install("0.2.0", InstallMethod::Homebrew, Some("macos-arm64")), Availability::BrewCheck);
         assert_eq!(for_install("0.2.0", InstallMethod::Debian, Some("linux-x86_64")), Availability::Available);

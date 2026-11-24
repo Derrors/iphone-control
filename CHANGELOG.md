@@ -6,6 +6,10 @@ What changed in each release, one line per change. Versions follow [Semantic Ver
 
 ## [Unreleased]
 
+### New
+
+- Intel Macs (macOS 11+) get prebuilt binaries: install with the one-line script or Homebrew, upgrade with `iphone-control update` (#181). The package is cross-compiled and not yet tested on a real Intel Mac; reports are welcome.
+
 ### Fixes
 
 - WebDriverAgent on the phone now listens on the phone itself only: other devices on the same Wi-Fi can no longer reach its port 8100 (the unauthenticated control API) or 9100 (the picture). After upgrading, a WDA an older version launched in the background is launched again once.

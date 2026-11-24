@@ -95,7 +95,7 @@ iphone-control 在 Linux 或 macOS 上用**一个 Rust 二进制**把这些事�
 
 ## 快速开始
 
-需要一部 iPhone 或 iPad（推荐 iOS 27 及以上，iOS 17 起都能用）和能**传数据**的线，以及一台 Apple Silicon 的 Mac 或一台 Linux 机器。iOS 26 及以下还要一个免费 Apple ID（建议专门注册一个），用来给 WebDriverAgent 签名。
+需要一部 iPhone 或 iPad（推荐 iOS 27 及以上，iOS 17 起都能用）和能**传数据**的线，以及一台 Mac（macOS 11 及以上，Apple Silicon 或 Intel）或一台 Linux 机器。iOS 26 及以下还要一个免费 Apple ID（建议专门注册一个），用来给 WebDriverAgent 签名。
 
 **macOS 或 Linux，一行命令安装**
 
@@ -119,7 +119,7 @@ brew install derrors/tap/iphone-control && brew services start iphone-control
 sudo apt install ./iphone-control_<版本>_amd64.deb && systemctl --user enable --now iphone-control
 ```
 
-Linux 上要用系统的 usbmuxd（`sudo apt install usbmuxd`，.deb 会自动装上）。Intel 芯片的 Mac 请从源码编译。
+Linux 上要用系统的 usbmuxd（`sudo apt install usbmuxd`，.deb 会自动装上）。Intel Mac 的包从 0.2.14 起提供，是在 Apple Silicon 上交叉编译的，只在 Rosetta 下跑过测试，还没在真正的 Intel Mac 上用过。
 
 **装好以后，各系统都一样**
 

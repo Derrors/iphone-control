@@ -58,7 +58,8 @@ class InstallerTest(unittest.TestCase):
         }))
         self.stack.enter_context(patch.multiple(installer, PUBLISHER=REPO, PUBLIC_KEYS=pub))
         self.stack.enter_context(patch.object(installer, "download", self.download))
-        self.target = "macos-arm64" if sys.platform == "darwin" else "linux-" + platform.machine()
+        self.target = installer.release_target(sys.platform, platform.machine(),
+                                               lambda: installer.run("arch", "-arm64", "/usr/bin/true"))
         self.name = f"iphone-control-v{VERSION}-{self.target}"
         self.archive = self.dist / (self.name + ".tar.gz")
         self.manifest = self.dist / (self.name + ".manifest.json")
@@ -106,6 +107,16 @@ class InstallerTest(unittest.TestCase):
     def install(self, *args):
         with patch.object(sys, "argv", ["install.sh", "--prefix", str(self.prefix), *args]):
             installer.main()
+
+    def test_release_target(self):
+        never, always = (lambda: False), (lambda: True)
+        self.assertEqual(installer.release_target("darwin", "arm64", never), "macos-arm64")
+        self.assertEqual(installer.release_target("darwin", "x86_64", always), "macos-arm64", "Python under Rosetta")
+        self.assertEqual(installer.release_target("darwin", "x86_64", never), "macos-x86_64", "an Intel Mac")
+        self.assertEqual(installer.release_target("linux", "x86_64", always), "linux-x86_64")
+        self.assertEqual(installer.release_target("linux", "aarch64", never), "linux-aarch64")
+        self.assertIsNone(installer.release_target("linux", "armv7l", never))
+        self.assertIsNone(installer.release_target("freebsd", "amd64", never))
 
     def test_install_and_uninstall(self):
         with contextlib.redirect_stdout(io.StringIO()) as output:

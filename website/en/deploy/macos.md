@@ -3,12 +3,12 @@
 iphone-control also runs directly on a Mac, using the usbmuxd that ships with macOS. No Xcode and no paid developer account. It works much like on Linux; the differences are listed under [Known differences](#known-differences).
 
 ::: info Verified
-Verified on a MacBook Pro (Apple M3 Pro) / macOS 26.6.2 with an iPhone 15 Pro Max / iOS 27.0.1: the setup wizard, every MCP tool at that time, continuous use with Finder open, one tunnel kept busy for 30 minutes, and recovery after unplugging and phone reboots. This predates 0.1.3: the multi-device tools (`iphone_list_devices`, `iphone_select_device`) haven't been verified on macOS. Intel Macs are untested. Steps and results: [macOS verification](https://github.com/Derrors/iphone-control/blob/main/docs/dev/macos-verification.md) (in Chinese).
+Verified on a MacBook Pro (Apple M3 Pro) / macOS 26.6.2 with an iPhone 15 Pro Max / iOS 27.0.1: the setup wizard, every MCP tool at that time, continuous use with Finder open, one tunnel kept busy for 30 minutes, and recovery after unplugging and phone reboots. This predates 0.1.3: the multi-device tools (`iphone_list_devices`, `iphone_select_device`) haven't been verified on macOS. Intel Mac packages come with 0.2.14 and later; they are cross-compiled on Apple Silicon and were only tested under Rosetta, not yet on a real Intel Mac. Steps and results: [macOS verification](https://github.com/Derrors/iphone-control/blob/main/docs/dev/macos-verification.md) (in Chinese).
 :::
 
 ## You need
 
-- An Apple Silicon Mac. The script installer requires Python 3 and OpenSSL 3 on PATH. Intel Macs have no prebuilt package and build from source (Xcode Command Line Tools and Rust 1.89+). Full Xcode is **not** needed
+- A Mac on macOS 11 or later, Apple Silicon or Intel (Intel packages from 0.2.14; earlier versions build from source with Xcode Command Line Tools and Rust 1.89+). The script installer requires Python 3 and OpenSSL 3 on PATH. Full Xcode is **not** needed
 - An iPhone or iPad, connected with a cable that carries **data**. iOS 27 or later is recommended (native control); iOS 17 and later work
 - On iOS 26 and earlier, a free Apple ID (a dedicated one is recommended)
 
@@ -33,7 +33,7 @@ brew services start iphone-control      # the daemon runs now and after each log
 
 This service also reads `~/.config/iphone-control/env` and logs to `$(brew --prefix)/var/log/iphone-control.log`. The settings template is `$(brew --prefix)/opt/iphone-control/share/iphone-control/env.example`.
 
-### Build from source (Intel Macs)
+### Build from source
 
 You need the Xcode Command Line Tools and Rust 1.89+; about 2½ minutes on an M3 Pro:
 
@@ -137,11 +137,11 @@ If WDA was used, delete the WebDriverAgent app on the phone; its profile under *
 
 | | Linux | macOS |
 |---|---|---|
-| Install | One command, Homebrew, .deb or build from source | One command, Homebrew or build from source (packages for Apple Silicon only) |
+| Install | One command, Homebrew, .deb or build from source | One command, Homebrew or build from source (packages for Apple Silicon and Intel) |
 | Keep running | systemd user service | launchd user service |
 | usbmuxd | System package, started by udev on plug-in | Built into macOS, always running |
 | Data directory | `~/.local/share/iphone-control` | Same (not the usual `~/Library/Application Support`) |
 | Control socket | `$XDG_RUNTIME_DIR/iphone-control/ctl.sock` | `~/.local/share/iphone-control/ctl.sock` |
 | Pairing records | `/var/lib/lockdown` | `/var/db/lockdown` (shared with Finder) |
 
-Not yet verified on a Mac: whether Xcode's *Devices and Simulators* window competes for the connection, pairing a phone with the Mac for the first time, iPads, several devices, and Intel Macs. [Reports](https://github.com/Derrors/iphone-control/issues) are welcome.
+Not yet verified on a Mac: whether Xcode's *Devices and Simulators* window competes for the connection, pairing a phone with the Mac for the first time, iPads, several devices, and a real Intel Mac (the Intel package was only tested under Rosetta). [Reports](https://github.com/Derrors/iphone-control/issues) are welcome.

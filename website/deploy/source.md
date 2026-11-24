@@ -1,6 +1,6 @@
 # 从源码编译
 
-一般用不着：一行命令、Homebrew 和 deb 包装的都是 Release 里编好的程序，见[快速开始](../guide/getting-started#install)。没有预编译包的机器（Intel Mac）和参与开发时才从源码编译。在 Mac 上见 [macOS](./macos)。
+一般用不着：一行命令、Homebrew 和 deb 包装的都是 Release 里编好的程序，见[快速开始](../guide/getting-started#install)。没有预编译包的机器（0.2.14 以前的 Intel Mac）和参与开发时才从源码编译。在 Mac 上见 [macOS](./macos)。
 
 ## 准备
 

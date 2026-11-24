@@ -1,6 +1,6 @@
 name: Release
 
-# 推送 v* tag 时：Linux（x86_64、aarch64）和 macOS（Apple Silicon）的压缩包、Linux 的 .deb 及 sha256 附在 GitHub Release 上，
+# 推送 v* tag 时：Linux（x86_64、aarch64）和 macOS（Apple Silicon、Intel）的压缩包、Linux 的 .deb 及 sha256 附在 GitHub Release 上，
 # 发布说明取自 CHANGELOG.md 和 CHANGELOG.zh-CN.md；稳定版按发布者配置签名并可选更新 tap。
 on:
   push:
@@ -114,7 +114,7 @@ jobs:
             echo "## 中文"; echo; echo "$zh"; echo
             # 已装的程序在「---」加「**Binaries / 二进制:**」处截掉页脚，按「## English」「## 中文」分语言，这三处别改
             echo "---"; echo
-            echo "**Binaries / 二进制:** macOS \`macos-arm64\` (11+, Apple Silicon) · Linux \`linux-x86_64\`, \`linux-aarch64\` (glibc 2.34+) · \`.deb\` amd64, arm64 (Debian 12+, Ubuntu 22.04+)"; echo
+            echo "**Binaries / 二进制:** macOS \`macos-arm64\` (11+, Apple Silicon), \`macos-x86_64\` (11+, Intel) · Linux \`linux-x86_64\`, \`linux-aarch64\` (glibc 2.34+) · \`.deb\` amd64, arm64 (Debian 12+, Ubuntu 22.04+)"; echo
             if [[ "$GITHUB_REF_NAME" != *-* ]]; then
               echo "- **Script / 脚本:** \`curl -fsSL https://github.com/$GITHUB_REPOSITORY/releases/download/$GITHUB_REF_NAME/install.sh | sh\`"
               if [[ -n "$ICTL_UPDATE_TAP" ]]; then echo "- **Homebrew:** \`brew install $ICTL_UPDATE_TAP/iphone-control\`"; fi
@@ -130,43 +130,66 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
 
-  # macOS（Apple Silicon）二进制，Release 建好后再传上去：GitHub 的 macOS runner 经常排队，
-  # 排不上时（15 分钟后被取消）不拖住镜像和 Linux 二进制，重跑这个任务就能补上。
-  # 文件名里的 arm64 与 Mac 上 uname -m 一致。没有公证（要付费开发者账号）：链接器自带 ad-hoc 签名能直接运行，
+  # macOS 二进制，Release 建好后再传上去：GitHub 的 macOS runner 经常排队，
+  # 排不上时（15 分钟后被取消）不拖住镜像和 Linux 二进制，重跑失败的任务就能补上。
+  # Apple Silicon 和 Intel 都在同一种（Apple Silicon）runner 上编，Intel 的交叉编译（GitHub 的 Intel runner 越来越少），
+  # 最低系统都是 macOS 11。文件名里的 arm64、x86_64 与 Mac 上 uname -m 一致。
+  # 没有公证（要付费开发者账号）：arm64 的链接器自带 ad-hoc 签名，x86_64 的不带，这里补上，两个包一样；
   # 用终端 curl 下载不带隔离标记；浏览器下载的要去掉 com.apple.quarantine（见 macOS 指南）
   macos-binary:
     needs: release
+    strategy:
+      # 一个架构失败不取消另一个；两个都传上去之后才签名
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            arch: arm64
+          - target: x86_64-apple-darwin
+            arch: x86_64
+    # 最低系统 macOS 11 由 .cargo/config.toml 定，下面 Check 核对
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@1.99.1
+        with:
+          targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
         with:
-          key: release-aarch64-apple-darwin
-      - run: cargo build --release --locked -p iphone-control
+          key: release-${{ matrix.target }}
+      - run: cargo build --release --locked -p iphone-control --target ${{ matrix.target }}
+      - name: Ad-hoc signature (x86_64)
+        if: matrix.arch == 'x86_64'
+        run: codesign --sign - --force target/${{ matrix.target }}/release/iphone-control
       # 第三方 Rust 组件许可证清单（cargo-about，按 Cargo.lock 生成）；白名单（packaging/licenses/about.toml）以外的许可证让发布失败
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-about@0.9.3
       - run: cargo about generate --locked -m apps/iphone-control/Cargo.toml -c packaging/licenses/about.toml packaging/licenses/about.hbs -o THIRD_PARTY_LICENSES.html
+      # x86_64 的在 Rosetta 下跑一次；runner 上没装 Rosetta 时先装
       - name: Check
         run: |
-          file target/release/iphone-control
-          codesign --verify --verbose target/release/iphone-control
-          target/release/iphone-control --version
+          bin=target/${{ matrix.target }}/release/iphone-control
+          file "$bin" | grep -q "${{ matrix.arch }}"
+          otool -l "$bin" | grep -A3 LC_BUILD_VERSION | grep -q "minos 11.0"
+          codesign --verify --verbose "$bin"
+          if [ "${{ matrix.arch }}" = x86_64 ] && ! arch -x86_64 /usr/bin/true 2>/dev/null; then
+            sudo softwareupdate --install-rosetta --agree-to-license
+          fi
+          arch -${{ matrix.arch }} "$bin" --version
       # 不带 deploy/（systemd 服务文件，Mac 上用不到）
       - name: Package
         run: |
-          name="iphone-control-${GITHUB_REF_NAME}-macos-arm64"
+          name="iphone-control-${GITHUB_REF_NAME}-macos-${{ matrix.arch }}"
           mkdir -p "dist/$name"
-          cp target/release/iphone-control LICENSE THIRD_PARTY.md README.md README.zh-CN.md CHANGELOG.md CHANGELOG.zh-CN.md "dist/$name/"
+          cp target/${{ matrix.target }}/release/iphone-control LICENSE THIRD_PARTY.md README.md README.zh-CN.md CHANGELOG.md CHANGELOG.zh-CN.md "dist/$name/"
           cp packaging/env.example "dist/$name/env.example"
           cp THIRD_PARTY_LICENSES.html "dist/$name/"
           tar -C dist -czf "dist/$name.tar.gz" "$name"
           (cd dist && shasum -a 256 "$name.tar.gz" > "$name.tar.gz.sha256")
       - uses: actions/upload-artifact@v7
         with:
-          name: macos-archive
+          name: macos-archive-${{ matrix.arch }}
           path: dist/*.tar.gz*
           if-no-files-found: error
 
@@ -180,10 +203,13 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/download-artifact@v8
         with:
-          name: macos-archive
+          pattern: macos-archive-*
           path: dist
+          merge-multiple: true
       - name: Upload to the release
-        run: python3 packaging/release.py upload dist/*.tar.gz dist/*.tar.gz.sha256
+        run: |
+          test "$(ls dist/*.tar.gz | wc -l)" -eq 2
+          python3 packaging/release.py upload dist/*.tar.gz dist/*.tar.gz.sha256
         env:
           GH_TOKEN: ${{ github.token }}
 
@@ -235,24 +261,31 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v7
-      - name: Download macOS archive
+      - name: Download macOS archives
         uses: actions/download-artifact@v8
         with:
-          name: macos-archive
+          pattern: macos-archive-*
           path: built
-      - name: Compare published archive to build
+          merge-multiple: true
+      - name: Compare published archives to build
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release download "$GITHUB_REF_NAME" --pattern '*-macos-arm64.tar.gz' --dir dist
-          archive="iphone-control-$GITHUB_REF_NAME-macos-arm64.tar.gz"
-          cmp "built/$archive" "dist/$archive"
-      - name: Sign macOS manifest
+          gh release download "$GITHUB_REF_NAME" --pattern '*-macos-*.tar.gz' --dir dist
+          test "$(ls dist/*.tar.gz | wc -l)" -eq 2
+          for arch in arm64 x86_64; do
+            archive="iphone-control-$GITHUB_REF_NAME-macos-$arch.tar.gz"
+            cmp "built/$archive" "dist/$archive"
+          done
+      - name: Sign macOS manifests
         env:
           ICTL_UPDATE_SIGNING_KEY: ${{ secrets.ICTL_UPDATE_SIGNING_KEY }}
           ICTL_UNATTENDED_TAG: ${{ vars.ICTL_UNATTENDED_TAG }}
-        run: python3 packaging/release.py sign dist macos-arm64
-      - name: Publish signed macOS manifest
+        run: |
+          for target in macos-arm64 macos-x86_64; do
+            python3 packaging/release.py sign dist "$target"
+          done
+      - name: Publish signed macOS manifests
         env:
           GH_TOKEN: ${{ github.token }}
         run: python3 packaging/release.py upload dist/*.manifest.json*
@@ -268,9 +301,10 @@ jobs:
         run: |
           gh release download "$GITHUB_REF_NAME" --pattern '*.manifest.json*' --dir signed
           mac=$(python3 packaging/release.py sha signed macos-arm64)
+          intel=$(python3 packaging/release.py sha signed macos-x86_64)
           x86=$(python3 packaging/release.py sha signed linux-x86_64)
           arm=$(python3 packaging/release.py sha signed linux-aarch64)
-          sh packaging/homebrew/formula.sh "$GITHUB_REF_NAME" "$mac" "$x86" "$arm" > iphone-control.rb
+          sh packaging/homebrew/formula.sh "$GITHUB_REF_NAME" "$mac" "$intel" "$x86" "$arm" > iphone-control.rb
           ruby -c iphone-control.rb
         env:
           GH_TOKEN: ${{ github.token }}

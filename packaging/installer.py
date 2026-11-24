@@ -148,6 +148,17 @@ def run(*args):
     return subprocess.run(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
 
 
+def release_target(system, machine, arm64_capable):
+    """The release archive for this machine, or None. A Mac that can run arm64 code gets the Apple Silicon build
+    even when this Python runs under Rosetta (it then reports x86_64)."""
+    machine = machine.lower()
+    if system == "darwin":
+        return "macos-arm64" if machine == "arm64" or arm64_capable() else "macos-x86_64"
+    if system == "linux" and machine in ("x86_64", "aarch64"):
+        return "linux-" + machine
+    return None
+
+
 def service_files(config):
     if sys.platform == "darwin":
         return "launchd", Path.home() / "Library/LaunchAgents" / (LABEL + ".plist")
@@ -461,12 +472,8 @@ def main():
         raise ValueError("unbound source installer; download install.sh from your publisher's GitHub Release assets")
     if os.getuid() == 0:
         raise ValueError("run as your regular user")
-    arch = platform.machine().lower()
-    if sys.platform == "darwin" and (arch == "arm64" or run("arch", "-arm64", "/usr/bin/true")):
-        target = "macos-arm64"
-    elif sys.platform == "linux" and arch in ("x86_64", "aarch64"):
-        target = "linux-" + arch
-    else:
+    target = release_target(sys.platform, platform.machine(), lambda: run("arch", "-arm64", "/usr/bin/true"))
+    if target is None:
         raise ValueError("no supported release for this platform")
     binary_dir = (args.prefix / "bin").resolve()
     binary_dir.mkdir(mode=0o755, parents=True, exist_ok=True)

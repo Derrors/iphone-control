@@ -49,7 +49,7 @@ systemctl --user enable --now iphone-control     # 以普通用户运行，每�
 Linux 上装了 ffmpeg，控制台的画面改用 H.264，流量约为原来的 1/15，经隧道、走外网时更顺：`sudo apt install ffmpeg`。macOS 上不用装，直接就是 H.264。见[控制台的画面](./cli#viewer-picture)。
 :::
 
-Intel Mac 没有预编译版本，要从源码编译；参与开发也从源码运行。见[从源码编译](../deploy/source)。
+一行命令和 Homebrew 在 Apple Silicon 和 Intel 的 Mac 上都能用（Intel 的包从 0.2.14 起提供）。参与开发从源码运行，见[从源码编译](../deploy/source)。
 
 ### 上游 v0.2.0 脚本安装与迁移 {#legacy-script}
 

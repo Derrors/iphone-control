@@ -166,19 +166,19 @@ impl Daemon {
         }
 
         let now = Instant::now();
-        if now >= g.next_resign {
+        let upkeep = wda_upkeep(g.device.is_some(), self.native(g), g.persisted.wda_bundle.is_some());
+        // 不该做的这一轮不算数：换到用 WDA 的设备后下一轮就做，不用再等一个周期
+        if now >= g.next_resign && upkeep.resign {
             g.next_resign = now + self.cfg.resign_check;
-            if g.device.is_some() && g.persisted.wda_bundle.is_some() {
-                let d = self.clone();
-                tokio::task::spawn_local(async move {
-                    if let Err(e) = d.resign_now(false).await {
-                        let mut g = d.inner.lock().await;
-                        d.notify(&mut g, Event::ResignFailed(e.to_string()));
-                    }
-                });
-            }
+            let d = self.clone();
+            tokio::task::spawn_local(async move {
+                if let Err(e) = d.resign_now(false).await {
+                    let mut g = d.inner.lock().await;
+                    d.notify(&mut g, Event::ResignFailed(e.to_string()));
+                }
+            });
         }
-        if now >= g.next_session_check {
+        if now >= g.next_session_check && upkeep.session {
             g.next_session_check = now + self.cfg.session_check;
             tokio::task::spawn_local(self.clone().check_session());
         }
@@ -1034,9 +1034,12 @@ impl Daemon {
                 g.persisted.save(&self.cfg.state_file());
                 // 新包装上后旧的 runner 会失效，下一轮巡检重新拉起。签名期间切到了别的设备就不动它的会话
                 if g.device.as_ref().is_some_and(|d| d.udid == signed_udid) {
+                    // 装新包时旧的后台 WDA 已被结束：忘掉它（进程号可能被别的进程用上），巡检马上重新拉起
+                    self.forget_detached_here(g);
                     self.drop_session(g).await;
                     self.refresh_device_profile(g).await;
                     g.backoff.reset();
+                    self.wake.notify_one();
                 }
                 g.dedup.clear("resign");
                 let expires = crate::eventlog::format_local(exp);
@@ -1060,6 +1063,20 @@ impl Daemon {
         self.publish(g);
         r
     }
+}
+
+/// 定时的 WDA 维护（自动重签、Apple ID 会话检查）这一轮该不该做
+#[derive(Debug, PartialEq, Eq)]
+struct Upkeep {
+    resign: bool,
+    session: bool,
+}
+
+/// 只为用 WDA 的设备做：在用的设备走原生控制时都不做（iOS 27 原生不要 Apple ID，见 docs/dev/ios27-native.md）。
+/// 没装过 WDA（`has_bundle` 为 false）也不做。会话检查在没连手机时照做，提早发现会话失效
+fn wda_upkeep(device: bool, native: bool, has_bundle: bool) -> Upkeep {
+    let wda = has_bundle && !(device && native);
+    Upkeep { resign: wda && device, session: wda }
 }
 
 fn now_secs() -> u64 {
@@ -1168,5 +1185,23 @@ mod display_tests {
             assert!(g.dev.touch_rotation.is_none());
         }
         std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod upkeep_tests {
+    use super::*;
+
+    #[test]
+    fn wda_upkeep_is_only_for_devices_that_use_wda() {
+        // a WDA device with WDA installed: both
+        assert_eq!(wda_upkeep(true, false, true), Upkeep { resign: true, session: true });
+        // the device in use is driven natively: neither, even with a WDA bundle left from another device
+        assert_eq!(wda_upkeep(true, true, true), Upkeep { resign: false, session: false });
+        // no phone: nothing to re-sign for, the Apple ID session is still checked
+        assert_eq!(wda_upkeep(false, false, true), Upkeep { resign: false, session: true });
+        // never installed WDA (native only): no Apple ID upkeep at all
+        assert_eq!(wda_upkeep(true, false, false), Upkeep { resign: false, session: false });
+        assert_eq!(wda_upkeep(false, false, false), Upkeep { resign: false, session: false });
     }
 }

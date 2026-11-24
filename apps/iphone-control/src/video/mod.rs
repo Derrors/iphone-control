@@ -399,13 +399,15 @@ pub async fn serve_mjpeg(
     let (tx, rx) = watch::channel::<Option<Arc<Vec<u8>>>>(None);
     let reader = tokio::spawn(async move {
         let mut f = mjpeg::Frames::new(src);
-        let mut last: Option<Vec<u8>> = None;
+        let mut last: Option<Arc<Vec<u8>>> = None;
         while let Ok(Ok(Some(j))) = tokio::time::timeout(idle, f.next()).await {
-            if last.as_ref() == Some(&j) {
+            if last.as_deref() == Some(&j) {
                 continue;
             }
+            // kept and sent as the same allocation, not copied per frame
+            let j = Arc::new(j);
             last = Some(j.clone());
-            if tx.send(Some(Arc::new(j))).is_err() {
+            if tx.send(Some(j)).is_err() {
                 return;
             }
         }

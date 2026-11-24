@@ -194,12 +194,16 @@ impl HidSession {
         limit(ictl_l10n::tr!("HID 按住拖动", "HID held drag"), d, async {
             let end = tokio::time::Instant::now() + held;
             self.touch.send_touchscreen(TOUCHSCREEN_STATE_CONTACT, x1, y1, None).await?;
+            // the finger is down: if this fails or times out from here on, closing the session lifts it
+            self.contact = Some((x1, y1));
             while tokio::time::Instant::now() < end {
                 tokio::time::sleep(Duration::from_millis(100).min(end - tokio::time::Instant::now())).await;
                 self.touch.send_touchscreen(TOUCHSCREEN_STATE_CONTACT, x1, y1, None).await?;
             }
             // drag() starts with a contact at (x1, y1): the finger stays down from the hold into the move
-            Ok(self.touch.drag(x1, y1, x2, y2, steps, 20).await?)
+            self.touch.drag(x1, y1, x2, y2, steps, 20).await?;
+            self.contact = None;
+            Ok(())
         })
         .await
     }

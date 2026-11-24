@@ -15,6 +15,7 @@
     <a href="Cargo.toml"><img src="https://img.shields.io/badge/Rust-1.89%2B-CE422B?style=flat&logo=rust&logoColor=white" alt="Rust"></a>
     <a href="LICENSE"><img src="https://img.shields.io/github/license/Derrors/iphone-control?style=flat" alt="License"></a>
     <a href="https://m8ven.ai/mcp/derrors-iphone-control-1pcmse?s=readme"><img src="https://m8ven.ai/badge/mcp/derrors-iphone-control-1pcmse?variant=verified" alt="M8ven 已验证"></a>
+    <a href="https://glama.ai/mcp/servers/Derrors/iphone-control"><img src="https://glama.ai/mcp/servers/Derrors/iphone-control/badges/score.svg" alt="Derrors/iphone-control MCP server"></a>
   </p>
 
   <p align="center">

@@ -22,6 +22,7 @@ What changed in each release, one line per change. Versions follow [Semantic Ver
 - The control page's server allows 64 connections instead of 32, and answers 503 (and logs it) when they are all taken instead of dropping the connection silently.
 - Stopping the viewer (`systemctl stop`, an update, Ctrl-C) also stops the agents of AI tasks started from the page; they kept running on their own.
 - An idle `iphone-control mcp` (kept running by Claude Desktop, Cursor, Claude Code…) no longer keeps updates from installing: it holds the maintenance lock only during a tool call, and its next call reaches the new daemon.
+- The phone's own video on the control page pauses while the phone unlocks itself or the bitrate changes, instead of dropping and reconnecting.
 
 ## [0.2.14] - 2026-11-24
 

@@ -13,8 +13,13 @@
 //! [`ictl_device::LOW_BANDWIDTH_BITRATE`] while it watches. There is one stream per phone and its cap is set when it
 //! starts, so the HID session is closed and opened again when the cap has to change: when the first such page comes,
 //! and when the last one goes while others still watch (they get the full rate back). Every page's picture stops for
-//! about half a second then and reconnects, and a touch under way ends ([`crate::tools::video_bitrate`]). The video is always portrait; the rotation of the
+//! about half a second then, and a touch under way ends ([`crate::tools::video_bitrate`]). The video is always portrait; the rotation of the
 //! interface is sent alongside ([`ScreenMsg::Info`]) and the page turns the picture.
+//!
+//! When the HID session closes under a stream (a bitrate change; unlocking natively, which reads the lock screen with
+//! it closed seven or eight times, because iOS hides the keypad from accessibility while the screen is streamed),
+//! the connection stays and waits for the next media stream ([`Daemon::reopen_feed`]): the page sees the picture
+//! pause instead of losing it and reconnecting each time.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -31,6 +36,12 @@ use crate::tools::video_bitrate;
 /// How often the interface rotation is asked of WDA while streaming (about 20 ms each, only when the device lock is
 /// free). Once for all the pages watching ([`Daemon::sample_rotation`]), not once per page
 const ROTATION_EVERY: Duration = Duration::from_secs(1);
+
+/// A media stream that closed under a page is waited for again after this long ([`Daemon::reopen_feed`])
+const REOPEN_AFTER: Duration = Duration::from_millis(200);
+/// … this many times in a row without a frame in between; then the page reconnects. Unlocking holds the device until
+/// it is done, so a page waits for it once however often the session closes meanwhile
+const REOPEN_TRIES: u32 = 10;
 
 fn degrees(r: Rotation) -> u32 {
     match r {
@@ -99,9 +110,12 @@ impl Daemon {
             return;
         }
         let _viewer = viewer;
+        let mut feed = feed;
         // stopped already (the HID session closed meanwhile): the viewer reconnects
         let Some(mut frames) = feed.subscribe() else { return };
         feed.request_keyframe();
+        // media streams that closed one after the other without a frame in between
+        let mut reopened = 0;
         // nothing decodes before a keyframe (and the config message it brings)
         let mut need_key = true;
         let mut codec: Option<String> = None;
@@ -116,6 +130,7 @@ impl Daemon {
             let out = tokio::select! {
                 r = frames.recv() => match r {
                     Ok(f) => {
+                        reopened = 0;
                         if need_key && !f.key {
                             continue;
                         }
@@ -141,8 +156,19 @@ impl Daemon {
                         feed.request_keyframe();
                         continue;
                     }
-                    // the HID session (and its media stream) closed: the viewer reconnects
-                    Err(RecvError::Closed) => return,
+                    // the HID session (and its media stream) closed: wait for the next one on this connection. Not
+                    // forever: a stream that closes again and again without a frame is given up (the viewer reconnects)
+                    Err(RecvError::Closed) => {
+                        reopened += 1;
+                        if reopened > REOPEN_TRIES {
+                            return;
+                        }
+                        let Some((f, sub)) = self.reopen_feed(expect_udid.as_deref(), low_bandwidth).await else { return };
+                        (feed, frames) = (f, sub);
+                        need_key = true;
+                        feed.request_keyframe();
+                        continue;
+                    }
                 },
                 r = reader.read(&mut buf) => match r {
                     Ok(0) | Err(_) => return,
@@ -219,6 +245,23 @@ impl Daemon {
         rotation.map(degrees)
     }
 
+    /// The next media stream after the last one closed under a watching page (see the module docs): taken once the
+    /// device is free (unlocking holds it until done), for the same device and rate. `None` when there is none to be
+    /// had: the device changed or went, the HID session can't be opened
+    async fn reopen_feed(
+        self: &Arc<Self>,
+        expect_udid: Option<&str>,
+        low_bandwidth: bool,
+    ) -> Option<(ictl_device::ScreenFeed, tokio::sync::broadcast::Receiver<ictl_device::ScreenFrame>)> {
+        // whoever closed it may go on with the device for a moment (the next digit of the passcode)
+        tokio::time::sleep(REOPEN_AFTER).await;
+        let mut g = self.inner.lock().await;
+        let feed = self.open_feed(&mut g, expect_udid, low_bandwidth).await.ok()?;
+        g.hid_used = Some(Instant::now());
+        let frames = feed.subscribe()?;
+        Some((feed, frames))
+    }
+
     /// The screen feed of the controlled device, opening the HID session for it if needed (again, at the lower rate,
     /// for a page in low-bandwidth mode: see the module docs)
     async fn screen_feed(
@@ -228,6 +271,22 @@ impl Daemon {
     ) -> crate::error::Result<(ictl_device::ScreenFeed, Viewer)> {
         let mut g = self.inner.lock().await;
         let g = &mut *g;
+        let feed = self.open_feed(g, expect_udid, low_bandwidth).await?;
+        g.screen_viewers += 1;
+        if low_bandwidth {
+            g.low_bandwidth_viewers += 1;
+        }
+        g.hid_used = Some(Instant::now());
+        Ok((feed, Viewer(self.clone(), low_bandwidth)))
+    }
+
+    /// [`Self::screen_feed`] without counting the page
+    async fn open_feed(
+        &self,
+        g: &mut crate::core::Inner,
+        expect_udid: Option<&str>,
+        low_bandwidth: bool,
+    ) -> crate::error::Result<ictl_device::ScreenFeed> {
         let udid =
             g.device.as_ref().map(|d| d.udid.clone()).ok_or(ictl_l10n::tr!("手机未连接", "Phone not connected"))?;
         if expect_udid.is_some_and(|u| !u.eq_ignore_ascii_case(&udid)) {
@@ -256,17 +315,11 @@ impl Daemon {
                 }
             );
         }
-        let feed = self
+        Ok(self
             .hid_at(g, rate)
             .await?
             .screen_feed()
-            .ok_or(ictl_l10n::tr!("屏幕媒体流已停止", "The screen media stream stopped"))?;
-        g.screen_viewers += 1;
-        if low_bandwidth {
-            g.low_bandwidth_viewers += 1;
-        }
-        g.hid_used = Some(Instant::now());
-        Ok((feed, Viewer(self.clone(), low_bandwidth)))
+            .ok_or(ictl_l10n::tr!("屏幕媒体流已停止", "The screen media stream stopped"))?)
     }
 }
 

@@ -17,14 +17,23 @@ use super::{Availability, InstallMethod, Report, archive, deb_asset, digest, ins
 const DEB_UNIT: &str = "/usr/lib/systemd/user/iphone-control.service";
 
 pub(super) async fn apply(socket: &Path, report: &Report) -> Result<()> {
-    let exe = report.executable.as_deref().context("missing installation path")?;
-    let latest = report.available_version.as_deref().context("missing release version")?;
-    ensure!(release::stable_tag(&format!("v{latest}")).is_some(), "invalid stable release version");
+    let exe = report.executable.as_deref().context(ictl_l10n::tr!("缺少安装路径", "missing installation path"))?;
+    let latest =
+        report.available_version.as_deref().context(ictl_l10n::tr!("缺少发布版本号", "missing release version"))?;
+    ensure!(
+        release::stable_tag(&format!("v{latest}")).is_some(),
+        "{}",
+        ictl_l10n::tr!("正式版的版本号不对", "invalid stable release version")
+    );
     match (report.install_method, report.availability) {
         (InstallMethod::Homebrew, Availability::BrewCheck) => {
-            let cellar = exe.ancestors().nth(4).context("missing Homebrew Cellar")?;
-            let tap = tap().context("missing Homebrew tap")?;
-            let brew = install::brew_program(cellar).context("cannot locate the Homebrew executable")?;
+            let cellar = exe
+                .ancestors()
+                .nth(4)
+                .context(ictl_l10n::tr!("找不到 Homebrew 的 Cellar", "missing Homebrew Cellar"))?;
+            let tap = tap().context(ictl_l10n::tr!("缺少 Homebrew tap", "missing Homebrew tap"))?;
+            let brew = install::brew_program(cellar)
+                .context(ictl_l10n::tr!("找不到 Homebrew 程序", "cannot locate the Homebrew executable"))?;
             if homebrew(&brew, cellar, tap, latest).await? {
                 let running = brew_service_running(&brew).await;
                 restart(
@@ -39,8 +48,9 @@ pub(super) async fn apply(socket: &Path, report: &Report) -> Result<()> {
             Ok(())
         }
         (InstallMethod::Debian, Availability::Available) => {
-            let repo = publisher().context("missing release publisher")?;
-            let target = super::target().context("unsupported Debian architecture")?;
+            let repo = publisher().context(ictl_l10n::tr!("缺少发布者", "missing release publisher"))?;
+            let target =
+                super::target().context(ictl_l10n::tr!("不支持的 Debian 架构", "unsupported Debian architecture"))?;
             if debian(repo, target, latest, exe).await? {
                 let running = deb_service_running().await;
                 restart(
@@ -149,18 +159,17 @@ async fn wait_for_daemon(socket: &Path, version: &str, within: Duration) -> bool
 }
 
 async fn run(cmd: &mut Command) -> Result<()> {
-    let status =
-        cmd.status().await.with_context(|| format!("starting {}", cmd.as_std().get_program().to_string_lossy()))?;
+    let status = cmd.status().await.with_context(|| {
+        ictl_l10n::trf!("启动 {} 失败", "starting {}", cmd.as_std().get_program().to_string_lossy())
+    })?;
     ensure!(status.success(), "{}: {status}", cmd.as_std().get_program().to_string_lossy());
     Ok(())
 }
 
 async fn output(cmd: &mut Command) -> Result<String> {
-    let result = cmd
-        .stderr(Stdio::inherit())
-        .output()
-        .await
-        .with_context(|| format!("starting {}", cmd.as_std().get_program().to_string_lossy()))?;
+    let result = cmd.stderr(Stdio::inherit()).output().await.with_context(|| {
+        ictl_l10n::trf!("启动 {} 失败", "starting {}", cmd.as_std().get_program().to_string_lossy())
+    })?;
     ensure!(result.status.success(), "{}: {}", cmd.as_std().get_program().to_string_lossy(), result.status);
     Ok(String::from_utf8(result.stdout)?)
 }
@@ -168,13 +177,15 @@ async fn output(cmd: &mut Command) -> Result<String> {
 /// True when it upgraded (false: Homebrew already had `latest`)
 async fn homebrew(brew: &Path, cellar: &Path, tap: &str, latest: &str) -> Result<bool> {
     let formula = format!("{tap}/iphone-control");
-    let active = cellar.parent().context("invalid Homebrew prefix")?.join("opt/iphone-control/bin/iphone-control");
+    let active = cellar
+        .parent()
+        .context(ictl_l10n::tr!("Homebrew 的安装前缀不对", "invalid Homebrew prefix"))?
+        .join("opt/iphone-control/bin/iphone-control");
     let installed = || {
-        active
-            .canonicalize()
-            .ok()
-            .and_then(|exe| install::brew_keg(&exe, cellar, tap))
-            .context("Homebrew's active keg does not match this installation and tap")
+        active.canonicalize().ok().and_then(|exe| install::brew_keg(&exe, cellar, tap)).context(ictl_l10n::tr!(
+            "Homebrew 当前启用的版本和这个安装、tap 对不上",
+            "Homebrew's active keg does not match this installation and tap"
+        ))
     };
     let before = semver::Version::parse(&installed()?)?;
     if before >= semver::Version::parse(latest)? {
@@ -193,7 +204,8 @@ async fn homebrew(brew: &Path, cellar: &Path, tap: &str, latest: &str) -> Result
     let f = &info["formulae"][0];
     ensure!(
         f["full_name"].as_str().is_some_and(|s| s.eq_ignore_ascii_case(&formula)),
-        "Homebrew formula identity changed"
+        "{}",
+        ictl_l10n::tr!("Homebrew formula 的身份变了", "Homebrew formula identity changed")
     );
     ensure!(f["pinned"] == false, "{}", tr!("Homebrew 已固定此版本。", "This formula is pinned in Homebrew."));
     ensure!(
@@ -205,7 +217,11 @@ async fn homebrew(brew: &Path, cellar: &Path, tap: &str, latest: &str) -> Result
         )
     );
     run(cmd().args(["upgrade", "--formula", &formula])).await?;
-    ensure!(installed()? == latest, "Homebrew did not activate {latest}");
+    ensure!(
+        installed()? == latest,
+        "{}",
+        ictl_l10n::trf!("Homebrew 没有启用 {latest}", "Homebrew did not activate {latest}")
+    );
     println!("{}", ictl_l10n::trf!("Homebrew 已升级至 {latest}。", "Homebrew upgraded to {latest}."));
     Ok(true)
 }
@@ -213,14 +229,19 @@ async fn homebrew(brew: &Path, cellar: &Path, tap: &str, latest: &str) -> Result
 fn check_deb_metadata<'a>(fields: &'a str, version: &str, arch: &str) -> Result<&'a str> {
     let mut lines = fields.lines();
     let (name, package_version, architecture) = (lines.next(), lines.next(), lines.next());
-    let package_version = package_version.context("missing Debian package version")?;
+    let package_version =
+        package_version.context(ictl_l10n::tr!("缺少 Debian 包的版本号", "missing Debian package version"))?;
     // cargo-deb adds its Debian revision to the upstream package version.
     ensure!(
         name == Some("iphone-control")
             && architecture == Some(arch)
             && lines.next().is_none()
             && (package_version == version || package_version.strip_suffix("-1") == Some(version)),
-        "Debian package metadata does not match iphone-control {version} {arch}"
+        "{}",
+        ictl_l10n::trf!(
+            "Debian 包的信息和 iphone-control {version} {arch} 对不上",
+            "Debian package metadata does not match iphone-control {version} {arch}"
+        )
     );
     Ok(package_version)
 }
@@ -251,8 +272,12 @@ async fn check_apt_candidate(apt_cache: &mut Command, path: &Path, deb_version: 
 
 /// True when it upgraded (false: APT already had `latest`)
 async fn debian(repo: &str, target: &str, latest: &str, exe: &Path) -> Result<bool> {
-    let asset = deb_asset(latest, target).context("unsupported Debian architecture")?;
-    let arch = asset.rsplit_once('_').and_then(|(_, s)| s.strip_suffix(".deb")).context("invalid Debian asset name")?;
+    let asset =
+        deb_asset(latest, target).context(ictl_l10n::tr!("不支持的 Debian 架构", "unsupported Debian architecture"))?;
+    let arch = asset
+        .rsplit_once('_')
+        .and_then(|(_, s)| s.strip_suffix(".deb"))
+        .context(ictl_l10n::tr!("Debian 包的文件名不对", "invalid Debian asset name"))?;
     let client = archive::client()?;
     let signed = archive::signed_manifest(&client, repo, target, latest, &asset).await?;
     let temp = tempfile::tempdir()?;
@@ -261,12 +286,19 @@ async fn debian(repo: &str, target: &str, latest: &str, exe: &Path) -> Result<bo
     archive::download(&client, &url, signed.size, File::create_new(&path)?).await?;
     ensure!(
         path.metadata()?.len() == signed.size && digest(&path)? == signed.sha256,
-        "Debian package does not match its signed manifest"
+        "{}",
+        ictl_l10n::tr!("Debian 包和它的签名清单对不上", "Debian package does not match its signed manifest")
     );
     let deb_version = inspect_deb(&path, latest, arch).await?;
     let current = install::detect(Some(exe));
-    ensure!(current.method == InstallMethod::Debian, "Debian package ownership changed");
-    let current = semver::Version::parse(&current.version.context("missing installed Debian version")?)?;
+    ensure!(
+        current.method == InstallMethod::Debian,
+        "{}",
+        ictl_l10n::tr!("Debian 包的归属变了", "Debian package ownership changed")
+    );
+    let current = semver::Version::parse(
+        &current.version.context(ictl_l10n::tr!("读不到已安装的 Debian 包版本", "missing installed Debian version"))?,
+    )?;
     if current >= semver::Version::parse(latest)? {
         println!("{}", ictl_l10n::trf!("APT 当前版本为 {current}。", "APT already has {current}."));
         return Ok(false);
@@ -298,7 +330,8 @@ async fn debian(repo: &str, target: &str, latest: &str, exe: &Path) -> Result<bo
     let installed = install::detect(Some(exe));
     ensure!(
         installed.method == InstallMethod::Debian && installed.version.as_deref() == Some(latest),
-        "APT did not install {latest}"
+        "{}",
+        ictl_l10n::trf!("APT 没有装上 {latest}", "APT did not install {latest}")
     );
     println!("{}", ictl_l10n::trf!("APT 已升级至 {latest}。", "APT upgraded to {latest}."));
     Ok(true)

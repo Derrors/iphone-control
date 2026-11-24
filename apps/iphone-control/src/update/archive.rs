@@ -75,11 +75,15 @@ pub(super) fn client() -> anyhow::Result<Client> {
 pub(super) async fn download(client: &Client, url: &str, max: u64, mut out: impl Write) -> anyhow::Result<u64> {
     let mut response =
         client.get(url).send().await.and_then(|r| r.error_for_status()).map_err(reqwest::Error::without_url)?;
-    ensure!(response.content_length().is_none_or(|s| s <= max), "release asset exceeds size limit");
+    ensure!(
+        response.content_length().is_none_or(|s| s <= max),
+        "{}",
+        ictl_l10n::tr!("发布文件超过大小上限", "release asset exceeds size limit")
+    );
     let mut size = 0;
     while let Some(chunk) = response.chunk().await.map_err(reqwest::Error::without_url)? {
         size += chunk.len() as u64;
-        ensure!(size <= max, "release asset exceeds size limit");
+        ensure!(size <= max, "{}", ictl_l10n::tr!("发布文件超过大小上限", "release asset exceeds size limit"));
         out.write_all(&chunk)?;
     }
     Ok(size)
@@ -98,7 +102,9 @@ fn key_bytes(key: &str) -> Option<[u8; 32]> {
 
 /// The release signing keys this build trusts (`ICTL_UPDATE_PUBLIC_KEYS`)
 pub(super) fn keys() -> anyhow::Result<&'static str> {
-    option_env!("ICTL_UPDATE_PUBLIC_KEYS").filter(|s| !s.is_empty()).context("this build has no update trust key")
+    option_env!("ICTL_UPDATE_PUBLIC_KEYS")
+        .filter(|s| !s.is_empty())
+        .context(ictl_l10n::tr!("这个版本没有内置更新用的公钥", "this build has no update trust key"))
 }
 
 /// Downloads `<asset>.manifest.json` and its signature from release `version` of `publisher` and checks both
@@ -134,18 +140,21 @@ fn verify(
 ) -> anyhow::Result<Manifest> {
     ensure!(
         keys.split(',').filter_map(key_bytes).any(|key| UnparsedPublicKey::new(&ED25519, key).verify(raw, sig).is_ok()),
-        "invalid release signature"
+        "{}",
+        ictl_l10n::tr!("发布签名不对", "invalid release signature")
     );
     let m: Manifest = serde_json::from_slice(raw)?;
     ensure!(
         m.schema == 1 && m.publisher == publisher && m.target == target && m.version == version && m.asset == asset,
-        "manifest does not match this release"
+        "{}",
+        ictl_l10n::tr!("清单和这个版本对不上", "manifest does not match this release")
     );
     ensure!(
         (1..=MAX_ARCHIVE).contains(&m.size)
             && key_bytes(&m.sha256).is_some()
             && m.sha256.bytes().all(|b| !b.is_ascii_uppercase()),
-        "invalid signed digest or size"
+        "{}",
+        ictl_l10n::tr!("签名里的摘要或大小不对", "invalid signed digest or size")
     );
     Ok(m)
 }
@@ -157,21 +166,30 @@ fn extract(archive: &Path, root: &str, candidate: &Path) -> anyhow::Result<()> {
     let mut tar = tar::Archive::new(gzip.take(MAX_EXPANDED + 1));
     let mut found = false;
     for (n, item) in tar.entries()?.enumerate() {
-        ensure!(n < 32, "too many archive entries");
+        ensure!(n < 32, "{}", ictl_l10n::tr!("压缩包里的文件太多", "too many archive entries"));
         let mut item = item?;
         let name = item.path()?;
         let kind = item.header().entry_type();
         if name == Path::new(root) && kind.is_dir() {
             continue;
         }
-        ensure!(name.parent() == Some(Path::new(root)) && kind.is_file(), "unexpected path or link in release archive");
+        ensure!(
+            name.parent() == Some(Path::new(root)) && kind.is_file(),
+            "{}",
+            ictl_l10n::tr!("发布包里有不该有的路径或链接", "unexpected path or link in release archive")
+        );
         if name.file_name().is_some_and(|n| n == "iphone-control") {
             ensure!(
                 !found && (1..=MAX_EXPANDED).contains(&item.size()) && item.header().mode()? & 0o111 != 0,
-                "invalid executable entry"
+                "{}",
+                ictl_l10n::tr!("压缩包里的程序条目不对", "invalid executable entry")
             );
             let mut out = File::create_new(candidate)?;
-            ensure!(std::io::copy(&mut item, &mut out)? == item.size(), "truncated executable");
+            ensure!(
+                std::io::copy(&mut item, &mut out)? == item.size(),
+                "{}",
+                ictl_l10n::tr!("程序文件不完整", "truncated executable")
+            );
             out.set_permissions(std::fs::Permissions::from_mode(0o755))?;
             out.sync_all()?;
             found = true;
@@ -179,7 +197,11 @@ fn extract(archive: &Path, root: &str, candidate: &Path) -> anyhow::Result<()> {
     }
     let mut decoder = tar.into_inner();
     std::io::copy(&mut decoder, &mut std::io::sink())?;
-    ensure!(decoder.limit() > 0 && found, "invalid expanded archive size or missing executable");
+    ensure!(
+        decoder.limit() > 0 && found,
+        "{}",
+        ictl_l10n::tr!("解压后的大小不对，或者缺少程序", "invalid expanded archive size or missing executable")
+    );
     Ok(())
 }
 
@@ -187,7 +209,8 @@ fn unpack(m: &Manifest, stage: &Path) -> anyhow::Result<PathBuf> {
     let archive = stage.join("archive");
     ensure!(
         archive.metadata()?.len() == m.size && super::digest(&archive)? == m.sha256,
-        "release archive digest or size mismatch"
+        "{}",
+        ictl_l10n::tr!("发布包的摘要或大小对不上", "release archive digest or size mismatch")
     );
     let candidate = stage.join("candidate");
     extract(&archive, m.asset.trim_end_matches(".tar.gz"), &candidate)?;
@@ -222,7 +245,7 @@ pub(super) async fn preflight(candidate: &Path, version: &str) -> anyhow::Result
         cmd.arg("--version").kill_on_drop(true);
         match tokio::time::timeout(Duration::from_secs(10), cmd.output())
             .await
-            .context("candidate --version timed out")?
+            .context(ictl_l10n::tr!("新版本程序运行 --version 超时", "candidate --version timed out"))?
         {
             Err(e) if e.raw_os_error() == Some(libc::ETXTBSY) && busy < 20 => {
                 busy += 1;
@@ -233,7 +256,8 @@ pub(super) async fn preflight(candidate: &Path, version: &str) -> anyhow::Result
     };
     ensure!(
         out.status.success() && std::str::from_utf8(&out.stdout)?.trim() == format!("iphone-control {version}"),
-        "unexpected candidate --version"
+        "{}",
+        ictl_l10n::tr!("新版本程序 --version 的输出不对", "unexpected candidate --version")
     );
     Ok(())
 }

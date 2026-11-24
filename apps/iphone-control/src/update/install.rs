@@ -30,23 +30,38 @@ pub fn receipt_path() -> PathBuf {
 }
 
 pub fn read_receipt() -> Result<Receipt> {
-    let file = File::options().read(true).custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK).open(receipt_path()).context("No readable script installation receipt; run iphone-control update check for the upgrade instructions for this installation")?;
+    let file = File::options().read(true).custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK).open(receipt_path()).context(ictl_l10n::tr!("读不到脚本安装的记录；运行 iphone-control update check，查看这种安装方式怎么升级", "No readable script installation receipt; run iphone-control update check for the upgrade instructions for this installation"))?;
     let meta = file.metadata()?;
-    ensure!(user_owned(&meta) && meta.is_file() && meta.len() < 16 * 1024, "invalid installation receipt file");
+    ensure!(
+        user_owned(&meta) && meta.is_file() && meta.len() < 16 * 1024,
+        "{}",
+        ictl_l10n::tr!("安装记录文件不对", "invalid installation receipt file")
+    );
     let r: Receipt = serde_json::from_reader(file)?;
     ensure!(
         r.schema == 1 && Some(r.publisher.as_str()) == publisher() && Some(r.target.as_str()) == target(),
-        "receipt does not match this build"
+        "{}",
+        ictl_l10n::tr!("安装记录和这个版本对不上", "receipt does not match this build")
     );
-    ensure!(matches!(r.service.as_str(), "none" | "launchd" | "systemd"), "invalid service in receipt");
+    ensure!(
+        matches!(r.service.as_str(), "none" | "launchd" | "systemd"),
+        "{}",
+        ictl_l10n::tr!("安装记录里的后台服务不对", "invalid service in receipt")
+    );
     ensure!(
         r.binary_path.is_absolute() && r.binary_path.file_name().is_some_and(|n| n == "iphone-control"),
-        "invalid binary path"
+        "{}",
+        ictl_l10n::tr!("程序路径不对", "invalid binary path")
     );
-    ensure!(Version::parse(&r.version).is_ok(), "invalid receipt version");
+    ensure!(
+        Version::parse(&r.version).is_ok(),
+        "{}",
+        ictl_l10n::tr!("安装记录里的版本号不对", "invalid receipt version")
+    );
     ensure!(
         r.sha256.len() == 64 && r.sha256.bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase()),
-        "invalid binary digest"
+        "{}",
+        ictl_l10n::tr!("程序摘要不对", "invalid binary digest")
     );
     Ok(r)
 }
@@ -59,13 +74,22 @@ fn user_owned(meta: &Metadata) -> bool {
 fn receipt_file(r: &Receipt, exe: &Path) -> Result<File> {
     ensure!(
         exe.canonicalize()? == r.binary_path && r.binary_path.canonicalize()? == r.binary_path,
-        "receipt belongs to another executable"
+        "{}",
+        ictl_l10n::tr!("安装记录是另一个程序的", "receipt belongs to another executable")
     );
-    let parent = r.binary_path.parent().context("missing install directory")?;
-    ensure!(user_owned(&fs::metadata(parent)?), "unsafe install directory ownership or permissions");
+    let parent = r.binary_path.parent().context(ictl_l10n::tr!("安装目录不存在", "missing install directory"))?;
+    ensure!(
+        user_owned(&fs::metadata(parent)?),
+        "{}",
+        ictl_l10n::tr!("安装目录的所有者或权限不安全", "unsafe install directory ownership or permissions")
+    );
     let file = File::options().read(true).custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK).open(&r.binary_path)?;
     let meta = file.metadata()?;
-    ensure!(meta.is_file() && user_owned(&meta) && meta.mode() & 0o100 != 0, "unsafe installed executable");
+    ensure!(
+        meta.is_file() && user_owned(&meta) && meta.mode() & 0o100 != 0,
+        "{}",
+        ictl_l10n::tr!("已安装的程序文件不安全", "unsafe installed executable")
+    );
     Ok(file)
 }
 
@@ -90,7 +114,8 @@ pub fn digest(path: &Path) -> Result<String> {
 pub fn validate_receipt(receipt: &Receipt, expected_exe: &Path) -> Result<()> {
     ensure!(
         hash(receipt_file(receipt, expected_exe)?)? == receipt.sha256,
-        "installed binary digest differs from receipt"
+        "{}",
+        ictl_l10n::tr!("已安装程序的摘要和安装记录不同", "installed binary digest differs from receipt")
     );
     Ok(())
 }

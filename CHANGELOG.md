@@ -6,6 +6,11 @@ What changed in each release, one line per change. Versions follow [Semantic Ver
 
 ## [Unreleased]
 
+### Fixes
+
+- Times in `status`, `doctor` and the event log are shown in local time with the time zone; they were UTC without saying so.
+- Errors from `iphone-control update`, `service` and the update panel on the control page follow the chosen language; they were always in English.
+
 ## [0.2.14] - 2026-11-24
 
 ### New

@@ -1027,15 +1027,15 @@ impl Daemon {
                     g.backoff.reset();
                 }
                 g.dedup.clear("resign");
-                let expires = crate::eventlog::format_utc(exp);
+                let expires = crate::eventlog::format_local(exp);
                 // 事件日志按守护进程的语言，返回给调用方的按请求的语言
                 self.log.log(&ictl_l10n::log_trf!(
-                    "重签完成,新描述文件到期 {expires} UTC",
-                    "Re-signing done, the new provisioning profile expires {expires} UTC"
+                    "重签完成,新描述文件到期 {expires}",
+                    "Re-signing done, the new provisioning profile expires {expires}"
                 ));
                 Ok(ictl_l10n::trf!(
-                    "重签完成,新描述文件到期 {expires} UTC",
-                    "Re-signing done, the new provisioning profile expires {expires} UTC"
+                    "重签完成,新描述文件到期 {expires}",
+                    "Re-signing done, the new provisioning profile expires {expires}"
                 ))
             }
             Err(e) => {

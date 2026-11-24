@@ -131,16 +131,24 @@ pub fn managed(exe: &Path, method: &str) -> anyhow::Result<Service> {
             (our_plist(), Service::Launchd { label: LABEL.into(), plist: our_plist(), ours: true })
         }
         "systemd" if cfg!(target_os = "linux") => (our_unit(), Service::Systemd { unit: UNIT.into(), ours: true }),
-        _ => bail!("a script-managed user service is required"),
+        _ => bail!("{}", ictl_l10n::tr!("需要由安装脚本管理的用户服务", "a script-managed user service is required")),
     };
     let meta = file.symlink_metadata()?;
-    ensure!(meta.is_file() && meta.uid() == uid() && meta.mode() & 0o022 == 0, "untrusted service file");
-    let exe = exe.to_str().context("invalid executable path")?;
+    ensure!(
+        meta.is_file() && meta.uid() == uid() && meta.mode() & 0o022 == 0,
+        "{}",
+        ictl_l10n::tr!("后台服务文件不可信", "untrusted service file")
+    );
+    let exe = exe.to_str().context(ictl_l10n::tr!("程序路径不对", "invalid executable path"))?;
     match &service {
         Service::Launchd { label, .. } => {
             let plist = plist::Value::from_file(&file)?;
-            let dict = plist.as_dictionary().context("invalid service plist")?;
-            let args = dict.get("ProgramArguments").and_then(|v| v.as_array()).context("missing service arguments")?;
+            let dict =
+                plist.as_dictionary().context(ictl_l10n::tr!("后台服务的 plist 不对", "invalid service plist"))?;
+            let args = dict
+                .get("ProgramArguments")
+                .and_then(|v| v.as_array())
+                .context(ictl_l10n::tr!("后台服务缺少启动参数", "missing service arguments"))?;
             let script = format!(
                 r#"set -a; f="$HOME/.config/iphone-control/env"; [ -f "$f" ] && . "$f"; set +a; exec "{exe}" daemon"#
             );
@@ -149,18 +157,26 @@ pub fn managed(exe: &Path, method: &str) -> anyhow::Result<Service> {
                     && !dict.contains_key("Program")
                     && (args.iter().map(|v| v.as_string()).eq([Some(exe), Some("daemon")])
                         || args.iter().map(|v| v.as_string()).eq([Some("/bin/sh"), Some("-c"), Some(script.as_str())])),
-                "the launch agent does not start the recorded binary"
+                "{}",
+                ictl_l10n::tr!(
+                    "launchd 服务启动的不是记录里的程序",
+                    "the launch agent does not start the recorded binary"
+                )
             );
         }
         Service::Systemd { .. } => {
             let unit = std::fs::read_to_string(&file)?;
             let mut commands = unit.lines().filter_map(|line| line.trim().strip_prefix("ExecStart="));
-            let command = commands.next().context("missing ExecStart")?;
+            let command = commands.next().context(ictl_l10n::tr!("缺少 ExecStart", "missing ExecStart"))?;
             ensure!(
                 commands.next().is_none()
                     && (command == format!(r#""{exe}" daemon"#)
                         || (!exe.contains(char::is_whitespace) && command == format!("{exe} daemon"))),
-                "the systemd unit does not start the recorded binary"
+                "{}",
+                ictl_l10n::tr!(
+                    "systemd 服务启动的不是记录里的程序",
+                    "the systemd unit does not start the recorded binary"
+                )
             );
         }
     }
@@ -179,7 +195,8 @@ pub fn managed_pid(service: &Service, stopping: bool) -> anyhow::Result<Option<u
             if !out.status.success() {
                 ensure!(
                     String::from_utf8_lossy(&out.stderr).contains("Could not find service"),
-                    "cannot query launchd"
+                    "{}",
+                    ictl_l10n::tr!("查不了 launchd", "cannot query launchd")
                 );
                 return Ok(None);
             }
@@ -195,7 +212,11 @@ pub fn managed_pid(service: &Service, stopping: bool) -> anyhow::Result<Option<u
                     "--property=ActiveState,LoadState,MainPID,FragmentPath,DropInPaths,NeedDaemonReload",
                 ])
                 .output()?;
-            ensure!(out.status.success(), "cannot query systemd user service");
+            ensure!(
+                out.status.success(),
+                "{}",
+                ictl_l10n::tr!("查不了 systemd 用户服务", "cannot query systemd user service")
+            );
             let info = std::str::from_utf8(&out.stdout)?;
             let field = |key: &str| info.lines().find_map(|line| line.strip_prefix(key));
             ensure!(
@@ -203,15 +224,19 @@ pub fn managed_pid(service: &Service, stopping: bool) -> anyhow::Result<Option<u
                     && field("NeedDaemonReload=") == Some("no")
                     && field("FragmentPath=").map(Path::new) == Some(our_unit().as_path())
                     && field("DropInPaths=") == Some(""),
-                "systemd unit is stale or overridden"
+                "{}",
+                ictl_l10n::tr!("systemd 服务文件过期或被覆盖了", "systemd unit is stale or overridden")
             );
             match (field("ActiveState="), field("MainPID=")) {
                 (Some("inactive" | "failed"), Some("0")) => Ok(None),
-                (Some("active"), Some(pid)) => {
-                    Ok(Some(pid.parse::<u32>().ok().filter(|p| *p > 0).context("missing MainPID")?))
-                }
+                (Some("active"), Some(pid)) => Ok(Some(
+                    pid.parse::<u32>()
+                        .ok()
+                        .filter(|p| *p > 0)
+                        .context(ictl_l10n::tr!("缺少 MainPID", "missing MainPID"))?,
+                )),
                 (_, Some(pid)) if stopping => Ok(pid.parse::<u32>().ok().filter(|p| *p > 0)),
-                _ => bail!("systemd service is transitioning"),
+                _ => bail!("{}", ictl_l10n::tr!("systemd 服务正在启动或停止", "systemd service is transitioning")),
             }
         }
     }
@@ -222,19 +247,31 @@ pub fn managed_pid(service: &Service, stopping: bool) -> anyhow::Result<Option<u
 /// with no PID, for good: like an inactive systemd unit, it is stopped, not transitioning
 fn launchd_pid(info: &str, plist: &Path, stopping: bool) -> anyhow::Result<Option<u32>> {
     let field = |key: &str| info.lines().find_map(|line| line.strip_prefix('\t')?.strip_prefix(key));
-    ensure!(field("path = ").map(Path::new) == Some(plist), "launchd loaded a different plist");
+    ensure!(
+        field("path = ").map(Path::new) == Some(plist),
+        "{}",
+        ictl_l10n::tr!("launchd 载入的是另一个 plist", "launchd loaded a different plist")
+    );
     let pid = field("pid = ");
     if pid.is_none() && (stopping || field("state = ") == Some("not running")) {
         return Ok(None);
     }
-    ensure!(stopping || field("state = ") == Some("running"), "launchd service is transitioning");
-    Ok(Some(pid.context("no launchd PID")?.parse()?))
+    ensure!(
+        stopping || field("state = ") == Some("running"),
+        "{}",
+        ictl_l10n::tr!("launchd 服务正在启动或停止", "launchd service is transitioning")
+    );
+    Ok(Some(pid.context(ictl_l10n::tr!("launchd 没有给出进程号", "no launchd PID"))?.parse()?))
 }
 
 /// Restart exactly the service we stopped without changing the user's enable-at-login setting.
 pub fn start_managed(s: &Service) -> anyhow::Result<()> {
     if let Service::Systemd { unit, .. } = s {
-        ensure!(systemctl(&["start", unit]), "could not start systemd user service");
+        ensure!(
+            systemctl(&["start", unit]),
+            "{}",
+            ictl_l10n::tr!("启动不了 systemd 用户服务", "could not start systemd user service")
+        );
         Ok(())
     } else {
         start(s)
@@ -570,7 +607,7 @@ pub fn pause_viewer() -> anyhow::Result<Option<Service>> {
         std::thread::sleep(std::time::Duration::from_millis(200));
     }
     let _ = start(&s);
-    bail!("busy: the viewer service didn't stop")
+    bail!("{}", ictl_l10n::tr!("正忙：控制台服务没有停下", "busy: the viewer service didn't stop"))
 }
 
 /// Starts the control page's service again after [`pause_viewer`]; a failure is only reported

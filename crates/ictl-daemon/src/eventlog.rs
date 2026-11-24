@@ -63,10 +63,37 @@ impl EventLog {
     }
 }
 
-/// UTC 时间 `YYYY-MM-DD HH:MM:SS`（不引入时间库，按公历自己算）
+/// 现在的本地时间，带时区偏移（见 [`format_local`]）
 pub fn timestamp() -> String {
     let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
-    format_utc(secs)
+    format_local(secs)
+}
+
+/// 给人看的时间：本地时间加时区偏移，`2026-11-24 16:08:52 +08:00`。以前只写 UTC 又不标明，东八区的用户看到的
+/// 日志时间差 8 小时。偏移按那一刻算（夏令时前后不同）；取不到本地时区时就是 UTC（`+00:00`）
+pub fn format_local(secs: u64) -> String {
+    format_at(secs, local_offset(secs))
+}
+
+/// `secs` 那一刻本地时间比 UTC 快多少秒（东边为正）
+fn local_offset(secs: u64) -> i64 {
+    let Ok(t) = libc::time_t::try_from(secs) else { return 0 };
+    // SAFETY: localtime_r only writes the tm it is given; a zeroed tm is a valid value to start from
+    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+    if unsafe { libc::localtime_r(&t, &mut tm) }.is_null() {
+        return 0;
+    }
+    // c_long: i64 on the 64-bit hosts we ship for, narrower elsewhere
+    #[allow(clippy::unnecessary_cast)]
+    let offset = tm.tm_gmtoff as i64;
+    offset
+}
+
+/// `secs`（UTC）按偏移 `offset` 秒写成本地时间并标出偏移
+fn format_at(secs: u64, offset: i64) -> String {
+    let local = u64::try_from(i64::try_from(secs).unwrap_or(i64::MAX).saturating_add(offset)).unwrap_or(0);
+    let (sign, abs) = if offset < 0 { ('-', -offset) } else { ('+', offset) };
+    format!("{} {sign}{:02}:{:02}", format_utc(local), abs / 3600, abs % 3600 / 60)
 }
 
 pub fn format_utc(secs: u64) -> String {
@@ -87,6 +114,29 @@ pub fn format_utc(secs: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn local_time_carries_its_offset() {
+        assert_eq!(format_at(1_793_448_000, 8 * 3600), "2026-10-31 20:00:00 +08:00");
+        assert_eq!(format_at(1_793_448_000, 0), "2026-10-31 12:00:00 +00:00");
+        assert_eq!(format_at(1_793_448_000, -(5 * 3600 + 1800)), "2026-10-31 06:30:00 -05:30");
+        // just after midnight UTC, west of Greenwich: the day before
+        assert_eq!(format_at(1_793_404_860, -7 * 3600), "2026-10-30 17:01:00 -07:00");
+        // whatever this machine's zone is, the shape is the same
+        assert!(regex_like(&format_local(1_793_448_000)), "{}", format_local(1_793_448_000));
+    }
+
+    /// `YYYY-MM-DD HH:MM:SS ±HH:MM`
+    fn regex_like(s: &str) -> bool {
+        let b = s.as_bytes();
+        b.len() == 26
+            && [4, 7].iter().all(|&i| b[i] == b'-')
+            && b[10] == b' '
+            && [13, 16, 23].iter().all(|&i| b[i] == b':')
+            && b[19] == b' '
+            && matches!(b[20], b'+' | b'-')
+            && s.chars().filter(char::is_ascii_digit).count() == 18
+    }
 
     #[test]
     fn utc_formatting() {

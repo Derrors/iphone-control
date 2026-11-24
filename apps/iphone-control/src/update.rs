@@ -124,7 +124,9 @@ impl Report {
 /// (the updater's store is private and checked, see `transaction::Store::open`)
 pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     use std::io::Write;
-    let dir = path.parent().ok_or_else(|| anyhow::anyhow!("no parent directory: {}", path.display()))?;
+    let dir = path.parent().ok_or_else(|| {
+        anyhow::anyhow!("{}", ictl_l10n::trf!("没有上级目录：{}", "no parent directory: {}", path.display()))
+    })?;
     let mut tmp = tempfile::NamedTempFile::new_in(dir)?;
     tmp.write_all(bytes)?;
     tmp.as_file().sync_all()?;
@@ -490,7 +492,10 @@ pub async fn upgrade(socket: &Path, report: Report, yes: bool) -> Result<()> {
             if !confirm(&report, yes)? {
                 return Ok(());
             }
-            let version = report.available_version.clone().ok_or_else(|| anyhow::anyhow!("missing release version"))?;
+            let version = report
+                .available_version
+                .clone()
+                .ok_or_else(|| anyhow::anyhow!("{}", ictl_l10n::tr!("缺少发布版本号", "missing release version")))?;
             transaction::apply(socket, false, report).await?;
             println!("{}", trf!("已升级到 {version}。", "Updated to {version}."));
         }

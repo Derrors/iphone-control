@@ -50,6 +50,41 @@ impl Button {
     }
 }
 
+/// 手势时长的上限：再长的按住、拖动都是给错了数
+const MAX_GESTURE: f64 = 60.0;
+
+/// 手势的一段时长：负数当 0，超过 [`MAX_GESTURE`] 截到上限；不是有限数（`NaN`、无穷）的不做，
+/// `Duration::from_secs_f64` 遇到它会 panic
+fn gesture_time(seconds: f64) -> Result<Duration> {
+    if !seconds.is_finite() {
+        return Err(DeviceError::InvalidInput(ictl_l10n::trf!(
+            "手势时长不是有效的数：{seconds}",
+            "The gesture's duration isn't a valid number: {seconds}"
+        )));
+    }
+    Ok(Duration::from_secs_f64(seconds.clamp(0.0, MAX_GESTURE)))
+}
+
+/// 界面上的点 → HID 归一化坐标。不是有限数的坐标、量不出的屏幕尺寸不换算：`NaN` 会悄悄变成 (0,0)，点到左上角
+fn map_point(p: (f64, f64), screen: ScreenSize, rotation: Rotation) -> Result<(u16, u16)> {
+    if !(p.0.is_finite() && p.1.is_finite()) {
+        return Err(DeviceError::InvalidInput(ictl_l10n::trf!(
+            "坐标不是有效的数：({}, {})",
+            "The point isn't a valid number: ({}, {})",
+            p.0,
+            p.1
+        )));
+    }
+    if !(screen.width.is_finite() && screen.height.is_finite() && screen.width > 0.0 && screen.height > 0.0) {
+        return Err(DeviceError::InvalidInput(
+            ictl_l10n::tr!("屏幕尺寸未知，没法换算坐标", "The screen size is unknown, so the point can't be mapped")
+                .into(),
+        ));
+    }
+    let (x, y) = rotation.to_portrait(p, screen);
+    Ok(to_hid(x, y, screen))
+}
+
 /// 点 → HID 归一化坐标
 pub fn to_hid(x: f64, y: f64, screen: ScreenSize) -> (u16, u16) {
     let n = |v: f64, max: f64| (v / max * HID_MAX).round().clamp(0.0, HID_MAX) as u16;
@@ -157,14 +192,13 @@ impl HidSession {
         }
     }
 
-    /// 界面上的点 → HID 归一化坐标（先按 [`Self::rotation`] 换算回竖放）
-    fn hid_point(&self, p: (f64, f64)) -> (u16, u16) {
-        let (x, y) = self.rotation.to_portrait(p, self.screen);
-        to_hid(x, y, self.screen)
+    /// 界面上的点 → HID 归一化坐标（先按 [`Self::rotation`] 换算回竖放），见 [`map_point`]
+    fn hid_point(&self, p: (f64, f64)) -> Result<(u16, u16)> {
+        map_point(p, self.screen, self.rotation)
     }
 
     pub async fn tap(&mut self, x: f64, y: f64) -> Result<()> {
-        let (hx, hy) = self.hid_point((x, y));
+        let (hx, hy) = self.hid_point((x, y))?;
         limit(ictl_l10n::tr!("HID 点击", "HID tap"), Duration::from_secs(10), async {
             Ok(self.touch.tap(hx, hy).await?)
         })
@@ -173,10 +207,11 @@ impl HidSession {
 
     /// 拖动：按时长换算采样数（每 20ms 一个点，至少 10 个），太快会被识别成点击
     pub async fn drag(&mut self, from: (f64, f64), to: (f64, f64), seconds: f64) -> Result<()> {
-        let (x1, y1) = self.hid_point(from);
-        let (x2, y2) = self.hid_point(to);
-        let steps = ((seconds * 1000.0 / 20.0).round() as u32).max(10);
-        let d = Duration::from_secs_f64(seconds.max(0.0) + 10.0);
+        let (x1, y1) = self.hid_point(from)?;
+        let (x2, y2) = self.hid_point(to)?;
+        let moving = gesture_time(seconds)?;
+        let steps = ((moving.as_secs_f64() * 1000.0 / 20.0).round() as u32).max(10);
+        let d = moving + Duration::from_secs(10);
         limit(ictl_l10n::tr!("HID 拖动", "HID drag"), d, async {
             Ok(self.touch.drag(x1, y1, x2, y2, steps, 20).await?)
         })
@@ -186,11 +221,12 @@ impl HidSession {
     /// 按住再拖：按下后在起点按住 `hold` 秒（和 [`Self::long_press`] 一样每 100 毫秒重报一次位置），不抬起，接着
     /// 像 [`Self::drag`] 一样移到终点抬起。拖动主屏幕图标、列表排序这类要先长按才能拖的
     pub async fn held_drag(&mut self, from: (f64, f64), to: (f64, f64), hold: f64, seconds: f64) -> Result<()> {
-        let (x1, y1) = self.hid_point(from);
-        let (x2, y2) = self.hid_point(to);
-        let held = Duration::from_secs_f64(hold.clamp(0.0, 60.0));
-        let steps = ((seconds * 1000.0 / 20.0).round() as u32).max(10);
-        let d = held + Duration::from_secs_f64(seconds.max(0.0) + 10.0);
+        let (x1, y1) = self.hid_point(from)?;
+        let (x2, y2) = self.hid_point(to)?;
+        let held = gesture_time(hold)?;
+        let moving = gesture_time(seconds)?;
+        let steps = ((moving.as_secs_f64() * 1000.0 / 20.0).round() as u32).max(10);
+        let d = held + moving + Duration::from_secs(10);
         limit(ictl_l10n::tr!("HID 按住拖动", "HID held drag"), d, async {
             let end = tokio::time::Instant::now() + held;
             self.touch.send_touchscreen(TOUCHSCREEN_STATE_CONTACT, x1, y1, None).await?;
@@ -212,7 +248,7 @@ impl HidSession {
     /// point (the first one touches down, later ones move it), false lifts it there. iOS works out taps, long presses
     /// and the speed of a swipe from these samples and their timing, the same way as from a real finger
     pub async fn touch(&mut self, contact: bool, x: f64, y: f64) -> Result<()> {
-        let (hx, hy) = self.hid_point((x, y));
+        let (hx, hy) = self.hid_point((x, y))?;
         let state = if contact { TOUCHSCREEN_STATE_CONTACT } else { TOUCHSCREEN_STATE_RELEASE };
         limit(ictl_l10n::tr!("HID 触摸", "HID touch"), Duration::from_secs(5), async {
             self.touch.send_touchscreen(state, hx, hy, None).await?;
@@ -225,8 +261,8 @@ impl HidSession {
     /// 长按：按下，按住 `seconds` 秒，抬起。按住时每 100 毫秒重报一次位置：只报一次的话，有的 App（微信）
     /// 会当成轻点（iCTRL 的做法）
     pub async fn long_press(&mut self, x: f64, y: f64, seconds: f64) -> Result<()> {
-        let (hx, hy) = self.hid_point((x, y));
-        let held = Duration::from_secs_f64(seconds.clamp(0.0, 60.0));
+        let (hx, hy) = self.hid_point((x, y))?;
+        let held = gesture_time(seconds)?;
         limit(ictl_l10n::tr!("HID 长按", "HID long press"), held + Duration::from_secs(10), async {
             let end = tokio::time::Instant::now() + held;
             self.touch.send_touchscreen(TOUCHSCREEN_STATE_CONTACT, hx, hy, None).await?;
@@ -365,6 +401,26 @@ mod tests {
     use super::*;
 
     const SCREEN: ScreenSize = ScreenSize { width: 430.0, height: 932.0 };
+
+    /// `NaN` or an infinity used to panic in `Duration::from_secs_f64`, or tap the top left corner (`NaN as u16` is 0)
+    #[test]
+    fn only_finite_points_and_durations_reach_the_phone() {
+        let p = |x, y| map_point((x, y), SCREEN, Rotation::Portrait);
+        assert_eq!(p(0.0, 0.0).unwrap(), (0, 0));
+        assert_eq!(p(430.0, 932.0).unwrap(), (65535, 65535));
+        for (x, y) in [(f64::NAN, 1.0), (1.0, f64::INFINITY), (f64::NEG_INFINITY, 1.0)] {
+            assert!(matches!(p(x, y), Err(DeviceError::InvalidInput(_))), "({x}, {y})");
+        }
+        for screen in [ScreenSize { width: 0.0, height: 932.0 }, ScreenSize { width: f64::NAN, height: 932.0 }] {
+            assert!(matches!(map_point((1.0, 1.0), screen, Rotation::Portrait), Err(DeviceError::InvalidInput(_))));
+        }
+        assert_eq!(gesture_time(0.5).unwrap(), Duration::from_millis(500));
+        assert_eq!(gesture_time(-3.0).unwrap(), Duration::ZERO);
+        assert_eq!(gesture_time(1e9).unwrap(), Duration::from_secs(60), "capped");
+        for s in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            assert!(matches!(gesture_time(s), Err(DeviceError::InvalidInput(_))), "{s}");
+        }
+    }
 
     #[test]
     fn hid_norm_corners_center_and_clamp() {

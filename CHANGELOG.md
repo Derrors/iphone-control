@@ -16,6 +16,12 @@ What changed in each release, one line per change. Versions follow [Semantic Ver
 
 ### Fixes
 
+- iPads with Touch ID in a language other than Chinese or English: the "Touch ID" prompt after swiping up is known as the lock screen, and auto-unlock taps "Use Passcode" on it; the iPad was taken for unlocked and never checked again (#198).
+- A malformed accessibility answer from the phone (iOS 27+) can no longer keep the daemon busy for ever; a malformed touch (a coordinate or duration that isn't a number) is refused instead of crashing or tapping the top-left corner (#198).
+- The phone's log is read from now on only: the daemon took old lines for new, such as a past "Enable UI Automation" prompt, and `iphone_app_logs` showed them as just logged (#198).
+- Re-signing locks down the Apple ID session and a new signing key as soon as they are written, leaves no scratch directory behind when it times out, and never leaves a half-written package (#198).
+- macOS: a memory-safety bug in the built-in video encoder's JPEG decoding is fixed (#198).
+
 - iOS 27+: an action that comes while the control page checks the phone in the background no longer leaves the accessibility connection half-read, and those checks no longer restart the phone's accessibility daemon; only actions decide that (#197).
 - A task paused for a long time no longer keeps the control page's background checks from running (#197).
 - Switching back to a phone made ready in the background takes effect at once even when the daemon was busy at that moment; it could wait 10 seconds. The daemon serves at most 256 clients at once; more wait their turn (#197).

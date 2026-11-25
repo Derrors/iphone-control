@@ -74,7 +74,17 @@ impl Tunnel {
                 .get(ictl_ax::SERVICE)
                 .map(|s| s.port)
                 .ok_or_else(|| DeviceError::Idevice(format!("the phone offers no {}", ictl_ax::SERVICE)))?;
-            let stream: Box<dyn ReadWrite> = Box::new(self.adapter.connect(port).await?);
+            // the tunnel's own connect has no time limit: one that doesn't come is the tunnel's fault (a timeout, the
+            // tunnel is rebuilt), not the accessibility daemon's
+            let adapter = &mut self.adapter;
+            let stream: Box<dyn ReadWrite> = Box::new(
+                limit(
+                    ictl_l10n::tr!("连接无障碍服务的端口", "connect to the accessibility service's port"),
+                    CONNECT_WAIT,
+                    async { Ok(adapter.connect(port).await?) },
+                )
+                .await?,
+            );
             let s =
                 limit(ictl_l10n::tr!("连接无障碍服务", "connect to the accessibility service"), CONNECT_WAIT, async {
                     Ok(AxSession::connect(stream, CONNECT_WAIT).await?)

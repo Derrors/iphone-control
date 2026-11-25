@@ -790,15 +790,40 @@ pub fn delete_key(elements: &[Element], pad: &[(i64, i64); 10]) -> Option<(i64, 
 }
 
 /// 有 Touch ID 的机型（iPad mini 5，iPadOS 26.6.1 真机）上滑后先是「触控 ID」提示，只有「使用密码」和「取消」两个按钮，
-/// 树里没有数字键和密码栏，点「使用密码」才出键盘。返回它的中心。英文标签没在真机上核对过
+/// 树里没有数字键和密码栏，点「使用密码」才出键盘。返回它的中心。英文标签没在真机上核对过。
+/// 别的语言认不出文字时按结构找：整棵树只有这两个按钮、上下叠在同一条竖线上，没有锁屏本身的标识（「按下主屏幕按钮
+/// 以解锁」也是个按钮）和密码栏，「使用密码」在前（三个真机样本都是）。万一点成了「取消」，只是回到锁屏，不算输错密码
 pub fn use_passcode_button(elements: &[Element]) -> Option<(i64, i64)> {
-    elements
+    let by_label = elements.iter().find(|e| {
+        e.kind == "Button"
+            && (USE_PASSCODE_LABELS.contains(&e.label.as_str()) || USE_PASSCODE_LABELS.contains(&e.name.as_str()))
+    });
+    if let Some(e) = by_label {
+        return Some(e.center);
+    }
+    let buttons: Vec<&Element> = elements.iter().filter(|e| e.kind == "Button").collect();
+    let stacked = |a: &Element, b: &Element| (a.center.0 - b.center.0).abs() <= 20 && a.center.1 != b.center.1;
+    // the lock screen itself (its "press Home to unlock" is a button too, with a notification above it)
+    let lock_screen = elements
         .iter()
-        .find(|e| {
-            e.kind == "Button"
-                && (USE_PASSCODE_LABELS.contains(&e.label.as_str()) || USE_PASSCODE_LABELS.contains(&e.name.as_str()))
-        })
-        .map(|e| e.center)
+        .any(|e| ["call-to-action-label", "proud-lock", "lockscreen-date-view"].contains(&e.name.as_str()));
+    (buttons.len() == 2 && stacked(buttons[0], buttons[1]) && !lock_screen && passcode_field(elements).is_none())
+        .then(|| buttons[0].center)
+}
+
+/// 「触控 ID」提示的结构，和界面语言无关：SpringBoard 的 `SBCoverSheetWindow` 里没有锁屏日期（不是锁屏本身，
+/// 也不是通知中心），只有两个按钮。按钮上的字只认得中文和英文（[`USE_PASSCODE_LABELS`]），繁中、日、德、法……
+/// 的系统上靠这个认出锁屏：认不出时把锁着的 iPad 当成了解锁的，之后不再查锁屏
+fn touch_id_prompt(xml: &str) -> bool {
+    let Some(at) = xml.find("name=\"SBCoverSheetWindow\"") else { return false };
+    let start = xml[..at].rfind('<').unwrap_or(0);
+    let Some(open_end) = xml[at..].find('>').map(|i| at + i) else { return false };
+    if xml[..open_end].ends_with('/') {
+        return false;
+    }
+    let Some(len) = xml[open_end..].find("</XCUIElementTypeWindow>") else { return false };
+    let window = &xml[start..open_end + len];
+    !window.contains("\"lockscreen-date-view\"") && window.matches("<XCUIElementTypeButton ").count() == 2
 }
 
 /// 「触控 ID」提示上「使用密码」按钮的标签（英文的没在真机上核对过）
@@ -842,7 +867,7 @@ pub fn cover_sheet(xml: &str) -> CoverSheet {
     static PASSCODE: LazyLock<Regex> =
         LazyLock::new(|| regex(r#"<XCUIElementTypeSecureTextField [^>]*value="([^"]*)""#));
     let passcode_field = PASSCODE.captures_iter(xml).any(|c| parse_passcode_value(&c[1]).is_some());
-    if lock_glyph || use_passcode || passcode_field {
+    if lock_glyph || use_passcode || passcode_field || touch_id_prompt(xml) {
         CoverSheet::Locked
     } else if xml.contains("\"lockscreen-date-view\"") {
         CoverSheet::NotificationCenter
@@ -910,6 +935,42 @@ mod tests {
         assert_eq!(passcode_field(&els), Some((6, 2)));
         // 「紧急情况」在左下，不能认成删除
         assert!(els.iter().any(|e| e.label == "紧急情况"));
+    }
+
+    /// The Touch ID prompt in a language whose words aren't known (here German): still a lock screen, and its first
+    /// button (Use Passcode) is the one to tap. The lock screen itself, with its two buttons in the corners, isn't it
+    #[test]
+    fn a_touch_id_prompt_in_any_language() {
+        let german = |xml: &str| {
+            xml.replace("使用密码", "Code verwenden")
+                .replace("取消", "Abbrechen")
+                .replace("触控 ID", "Touch ID")
+                .replace("触控ID", "Touch ID")
+        };
+        let portrait =
+            View { screen: ScreenSize { width: 768.0, height: 1024.0 }, orientation: Some(Orientation::Portrait) };
+        let cases = [
+            (IPAD_TOUCHID_P, portrait),
+            (IPAD_TOUCHID, land(Some(Orientation::LandscapeLeft))),
+            (IPAD_TOUCHID_LEFT, land(Some(Orientation::LandscapeLeft))),
+        ];
+        for (xml, view) in cases {
+            let de = german(xml);
+            assert!(!de.contains("使用密码"));
+            assert_eq!(cover_sheet(&de), CoverSheet::Locked);
+            assert_eq!(
+                use_passcode_button(&parse(&de, view)),
+                use_passcode_button(&parse(xml, view)),
+                "the same button"
+            );
+            assert!(use_passcode_button(&parse(xml, view)).is_some());
+        }
+        assert_eq!(use_passcode_button(&parse(IPAD_LOCK_P, portrait)), None, "not a button on the lock screen");
+        // the notification center has the same window, with the lock screen's date: not taken for the prompt
+        assert_eq!(cover_sheet(NC_IOS27), CoverSheet::NotificationCenter);
+        for xml in [HOME, SETTINGS_IOS27, HOME_WIDGETS_IOS27, WALLET_IOS27] {
+            assert_eq!(cover_sheet(xml), CoverSheet::None);
+        }
     }
 
     #[test]

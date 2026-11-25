@@ -104,6 +104,8 @@ impl AccountDir {
             .accounts_add_from_session(email.to_owned(), account)
             .await
             .map_err(|e| SignError::Developer(e.to_string()))?;
+        // the session's tokens were just written with the default umask
+        restrict_tree(&self.dir)?;
         Ok(email.to_owned())
     }
 
@@ -187,9 +189,11 @@ impl Session {
     /// 签名 .ipa：Bundle ID 改成 `<原 ID>.<团队 ID>`（免费账号不能用别人的 ID），申请描述文件，深度优先签名所有嵌套 bundle。
     /// 签好后自检（每个嵌套 bundle 都有 `_CodeSignature`、描述文件含这台手机且带 get-task-allow）。
     pub async fn sign_ipa(&self, input: &Path, output: &Path, udid: &str) -> Result<Signed> {
-        let work = std::env::temp_dir().join(format!("ictl-sign-{}", uuid::Uuid::new_v4()));
-        let result = self.sign_in(&work, input, output, udid).await;
-        let _ = std::fs::remove_dir_all(&work);
+        // removed however this ends, also when the caller gives up waiting and drops it
+        let work = WorkDir(std::env::temp_dir().join(format!("ictl-sign-{}", uuid::Uuid::new_v4())));
+        let result = self.sign_in(&work.0, input, output, udid).await;
+        // a key written on the way is locked down even when signing failed after it
+        let _ = restrict_tree(&self.dir.dir);
         result
     }
 
@@ -225,6 +229,9 @@ impl Session {
             Some(&mut on_reset),
         )
         .await?;
+        // a new certificate's private key was just written with the default umask (0644): locked down now, not after
+        // the whole package is signed
+        restrict_tree(&self.dir.dir)?;
         let new_certificate = cert.new;
         if new_certificate {
             tracing::warn!(
@@ -338,6 +345,15 @@ pub fn verify_signed(app_dir: &Path, udid: &str, signing_cert: Option<&[u8]>) ->
     Ok(p)
 }
 
+/// [`AccountDir::sign_ipa`]'s scratch directory, removed when dropped
+struct WorkDir(PathBuf);
+
+impl Drop for WorkDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
 fn restrict_dir(dir: &Path) -> std::io::Result<()> {
     use std::os::unix::fs::PermissionsExt;
     std::fs::create_dir_all(dir)?;
@@ -398,6 +414,15 @@ mod tests {
         assert_eq!(anisette.get_header("X-Apple-Locale").unwrap(), "en_US");
     }
     use std::time::{Duration, SystemTime};
+
+    /// The scratch directory goes with the guard, also when the signing future is dropped (a caller's timeout)
+    #[test]
+    fn the_scratch_directory_is_removed_when_dropped() {
+        let dir = std::env::temp_dir().join(format!("ictl-sign-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(dir.join("Payload/X.app")).unwrap();
+        drop(WorkDir(dir.clone()));
+        assert!(!dir.exists());
+    }
 
     #[test]
     fn account_tree_is_locked_down() {

@@ -20,6 +20,8 @@ pub mod flags {
     pub const DEBUG: u64 = 0x20;
     /// What idevice and pymobiledevice3 send
     pub const IDEVICE_DEFAULT: u64 = PAYLOAD | HISTORICAL | CALLSTACK | DEBUG;
+    /// What [`crate::Device::log_stream`] asks for: what is logged from now on, without debug messages
+    pub const LIVE: u64 = IDEVICE_DEFAULT & !DEBUG & !HISTORICAL;
 }
 
 /// Fixed part of an entry before the strings
@@ -129,6 +131,14 @@ fn take(rest: &[u8], at: &mut usize, n: usize) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Neither debug messages (they slow the phone) nor the past (it was read as new)
+    #[test]
+    fn the_stream_is_live_only() {
+        use flags::*;
+        assert_eq!(LIVE & (DEBUG | HISTORICAL), 0);
+        assert_eq!(LIVE, PAYLOAD | CALLSTACK);
+    }
 
     fn entry(level: u8, file: &str, msg: &str, label: Option<(&str, &str)>) -> Vec<u8> {
         let mut p = vec![0u8; HEADER];

@@ -103,13 +103,17 @@ fn check(step: &str, t0: Instant, ok: bool, detail: String) -> anyhow::Result<()
     }
 }
 
-async fn e2e(device: &Device, bundle_id: &str, out: &std::path::Path) -> anyhow::Result<()> {
+async fn e2e(device: &Device, legacy_ddi: bool, bundle_id: &str, out: &std::path::Path) -> anyhow::Result<()> {
     let t = Instant::now();
     let mut tunnel = device.open_tunnel().await?;
     check(ictl_l10n::tr!("建隧道", "open tunnel"), t, true, String::new())?;
 
     let t = Instant::now();
-    let ddi = tunnel.ddi_mounted().await?;
+    let ddi = if legacy_ddi {
+        device.legacy_ddi_mounted().await?.then(|| "personalized".to_owned())
+    } else {
+        tunnel.ddi_mounted().await?
+    };
     check(
         ictl_l10n::tr!("开发者镜像", "developer disk image"),
         t,
@@ -497,7 +501,7 @@ pub async fn run(udid: Option<&str>, args: DebugArgs) -> anyhow::Result<()> {
         }
         Check::E2e { bundle_id, out } => {
             let t0 = Instant::now();
-            e2e(&device, &bundle_id, &out).await?;
+            e2e(&device, ictl_device::ddi::legacy(info.major_version()), &bundle_id, &out).await?;
             println!(
                 "{}",
                 ictl_l10n::trf!("全部通过，总耗时 {:.1}s", "All passed in {:.1}s", t0.elapsed().as_secs_f64())

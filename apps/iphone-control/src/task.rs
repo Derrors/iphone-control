@@ -368,6 +368,13 @@ async fn run_command(
         None => backend.state(&opened.id).await.unwrap_or_default(),
     };
     eprintln!("{}", ictl_l10n::trf!("任务 {} 结束：{outcome}", "Task {} ended: {outcome}", opened.id));
+    // the command is gone, but what it started may not be (an MCP server that ignores SIGTERM): stopped and waited
+    // for here, as exiting would take the delayed SIGKILL of `stop_group` with it
+    if let Some(p) = pid.and_then(|p| u32::try_from(p).ok())
+        && crate::procgroup::any_left(p)
+    {
+        crate::procgroup::stop_and_wait(&[p]).await;
+    }
     drop(lease);
     std::process::exit(exit_code(status.code(), &outcome));
 }

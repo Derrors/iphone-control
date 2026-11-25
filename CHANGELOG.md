@@ -16,6 +16,14 @@ What changed in each release, one line per change. Versions follow [Semantic Ver
 
 ### Fixes
 
+- AI tasks: while a step waits for your confirmation you can take over first (to look or change something); the question stays, and can be answered while you're in control or after handing back (#201).
+- The control page no longer stays on "running" when a task's event stream is closed for good: it follows the task again if it is still there, or marks it stopped. Reconnecting no longer redraws old gesture marks (#201).
+- A page or `task events` that fell behind a busy task no longer misses its end and stays open; nothing is recorded after a task's end (#201).
+- `task run` waits for what the command started to stop (killing what ignores SIGTERM) before it exits; stopping a group no longer sends a late SIGKILL to a group number that may have been reused (#201).
+- The picture of a phone driven by WebDriverAgent ends when you switch to another device, instead of showing the old one (#201).
+- The H.264 copy of the phone's own video counts a crashed ffmpeg as a failure and moves on to the next encoder, instead of restarting it for ever (#201).
+- `task run --url` stops within 10 seconds of Ctrl-C even if the viewer doesn't answer, and gives up an event stream that goes silent or sends an endless event (#201).
+- Only one daemon runs per socket, even when two start at once, and the socket is private from the moment it is created (#201).
 - When pressing Home finds a system alert in the way, the daemon's answer now also marks it in its structured result (`alert_reported`), as launching an app or opening a link does; programs reading the result rather than its text missed it (#200).
 - A long press falls back to HID like a tap when WebDriverAgent can't be reached (#200).
 - Requests that can't run (a tap count of 0, an empty tap sequence, an unknown button, a point that isn't a number) are refused at once, before waiting for the phone and without dropping the cached screen (#200).

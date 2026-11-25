@@ -94,7 +94,9 @@ async function runStep(task, spec) {
     task.confirmResolve = null;
     if (task.stopped) throw STOP;
     if (!ok) { step.status = 'rejected'; step.result = tr('你拒绝了这一步，没有执行。'); finish(task, 'stopped', spec.rejectSummary); throw STOP; }
-    step.status = 'running'; task.status = 'running'; renderAll(); await sleep(400);
+    // answered while taken over: the task stays with the user until handed back
+    step.status = 'running'; if (task.status === 'waiting') task.status = 'running'; renderAll(); await sleep(400);
+    await gate(task);
   }
   const r = spec.exec() || {};
   step.ms = performance.now() - t0; step.status = r.error ? 'error' : 'ok'; step.result = r.text;
@@ -135,16 +137,44 @@ function follow(task, id) {
     task.remoteId = id;
     const es = new EventSource(`/api/agent/tasks/${encodeURIComponent(id)}/events`);
     task.es = es;
-    es.addEventListener('step', e => { const d = JSON.parse(e.data); upsertStep(task, d); if (d.gesture) { const g = d.gesture; drawMark(g.kind, 'ai', { x: g.x, y: g.y }, g.x2 != null ? { x: g.x2, y: g.y2 } : null); } renderTurns(true); });
+    // a step's mark is drawn once: the stream replays the whole task on each (re)connection
+    const marked = new Set(task.steps.filter(s => s.gesture && s.id != null).map(s => s.id));
+    es.addEventListener('step', e => {
+      const d = JSON.parse(e.data); upsertStep(task, d);
+      if (d.gesture && !marked.has(d.id)) { marked.add(d.id); const g = d.gesture; drawMark(g.kind, 'ai', { x: g.x, y: g.y }, g.x2 != null ? { x: g.x2, y: g.y2 } : null); }
+      renderTurns(true);
+    });
     es.addEventListener('confirm', e => { const d = JSON.parse(e.data); upsertStep(task, { id: d.step, status: 'waiting', confirm: d }); task.status = 'waiting'; renderAll(); scrollConvo(); });
-    es.addEventListener('state', e => { const d = JSON.parse(e.data); if (ACTIVE.includes(task.status)) { task.status = d.state; renderAll(); } });
+    // a state this page doesn't know (a newer daemon's) is left alone: the task keeps the last one it knows
+    es.addEventListener('state', e => { const d = JSON.parse(e.data); if (ACTIVE.includes(task.status) && ACTIVE.includes(d.state)) { task.status = d.state; renderAll(); } });
     es.addEventListener('done', e => { const d = JSON.parse(e.data); finish(task, d.ok ? 'success' : d.stopped ? 'stopped' : 'failed', d.summary || ''); refreshStatusSoon(); });
-    es.onerror = () => { if (ACTIVE.includes(task.status)) show(tr('AI 任务的事件流断开了，正在重连…'), 'warn'); };
+    es.onerror = () => {
+      if (!ACTIVE.includes(task.status) || task.es !== es) return;
+      show(tr('AI 任务的事件流断开了，正在重连…'), 'warn');
+      // the browser gave up (an error answer, not a dropped connection): it won't reconnect by itself
+      if (es.readyState === EventSource.CLOSED) streamClosed(task, id);
+    };
+}
+/* 浏览器不再自动重连的事件流：问服务端这个任务还在不在，在就重新跟上（回放会带来它现在的状态），不在了就标成停止；
+ * 问不到（服务正在重启）过一会儿再问，几次都不行就不再跟 */
+const REFOLLOW_MS = 3000, REFOLLOW_TRIES = 5;
+const LOST_STREAM = () => tr('和这个任务的事件流断开了，页面不再跟踪它的进度。');
+async function streamClosed(task, id, tries = 0) {
+  await sleep(REFOLLOW_MS);
+  if (!ACTIVE.includes(task.status) || task.remoteId !== id) return;
+  let list;
+  try { list = (await api('/api/agent/tasks')).tasks || []; }
+  catch {
+    if (tries + 1 < REFOLLOW_TRIES) return streamClosed(task, id, tries + 1);
+    lostTask(task, LOST_STREAM()); renderAll(); return;
+  }
+  if (list.some(x => x.id === id)) follow(task, id);
+  else { lostTask(task, LOST_STREAM()); renderAll(); }
 }
 /* 页面已经跟不上的任务（守护进程不记得了，或者没连上服务） */
-function lostTask(t) {
-  t.reattach = false; t.status = 'stopped'; t.endedAt = t.endedAt || Date.now();
-  t.summary = tr('页面刷新时这个任务还在执行，刷新后页面不再跟踪它的进度。');
+function lostTask(t, summary = tr('页面刷新时这个任务还在执行，刷新后页面不再跟踪它的进度。')) {
+  t.reattach = false; t.status = 'stopped'; t.endedAt = t.endedAt || Date.now(); t.es?.close();
+  t.summary = summary;
   t.steps.forEach(st => { if (st.status === 'running' || st.status === 'waiting') st.status = 'stopped'; });
 }
 /* 正在进行、但这个页面还没跟着的任务（页面刷新过，或者是在别处开的）：接上，事件会从头重放。
@@ -251,16 +281,19 @@ function control(action) {
   if (action === 'pause') { t.status = 'paused'; show(tr('AI 已暂停')); }
   if (action === 'resume') { t.status = 'running'; show(tr('AI 继续执行')); }
   if (action === 'takeover') { t.status = 'takeover'; show(tr('你已接管：现在可以直接在画面上操作。')); }
-  if (action === 'handback') { t.status = 'running'; t.recheck = true; show(tr('已交还 AI，它会先重新看一遍屏幕')); }
+  if (action === 'handback') { t.status = pendingConfirm(t) ? 'waiting' : 'running'; t.recheck = true; show(tr('已交还 AI，它会先重新看一遍屏幕')); }
   renderAll();
 }
+/* 在等确认的那一步（接管时问题也还留着） */
+function pendingConfirm(t) { return t.steps.find(x => x.status === 'waiting' && x.confirm); }
 function answerConfirm(approve) {
-  const t = activeTask(); if (!t || t.status !== 'waiting') return;
+  const t = activeTask(); if (!t || !(t.status === 'waiting' || (t.status === 'takeover' && pendingConfirm(t)))) return;
   if (t.source === 'live') {
     const s = t.steps.find(x => x.status === 'waiting');
     liveControl(t, 'confirm', { step: s?.id, approve });
     if (s) s.status = approve ? 'running' : 'rejected';
-    t.status = 'running'; renderAll();
+    if (t.status === 'waiting') t.status = 'running';
+    renderAll();
   } else t.confirmResolve?.(approve);
   show(approve ? tr('已批准，AI 继续执行') : tr('已拒绝这一步'));
 }
@@ -348,7 +381,7 @@ function agentLabel(t) {
 function turnHtml(t) {
   // the id is the page's own (`t<n>`), but read back from localStorage: escaped like everything else put in HTML
   const id = esc(t.id);
-  const st = TASK_STATUS[t.status], active = ACTIVE.includes(t.status), open = S.expanded.has(t.id) || active;
+  const st = taskStatus(t.status), active = ACTIVE.includes(t.status), open = S.expanded.has(t.id) || active;
   const busy = !!activeTask();
   const actions = active ? '' : S.pendingDelete === t.id
     ? `<button type="button" class="mini confirm-del" data-action="del-yes" data-id="${id}" data-focus="dely-${id}">${icon('trash')}<span>${tr('确认删除')}</span></button><button type="button" class="mini" data-action="del-no" data-id="${id}" data-focus="deln-${id}">${tr('取消')}</button>`
@@ -379,11 +412,12 @@ function renderRunbar() {
   const btn = (a, l, i, cls = '') => `<button type="button" class="btn btn-sm ${cls}" data-action="${a}" data-focus="rc-${a}">${icon(i)}<span>${l}</span></button>`;
   if (!t) { bar.hidden = true; bar.innerHTML = ''; }
   else {
-    const st = TASK_STATUS[t.status], b = [];
+    const st = taskStatus(t.status), b = [];
     if (t.status === 'running') b.push(btn('pause', tr('暂停'), 'pause'), btn('takeover', tr('接管'), 'cursor'));
     if (t.status === 'paused') b.push(btn('resume', tr('继续'), 'play', 'btn-primary'), btn('takeover', tr('接管'), 'cursor'));
     if (t.status === 'takeover') b.push(btn('handback', tr('交还 AI'), 'play', 'btn-primary'));
-    if (t.status === 'waiting') b.push(btn('goto-confirm', tr('去确认'), 'arrow', 'btn-primary'));
+    if (t.status === 'waiting' || (t.status === 'takeover' && pendingConfirm(t))) b.push(btn('goto-confirm', tr('去确认'), 'arrow', t.status === 'waiting' ? 'btn-primary' : ''));
+    if (t.status === 'waiting') b.push(btn('takeover', tr('接管'), 'cursor'));
     b.push(btn('stop', tr('停止'), 'stop', 'btn-danger'));
     bar.innerHTML = `<span class="runbar-state t-${st.tone}">${icon(st.icon, st.icon === 'loader' ? 'spin' : '')}<span>${st.label}</span><span class="runbar-time" data-runtime="${esc(t.id)}">${mmss(Date.now() - t.startedAt)}</span></span>${b.join('')}`;
     bar.hidden = false;
@@ -393,7 +427,7 @@ function renderRunbar() {
   promptEl.placeholder = busy ? tr('当前任务结束后可以发新任务') : tr('想让设备做什么？');
   const clear = $('#clear-btn');
   clear.hidden = !S.tasks.length || busy;
-  $('#agent-badge').innerHTML = badge(t ? TASK_STATUS[t.status] : { label: S.mode === 'demo' ? tr('演示模式') : tr('空闲'), tone: S.mode === 'demo' ? 'warn' : 'muted', icon: S.mode === 'demo' ? 'info' : 'dot' });
+  $('#agent-badge').innerHTML = badge(t ? taskStatus(t.status) : { label: S.mode === 'demo' ? tr('演示模式') : tr('空闲'), tone: S.mode === 'demo' ? 'warn' : 'muted', icon: S.mode === 'demo' ? 'info' : 'dot' });
 }
 function renderGuard() {
   const t = activeTask(), g = $('#guard');
@@ -410,7 +444,7 @@ function renderGuard() {
   const cfg = {
     running: { tone: 'accent', ic: 'loader', title: ext ? tr('外部任务正在操作这台设备') : tr('AI 正在操作这台设备'), sub: ext ? tr('手动操作已锁定，避免和它同时点击。') : tr('手动操作已锁定，避免和 AI 同时点击。'), btns: [['takeover', tr('接管'), 'cursor']] },
     paused: { tone: 'warn', ic: 'pause', title: ext ? tr('外部任务已暂停') : tr('AI 已暂停'), sub: ext ? tr('画面仍为这个任务保留，要自己操作先接管。') : tr('画面仍为 AI 保留，要自己操作先接管。'), btns: [['resume', tr('继续'), 'play'], ['takeover', tr('接管'), 'cursor']] },
-    waiting: { tone: 'warn', ic: 'alert', title: ext ? tr('外部任务在等你确认一步操作') : tr('AI 在等你确认一步操作'), sub: tr('确认前画面保持锁定。'), btns: [['goto-confirm', tr('去确认'), 'arrow']] },
+    waiting: { tone: 'warn', ic: 'alert', title: ext ? tr('外部任务在等你确认一步操作') : tr('AI 在等你确认一步操作'), sub: tr('要先自己看看或改一下，可以接管；问题会一直留着。'), btns: [['goto-confirm', tr('去确认'), 'arrow'], ['takeover', tr('接管'), 'cursor']] },
     takeover: { tone: 'user', ic: 'cursor', title: tr('你在接管'), sub: tr('AI 已暂停。交还后它会先重新看一遍屏幕。'), btns: [['handback', tr('交还 AI'), 'play']] }
   }[t.status];
   g.className = `guard glass tone-${cfg.tone}`;
@@ -429,7 +463,7 @@ function renderManual() {
   pickerSync.device();
   $$('#nav-devices button').forEach(row => { row.disabled = lock || S.switching || !!S.devicesFixed; });
   const t = activeTask();
-  $('#vt-agent-label').textContent = t ? `AI · ${{ running: tr('执行中'), waiting: tr('待确认'), paused: tr('已暂停'), takeover: tr('接管中') }[t.status]}` : tr('AI 助手');
+  $('#vt-agent-label').textContent = t ? `AI · ${{ running: tr('执行中'), waiting: tr('待确认'), paused: tr('已暂停'), takeover: tr('接管中') }[t.status] ?? taskStatus(t.status).label}` : tr('AI 助手');
 }
 /* 系统弹窗（权限请求之类）：手机自己的视频里可能看不到（定位授权弹窗只剩变暗的屏幕），画面用它时问守护进程有没有，有就在
  * 画面上方显示弹窗的文字和按钮。点按钮是按坐标点手机上的那个按钮：按名字点会把「允许」点到「不允许」上。

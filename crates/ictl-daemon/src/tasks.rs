@@ -378,6 +378,10 @@ impl Task {
     }
 
     fn emit(&self, st: &mut TaskState, name: &str, data: Value) {
+        // `done` is the last event: readers stop at it (the page, `task events`), and a log replayed later ends there
+        if !st.status.active() && name != "done" {
+            return;
+        }
         let e = TaskEvent { event: name.into(), data };
         if let Some(f) = &self.file {
             append(f, &e);
@@ -407,6 +411,11 @@ impl Task {
         let mut st = self.lock();
         if !st.status.active() {
             return false;
+        }
+        // a step under way ends with the task, said before `done` (nothing is written after it)
+        if let Some((id, _, true, _)) = st.last {
+            st.last = None;
+            self.emit(&mut st, "step", json!({"id": id, "status": "stopped"}));
         }
         st.status = Status::Ended(end);
         st.ended = Some(now_ms());
@@ -706,12 +715,17 @@ impl Task {
         match (action, st.status) {
             ("pause", Status::Running) => self.set_status(&mut st, Status::Paused),
             ("resume", Status::Paused) => self.set_status(&mut st, Status::Running),
-            ("takeover", Status::Running | Status::Paused) => self.set_status(&mut st, Status::Takeover),
+            // also while a step waits for the user: they may want to look or change something before answering; the
+            // question stays, to be answered under takeover or after handing back
+            ("takeover", Status::Running | Status::Paused | Status::Waiting) => {
+                self.set_status(&mut st, Status::Takeover)
+            }
             ("handback", Status::Takeover) => {
                 st.recheck = true;
-                self.set_status(&mut st, Status::Running);
+                let back = if st.confirm.is_some() { Status::Waiting } else { Status::Running };
+                self.set_status(&mut st, back);
             }
-            ("confirm", Status::Waiting) => match st.confirm.take() {
+            ("confirm", Status::Waiting | Status::Takeover) => match st.confirm.take() {
                 Some((waiting, tx)) if step.is_none_or(|s| s == waiting) => {
                     what["step"] = json!(waiting);
                     what["approve"] = json!(approve);
@@ -1521,6 +1535,52 @@ mod tests {
         t.control("confirm", None, true, None).unwrap();
         assert!(matches!(asked.await.unwrap(), Response::Text { .. }));
         assert_eq!(t.info().state, "running");
+    }
+
+    /// `done` is the last event: a step under way is stopped before it, and nothing that comes after is written
+    #[tokio::test]
+    async fn nothing_follows_done() {
+        let ts = Arc::new(tasks());
+        let t = open(&ts);
+        let asked = ask(&ts, &t);
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        t.end(End::Cancelled, "stopped");
+        let _ = asked.await.unwrap();
+        t.observed();
+        let (log, _, ended) = t.subscribe();
+        assert!(ended);
+        let names: Vec<&str> = log.iter().map(|e| e.event.as_str()).collect();
+        assert_eq!(names.last(), Some(&"done"), "{names:?}");
+        let stopped = &log[log.len() - 2];
+        assert_eq!((stopped.event.as_str(), stopped.data["status"].as_str()), ("step", Some("stopped")));
+    }
+
+    /// While a step waits for the user, they can take over (to look or change something first): the question stays,
+    /// answered under takeover (the task stays with the user) or after handing back (it waits again)
+    #[tokio::test]
+    async fn the_user_can_take_over_while_a_step_waits_for_them() {
+        let ts = Arc::new(tasks());
+        let t = open(&ts);
+        let asked = ask(&ts, &t);
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        assert_eq!(t.info().state, "waiting");
+        t.control("takeover", None, false, None).unwrap();
+        assert_eq!(t.info().state, "takeover");
+        assert!(matches!(admit(&ts, &tap(), None).await, Ok((Admission::Supervisor(_), _))));
+        t.control("confirm", None, true, None).unwrap();
+        assert!(matches!(asked.await.unwrap(), Response::Text { .. }));
+        assert_eq!(t.info().state, "takeover", "answered, but still the user's until handed back");
+        t.control("handback", None, false, None).unwrap();
+        assert_eq!(t.info().state, "running");
+
+        // handed back before answering: the question is still there
+        let asked = ask(&ts, &t);
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        t.control("takeover", None, false, None).unwrap();
+        t.control("handback", None, false, None).unwrap();
+        assert_eq!(t.info().state, "waiting");
+        t.control("confirm", None, false, None).unwrap();
+        assert!(matches!(asked.await.unwrap(), Response::Error { .. }), "rejected");
     }
 
     /// Two questions at once are asked one after the other, each answered on its own

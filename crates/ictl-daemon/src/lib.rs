@@ -48,9 +48,16 @@ const MAX_REQUEST_LINE: u64 = 1024 * 1024;
 pub async fn run(cfg: Config) -> anyhow::Result<()> {
     cfg.prepare_dirs()?;
     let socket = cfg.socket.clone();
-    if let Some(dir) = socket.parent() {
-        std::fs::create_dir_all(dir)?;
+    if let Some(dir) = socket.parent()
+        && !dir.exists()
+    {
+        // made here: this user's alone (a directory that was there, such as /tmp, is left as it is)
+        use std::os::unix::fs::DirBuilderExt;
+        std::fs::DirBuilder::new().recursive(true).mode(0o700).create(dir)?;
     }
+    // one daemon per socket, for as long as it runs: two started at once both found no one answering and bound in
+    // turn, the second taking the socket from the first
+    let _instance = single_instance(&socket, INSTANCE_WAIT).await?;
     // 已有守护进程在用这个 socket 就退出：两个守护进程会争 usbmuxd、WDA 和 HID
     if tokio::net::UnixStream::connect(&socket).await.is_ok() {
         bail!(
@@ -59,7 +66,11 @@ pub async fn run(cfg: Config) -> anyhow::Result<()> {
         );
     }
     let _ = std::fs::remove_file(&socket);
-    let listener = tokio::net::UnixListener::bind(&socket)?;
+    // created 0600 from the start (the umask for the bind alone): set afterwards, others could connect in between
+    let old = unsafe { libc::umask(0o077) };
+    let bound = tokio::net::UnixListener::bind(&socket);
+    unsafe { libc::umask(old) };
+    let listener = bound?;
     {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o600))?;
@@ -71,6 +82,37 @@ pub async fn run(cfg: Config) -> anyhow::Result<()> {
     let r = local.run_until(serve(cfg, listener)).await;
     let _ = std::fs::remove_file(&socket);
     r
+}
+
+/// How long a starting daemon waits for the one before it to let go of the socket (it may still be stopping)
+const INSTANCE_WAIT: std::time::Duration = std::time::Duration::from_secs(15);
+
+/// The lock beside the socket (`ctl.lock`), held while the daemon runs; waits up to `wait` for another daemon that is
+/// stopping, and gives up at once when one answers on the socket
+async fn single_instance(socket: &std::path::Path, wait: std::time::Duration) -> anyhow::Result<std::fs::File> {
+    use std::os::fd::AsRawFd;
+    use std::os::unix::fs::OpenOptionsExt;
+    let path = socket.with_extension("lock");
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(&path)?;
+    let deadline = Instant::now() + wait;
+    loop {
+        if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
+            return Ok(file);
+        }
+        let running =
+            || ictl_l10n::trf!("已经有守护进程在运行（{}）", "A daemon is already running ({})", socket.display());
+        if tokio::net::UnixStream::connect(socket).await.is_ok() || Instant::now() >= deadline {
+            bail!("{}", running());
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    }
 }
 
 /// A supervision round asked for that couldn't take the device is asked for again this much later
@@ -332,11 +374,14 @@ async fn task_stream(
     for e in &log {
         ok = ok && send(&mut w, e).await;
     }
+    // events sent so far: the task's log is complete, so a reader that fell behind catches up from it
+    let mut sent = log.len();
     if ok && !ended {
         loop {
             tokio::select! {
                 e = rx.recv() => match e {
                     Ok(e) => {
+                        sent += 1;
                         let done = e.event == "done";
                         if !send(&mut w, &e).await {
                             break;
@@ -345,7 +390,25 @@ async fn task_stream(
                             return;
                         }
                     }
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                    // fell behind and missed some, maybe `done` (then nothing more would come, and the connection would
+                    // stay open for good): what was missed comes from the log, then events again from there
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                        let (log, again, ended) = task.subscribe();
+                        for e in log.iter().skip(sent) {
+                            if !send(&mut w, e).await {
+                                ok = false;
+                                break;
+                            }
+                        }
+                        sent = sent.max(log.len());
+                        rx = again;
+                        if !ok {
+                            break;
+                        }
+                        if ended {
+                            return;
+                        }
+                    }
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
                 },
                 () = wait_closed(&mut reader) => break,
@@ -438,6 +501,62 @@ mod tests {
                 std::fs::remove_dir_all(dir).unwrap();
             })
             .await;
+    }
+
+    /// A follower that falls behind (its socket full while thousands of events go by) still gets every event and
+    /// `done`: before, the missed `done` left it open for good
+    #[tokio::test]
+    async fn a_follower_that_fell_behind_catches_up_and_ends() {
+        use tokio::io::AsyncBufReadExt;
+        let local = tokio::task::LocalSet::new();
+        local
+            .run_until(async {
+                let (d, dir) = core::tests::test_daemon("lagged");
+                let t = d.tasks.open("x", "test", Some("phone"), Vec::new(), None).unwrap();
+                let (ours, theirs) = tokio::net::UnixStream::pair().unwrap();
+                let (r, w) = ours.into_split();
+                let (daemon, id) = (d.clone(), t.id.clone());
+                let follow = tokio::task::spawn_local(async move {
+                    task_stream(&daemon, BufReader::new(r), w, protocol::Request::TaskEvents { id }, None).await
+                });
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                // more than the channel holds, while nobody reads the socket
+                for _ in 0..3000 {
+                    t.control_as_user("pause").unwrap();
+                    t.control_as_user("resume").unwrap();
+                }
+                t.end(tasks::End::Cancelled, "stopped");
+                let mut lines = tokio::io::BufReader::new(theirs).lines();
+                let mut got = Vec::new();
+                while let Ok(Ok(Some(l))) =
+                    tokio::time::timeout(std::time::Duration::from_secs(10), lines.next_line()).await
+                {
+                    got.push(l);
+                }
+                tokio::time::timeout(std::time::Duration::from_secs(5), follow)
+                    .await
+                    .expect("the stream ended")
+                    .unwrap();
+                let (log, _, _) = t.subscribe();
+                assert_eq!(got.len(), 1 + log.len(), "the answer line, then every event once");
+                assert!(got.last().unwrap().contains("\"done\""), "{}", got.last().unwrap());
+                std::fs::remove_dir_all(dir).unwrap();
+            })
+            .await;
+    }
+
+    /// One daemon per socket: a second is refused while the first holds the lock, and gets it once that one is gone
+    #[tokio::test]
+    async fn only_one_daemon_holds_a_socket() {
+        let dir = std::env::temp_dir().join(format!("ictl-instance-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let socket = dir.join("ctl.sock");
+        let first = single_instance(&socket, std::time::Duration::ZERO).await.unwrap();
+        let e = single_instance(&socket, std::time::Duration::from_millis(300)).await.unwrap_err();
+        assert!(e.to_string().contains("running") || e.to_string().contains("运行"), "{e}");
+        drop(first);
+        assert!(single_instance(&socket, std::time::Duration::ZERO).await.is_ok(), "free again");
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

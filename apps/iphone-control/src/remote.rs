@@ -151,7 +151,9 @@ impl Remote {
 
     /// Stops the task (the platform's Ctrl-C); whether the viewer took it
     pub async fn stop(&self, id: &str) -> bool {
-        let r = self.post(&format!("/api/agent/tasks/{id}/stop"), &json!({})).send().await;
+        // Ctrl-C waits for this: a viewer that doesn't answer mustn't keep `task run` from stopping
+        let r =
+            self.post(&format!("/api/agent/tasks/{id}/stop"), &json!({})).timeout(Duration::from_secs(10)).send().await;
         r.is_ok_and(|r| r.status().is_success())
     }
 
@@ -241,13 +243,23 @@ impl Events {
                 }
                 continue;
             }
-            match self.resp.chunk().await {
-                Ok(Some(c)) => self.buf.extend_from_slice(&c),
+            // nothing at all for this long, not even the viewer's ping every 15 s: it is gone; an event that never ends
+            // (no blank line in a megabyte) isn't one
+            if self.buf.len() > MAX_EVENT {
+                return None;
+            }
+            match tokio::time::timeout(EVENT_SILENCE, self.resp.chunk()).await {
+                Ok(Ok(Some(c))) => self.buf.extend_from_slice(&c),
                 _ => return None,
             }
         }
     }
 }
+
+/// How long a task's event stream may stay silent: the viewer sends a ping every 15 s
+const EVENT_SILENCE: Duration = Duration::from_secs(60);
+/// The longest event taken: the viewer's are a few kilobytes at most
+const MAX_EVENT: usize = 1024 * 1024;
 
 /// Where the first event in `buf` ends, and where the next one starts
 fn event_end(buf: &[u8]) -> Option<(usize, usize)> {
@@ -299,6 +311,35 @@ mod tests {
         assert_eq!(event_end(b"data: 1\r\n\r\ndata: 2\n\n"), Some((7, 11)));
         assert_eq!(event_end(b"data: 1\n\ndata: 2\r\n\r\n"), Some((7, 9)));
         assert_eq!(event_end("data: \"设".as_bytes()), None, "not yet");
+    }
+
+    /// An event that never ends (no blank line in more than a megabyte) ends the stream instead of growing for ever
+    #[tokio::test]
+    async fn an_event_without_end_ends_the_stream() {
+        use tokio::io::AsyncWriteExt;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut s, _) = listener.accept().await.unwrap();
+            let mut head = [0u8; 1024];
+            let _ = tokio::io::AsyncReadExt::read(&mut s, &mut head).await;
+            s.write_all(b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\n\r\nevent: step\ndata: ")
+                .await
+                .unwrap();
+            let chunk = vec![b'x'; 64 * 1024];
+            for _ in 0..32 {
+                if s.write_all(&chunk).await.is_err() {
+                    break;
+                }
+            }
+        });
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        let resp = client.get(format!("http://{addr}/")).send().await.unwrap();
+        let mut events = Events::new(resp);
+        let next = tokio::time::timeout(Duration::from_secs(10), events.next_raw()).await.expect("not waited for");
+        assert_eq!(next, None);
+        assert!(events.buf.len() <= MAX_EVENT + 64 * 1024, "{}", events.buf.len());
+        server.abort();
     }
 
     #[test]

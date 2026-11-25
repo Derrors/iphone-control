@@ -8,6 +8,8 @@ const TASK_STATUS = {
   failed: { label: tr('没有完成'), tone: 'danger', icon: 'x' },
   stopped: { label: tr('已停止'), tone: 'muted', icon: 'stop' }
 };
+/* 任务状态的显示；认不出的（新版本服务端多出来的状态）照原样写出来，不至于渲染出错 */
+function taskStatus(s) { return TASK_STATUS[s] || { label: String(s ?? ''), tone: 'muted', icon: 'dot' }; }
 const STEP_STATUS = {
   running: { label: tr('执行中'), tone: 'accent', icon: 'loader' },
   ok: { label: tr('完成'), tone: 'ok', icon: 'check' },

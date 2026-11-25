@@ -324,12 +324,14 @@ async fn run() -> anyhow::Result<()> {
         .init();
 
     // Lifetime clients hold this through pauses and confirmations, and direct-device CLI
-    // commands participate even when they bypass the daemon.
+    // commands participate even when they bypass the daemon. The MCP server, which agents keep running for hours,
+    // takes it for each tool call instead (`ictl_mcp::serve_stdio`); over --url it talks to another machine.
     let _client = match &cli.command {
         Some(
             Command::Daemon
             | Command::Update { .. }
             | Command::McpConfig
+            | Command::Mcp { .. }
             | Command::Status
             | Command::Completions { .. },
         ) => None,
@@ -346,7 +348,9 @@ async fn run() -> anyhow::Result<()> {
             ictl_daemon::run(cfg).await
         }
         Command::Mcp { url: Some(url), ca } => mcp_bridge::run(&url, ca.as_deref()).await,
-        Command::Mcp { url: None, .. } => ictl_mcp::serve_stdio(cli.socket).await,
+        Command::Mcp { url: None, .. } => {
+            ictl_mcp::serve_stdio(cli.socket, Some(ictl_daemon::maintenance::shared)).await
+        }
         Command::McpConfig => {
             println!("{}", mcp_config(&cli.socket)?);
             Ok(())

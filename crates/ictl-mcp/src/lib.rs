@@ -1173,6 +1173,29 @@ pub struct McpServer {
     /// This process works for a task (`IPHONE_CONTROL_TASK_TOKEN`, see [`task`]); over HTTP a request may instead
     /// carry a task's token in [`protocol::TASK_TOKEN_HEADER`] ([`request_token`])
     pub task: bool,
+    /// Held for the length of each tool call ([`serve_stdio`]); `None` where the process holds one of its own
+    pub lease: Option<Lease>,
+}
+
+/// Takes the host's shared maintenance lease (`ictl_daemon::maintenance::shared`): an update waits while it is held
+pub type Lease = fn() -> std::io::Result<std::fs::File>;
+
+/// How long a tool call waits for an update that holds the maintenance lock before it goes on without the lease
+/// (the daemon then answers, or `protocol::connect` waits for it to be back)
+const LEASE_WAIT: std::time::Duration = std::time::Duration::from_secs(15);
+
+/// The lease for one tool call: taken, waited for while an update runs, or `None` (going on without)
+async fn hold(take: Lease) -> Option<std::fs::File> {
+    let started = std::time::Instant::now();
+    loop {
+        match take() {
+            Ok(f) => return Some(f),
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock && started.elapsed() < LEASE_WAIT => {
+                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            }
+            Err(_) => return None,
+        }
+    }
 }
 
 /// The task token an HTTP request carries ([`protocol::TASK_TOKEN_HEADER`]); `None` over stdio
@@ -1193,7 +1216,7 @@ pub fn http_service(socket: PathBuf) -> HttpService {
     use rmcp::transport::streamable_http_server::{StreamableHttpServerConfig, StreamableHttpService};
     let config = StreamableHttpServerConfig::default().with_allowed_hosts(Vec::<String>::new());
     StreamableHttpService::new(
-        move || Ok(McpServer { socket: socket.clone(), task: false }),
+        move || Ok(McpServer { socket: socket.clone(), task: false, lease: None }),
         std::sync::Arc::default(),
         config,
     )
@@ -1221,6 +1244,11 @@ impl ServerHandler for McpServer {
         request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, ErrorData> {
+        // an idle server holds nothing (an update can go ahead between calls); a call holds the lease to its end
+        let _lease = match self.lease {
+            Some(take) => hold(take).await,
+            None => None,
+        };
         let token = request_token(&context);
         if !self.task && token.is_none() {
             return self.call_tool_cancellable(request, &context).await;
@@ -1560,8 +1588,10 @@ impl McpServer {
 }
 
 /// 在 stdin/stdout 上运行 MCP 服务直到客户端断开
-pub async fn serve_stdio(socket: PathBuf) -> anyhow::Result<()> {
-    let running = McpServer { socket, task: task::join_from_env() }.serve(rmcp::transport::stdio()).await?;
+/// The MCP server on stdin/stdout. `lease` is taken for each tool call, not for the life of the process: agents keep
+/// this process running for hours, and an update has to wait only for calls under way
+pub async fn serve_stdio(socket: PathBuf, lease: Option<Lease>) -> anyhow::Result<()> {
+    let running = McpServer { socket, task: task::join_from_env(), lease }.serve(rmcp::transport::stdio()).await?;
     running.waiting().await?;
     Ok(())
 }
@@ -1578,7 +1608,7 @@ mod tests {
     async fn input_delivery_is_independent_of_field_and_screen_readback() {
         use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
         let socket = PathBuf::from(format!("/tmp/ictl-single-input-{}.sock", std::process::id()));
-        let server = McpServer { socket: socket.clone(), task: false };
+        let server = McpServer { socket: socket.clone(), task: false, lease: None };
         let call = |name, args: Value| {
             let req = CallToolRequestParams::new(name).with_arguments(args.as_object().unwrap().clone());
             let server = &server;

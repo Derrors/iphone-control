@@ -230,8 +230,15 @@ fn check_clients(daemon: Option<u32>) -> Result<()> {
             continue;
         }
         let command = parts.collect::<Vec<_>>().join(" ");
-        ensure!(
-            !Path::new(&command).file_name().is_some_and(|s| s == "iphone-control"),
+        if !Path::new(&command).file_name().is_some_and(|s| s == "iphone-control") {
+            continue;
+        }
+        // an MCP server of this version holds the lease only during a tool call, which the exclusive lease already
+        // waited for; idle, it just reconnects to the new daemon on the next call
+        if process_args(pid).is_some_and(|a| idles_without_lease(&a)) {
+            continue;
+        }
+        bail!(
             "{}",
             ictl_l10n::trf!(
                 "正忙：另一个 iphone-control 进程（{pid}）在运行",
@@ -240,6 +247,32 @@ fn check_clients(daemon: Option<u32>) -> Result<()> {
         );
     }
     Ok(())
+}
+
+/// The command line of `pid` (`ps -o args=`), if it can be read
+fn process_args(pid: u32) -> Option<String> {
+    let out = std::process::Command::new("ps")
+        .args(["-o", "args=", "-p", &pid.to_string()])
+        .env("LC_ALL", "C")
+        .output()
+        .ok()?;
+    out.status.success().then(|| String::from_utf8_lossy(&out.stdout).trim().to_owned())
+}
+
+/// `iphone-control [--data-dir D] [--socket S] mcp …`: the MCP server, which from this version on takes the
+/// maintenance lease for each tool call only. Older ones hold it for their whole life, so they never get this far
+fn idles_without_lease(args: &str) -> bool {
+    let mut words = args.split_whitespace().skip(1);
+    while let Some(w) = words.next() {
+        match w {
+            "--data-dir" | "--socket" => {
+                words.next();
+            }
+            w if w.starts_with("--data-dir=") || w.starts_with("--socket=") => {}
+            w => return w == "mcp",
+        }
+    }
+    false
 }
 
 impl Host<'_> {

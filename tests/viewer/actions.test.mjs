@@ -126,3 +126,26 @@ test('hovering keeps the HID session warm at most every 20 seconds', () => {
   context.S.liveTouch = false; now += 20000; touchWarm();
   assert.equal(sent.length, 2, 'no warm-up without live touch');
 });
+
+// Read-only login: the picture takes no finger (the server refuses anyway, with an error each time); a note, not a flood
+test('a read-only page sends no finger and says so once in a while', () => {
+  const shown = [], sent = [];
+  const S = { readOnly: true, liveTouch: true, mode: 'live' };
+  const context = { S, tr: String, show: (m, k) => shown.push([m, k]), Date: { now: () => context.now }, now: 10000,
+    T: { warm: 0 }, dims: () => ({ W: 1, H: 1 }), guarded: () => false, touchSend: (...a) => sent.push(a) };
+  const fns = ['viewOnly', 'touchWarm'].map(n => html.match(new RegExp(`^function ${n}\\([^]*?^}`, 'm'))[0]).join('\n');
+  const { viewOnly, touchWarm } = runInNewContext('let viewOnlyShown = 0;\n' + fns + '\n({ viewOnly, touchWarm })', context);
+  assert.equal(viewOnly(), true);
+  assert.equal(viewOnly(), true);
+  assert.equal(shown.length, 1, 'once, not on every touch');
+  context.now += 4000;
+  viewOnly();
+  assert.equal(shown.length, 2);
+  touchWarm();
+  assert.equal(sent.length, 0, 'not even the HID session warmed');
+  S.readOnly = false;
+  assert.equal(viewOnly(), false);
+  context.now += 20000;                       // past its once-in-20-s
+  touchWarm();
+  assert.equal(sent.length, 1);
+});

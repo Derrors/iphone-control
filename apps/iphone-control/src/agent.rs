@@ -191,16 +191,29 @@ fn sub_dir(private: &Path, name: &str) -> std::io::Result<PathBuf> {
     Ok(dir)
 }
 
+/// Token files left by an earlier viewer (killed before it could remove them): its agents were stopped with it, and
+/// one of them could share a name with a new file once a process number comes round again
+fn clear_stale_tokens(dir: &Path) {
+    for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+        let p = e.path();
+        if p.extension().is_some_and(|x| x == "token") && e.file_type().is_ok_and(|t| t.is_file()) {
+            let _ = std::fs::remove_file(p);
+        }
+    }
+}
+
 impl Agents {
     pub fn new(socket: &Path) -> anyhow::Result<Arc<Self>> {
         let base = std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from).filter(|p| p.is_absolute());
         let private = private_dir(&base.unwrap_or_else(std::env::temp_dir))?;
         // the agent works in `work`; the tasks' tokens are kept beside it, not in what it works on
+        let tokens = sub_dir(&private, "tokens")?;
+        clear_stale_tokens(&tokens);
         Ok(Arc::new(Self {
             exe: std::env::current_exe()?,
             socket: socket.to_path_buf(),
             workdir: sub_dir(&private, "work")?,
-            tokens: sub_dir(&private, "tokens")?,
+            tokens,
             running: Default::default(),
         }))
     }
@@ -635,6 +648,10 @@ mod tests {
         assert_ne!(a.0, b.0);
         drop((a, b));
         std::fs::remove_dir_all(dir).unwrap();
+        // a file left by an earlier viewer is cleared when the next one starts
+        std::fs::write(agents.tokens.join("task-1-0.token"), "old").unwrap();
+        let again = Agents::new(Path::new("/nonexistent/ctl.sock")).unwrap();
+        assert!(!again.tokens.join("task-1-0.token").exists());
         // kept beside the agent's working directory, not in what it works on; both its own
         assert!(!agents.tokens.starts_with(&agents.workdir) && !agents.workdir.starts_with(&agents.tokens));
         for d in [&agents.tokens, &agents.workdir] {

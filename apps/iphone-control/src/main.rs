@@ -272,8 +272,13 @@ fn main() -> anyhow::Result<()> {
             return completions::write(shell, &mut std::io::stdout().lock());
         }
     }
-    // 设置文件先读进环境（命令行上已设的优先），要在启动任何线程之前：语言、代理、通知等对所有命令都生效
-    envfile::load_into_process();
+    // 设置文件先读进环境（命令行上已设的优先），要在启动任何线程之前：语言、代理、通知等对所有命令都生效。
+    // 控制台给它的 agent 起的 MCP 服务（`mcp --task-token-file`）只连本机：设置文件里给自己的命令连别处用的地址不读，
+    // 读了会和这个参数冲突、服务起不来
+    let local_only = std::env::args().any(|a| a == "--task-token-file");
+    let skip: &[&str] =
+        if local_only { &[ictl_daemon::protocol::env::URL, ictl_daemon::protocol::env::CA] } else { &[] };
+    envfile::load_into_process(skip);
     tokio::runtime::Runtime::new()?.block_on(run())
 }
 

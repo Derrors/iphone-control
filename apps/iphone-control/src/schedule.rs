@@ -20,6 +20,11 @@ pub fn set_policy(socket: &Path, policy: update::Policy) -> Result<()> {
     if let Err(e) = configure_job(socket, policy) {
         // A partial timer install must not later run with unintended permission to replace files.
         update::set_policy(update::Policy::Manual)?;
+        // and what was written of it goes (only ours: the same owner check as any change; a job already running is
+        // left to finish), or a launcher and a unit half set up stay behind
+        if let Err(cleanup) = configure_job(socket, update::Policy::Manual) {
+            tracing::debug!("removing a partial update job: {cleanup:#}");
+        }
         bail!(
             "{}",
             ictl_l10n::trf!(

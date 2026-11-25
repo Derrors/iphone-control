@@ -168,8 +168,15 @@ async function touchPump() {
   }
   T.busy = false;
 }
+/* 只读登录：画面上的手指、滚轮都不发给手机（服务端也会拒绝，但每次都弹一个错误），只提示一下，三秒内不重复 */
+let viewOnlyShown = 0;
+function viewOnly() {
+  if (!S.readOnly) return false;
+  if (Date.now() - viewOnlyShown > 3000) { viewOnlyShown = Date.now(); show(tr('只读登录：只能看，不能操作'), 'warn'); }
+  return true;
+}
 function touchWarm() {
-  if (!S.liveTouch || S.mode !== 'live' || !dims() || guarded() || Date.now() - T.warm < 20000) return;
+  if (S.readOnly || !S.liveTouch || S.mode !== 'live' || !dims() || guarded() || Date.now() - T.warm < 20000) return;
   T.warm = Date.now(); touchSend('prepare', null);
 }
 function fingerDown(p) {
@@ -187,6 +194,7 @@ for (const t of ['pointerdown', 'pointermove', 'pointerup', 'pointercancel', 'wh
 
 stage.addEventListener('pointerdown', ev => {
   if (ev.button !== 0 || S.mode === 'detecting' || ev.target.closest('button, a, code')) return;
+  if (viewOnly()) return;
   if (guarded()) { nudgeGuard(); return; }
   const p = toPoints(ev.clientX, ev.clientY);
   if (!p || down) return;
@@ -199,7 +207,7 @@ stage.addEventListener('pointerdown', ev => {
 /* 鼠标悬停时跟随光标的小圆点，标出将要点到的位置；触屏、画面外、AI 操作时不显示 */
 let hoverDot = null;
 function moveHoverDot(p, ev) {
-  if (!p || ev.pointerType === 'touch' || guarded()) { hideHoverDot(); return; }
+  if (!p || ev.pointerType === 'touch' || guarded() || S.readOnly) { hideHoverDot(); return; }
   if (!hoverDot) {
     hoverDot = svgEl('g', { class: 'hover-dot' });
     const scale = svgEl('g', { class: 'dot-scale' });
@@ -248,7 +256,8 @@ const W = { on: false, start: null, cur: null, pend: { x: 0, y: 0 }, idle: 0, ra
 const EDGE = 90;
 function wheelSafe(p) { const d = dims(); return { x: Math.min(d.W - 30, Math.max(30, p.x)), y: Math.min(d.H - EDGE, Math.max(EDGE, p.y)) }; }
 stage.addEventListener('wheel', ev => {
-  if (S.mode !== 'live' || ev.ctrlKey || ev.metaKey || down) return;
+  // read-only: the page scrolls as any page, nothing goes to the phone
+  if (S.mode !== 'live' || S.readOnly || ev.ctrlKey || ev.metaKey || down) return;
   const p = toPoints(ev.clientX, ev.clientY);
   if (!p) return;
   ev.preventDefault();

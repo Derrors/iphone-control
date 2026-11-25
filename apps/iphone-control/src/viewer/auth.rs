@@ -75,8 +75,36 @@ pub fn tokens_file(data_dir: &Path) -> PathBuf {
     data_dir.join(TOKENS_FILE)
 }
 
+/// Runs `f` holding the lock beside the tokens file: commands changing tokens at once (and the first start making
+/// them) read and write one after the other instead of one losing the other's change
+fn locked<T>(data_dir: &Path, f: impl FnOnce() -> anyhow::Result<T>) -> anyhow::Result<T> {
+    use std::os::fd::AsRawFd;
+    use std::os::unix::fs::OpenOptionsExt;
+    std::fs::create_dir_all(data_dir)?;
+    let lock = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(tokens_file(data_dir).with_extension("lock"))?;
+    if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX) } != 0 {
+        return Err(io::Error::last_os_error().into());
+    }
+    f()
+}
+
 /// The tokens; the first start makes [`OWNER`] (from the earlier single token if there is one)
 pub fn load(data_dir: &Path) -> anyhow::Result<Vec<Entry>> {
+    if let Some(v) = read(data_dir)? {
+        return Ok(v);
+    }
+    locked(data_dir, || load_unlocked(data_dir))
+}
+
+/// [`load`] with the lock held
+fn load_unlocked(data_dir: &Path) -> anyhow::Result<Vec<Entry>> {
     if let Some(v) = read(data_dir)? {
         return Ok(v);
     }
@@ -124,7 +152,11 @@ pub fn add(data_dir: &Path, name: &str, role: Role) -> anyhow::Result<Entry> {
             "A name takes letters, digits and - _ . only, 40 at most: {name}"
         ));
     }
-    let mut v = load(data_dir)?;
+    locked(data_dir, || add_unlocked(data_dir, name, role))
+}
+
+fn add_unlocked(data_dir: &Path, name: &str, role: Role) -> anyhow::Result<Entry> {
+    let mut v = load_unlocked(data_dir)?;
     if v.iter().any(|e| e.name == name) {
         bail!(ictl_l10n::trf!(
             "已经有叫 {name} 的令牌了；要换新的用 viewer token show {name} --new",
@@ -144,7 +176,11 @@ pub fn get(data_dir: &Path, name: &str) -> anyhow::Result<Entry> {
 
 /// A new token in place of `name`'s; its browsers have to log in again
 pub fn renew(data_dir: &Path, name: &str) -> anyhow::Result<Entry> {
-    let mut v = load(data_dir)?;
+    locked(data_dir, || renew_unlocked(data_dir, name))
+}
+
+fn renew_unlocked(data_dir: &Path, name: &str) -> anyhow::Result<Entry> {
+    let mut v = load_unlocked(data_dir)?;
     let e = v.iter_mut().find(|e| e.name == name).ok_or_else(|| no_such(name))?;
     e.token = new_token()?;
     e.created = now();
@@ -155,7 +191,11 @@ pub fn renew(data_dir: &Path, name: &str) -> anyhow::Result<Entry> {
 
 /// Removes `name`; the last token that may operate stays (nobody could act otherwise)
 pub fn remove(data_dir: &Path, name: &str) -> anyhow::Result<()> {
-    let mut v = load(data_dir)?;
+    locked(data_dir, || remove_unlocked(data_dir, name))
+}
+
+fn remove_unlocked(data_dir: &Path, name: &str) -> anyhow::Result<()> {
+    let mut v = load_unlocked(data_dir)?;
     let Some(i) = v.iter().position(|e| e.name == name) else { return Err(no_such(name)) };
     if v[i].role == Role::Operate && v.iter().filter(|e| e.role == Role::Operate).count() == 1 {
         bail!(ictl_l10n::trf!(
@@ -269,7 +309,23 @@ impl Known {
 /// The tokens, read again when the file changes (`viewer token …` while the viewer runs)
 struct Tokens {
     known: Vec<Known>,
-    modified: Option<SystemTime>,
+    modified: Option<Stamp>,
+}
+
+/// What tells that the tokens file changed: its time alone misses a change within the same second on file systems
+/// that keep whole seconds (a token removed right after another change would stay valid). Each save is a new file
+/// renamed into place, so its inode changes every time
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Stamp {
+    modified: SystemTime,
+    len: u64,
+    ino: u64,
+}
+
+fn stamp(data_dir: &Path) -> Option<Stamp> {
+    use std::os::unix::fs::MetadataExt;
+    let m = std::fs::metadata(tokens_file(data_dir)).ok()?;
+    Some(Stamp { modified: m.modified().ok()?, len: m.len(), ino: m.ino() })
 }
 
 pub struct Auth {
@@ -285,8 +341,7 @@ impl Auth {
     /// The tokens in `data_dir` ([`load`])
     pub fn load(data_dir: &Path, port: u16) -> anyhow::Result<Self> {
         let known = load(data_dir)?.into_iter().map(Known::of).collect();
-        let modified = std::fs::metadata(tokens_file(data_dir)).and_then(|m| m.modified()).ok();
-        Ok(Self::with(Some(data_dir.to_owned()), Tokens { known, modified }, port))
+        Ok(Self::with(Some(data_dir.to_owned()), Tokens { known, modified: stamp(data_dir) }, port))
     }
 
     /// These tokens and no file
@@ -303,7 +358,7 @@ impl Auth {
     fn tokens(&self) -> std::sync::MutexGuard<'_, Tokens> {
         let mut t = self.tokens.lock().unwrap_or_else(|p| p.into_inner());
         if let Some(dir) = &self.data_dir {
-            let modified = std::fs::metadata(tokens_file(dir)).and_then(|m| m.modified()).ok();
+            let modified = stamp(dir);
             if modified != t.modified
                 && let Ok(Some(v)) = read(dir)
             {
@@ -525,6 +580,50 @@ mod tests {
         let fresh = tempfile::tempdir().unwrap();
         let t = &load(fresh.path()).unwrap()[0].token;
         assert!(t.len() == 64 && valid_token(t));
+    }
+
+    /// Commands adding tokens at once each keep theirs: the read-change-write is done one after the other
+    #[test]
+    fn tokens_added_at_once_are_all_kept() {
+        let tmp = tempfile::tempdir().unwrap();
+        load(tmp.path()).unwrap();
+        let dir = tmp.path().to_owned();
+        let threads: Vec<_> = (0..8)
+            .map(|i| {
+                let dir = dir.clone();
+                std::thread::spawn(move || add(&dir, &format!("t{i}"), Role::View).unwrap())
+            })
+            .collect();
+        for t in threads {
+            t.join().unwrap();
+        }
+        let names: Vec<String> = load(&dir).unwrap().into_iter().map(|e| e.name).collect();
+        for i in 0..8 {
+            assert!(names.contains(&format!("t{i}")), "{names:?}");
+        }
+    }
+
+    /// A token removed is let go of at once, also when the file's time reads the same (a file system keeping whole
+    /// seconds, a change within the same one)
+    #[test]
+    fn a_removed_token_is_noticed_within_the_same_second() {
+        let tmp = tempfile::tempdir().unwrap();
+        load(tmp.path()).unwrap();
+        let tv = add(tmp.path(), "tv", Role::View).unwrap();
+        let auth = Auth::load(tmp.path(), 8200).unwrap();
+        let Verdict::Ok(who) = auth.try_token(&tv.token) else { panic!("logs in") };
+        assert!(auth.knows(&who));
+        let file = tokens_file(tmp.path());
+        let before = std::fs::metadata(&file).unwrap().modified().unwrap();
+        remove(tmp.path(), "tv").unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&file)
+            .unwrap()
+            .set_times(std::fs::FileTimes::new().set_modified(before))
+            .unwrap();
+        assert_eq!(std::fs::metadata(&file).unwrap().modified().unwrap(), before, "the same time");
+        assert!(!auth.knows(&who), "noticed all the same");
     }
 
     #[test]

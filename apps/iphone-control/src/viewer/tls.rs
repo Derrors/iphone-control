@@ -190,20 +190,44 @@ fn ensure_made(dir: &Path, names: &[String], now: u64) -> anyhow::Result<(Vec<u8
     let key = rcgen::KeyPair::generate()?;
     let cert = p.self_signed(&key)?;
     let (c, k) = (cert.pem().into_bytes(), key.serialize_pem().into_bytes());
-    write_private(dir, &key_f, &k)?;
-    std::fs::write(&cert_f, &c)?;
-    std::fs::write(&meta_f, serde_json::to_vec_pretty(&Made { names: all, not_after })?)?;
+    // names.json is what makes the pair reused: gone first and written last, so a stop halfway (a new key beside the
+    // old certificate) is made again on the next start instead of failing to load for good
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        std::fs::DirBuilder::new().recursive(true).mode(0o700).create(dir)?;
+    }
+    match std::fs::remove_file(&meta_f) {
+        Err(e) if e.kind() != io::ErrorKind::NotFound => return Err(e.into()),
+        _ => {}
+    }
+    write_atomic(&key_f, &k, 0o600)?;
+    write_atomic(&cert_f, &c, 0o644)?;
+    write_atomic(&meta_f, &serde_json::to_vec_pretty(&Made { names: all, not_after })?, 0o644)?;
     Ok((c, k))
 }
 
-/// The key: only for this user
-fn write_private(dir: &Path, file: &Path, data: &[u8]) -> io::Result<()> {
+/// Writes `data` to a temporary file beside `file` (with `mode` from the start: the key is only ever this user's),
+/// syncs it and renames it into place: `file` is the old content or all of the new
+fn write_atomic(file: &Path, data: &[u8], mode: u32) -> io::Result<()> {
     use std::io::Write;
-    use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
-    std::fs::DirBuilder::new().recursive(true).mode(0o700).create(dir)?;
-    let mut f = std::fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(file)?;
-    f.set_permissions(std::fs::Permissions::from_mode(0o600))?;
-    f.write_all(data)
+    use std::os::unix::fs::OpenOptionsExt;
+    let name = file.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let tmp = file.with_file_name(format!(".{name}.{}.tmp", std::process::id()));
+    let r = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(mode)
+        .open(&tmp)
+        .and_then(|mut f| {
+            f.write_all(data)?;
+            f.sync_all()
+        })
+        .and_then(|()| std::fs::rename(&tmp, file));
+    if r.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    r
 }
 
 /// Year, month, day of a Unix time (UTC)
@@ -293,6 +317,24 @@ mod tests {
         // close to its end: made again
         let (cert, _) = ensure_made(&tmp.path().join(DIR), &names(&["localhost"]), meta.not_after - DAY).unwrap();
         assert_ne!(fingerprint(&CertificateDer::pem_slice_iter(&cert).next().unwrap().unwrap()), c.fingerprint);
+    }
+
+    /// A stop while a new pair was written (a new key beside the old certificate, names.json gone) makes a pair again
+    /// on the next start, instead of a viewer that can't load its certificate; nothing temporary is left
+    #[test]
+    fn a_pair_written_halfway_is_made_again() {
+        let tmp = tempfile::tempdir().unwrap();
+        let a = Tls::made(tmp.path(), &names(&["localhost"])).unwrap();
+        let dir = tmp.path().join(DIR);
+        // as left by a stop after the key: names.json removed, the key another one
+        std::fs::remove_file(dir.join("names.json")).unwrap();
+        let other = rcgen::KeyPair::generate().unwrap().serialize_pem();
+        std::fs::write(dir.join("key.pem"), other).unwrap();
+        let b = Tls::made(tmp.path(), &names(&["localhost"])).expect("made again, and loads");
+        assert_ne!(a.fingerprint, b.fingerprint);
+        let left: Vec<String> =
+            std::fs::read_dir(&dir).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+        assert!(left.iter().all(|n| !n.ends_with(".tmp")), "{left:?}");
     }
 
     #[test]

@@ -62,6 +62,8 @@ struct Ctx {
     data_dir: PathBuf,
     /// The page, marked with the viewer's language (the page's default; it can switch)
     page: String,
+    /// The page's `Content-Security-Policy` ([`csp_for`])
+    page_csp: String,
     socket: PathBuf,
     port: u16,
     /// The device the page shows and acts on
@@ -282,6 +284,7 @@ pub async fn run(
         checking: Arc::default(),
         check_error: Arc::default(),
         names: tokio::sync::Mutex::default(),
+        page_csp: csp_for(&page_in(ictl_l10n::lang())),
         page: page_in(ictl_l10n::lang()),
         device_video_allowed,
         video,
@@ -460,6 +463,42 @@ fn page_in(lang: ictl_l10n::Lang) -> String {
     PAGE.replacen("<html lang=\"zh-CN\">", html, 1)
 }
 
+/// A page's `Content-Security-Policy`: its own inline scripts only (by their SHA-256, so nothing injected into the page
+/// runs), inline styles (the page sets `style` attributes), and nothing from other sites: requests, pictures and the
+/// picture stream go to this server; no frames, plugins or `<base>`
+fn csp_for(html: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let scripts: Vec<String> = html
+        .split("<script>")
+        .skip(1)
+        .filter_map(|s| s.split_once("</script>").map(|(body, _)| body))
+        .map(|body| format!("'sha256-{}'", base64(&Sha256::digest(body.as_bytes()))))
+        .collect();
+    format!(
+        "default-src 'none'; script-src {}; style-src 'unsafe-inline'; img-src 'self' data: blob:; \
+         connect-src 'self'; media-src 'self' blob:; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
+        if scripts.is_empty() { "'none'".to_owned() } else { scripts.join(" ") }
+    )
+}
+
+/// Standard base64 with padding, for [`csp_for`]'s hashes
+fn base64(bytes: &[u8]) -> String {
+    const ABC: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for c in bytes.chunks(3) {
+        let n =
+            (u32::from(c[0]) << 16) | (u32::from(*c.get(1).unwrap_or(&0)) << 8) | u32::from(*c.get(2).unwrap_or(&0));
+        for i in 0..4 {
+            if i <= c.len() {
+                out.push(ABC[(n >> (18 - 6 * i) & 63) as usize] as char);
+            } else {
+                out.push('=');
+            }
+        }
+    }
+    out
+}
+
 /// How long a connection kept open waits for the page's next request (short in tests, which wait it out)
 const KEEP_IDLE: Duration = if cfg!(test) { Duration::from_millis(300) } else { Duration::from_secs(15) };
 
@@ -635,7 +674,10 @@ async fn route(
     let Some(client) = slot.as_mut() else { return Ok(()) };
     let path = req.path.as_str();
     match (req.method.as_str(), path) {
-        ("GET", "/") => reply(client, 200, "text/html; charset=utf-8", ctx.page.as_bytes()).await,
+        ("GET", "/") => {
+            let csp = format!("Content-Security-Policy: {}\r\n", ctx.page_csp);
+            reply_with(client, 200, "text/html; charset=utf-8", ctx.page.as_bytes(), &csp).await
+        }
         ("GET", "/stream" | "/video") => {
             let _feed = if let Some(id) = req.query("feed").filter(|id| !id.is_empty() && id.len() <= 80) {
                 let Some(guard) = FeedGuard::register(&ctx.feeds, id) else {
@@ -718,7 +760,7 @@ async fn route(
         }
         ("GET" | "POST" | "DELETE", "/mcp") if ctx.mcp.is_some() => {
             // a browser says where it comes from: only the page itself. Other clients send no Origin
-            if req.origin.as_deref().is_some_and(|o| !ctx.access.origin_allowed(o, ctx.port)) {
+            if req.origin.as_deref().is_some_and(|o| !ctx.access.origin_allowed(o, ctx.port, ctx.tls.is_some())) {
                 return reply(client, 403, "text/plain", b"forbidden").await;
             }
             // a length or chunked, not both (a request read two ways is how requests are smuggled past proxies),
@@ -763,7 +805,7 @@ async fn route(
 
 async fn video_head(client: &mut Conn) -> anyhow::Result<()> {
     let head = b"HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nCache-Control: no-store\r\n\
-                 X-Content-Type-Options: nosniff\r\nConnection: close\r\n\r\n";
+                 X-Content-Type-Options: nosniff\r\nReferrer-Policy: no-referrer\r\nConnection: close\r\n\r\n";
     tokio::time::timeout(crate::video::STREAM_IDLE, client.write_all(head)).await??;
     tokio::time::timeout(crate::video::STREAM_IDLE, client.flush()).await??;
     Ok(())
@@ -992,19 +1034,17 @@ async fn post(ctx: &Ctx, name: &str, b: &Value, device: Option<&str>, caller: Ca
 
 /// The task's events so far, then new ones as they come (from the daemon), as server-sent events, until it is done
 async fn events(client: &mut Conn, mut stream: protocol::TaskStream) -> anyhow::Result<()> {
-    client
-        .write_all(
-            b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-store\r\n\
-              X-Content-Type-Options: nosniff\r\nConnection: close\r\n\r\n",
-        )
-        .await?;
-    client.flush().await?;
+    write_timed(
+        client,
+        b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-store\r\n\
+          X-Content-Type-Options: nosniff\r\nReferrer-Policy: no-referrer\r\nConnection: close\r\n\r\n",
+    )
+    .await?;
     loop {
         tokio::select! {
             e = stream.next() => match e {
                 Some(e) => {
-                    client.write_all(sse(&e).as_bytes()).await?;
-                    client.flush().await?;
+                    write_timed(client, sse(&e).as_bytes()).await?;
                     if e.event == "done" {
                         return Ok(());
                     }
@@ -1014,8 +1054,7 @@ async fn events(client: &mut Conn, mut stream: protocol::TaskStream) -> anyhow::
             },
             // a comment now and then finds a page that went away
             _ = tokio::time::sleep(Duration::from_secs(15)) => {
-                client.write_all(b": ping\n\n").await?;
-                client.flush().await?;
+                write_timed(client, b": ping\n\n").await?;
             }
         }
     }
@@ -1042,11 +1081,10 @@ async fn open_task(client: &mut Conn, ctx: &Ctx, b: &Value, by: &str) -> anyhow:
     let (mut rd, mut wr) = tokio::io::split(client);
     let head = format!(
         "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-store\r\n\
-         X-Content-Type-Options: nosniff\r\nConnection: close\r\n\r\nevent: opened\ndata: {}\n\n",
+         X-Content-Type-Options: nosniff\r\nReferrer-Policy: no-referrer\r\nConnection: close\r\n\r\nevent: opened\ndata: {}\n\n",
         json!({"id": opened.id, "token": opened.token})
     );
-    wr.write_all(head.as_bytes()).await?;
-    wr.flush().await?;
+    write_timed(&mut wr, head.as_bytes()).await?;
     let gone = async {
         let mut buf = [0u8; 64];
         while matches!(rd.read(&mut buf).await, Ok(n) if n > 0) {}
@@ -1056,8 +1094,7 @@ async fn open_task(client: &mut Conn, ctx: &Ctx, b: &Value, by: &str) -> anyhow:
         tokio::select! {
             e = lease.next() => match e {
                 Some(e) => {
-                    wr.write_all(sse(&e).as_bytes()).await?;
-                    wr.flush().await?;
+                    write_timed(&mut wr, sse(&e).as_bytes()).await?;
                     if e.event == "done" {
                         return Ok(());
                     }
@@ -1069,8 +1106,7 @@ async fn open_task(client: &mut Conn, ctx: &Ctx, b: &Value, by: &str) -> anyhow:
             () = &mut gone => return Ok(()),
             // a comment now and then keeps proxies from closing a quiet connection
             _ = tokio::time::sleep(Duration::from_secs(15)) => {
-                wr.write_all(b": ping\n\n").await?;
-                wr.flush().await?;
+                write_timed(&mut wr, b": ping\n\n").await?;
             }
         }
     }
@@ -1089,7 +1125,7 @@ async fn action_body(
     pass: &Pass,
     body: &mut Vec<u8>,
 ) -> anyhow::Result<Option<Value>> {
-    if !action_allowed(req, &ctx.access, ctx.port, pass.program()) {
+    if !action_allowed(req, &ctx.access, ctx.port, ctx.tls.is_some(), pass.program()) {
         reply(client, 403, "text/plain", b"forbidden").await?;
         return Ok(None);
     }
@@ -1196,18 +1232,33 @@ async fn reply_with(client: &mut Conn, status: u16, kind: &str, body: &[u8], ext
     let connection = if keep { "Connection: keep-alive\r\n" } else { "Connection: close\r\n" };
     let head = format!(
         "HTTP/1.1 {status} {reason}\r\nContent-Type: {kind}\r\nContent-Length: {}\r\nCache-Control: no-store\r\n\
-         X-Content-Type-Options: nosniff\r\nX-Frame-Options: DENY\r\n{extra}{connection}\r\n",
+         X-Content-Type-Options: nosniff\r\nX-Frame-Options: DENY\r\nReferrer-Policy: no-referrer\r\n\
+         {extra}{connection}\r\n",
         body.len()
     );
-    client.write_all(head.as_bytes()).await?;
-    client.write_all(body).await?;
-    // over TLS the last record may still be buffered
-    client.flush().await?;
+    write_timed(client, head.as_bytes()).await?;
+    // flushed: over TLS the last record may still be buffered
+    write_timed(client, body).await?;
     if keep {
         let _ = KEEP_ALIVE.try_with(|k| k.set(Keep::Kept));
     } else {
         linger(client).await;
     }
+    Ok(())
+}
+
+/// Writing one answer, or one event of a stream, at most this long: a client that reads nothing would hold its
+/// connection's place for good (there are [`MAX_CONNECTIONS`])
+const WRITE_TIMEOUT: Duration = if cfg!(test) { Duration::from_millis(300) } else { Duration::from_secs(30) };
+
+/// Writes and flushes `bytes` within [`WRITE_TIMEOUT`]
+async fn write_timed<W: tokio::io::AsyncWrite + Unpin>(w: &mut W, bytes: &[u8]) -> anyhow::Result<()> {
+    tokio::time::timeout(WRITE_TIMEOUT, async {
+        w.write_all(bytes).await?;
+        w.flush().await
+    })
+    .await
+    .map_err(|_| anyhow::anyhow!("the client stopped reading"))??;
     Ok(())
 }
 
@@ -1289,7 +1340,7 @@ async fn login_gate(
     }
     // the login page's form
     if req.method == "POST" && req.path == "/login" {
-        if req.origin.as_deref().is_some_and(|o| !ctx.access.origin_allowed(o, ctx.port)) {
+        if req.origin.as_deref().is_some_and(|o| !ctx.access.origin_allowed(o, ctx.port, ctx.tls.is_some())) {
             reply(client, 403, "text/plain", b"forbidden").await?;
             return Ok(None);
         }
@@ -1352,7 +1403,9 @@ async fn login_page(client: &mut Conn, v: auth::Verdict) -> anyhow::Result<()> {
         auth::Verdict::Limited => (429, Some(auth::LoginError::Limited)),
         _ => (401, None),
     };
-    reply(client, status, "text/html; charset=utf-8", auth::login_page(why).as_bytes()).await
+    let page = auth::login_page(why);
+    let csp = format!("Content-Security-Policy: {}\r\n", csp_for(&page));
+    reply_with(client, status, "text/html; charset=utf-8", page.as_bytes(), &csp).await
 }
 
 /// Where a plain HTTP request from the network goes: the same page over HTTPS, at the name it asked for (one of
@@ -1367,7 +1420,7 @@ fn https_location(head: &[u8], req: &Head, port: u16) -> Option<String> {
 async fn redirect(client: &mut Conn, to: &str) -> anyhow::Result<()> {
     let head = format!(
         "HTTP/1.1 307 Temporary Redirect\r\nLocation: {to}\r\nContent-Length: 0\r\nCache-Control: no-store\r\n\
-         Connection: close\r\n\r\n"
+         Referrer-Policy: no-referrer\r\nConnection: close\r\n\r\n"
     );
     client.write_all(head.as_bytes()).await?;
     client.flush().await?;
@@ -1536,10 +1589,10 @@ fn percent_decode(s: &str) -> String {
 /// answers
 /// `bearer`: logged in with `Authorization: Bearer` (a program). A browser always sends `Origin` with a POST, and a
 /// web page can't make it send that header, so without `Origin` only a program's request is taken
-fn action_allowed(req: &Head, access: &lan::Access, port: u16, bearer: bool) -> bool {
+fn action_allowed(req: &Head, access: &lan::Access, port: u16, tls: bool, bearer: bool) -> bool {
     let json = req.content_type.as_deref().is_some_and(|c| c.split(';').next() == Some("application/json"));
     json && match req.origin.as_deref() {
-        Some(o) => access.origin_allowed(o, port),
+        Some(o) => access.origin_allowed(o, port, tls),
         None => bearer,
     }
 }
@@ -1631,6 +1684,7 @@ mod tests {
             data_dir: dir.into(),
             port: 0,
             page: String::new(),
+            page_csp: String::new(),
             checking: Arc::default(),
             check_error: Arc::default(),
             names: Default::default(),
@@ -2092,6 +2146,41 @@ mod tests {
 
     /// The redirect's `Location` is built from the request target: only a path is a target, so it can't send a
     /// browser to another host (`@evil.example/` would make `https://host:port@evil.example/`) nor add a header line
+    /// An answer to a client that reads nothing gives up after [`WRITE_TIMEOUT`] instead of holding the connection
+    #[tokio::test]
+    async fn a_client_that_reads_nothing_is_let_go() {
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let (client, accepted) =
+            tokio::join!(tokio::net::TcpStream::connect(listener.local_addr().unwrap()), listener.accept());
+        let _never_reads = client.unwrap();
+        let mut conn = Conn::Plain(accepted.unwrap().0);
+        let big = vec![b'x'; 32 << 20];
+        let t0 = std::time::Instant::now();
+        let r = tokio::time::timeout(Duration::from_secs(10), reply(&mut conn, 200, "text/plain", &big)).await;
+        assert!(matches!(r, Ok(Err(_))), "gave up with an error");
+        assert!(t0.elapsed() < Duration::from_secs(5), "{:?}", t0.elapsed());
+    }
+
+    /// The pages run their own inline scripts only: the policy names each by its hash, and a script changed or added
+    /// by someone else matches none
+    #[test]
+    fn pages_allow_only_their_own_scripts() {
+        use sha2::{Digest, Sha256};
+        for (input, want) in [("", ""), ("f", "Zg=="), ("fo", "Zm8="), ("foo", "Zm9v"), ("foobar", "Zm9vYmFy")] {
+            assert_eq!(base64(input.as_bytes()), want);
+        }
+        let page = page_in(ictl_l10n::Lang::En);
+        let csp = csp_for(&page);
+        let script = page.split("<script>").nth(1).unwrap().split("</script>").next().unwrap();
+        let hash = format!("'sha256-{}'", base64(&Sha256::digest(script.as_bytes())));
+        assert!(csp.contains(&format!("script-src {hash};")), "{csp}");
+        assert!(csp.starts_with("default-src 'none';") && csp.contains("frame-ancestors 'none'"), "{csp}");
+        let login = auth::login_page(None);
+        assert_eq!(csp_for(&login).matches("'sha256-").count(), 2, "the login page's two scripts");
+        assert!(!csp_for(&page.replace("'use strict';", "'use strict';alert(1);")).contains(&hash));
+        assert!(csp_for("<p>no script</p>").contains("script-src 'none'"));
+    }
+
     #[test]
     fn only_a_plain_request_head_is_taken() {
         let ok = |s: &str| Head::parse(s.as_bytes()).is_some();
@@ -2348,11 +2437,12 @@ mod tests {
     fn actions_need_own_origin_and_json() {
         let local = lan::Access::local();
         let ok = "POST /api/tap HTTP/1.1\r\nHost: 127.0.0.1:8200\r\nOrigin: http://127.0.0.1:8200\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n";
-        assert!(action_allowed(&head(ok), &local, 8200, false));
+        assert!(action_allowed(&head(ok), &local, 8200, false, false));
         assert!(action_allowed(
             &head(&ok.replace("http://127.0.0.1:8200", "http://localhost:8200")),
             &local,
             8200,
+            false,
             false
         ));
         // another page, another port, no origin, a form post
@@ -2360,34 +2450,50 @@ mod tests {
             &head(&ok.replace("http://127.0.0.1:8200", "http://evil.example")),
             &local,
             8200,
+            false,
             false
         ));
         assert!(!action_allowed(
             &head(&ok.replace("http://127.0.0.1:8200", "http://127.0.0.1:3000")),
             &local,
             8200,
+            false,
             false
         ));
-        assert!(!action_allowed(&head(&ok.replace("Origin: http://127.0.0.1:8200\r\n", "")), &local, 8200, false));
+        assert!(!action_allowed(
+            &head(&ok.replace("Origin: http://127.0.0.1:8200\r\n", "")),
+            &local,
+            8200,
+            false,
+            false
+        ));
         // a program logged in with Authorization: Bearer sends no Origin; a cookie (a browser) needs it
-        assert!(action_allowed(&head(&ok.replace("Origin: http://127.0.0.1:8200\r\n", "")), &local, 8200, true));
+        assert!(action_allowed(&head(&ok.replace("Origin: http://127.0.0.1:8200\r\n", "")), &local, 8200, false, true));
         assert!(!action_allowed(
             &head(&ok.replace("http://127.0.0.1:8200", "http://evil.example")),
             &local,
             8200,
+            false,
             true
         ));
-        assert!(!action_allowed(&head(&ok.replace("application/json", "text/plain")), &local, 8200, false));
+        assert!(!action_allowed(&head(&ok.replace("application/json", "text/plain")), &local, 8200, false, false));
         assert!(!action_allowed(
             &head(&ok.replace("Origin: http://127.0.0.1:8200", "Origin: null")),
             &local,
             8200,
+            false,
             false
         ));
         // only open to the network with --lan
         let on_lan = ok.replace("http://127.0.0.1:8200", "http://192.168.10.100:8200");
-        assert!(!action_allowed(&head(&on_lan), &local, 8200, false));
-        assert!(action_allowed(&head(&on_lan), &lan::Access::with_hosts(["192.168.10.100".into()]), 8200, false));
+        assert!(!action_allowed(&head(&on_lan), &local, 8200, false, false));
+        assert!(action_allowed(
+            &head(&on_lan),
+            &lan::Access::with_hosts(["192.168.10.100".into()]),
+            8200,
+            false,
+            false
+        ));
     }
 
     #[test]

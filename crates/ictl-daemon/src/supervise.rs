@@ -6,7 +6,7 @@ use std::time::{Duration, Instant, UNIX_EPOCH};
 use ictl_device::{Device, DeviceError, LogStream, Rotation, ScreenSize, Tunnel, UsbDevice};
 use ictl_wda::{WdaClient, WdaError, WdaRunner, http::DeviceTransport};
 
-use crate::core::{Daemon, DeviceProfile, Inner, close_hid, drop_tunnel};
+use crate::core::{Daemon, DeviceProfile, Inner, Route, close_hid, drop_tunnel};
 use crate::detached::{self, StoppedWda};
 use crate::machine::DeviceState;
 use crate::notify::Event;
@@ -194,15 +194,16 @@ impl Daemon {
         let device = g.device.clone();
         // an old size is measured again only while nobody acts: on an iPad mini 5 that takes WDA 0.95 s
         let refresh = !gesture_start && !self.acting_now(ACTION_QUIET);
-        let Some(wda) = self.wda(g) else {
+        let wda = match self.route(g) {
+            Route::Wda(w) => w,
             // 原生控制：方向问 SpringBoard（lockdown 服务），尺寸是读界面时记下的（竖放）
-            if self.native(g) {
+            Route::Native => {
                 let rotation = self.native_rotation(g).await;
                 let size = g.persisted.screen_for(device.as_ref().map(|d| d.udid.as_str()));
                 let changed = self.record_display_sample(g, size, rotation, gesture_start).await;
                 return (rotation, changed);
             }
-            return (None, self.update_display(g, None).await);
+            Route::Hid | Route::Unavailable => return (None, self.update_display(g, None).await),
         };
         let (size, rotation) = Box::pin(
             wda.display_sample(previous, refresh, async { device?.interface_rotation().await.ok().flatten() }),

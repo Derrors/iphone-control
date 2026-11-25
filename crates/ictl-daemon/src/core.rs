@@ -631,6 +631,30 @@ pub(crate) fn wda_down(state: &DeviceState, info: Option<&DeviceInfo>) -> String
     )
 }
 
+/// How an action reaches the device in use, decided once per action ([`Daemon::route`]). An action that has a way for
+/// each matches all four (no `_`): a new action then has to say what it does natively and with WDA down too, which
+/// is where a forgotten branch used to hide.
+///
+/// Not for fallback chains: an action that tries WDA and goes on over HID when WDA turns out unreachable (taps,
+/// swipes, typing, buttons, screenshots) starts with `self.wda(g)` and falls through, since the route was WDA when it
+/// started. Nor for questions only WDA answers (its snapshot limits, `doctor`)
+pub(crate) enum Route<'a> {
+    /// WDA is up
+    Wda(&'a mut WdaClient<DeviceTransport>),
+    /// iOS 27 and later driven natively, without WDA
+    Native,
+    /// WDA is down on a device that has the HID fallback (iOS 27 and later set to use WDA): screenshots, touches and
+    /// buttons go over HID
+    Hid,
+    /// WDA is down and there is no HID fallback (below iOS 27)
+    Unavailable,
+}
+
+/// The error for an action that needs WDA while it is down ([`wda_down`])
+pub(crate) fn wda_unavailable(g: &Inner) -> crate::error::Error {
+    wda_down(&g.state, g.info.as_ref()).into()
+}
+
 /// HID 后备路线（免 WDA 截图、点击）只有 iOS 27 起能用；不知道版本时照常尝试
 pub(crate) fn hid_supported(info: Option<&DeviceInfo>) -> bool {
     info.is_none_or(|i| matches!(i.major_version(), 0 | 27..))
@@ -863,9 +887,16 @@ impl Daemon {
         if g.runner.as_ref().is_some_and(|r| r.alive()) { g.wda.as_mut() } else { None }
     }
 
-    pub(crate) fn require_wda<'a>(&self, g: &'a mut Inner) -> crate::error::Result<&'a mut WdaClient<DeviceTransport>> {
-        let msg = wda_down(&g.state, g.info.as_ref());
-        self.wda(g).ok_or(msg.into())
+    /// How an action reaches the device in use now ([`Route`])
+    pub(crate) fn route<'a>(&self, g: &'a mut Inner) -> Route<'a> {
+        let native = self.native(g);
+        let hid = hid_supported(g.info.as_ref());
+        match self.wda(g) {
+            Some(w) => Route::Wda(w),
+            None if native => Route::Native,
+            None if hid => Route::Hid,
+            None => Route::Unavailable,
+        }
     }
 
     pub(crate) fn account(&self) -> ictl_sign::AccountDir {
@@ -1751,6 +1782,43 @@ pub(crate) mod tests {
         let dir = std::env::temp_dir().join(format!("ictl-core-{tag}-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         (Daemon::new(Config::from_env(&dir)), dir)
+    }
+
+    /// Without WDA, the route follows the device and the backend setting: iOS 27 natively by default, the HID fallback
+    /// when set to use WDA, nothing below iOS 27; an unknown version is given the HID fallback, as before
+    #[tokio::test]
+    async fn the_route_without_wda_follows_the_ios_version_and_backend() {
+        let kind = |r: Route<'_>| match r {
+            Route::Wda(_) => "wda",
+            Route::Native => "native",
+            Route::Hid => "hid",
+            Route::Unavailable => "unavailable",
+        };
+        let info = |v: &str| ictl_device::DeviceInfo {
+            udid: "u".into(),
+            name: "n".into(),
+            product_type: "iPhone16,2".into(),
+            product_version: v.into(),
+        };
+        for (backend, version, want) in [
+            (crate::config::IosBackend::Auto, Some("27.2.1"), "native"),
+            (crate::config::IosBackend::Native, Some("27.0"), "native"),
+            (crate::config::IosBackend::Wda, Some("27.2.1"), "hid"),
+            (crate::config::IosBackend::Auto, Some("26.7.3"), "unavailable"),
+            (crate::config::IosBackend::Wda, None, "hid"),
+        ] {
+            let dir =
+                std::env::temp_dir().join(format!("ictl-core-route-{}-{version:?}-{backend:?}", std::process::id()));
+            std::fs::create_dir_all(&dir).unwrap();
+            let mut cfg = Config::from_env(&dir);
+            cfg.ios_backend = backend;
+            let d = Daemon::new(cfg);
+            let mut g = d.inner.lock().await;
+            g.info = version.map(info);
+            assert_eq!(kind(d.route(&mut g)), want, "{backend:?} {version:?}");
+            drop(g);
+            std::fs::remove_dir_all(dir).unwrap();
+        }
     }
 
     /// A background check (the page's status and alert polls) gives way: it doesn't wait for the device lock, nor

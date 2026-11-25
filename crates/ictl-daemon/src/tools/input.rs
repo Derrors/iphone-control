@@ -431,16 +431,12 @@ impl Daemon {
         view: Option<&str>,
     ) -> crate::error::Result<String> {
         self.prepare_coordinates(g, view, true).await.map_err(Error::preflight)?;
-        let native = self.native(g);
-        match self.wda(g) {
-            Some(w) => w.touch_and_hold(x, y, seconds).await.map_err(Error::wda_input)?,
-            None if native => Box::pin(self.native_long_press(g, x, y, seconds)).await?,
-            None => self
-                .require_wda(g)
-                .map_err(Error::preflight)?
-                .touch_and_hold(x, y, seconds)
-                .await
-                .map_err(Error::wda_input)?,
+        match self.route(g) {
+            Route::Wda(w) => w.touch_and_hold(x, y, seconds).await.map_err(Error::wda_input)?,
+            Route::Native => Box::pin(self.native_long_press(g, x, y, seconds)).await?,
+            Route::Hid | Route::Unavailable => {
+                return Err(Error::preflight(wda_down(&g.state, g.info.as_ref())));
+            }
         }
         Ok(ictl_l10n::trf!("已长按 ({},{}) {} 秒", "Long-pressed ({},{}) for {} s", fmt_g(x), fmt_g(y), fmt_g(seconds)))
     }

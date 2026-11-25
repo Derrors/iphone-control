@@ -13,11 +13,10 @@ impl Daemon {
             g.dev.seen.saw_tree(&tree);
             return Ok(tree);
         }
-        let native = self.native(g);
-        let tree = match self.wda(g) {
-            Some(w) => w.tree().await?,
-            None if native => Box::pin(self.ax_tree(g, super::native::AX_WAIT)).await?,
-            None => self.require_wda(g)?.tree().await?,
+        let tree = match self.route(g) {
+            Route::Wda(w) => w.tree().await?,
+            Route::Native => Box::pin(self.ax_tree(g, super::native::AX_WAIT)).await?,
+            Route::Hid | Route::Unavailable => return Err(wda_unavailable(g)),
         };
         g.elements_cache = Some((Instant::now(), tree.clone()));
         g.dev.seen.saw_tree(&tree);
@@ -34,11 +33,10 @@ impl Daemon {
     ) -> crate::error::Result<(String, crate::protocol::Data)> {
         if keep_locked {
             // only looking (a read-only viewer): the passcode isn't typed for it
-            let native = self.native(g);
-            let locked = match self.wda(g) {
-                Some(w) => w.locked().await?,
-                None if native => self.native_locked(g).await?,
-                None => false,
+            let locked = match self.route(g) {
+                Route::Wda(w) => w.locked().await?,
+                Route::Native => self.native_locked(g).await?,
+                Route::Hid | Route::Unavailable => false,
             };
             if locked {
                 return Err(ictl_l10n::tr!(
@@ -93,12 +91,13 @@ impl Daemon {
         let t0 = Instant::now();
         // 刚滑完读到的树：只作比较的起点，是不是真稳定还要看下一次读到的
         let seed = g.swiped_tree.take().filter(|(at, _)| at.elapsed() < SWIPED_TREE_FRESH).map(|(_, t)| t);
-        if self.wda(g).is_none() && self.native(g) {
-            return Box::pin(self.settle_native(g, t0, max)).await;
-        }
-        let Some(w) = self.wda(g) else {
-            tokio::time::sleep(max.min(Duration::from_millis(500))).await;
-            return Ok(ictl_l10n::tr!("WDA 不可用,等了 0.5 秒", "WDA unavailable, waited 0.5 s").into());
+        let w = match self.route(g) {
+            Route::Wda(w) => w,
+            Route::Native => return Box::pin(self.settle_native(g, t0, max)).await,
+            Route::Hid | Route::Unavailable => {
+                tokio::time::sleep(max.min(Duration::from_millis(500))).await;
+                return Ok(ictl_l10n::tr!("WDA 不可用,等了 0.5 秒", "WDA unavailable, waited 0.5 s").into());
+            }
         };
         w.begin_polling().await?;
         let r = poll_stable(w, t0, max, seed).await;
@@ -231,10 +230,11 @@ impl Daemon {
     /// 前台是 App 时只多一次约 0.13 秒的查询；在主屏上再多约 0.4 秒
     /// A system alert in front: the note for the agent, and the alert's own text
     pub(crate) async fn alert_check(&self, g: &mut Inner) -> crate::error::Result<(String, Option<String>)> {
-        if self.wda(g).is_none() && self.native(g) {
-            return Box::pin(self.native_alert(g)).await;
-        }
-        let Some(w) = self.wda(g) else { return Ok((String::new(), None)) };
+        let w = match self.route(g) {
+            Route::Wda(w) => w,
+            Route::Native => return Box::pin(self.native_alert(g)).await,
+            Route::Hid | Route::Unavailable => return Ok((String::new(), None)),
+        };
         if w.active_app().await? != SPRINGBOARD {
             return Ok((String::new(), None));
         }
@@ -254,10 +254,11 @@ impl Daemon {
     ) -> crate::error::Result<String> {
         self.ensure_unlocked(g).await?;
         let t0 = Instant::now();
-        if self.wda(g).is_none() && self.native(g) {
-            return Box::pin(self.native_wait_for(g, text, timeout, disappeared)).await;
-        }
-        let w = self.require_wda(g)?;
+        let w = match self.route(g) {
+            Route::Wda(w) => w,
+            Route::Native => return Box::pin(self.native_wait_for(g, text, timeout, disappeared)).await,
+            Route::Hid | Route::Unavailable => return Err(wda_unavailable(g)),
+        };
         // 轮询时不等界面空闲：页面还在加载、播放动画时每次读树也只要约 0.2 秒
         w.begin_polling().await?;
         let r = async {

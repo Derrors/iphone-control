@@ -77,8 +77,8 @@ impl Daemon {
     pub(super) async fn lock_screen(&self, g: &mut Inner) -> crate::error::Result<String> {
         let via_wda = ways(g).lock_via_wda;
         // Ok(way)：用 way 锁上了；Err：WDA 两种办法没锁上的原因（WDA 不可用时为空），退到 HID
-        let outcome = match self.wda(g) {
-            Some(w) => {
+        let outcome = match self.route(g) {
+            Route::Wda(w) => {
                 // 已经锁着就不按：熄屏时再按电源键会把屏幕点亮
                 if matches!(w.locked().await, Ok(true)) {
                     return self.locked_now(g);
@@ -100,13 +100,14 @@ impl Daemon {
                 }
                 worked.ok_or(failed)
             }
-            None => {
+            Route::Native => {
                 // 已经锁着就不按（同上）
-                if self.native(g) && self.native_locked(g).await.unwrap_or(false) {
+                if self.native_locked(g).await.unwrap_or(false) {
                     return self.locked_now(g);
                 }
                 Err(Vec::new())
             }
+            Route::Hid | Route::Unavailable => Err(Vec::new()),
         };
         let way = match outcome {
             Ok(way) => Some(way),

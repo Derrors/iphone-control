@@ -44,11 +44,10 @@ impl Daemon {
     pub(crate) async fn launch_app(&self, g: &mut Inner, app: &str) -> crate::error::Result<(String, bool)> {
         let bid = self.resolve_app(g, app).await?;
         self.ensure_unlocked(g).await?;
-        let native = self.native(g);
-        let r = match self.wda(g) {
-            Some(w) => w.launch_app(&bid).await?,
-            None if native => Box::pin(self.native_launch(g, &bid, None)).await?,
-            None => self.require_wda(g)?.launch_app(&bid).await?,
+        let r = match self.route(g) {
+            Route::Wda(w) => w.launch_app(&bid).await?,
+            Route::Native => Box::pin(self.native_launch(g, &bid, None)).await?,
+            Route::Hid | Route::Unavailable => return Err(wda_unavailable(g)),
         };
         let blocked = matches!(r, Launch::Blocked(_));
         let text = match r {
@@ -71,29 +70,33 @@ impl Daemon {
     pub(crate) async fn terminate_app(&self, g: &mut Inner, app: &str) -> crate::error::Result<String> {
         let bid = self.resolve_app(g, app).await?;
         self.ensure_unlocked(g).await?;
-        if self.wda(g).is_none() && self.native(g) {
-            if !Box::pin(self.native_terminate(g, &bid)).await? {
-                return Ok(ictl_l10n::trf!("{bid} 没在运行", "{bid} wasn't running"));
+        match self.route(g) {
+            Route::Wda(w) => w.terminate_app(&bid).await?,
+            Route::Native => {
+                if !Box::pin(self.native_terminate(g, &bid)).await? {
+                    return Ok(ictl_l10n::trf!("{bid} 没在运行", "{bid} wasn't running"));
+                }
             }
-            return Ok(ictl_l10n::trf!("已结束 {bid}", "Terminated {bid}"));
+            Route::Hid | Route::Unavailable => return Err(wda_unavailable(g)),
         }
-        self.require_wda(g)?.terminate_app(&bid).await?;
         Ok(ictl_l10n::trf!("已结束 {bid}", "Terminated {bid}"))
     }
 
     pub(crate) async fn open_url(&self, g: &mut Inner, url: &str) -> crate::error::Result<(String, bool)> {
         self.ensure_unlocked(g).await?;
-        let (r, app) = if self.wda(g).is_none() && self.native(g) {
-            // the app the link is for, launched with it
-            let bid = Box::pin(self.native_app_for_url(g, url)).await?;
-            let r = Box::pin(self.native_launch(g, &bid, Some(url))).await?;
-            let app = match r {
-                Launch::Slow => Box::pin(self.native_foreground(g)).await.unwrap_or_default(),
-                _ => bid,
-            };
-            (r, app)
-        } else {
-            self.require_wda(g)?.open_url(url).await?
+        let (r, app) = match self.route(g) {
+            Route::Wda(w) => w.open_url(url).await?,
+            Route::Native => {
+                // the app the link is for, launched with it
+                let bid = Box::pin(self.native_app_for_url(g, url)).await?;
+                let r = Box::pin(self.native_launch(g, &bid, Some(url))).await?;
+                let app = match r {
+                    Launch::Slow => Box::pin(self.native_foreground(g)).await.unwrap_or_default(),
+                    _ => bid,
+                };
+                (r, app)
+            }
+            Route::Hid | Route::Unavailable => return Err(wda_unavailable(g)),
         };
         let blocked = matches!(r, Launch::Blocked(_));
         let text = match r {

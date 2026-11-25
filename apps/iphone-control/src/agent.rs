@@ -75,7 +75,10 @@ pub struct Agents {
     /// This program, for the agent's MCP server
     exe: PathBuf,
     socket: PathBuf,
+    /// Where the agent works
     workdir: PathBuf,
+    /// The tasks' token files ([`TokenFile`]), beside the working directory rather than in it
+    tokens: PathBuf,
     /// The process groups of the agents running now ([`Self::stop_all`])
     running: std::sync::Mutex<std::collections::HashSet<u32>>,
 }
@@ -105,14 +108,19 @@ impl Drop for Running<'_> {
 struct TokenFile(PathBuf);
 
 impl TokenFile {
+    /// In `dir` (the private directory's `tokens`, not the agent's working directory), under a name no other run of
+    /// this process has (a counter: clocks with microseconds only gave two runs the same name)
     fn new(dir: &Path, token: &str) -> std::io::Result<Self> {
         use std::io::Write;
         use std::os::unix::fs::OpenOptionsExt;
-        let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos());
-        let path = dir.join(format!("task-{}-{nanos:x}.token", std::process::id()));
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let path = dir.join(format!("task-{}-{n}.token", std::process::id()));
         let mut f = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&path)?;
+        // removed again if the write fails
+        let file = Self(path);
         f.write_all(token.as_bytes())?;
-        Ok(Self(path))
+        Ok(file)
     }
 }
 
@@ -124,11 +132,15 @@ impl Drop for TokenFile {
 
 /// Variables of this program's settings that the agent has no use for and shouldn't see: notification keys, the
 /// viewer's login (the agent's MCP server reads the settings file itself, so nothing it needs is lost)
-const HIDDEN_FROM_AGENT: [&str; 4] = [
+const HIDDEN_FROM_AGENT: [&str; 6] = [
     ictl_daemon::protocol::env::TG_BOT_TOKEN,
     ictl_daemon::protocol::env::BARK_KEY,
     ictl_daemon::protocol::env::VIEWER_TOKEN,
     ictl_daemon::protocol::env::TASK_TOKEN,
+    // the agent works on this machine's phone: its MCP server mustn't be sent to another viewer (with the token file
+    // it would refuse to start)
+    ictl_daemon::protocol::env::URL,
+    ictl_daemon::protocol::env::CA,
 ];
 
 /// The agent's working directory under `base`: this user's own (0700, not a link). The agent reads what is there
@@ -165,14 +177,30 @@ fn private_dir(base: &Path) -> std::io::Result<PathBuf> {
     unreachable!("returns from the loop")
 }
 
+/// A directory of our own inside the private one (which nobody else can write to): made 0700 if it isn't there
+fn sub_dir(private: &Path, name: &str) -> std::io::Result<PathBuf> {
+    use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+    let dir = private.join(name);
+    match std::fs::DirBuilder::new().mode(0o700).create(&dir) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists && std::fs::symlink_metadata(&dir)?.is_dir() => {
+            std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))?;
+        }
+        Err(e) => return Err(e),
+    }
+    Ok(dir)
+}
+
 impl Agents {
     pub fn new(socket: &Path) -> anyhow::Result<Arc<Self>> {
         let base = std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from).filter(|p| p.is_absolute());
-        let workdir = private_dir(&base.unwrap_or_else(std::env::temp_dir))?;
+        let private = private_dir(&base.unwrap_or_else(std::env::temp_dir))?;
+        // the agent works in `work`; the tasks' tokens are kept beside it, not in what it works on
         Ok(Arc::new(Self {
             exe: std::env::current_exe()?,
             socket: socket.to_path_buf(),
-            workdir,
+            workdir: sub_dir(&private, "work")?,
+            tokens: sub_dir(&private, "tokens")?,
             running: Default::default(),
         }))
     }
@@ -279,7 +307,7 @@ impl Agents {
         prompt: &str,
         apps: &[String],
     ) -> anyhow::Result<()> {
-        let token_file = TokenFile::new(&self.workdir, token)?;
+        let token_file = TokenFile::new(&self.tokens, token)?;
         let mut cmd = tokio::process::Command::new(program);
         cmd.args(self.agent_args(backend, &token_file.0, prompt, apps));
         for k in HIDDEN_FROM_AGENT {
@@ -306,9 +334,10 @@ impl Agents {
         let stderr = child.stderr.take().ok_or_else(|| anyhow::anyhow!("no stderr"))?;
         let errs = tokio::spawn(async move {
             let mut tail: Vec<String> = Vec::new();
-            let mut lines = BufReader::new(stderr).lines();
-            while let Ok(Some(l)) = lines.next_line().await {
-                tail.push(l);
+            // by bytes like stdout: stopping at a line that isn't UTF-8 would leave the pipe full and the agent stuck
+            let mut lines = BufReader::new(stderr).split(b'\n');
+            while let Ok(Some(l)) = lines.next_segment().await {
+                tail.push(String::from_utf8_lossy(&l).trim_end_matches('\r').to_owned());
                 if tail.len() > 20 {
                     tail.remove(0);
                 }
@@ -601,7 +630,16 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "secret");
         drop(f);
         assert!(!path.exists(), "removed with the run");
+        // two at once never share a name
+        let (a, b) = (TokenFile::new(&dir, "a").unwrap(), TokenFile::new(&dir, "b").unwrap());
+        assert_ne!(a.0, b.0);
+        drop((a, b));
         std::fs::remove_dir_all(dir).unwrap();
+        // kept beside the agent's working directory, not in what it works on; both its own
+        assert!(!agents.tokens.starts_with(&agents.workdir) && !agents.workdir.starts_with(&agents.tokens));
+        for d in [&agents.tokens, &agents.workdir] {
+            assert_eq!(std::fs::metadata(d).unwrap().mode() & 0o777, 0o700, "{}", d.display());
+        }
     }
 
     #[test]

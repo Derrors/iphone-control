@@ -1298,7 +1298,10 @@ async fn login_gate(
             reply(client, 413, "text/plain", b"too large").await?;
             return Ok(None);
         }
-        read_body(client, body, len).await?;
+        // a 4 KB form: no longer than a head may take ([`BODY_TIMEOUT`] is for large bodies)
+        tokio::time::timeout(crate::HEAD_TIMEOUT, read_body(client, body, len))
+            .await
+            .map_err(|_| anyhow::anyhow!("login form took too long"))??;
         match auth::form_token(body).filter(|t| !t.trim().is_empty()).map(|t| a.try_token(&t)) {
             Some(Verdict::Ok(w)) => logged_in(client, a, &w.name, secure).await?,
             Some(v) => login_page(client, v).await?,
@@ -1403,7 +1406,8 @@ impl Head {
             return None;
         }
         let text = std::str::from_utf8(head).ok()?;
-        let mut lines = text.split("\r\n");
+        // the blank line that ends the head; any other empty line is a malformed one
+        let mut lines = text.trim_end_matches("\r\n").split("\r\n");
         let mut first = lines.next()?.split(' ');
         let method = first.next()?.to_owned();
         let target = first.next()?;
@@ -1417,6 +1421,8 @@ impl Head {
             || !method.bytes().all(|b| b.is_ascii_uppercase())
             || !target.starts_with('/')
             || target.starts_with("//")
+            // visible ASCII only: a tab or a byte past ASCII went into the redirect's `Location` as it was
+            || !target.bytes().all(|b| (0x21..=0x7e).contains(&b))
         {
             return None;
         }
@@ -1439,9 +1445,14 @@ impl Head {
         };
         let mut hosts = 0;
         for l in lines {
-            let Some((k, v)) = l.split_once(':') else { continue };
+            // a line without a colon (a folded continuation, garbage) or a name with blanks (`Content-Length : 1`,
+            // which some proxies read and others don't): 400, as RFC 9112 §5.1 asks
+            let (k, v) = l.split_once(':')?;
+            if k.is_empty() || !k.bytes().all(is_tchar) {
+                return None;
+            }
             let v = v.trim();
-            match k.trim().to_ascii_lowercase().as_str() {
+            match k.to_ascii_lowercase().as_str() {
                 "host" => hosts += 1,
                 "origin" => h.origin = Some(v.to_owned()),
                 "content-type" => h.content_type = Some(v.to_ascii_lowercase()),
@@ -1475,6 +1486,11 @@ impl Head {
             (k == key).then(|| percent_decode(v))
         })
     }
+}
+
+/// A character of a header name (RFC 9110 §5.6.2 `tchar`)
+fn is_tchar(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&b)
 }
 
 /// A request head with nothing but printable text, tabs and CRLF line ends: no other control character, no CR or LF
@@ -2096,9 +2112,62 @@ mod tests {
             "POST /a HTTP/1.1\r\nContent-Length: 2\r\nContent-Length: 2\r\n",
             "POST /a HTTP/1.1\r\nContent-Length: +2\r\n",
             "POST /mcp HTTP/1.1\r\nTransfer-Encoding: chunked\r\nContent-Length: 2\r\n",
+            // a tab or a byte past ASCII in the target (it goes into the redirect's `Location`)
+            "GET /\tfoo HTTP/1.1\r\nHost: a\r\n",
+            "GET /a\tHTTP/1.1 HTTP/1.1\r\nHost: a\r\n",
+            "GET /caf\u{e9} HTTP/1.1\r\nHost: a\r\n",
+            // blanks in a header's name, which proxies read differently
+            "POST /a HTTP/1.1\r\nContent-Length : 1\r\n",
+            "POST /mcp HTTP/1.1\r\nTransfer-Encoding : chunked\r\n",
+            "GET /a HTTP/1.1\r\n Host: a\r\n",
+            // a line without a colon: a folded continuation, or garbage
+            "GET /a HTTP/1.1\r\nHost: a\r\nX-A: 1\r\n folded\r\n",
+            "GET /a HTTP/1.1\r\nHost: a\r\nnocolon\r\n",
+            "GET /a HTTP/1.1\r\n\r\nHost: a\r\n",
+            "GET /a HTTP/1.1\r\n: empty name\r\n",
         ] {
             assert!(!ok(bad), "{bad:?}");
         }
+        assert!(ok("GET /a HTTP/1.1\r\nHost: a\r\nX-Ok: v\r\n\r\n"), "the blank line that ends the head");
+    }
+
+    /// A connection counts against its machine's limit until the login passes, not only until its head is in; a
+    /// chunked body outside `/mcp` is refused (411) rather than taken for an empty one
+    #[tokio::test]
+    async fn the_place_is_kept_until_the_login_passes() {
+        let temp = tempfile::tempdir_in("/tmp").unwrap();
+        let mut ctx = test_ctx(temp.path(), &temp.path().join("none.sock"));
+        let token = "t".repeat(64);
+        let entry = auth::Entry { name: "owner".into(), role: auth::Role::Operate, token: token.clone(), created: 0 };
+        ctx.auth = Some(auth::Auth::fixed(vec![entry], 8202));
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let arriving = Arriving::default();
+        let lan: std::net::IpAddr = "192.168.1.9".parse().unwrap();
+        let run = async |raw: String, early: &mut Option<Early>| {
+            let (tab, accepted) =
+                tokio::join!(tokio::net::TcpStream::connect(listener.local_addr().unwrap()), listener.accept());
+            let mut tab = tab.unwrap();
+            let mut slot = Some(Conn::Plain(accepted.unwrap().0));
+            let head = Head::parse(raw.as_bytes()).unwrap();
+            let mut next = Vec::new();
+            let _ = handle(&mut slot, &ctx, raw.clone().into_bytes(), head, vec![], early, &mut next).await;
+            drop(slot);
+            answer(&mut tab).await.0
+        };
+        let mut early = arriving.enter(lan);
+        let h = run("GET /api/daemon HTTP/1.1\r\nHost: 127.0.0.1:8202\r\n\r\n".into(), &mut early).await;
+        assert!(h.starts_with("HTTP/1.1 401"), "{h}");
+        assert!(early.is_some(), "not logged in: still counted");
+        let h = run(
+            "POST /api/tap HTTP/1.1\r\nHost: 127.0.0.1:8202\r\nTransfer-Encoding: chunked\r\n\r\n".into(),
+            &mut early,
+        )
+        .await;
+        assert!(h.starts_with("HTTP/1.1 411"), "{h}");
+        let logged = format!("GET / HTTP/1.1\r\nHost: 127.0.0.1:8202\r\nAuthorization: Bearer {token}\r\n\r\n");
+        let h = run(logged, &mut early).await;
+        assert!(h.starts_with("HTTP/1.1 200"), "{h}");
+        assert!(early.is_none(), "logged in: the place is let go");
     }
 
     /// Without a login nothing of a body is waited for: a request that may keep its connection open used to read

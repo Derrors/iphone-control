@@ -70,7 +70,7 @@ enum Command {
         ca: Option<PathBuf>,
         /// The task's token, from this file instead of IPHONE_CONTROL_TASK_TOKEN: the control page starts its agent's
         /// MCP server this way, so the token isn't on a command line every user can read
-        #[arg(long, value_name = "FILE", hide = true)]
+        #[arg(long, value_name = "FILE", hide = true, conflicts_with = "url")]
         task_token_file: Option<PathBuf>,
     },
     #[command(about = ictl_l10n::tr!("打印把 MCP 注册到 Claude Code 的命令", "Print the command that registers the MCP server with Claude Code"))]
@@ -307,6 +307,20 @@ fn restore_sigpipe() {
     }
 }
 
+/// The task's token from `mcp --task-token-file`. Given the file, there must be a token in it: without one the server
+/// would run outside the task (no scope, no pause, no confirmation), so it doesn't start at all
+fn read_task_token(f: &std::path::Path) -> anyhow::Result<String> {
+    let t = std::fs::read_to_string(f).map_err(|e| anyhow::anyhow!("{}: {e}", f.display()))?;
+    let t = t.trim();
+    anyhow::ensure!(
+        !t.is_empty(),
+        "{}: {}",
+        f.display(),
+        ictl_l10n::tr!("任务口令文件是空的", "the task token file is empty")
+    );
+    Ok(t.to_owned())
+}
+
 async fn run() -> anyhow::Result<()> {
     // 依赖树里 rustls 的 ring 和 aws-lc-rs 都开着，不装默认 provider 的话第一个 HTTPS 请求就 panic
     let _ = rustls::crypto::ring::default_provider().install_default();
@@ -353,13 +367,7 @@ async fn run() -> anyhow::Result<()> {
         }
         Command::Mcp { url: Some(url), ca, .. } => mcp_bridge::run(&url, ca.as_deref()).await,
         Command::Mcp { url: None, task_token_file, .. } => {
-            let token = match task_token_file {
-                Some(f) => {
-                    let t = std::fs::read_to_string(&f).map_err(|e| anyhow::anyhow!("{}: {e}", f.display()))?;
-                    Some(t.trim().to_owned()).filter(|t| !t.is_empty())
-                }
-                None => None,
-            };
+            let token = task_token_file.as_deref().map(read_task_token).transpose()?;
             ictl_mcp::serve_stdio(cli.socket, Some(ictl_daemon::maintenance::shared), token).await
         }
         Command::McpConfig => {
@@ -1449,6 +1457,20 @@ mod tests {
     /// `IPHONE_CONTROL_VIEWER_LAN=1` turns `--lan` on. A plain flag only took true/false, so the service didn't start
     /// `--url` anywhere in `task …`, or from IPHONE_CONTROL_URL (which `task run --url` gives its command), and for
     /// `mcp`
+    /// Given a token file, the server works for that task or doesn't start: an empty one isn't "no task"
+    #[test]
+    fn an_empty_task_token_file_is_refused() {
+        let dir = std::env::temp_dir().join(format!("ictl-token-file-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("t.token");
+        for (content, ok) in [("", false), (" \n\t", false), ("abc\n", true)] {
+            std::fs::write(&f, content).unwrap();
+            assert_eq!(super::read_task_token(&f).ok().as_deref(), ok.then_some("abc"), "{content:?}");
+        }
+        assert!(super::read_task_token(&dir.join("missing")).is_err());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
     #[test]
     fn the_remote_viewer_from_a_flag_or_the_environment() {
         use clap::Parser;
@@ -1467,7 +1489,15 @@ mod tests {
         assert_eq!(task(&["i", "task", "--url", "https://a:1", "pause", "abc"]).as_deref(), Some("https://a:1"));
         assert_eq!(task(&["i", "task", "approve", "abc", "--url", "https://a:1"]).as_deref(), Some("https://a:1"));
         assert_eq!(mcp(&["i", "mcp", "--url", "https://a:1"]).as_deref(), Some("https://a:1"));
+        // the token file is for the local server only: never silently dropped for a bridge
+        let both = ["i", "mcp", "--url", "https://a:1", "--task-token-file", "/x/t.token"];
+        assert!(super::Cli::try_parse_from(both).is_err());
+        assert!(super::Cli::try_parse_from(["i", "mcp", "--task-token-file", "/x/t.token"]).is_ok());
         unsafe { std::env::set_var(ictl_daemon::protocol::env::URL, "https://b:2") };
+        assert!(
+            super::Cli::try_parse_from(["i", "mcp", "--task-token-file", "/x/t.token"]).is_err(),
+            "nor for one from the environment"
+        );
         assert_eq!(task(&["i", "task", "finish", "done"]).as_deref(), Some("https://b:2"));
         assert_eq!(mcp(&["i", "mcp"]).as_deref(), Some("https://b:2"));
         unsafe { std::env::remove_var(ictl_daemon::protocol::env::URL) };

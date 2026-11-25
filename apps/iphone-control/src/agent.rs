@@ -191,16 +191,47 @@ fn sub_dir(private: &Path, name: &str) -> std::io::Result<PathBuf> {
     Ok(dir)
 }
 
+/// Token files left by an earlier viewer (killed before it could remove them): its agents were stopped with it, and
+/// one of them could share a name with a new file once a process number comes round again. The directory is this
+/// user's, shared by every viewer they run (another port, a test): a file is only removed when the process named in it
+/// (`task-<pid>-<n>.token`) is this one (nothing of its own is made yet) or gone
+fn clear_stale_tokens(dir: &Path) {
+    let own = std::process::id();
+    for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+        let name = e.file_name();
+        let Some(pid) = name
+            .to_str()
+            .and_then(|n| n.strip_prefix("task-")?.strip_suffix(".token")?.split_once('-'))
+            .and_then(|(pid, _)| pid.parse::<u32>().ok())
+        else {
+            continue;
+        };
+        if e.file_type().is_ok_and(|t| t.is_file()) && (pid == own || gone(pid)) {
+            let _ = std::fs::remove_file(e.path());
+        }
+    }
+}
+
+/// No process has this number (one of another user's still counts as there)
+fn gone(pid: u32) -> bool {
+    let Ok(pid) = libc::pid_t::try_from(pid) else { return false };
+    pid > 0
+        && unsafe { libc::kill(pid, 0) } == -1
+        && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
+}
+
 impl Agents {
     pub fn new(socket: &Path) -> anyhow::Result<Arc<Self>> {
         let base = std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from).filter(|p| p.is_absolute());
         let private = private_dir(&base.unwrap_or_else(std::env::temp_dir))?;
         // the agent works in `work`; the tasks' tokens are kept beside it, not in what it works on
+        let tokens = sub_dir(&private, "tokens")?;
+        clear_stale_tokens(&tokens);
         Ok(Arc::new(Self {
             exe: std::env::current_exe()?,
             socket: socket.to_path_buf(),
             workdir: sub_dir(&private, "work")?,
-            tokens: sub_dir(&private, "tokens")?,
+            tokens,
             running: Default::default(),
         }))
     }
@@ -640,6 +671,24 @@ mod tests {
         for d in [&agents.tokens, &agents.workdir] {
             assert_eq!(std::fs::metadata(d).unwrap().mode() & 0o777, 0o700, "{}", d.display());
         }
+    }
+
+    /// What an earlier viewer left (its process is gone, or its number is this process's now) is cleared when the next
+    /// one starts; what another viewer still running uses is not
+    #[test]
+    fn only_tokens_of_viewers_that_are_gone_are_cleared() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut dead = std::process::Command::new("true").spawn().unwrap();
+        let dead_pid = dead.id();
+        dead.wait().unwrap();
+        let name = |pid: u32| format!("task-{pid}-0.token");
+        let files = [name(std::process::id()), name(dead_pid), name(1), "notes.token".into(), "task-x-0.token".into()];
+        for f in &files {
+            std::fs::write(dir.path().join(f), "t").unwrap();
+        }
+        clear_stale_tokens(dir.path());
+        let left: Vec<bool> = files.iter().map(|f| dir.path().join(f).exists()).collect();
+        assert_eq!(left, [false, false, true, true, true], "this process's and a gone one's go; a live one's stays");
     }
 
     #[test]

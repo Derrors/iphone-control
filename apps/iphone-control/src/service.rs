@@ -336,15 +336,7 @@ pub fn install() -> anyhow::Result<Service> {
     }
     let exe = stable_exe()?;
     let exe = exe.to_string_lossy();
-    if exe.contains(['"', '\'', '\\', '&', '<', '>']) {
-        bail!(
-            "{}",
-            ictl_l10n::trf!(
-                "程序路径里有特殊字符，装不了服务：{exe}",
-                "The program path has special characters, can't set up a service: {exe}"
-            )
-        );
-    }
+    check_exe(&exe)?;
     if cfg!(target_os = "macos") {
         let logs = home().join("Library/Logs/iphone-control");
         std::fs::create_dir_all(&logs)?;
@@ -394,8 +386,9 @@ pub fn install() -> anyhow::Result<Service> {
         format!(
             "# Written by iphone-control. Settings: ~/.config/iphone-control/env\n[Unit]\n\
              Description=iphone-control daemon (iPhone over USB, MCP)\nAfter=network-online.target\n\n[Service]\n\
-             ExecStart={exe} daemon\nEnvironmentFile=-%h/.config/iphone-control/env\nEnvironment=MALLOC_ARENA_MAX=2\n\
-             Restart=on-failure\nRestartSec=10\nTimeoutStopSec=30\n\n[Install]\nWantedBy=default.target\n"
+             ExecStart={} daemon\nEnvironmentFile=-%h/.config/iphone-control/env\nEnvironment=MALLOC_ARENA_MAX=2\n\
+             Restart=on-failure\nRestartSec=10\nTimeoutStopSec=30\n\n[Install]\nWantedBy=default.target\n",
+            exec_path(&exe)
         ),
     )?;
     systemctl(&["daemon-reload"]);
@@ -489,9 +482,32 @@ fn viewer_unit_text(exe: &str, path: &str) -> anyhow::Result<String> {
     Ok(format!(
         "# Written by iphone-control. Settings: ~/.config/iphone-control/env (IPHONE_CONTROL_VIEWER_*)\n[Unit]\n\
          Description=iphone-control viewer (control page)\nAfter=iphone-control.service\n\n[Service]\n\
-         ExecStart={exe} viewer\nEnvironmentFile=-%h/.config/iphone-control/env\nEnvironment=\"PATH={path}\"\n\
-         Restart=on-failure\nRestartSec=10\n\n[Install]\nWantedBy=default.target\n"
+         ExecStart={} viewer\nEnvironmentFile=-%h/.config/iphone-control/env\nEnvironment=\"PATH={path}\"\n\
+         Restart=on-failure\nRestartSec=10\n\n[Install]\nWantedBy=default.target\n",
+        exec_path(exe)
     ))
+}
+
+/// A program path a service can run: none of the characters that systemd (`%` specifiers, `$` variables, quotes,
+/// backslashes), the shell line launchd runs (`$`, backquotes, quotes inside `"…"`) or the plist's XML would read
+/// as their own. Spaces are fine ([`exec_path`])
+fn check_exe(exe: &str) -> anyhow::Result<()> {
+    if exe.chars().any(|c| c.is_control() || "\"'\\&<>$`%".contains(c)) {
+        bail!(
+            "{}",
+            ictl_l10n::trf!(
+                "程序路径里有特殊字符，装不了服务：{exe}",
+                "The program path has special characters, can't set up a service: {exe}"
+            )
+        );
+    }
+    Ok(())
+}
+
+/// The path as `ExecStart=` takes it: quoted when it has spaces (a home directory with one), bare otherwise as it
+/// always was ([`managed`] knows both)
+fn exec_path(exe: &str) -> String {
+    if exe.contains(char::is_whitespace) { format!("\"{exe}\"") } else { exe.to_owned() }
 }
 
 fn xml(s: &str) -> String {
@@ -532,15 +548,7 @@ fn viewer_plist_text(exe: &str, path: &str, log: &Path) -> anyhow::Result<String
 pub fn viewer_install() -> anyhow::Result<Service> {
     let exe = stable_exe()?;
     let exe = exe.to_string_lossy();
-    if exe.contains(['"', '\'', '\\', '&', '<', '>']) {
-        bail!(
-            "{}",
-            ictl_l10n::trf!(
-                "程序路径里有特殊字符，装不了服务：{exe}",
-                "The program path has special characters, can't set up a service: {exe}"
-            )
-        );
-    }
+    check_exe(&exe)?;
     let path = std::env::var("PATH").unwrap_or_default();
     if let Some(s) = viewer_find() {
         // rewritten below with the current PATH and program; stop the old one first
@@ -606,14 +614,15 @@ pub fn pause_viewer() -> anyhow::Result<Option<Service>> {
         }
         std::thread::sleep(std::time::Duration::from_millis(200));
     }
-    let _ = start(&s);
+    let _ = start_managed(&s);
     bail!("{}", ictl_l10n::tr!("正忙：控制台服务没有停下", "busy: the viewer service didn't stop"))
 }
 
 /// Starts the control page's service again after [`pause_viewer`]; a failure is only reported
 pub fn resume_viewer(paused: Option<Service>) {
+    // started as it was, not enabled: a service the user keeps from starting at login stays that way
     if let Some(s) = paused
-        && let Err(e) = start(&s)
+        && let Err(e) = start_managed(&s)
     {
         eprintln!("{e:#}");
     }
@@ -650,6 +659,20 @@ mod tests {
         assert_eq!(launchd_pid(&print("not running", None), plist, true).unwrap(), None);
         assert!(launchd_pid(&print("spawn scheduled", None), plist, false).is_err(), "really transitioning");
         assert!(launchd_pid(&print("running", Some(1)), Path::new("/elsewhere.plist"), false).is_err());
+    }
+
+    /// A path with a space runs (quoted for systemd); one with characters systemd or the shell would read is refused
+    #[test]
+    fn service_program_paths() {
+        assert!(check_exe("/home/u/.local/bin/iphone-control").is_ok());
+        assert!(check_exe("/Users/Jo Smith/.local/bin/iphone-control").is_ok());
+        for bad in ["/opt/$HOME/x", "/opt/`id`/x", "/opt/50%/x", "/opt/a\"b/x", "/opt/a\nb/x", "/opt/a&b/x"] {
+            assert!(check_exe(bad).is_err(), "{bad:?}");
+        }
+        assert_eq!(exec_path("/usr/bin/x"), "/usr/bin/x");
+        assert_eq!(exec_path("/Users/Jo Smith/x"), "\"/Users/Jo Smith/x\"");
+        let unit = viewer_unit_text("/Users/Jo Smith/x", "/usr/bin").unwrap();
+        assert!(unit.contains("ExecStart=\"/Users/Jo Smith/x\" viewer\n"), "{unit}");
     }
 
     #[test]

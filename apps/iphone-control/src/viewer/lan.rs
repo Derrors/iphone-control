@@ -89,20 +89,30 @@ impl Access {
         host_header(head).is_some_and(|h| self.knows(&h))
     }
 
-    /// An action's `Origin` is this page: `http://` or `https://<a known name>:<port>`
-    pub fn origin_allowed(&self, origin: &str, port: u16) -> bool {
-        let Some(rest) = origin.strip_prefix("http://").or_else(|| origin.strip_prefix("https://")) else {
-            return false;
+    /// An action's `Origin` is this page: `http://` or `https://<a known name>:<port>`, as this server serves it.
+    /// `tls`: HTTPS is on, and plain HTTP is served to this machine only (the network is sent to HTTPS); off, this
+    /// server speaks plain HTTP only, and no page of it is `https://`
+    pub fn origin_allowed(&self, origin: &str, port: u16, tls: bool) -> bool {
+        let (rest, https) = match (origin.strip_prefix("http://"), origin.strip_prefix("https://")) {
+            (Some(r), _) => (r, false),
+            (_, Some(r)) => (r, true),
+            _ => return false,
         };
         let rest = rest.to_ascii_lowercase();
         // a browser leaves the scheme's default port out
-        let default = if origin.starts_with("https://") { 443 } else { 80 };
+        let default = if https { 443 } else { 80 };
         // `[::1]` has colons but no port: what follows the last one isn't a number there
         let (name, p) = match rest.rsplit_once(':').and_then(|(n, p)| Some((n, p.parse::<u16>().ok()?))) {
             Some(np) => np,
             None => (rest.as_str(), default),
         };
-        p == port && self.knows(name)
+        let scheme_served = match (tls, https) {
+            (true, true) | (false, false) => true,
+            // plain HTTP with HTTPS on: from this machine only
+            (true, false) => LOOPBACK.contains(&name),
+            (false, true) => false,
+        };
+        p == port && scheme_served && self.knows(name)
     }
 }
 
@@ -213,8 +223,8 @@ mod tests {
         }
         assert!(!a.host_allowed(&head("192.168.10.100:8202")), "the network's name for it doesn't count");
         assert!(!a.host_allowed(b"GET / HTTP/1.1\r\n\r\n"), "no Host");
-        assert!(a.origin_allowed("http://127.0.0.1:8202", 8202));
-        assert!(!a.origin_allowed("http://192.168.10.100:8202", 8202));
+        assert!(a.origin_allowed("http://127.0.0.1:8202", 8202, false));
+        assert!(!a.origin_allowed("http://192.168.10.100:8202", 8202, false));
     }
 
     #[test]
@@ -229,17 +239,26 @@ mod tests {
         for h in ["evil.example:8202", "192.168.10.101:8202", "nas.evil.example"] {
             assert!(!a.host_allowed(&head(h)), "{h}");
         }
-        assert!(a.origin_allowed("http://192.168.10.100:8202", 8202));
-        assert!(a.origin_allowed("http://NAS.local:8202", 8202));
-        assert!(a.origin_allowed("https://192.168.10.100:8202", 8202), "the page over HTTPS");
-        assert!(!a.origin_allowed("https://evil.example:8202", 8202));
-        assert!(!a.origin_allowed("ftp://192.168.10.100:8202", 8202));
-        assert!(!a.origin_allowed("http://192.168.10.100:3000", 8202), "another port");
-        assert!(!a.origin_allowed("http://evil.example:8202", 8202));
-        assert!(!a.origin_allowed("null", 8202));
+        assert!(a.origin_allowed("http://192.168.10.100:8202", 8202, false));
+        assert!(a.origin_allowed("http://NAS.local:8202", 8202, false));
+        assert!(a.origin_allowed("https://192.168.10.100:8202", 8202, true), "the page over HTTPS");
+        assert!(!a.origin_allowed("https://evil.example:8202", 8202, true));
+        assert!(!a.origin_allowed("ftp://192.168.10.100:8202", 8202, false));
+        assert!(!a.origin_allowed("http://192.168.10.100:3000", 8202, false), "another port");
+        assert!(!a.origin_allowed("http://evil.example:8202", 8202, false));
+        assert!(!a.origin_allowed("null", 8202, false));
         // the scheme's default port, which a browser leaves out
-        assert!(a.origin_allowed("https://nas.local", 443) && a.origin_allowed("http://nas.local", 80));
-        assert!(!a.origin_allowed("https://nas.local", 8202) && !a.origin_allowed("http://nas.local", 443));
+        assert!(a.origin_allowed("https://nas.local", 443, true) && a.origin_allowed("http://nas.local", 80, false));
+        assert!(
+            !a.origin_allowed("https://nas.local", 8202, true) && !a.origin_allowed("http://nas.local", 443, false)
+        );
+        // the scheme this server serves: with HTTPS on, plain HTTP only for this machine; off, no HTTPS page at all
+        assert!(!a.origin_allowed("http://nas.local:8202", 8202, true), "the network gets HTTPS");
+        assert!(
+            a.origin_allowed("http://127.0.0.1:8202", 8202, true)
+                && a.origin_allowed("http://localhost:8202", 8202, true)
+        );
+        assert!(!a.origin_allowed("https://192.168.10.100:8202", 8202, false), "no HTTPS here");
         // what its certificate covers
         assert_eq!(a.names(), ["localhost", "127.0.0.1", "::1", "192.168.10.100", "nas.local", "nas"]);
         assert_eq!(Access::with_hosts(["[fd00::5]".into()]).names()[3], "fd00::5");

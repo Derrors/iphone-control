@@ -19,21 +19,27 @@ pub enum Shell {
 /// 根选项的值可以恰好是 `completions`，所以不能只搜索这个单词。
 pub fn requested(args: impl IntoIterator<Item = OsString>) -> bool {
     let mut args = args.into_iter();
+    match command(&mut args) {
+        Some(arg) if arg == "help" => args.next().is_some_and(|arg| arg == "completions"),
+        Some(arg) => arg == "completions",
+        None => false,
+    }
+}
+
+/// The first argument after the root options (`--data-dir`, `--socket` and their values), which names the command;
+/// `args` is left at the command's own arguments. None when there is none
+pub fn command(args: &mut impl Iterator<Item = OsString>) -> Option<OsString> {
     while let Some(arg) = args.next() {
         if arg == "--data-dir" || arg == "--socket" {
-            if args.next().is_none() {
-                return false;
-            }
+            args.next()?;
         } else if arg.as_encoded_bytes().starts_with(b"--data-dir=") || arg.as_encoded_bytes().starts_with(b"--socket=")
         {
             continue;
-        } else if arg == "help" {
-            return args.next().is_some_and(|arg| arg == "completions");
         } else {
-            return arg == "completions";
+            return Some(arg);
         }
     }
-    false
+    None
 }
 
 pub fn write(shell: Shell, output: &mut dyn Write) -> anyhow::Result<()> {

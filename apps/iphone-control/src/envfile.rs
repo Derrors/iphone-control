@@ -82,13 +82,21 @@ impl EnvFile {
         if let Some(dir) = self.path.parent() {
             std::fs::create_dir_all(dir)?;
         }
-        let tmp = self.path.with_extension("tmp");
-        let mut f = std::fs::OpenOptions::new().create(true).write(true).truncate(true).mode(0o600).open(&tmp)?;
-        f.set_permissions(std::fs::Permissions::from_mode(0o600))?;
-        f.write_all(self.text.as_bytes())?;
-        f.sync_all()?;
-        std::fs::rename(&tmp, &self.path)?;
-        Ok(())
+        // a name of its own: two commands saving at once must not write into the same temporary file
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let tmp = self.path.with_extension(format!("{}.{n}.tmp", std::process::id()));
+        let written = (|| {
+            let mut f = std::fs::OpenOptions::new().create_new(true).write(true).mode(0o600).open(&tmp)?;
+            f.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+            f.write_all(self.text.as_bytes())?;
+            f.sync_all()?;
+            std::fs::rename(&tmp, &self.path)
+        })();
+        if written.is_err() {
+            let _ = std::fs::remove_file(&tmp);
+        }
+        Ok(written?)
     }
 }
 
@@ -138,11 +146,12 @@ fn quote(v: &str) -> anyhow::Result<String> {
 }
 
 /// Puts the file's settings into this process's environment, without overriding what is already set (a variable on
-/// the command line wins). Called once at start-up, before any thread is started
-pub fn load_into_process() {
+/// the command line wins), except the keys in `skip`. A key set twice takes its last value, as the shell and systemd
+/// read the file. Called once at start-up, before any thread is started
+pub fn load_into_process(skip: &[&str]) {
     let Ok(text) = std::fs::read_to_string(path()) else { return };
-    for (k, v) in parse(&text) {
-        if v.is_empty() || std::env::var_os(&k).is_some() {
+    for (k, v) in last_values(parse(&text)) {
+        if v.is_empty() || skip.contains(&k.as_str()) || std::env::var_os(&k).is_some() {
             continue;
         }
         // SAFETY: single-threaded: main() calls this before building the async runtime
@@ -150,9 +159,26 @@ pub fn load_into_process() {
     }
 }
 
+/// Each key once, with its last value (an empty last one too: it unsets the key, as in the shell)
+fn last_values(pairs: Vec<(String, String)>) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = Vec::new();
+    for (k, v) in pairs {
+        out.retain(|(o, _)| *o != k);
+        out.push((k, v));
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A key set twice takes its last value, as the shell and systemd read the file; a last empty one unsets it
+    #[test]
+    fn the_last_value_of_a_key_wins() {
+        let v = last_values(parse("A=1\nB=x\nA=2\nexport B=\nC='3'\n"));
+        assert_eq!(v, vec![("A".into(), "2".into()), ("B".into(), String::new()), ("C".into(), "3".into())]);
+    }
 
     #[test]
     fn set_replaces_in_place_and_keeps_comments() {

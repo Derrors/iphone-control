@@ -390,7 +390,7 @@ async fn write_mjpeg(
     const NEXT: &[u8] = b"\r\n--ictl\r\nContent-Type: image/jpeg\r\n\r\n";
     let head =
         b"HTTP/1.1 200 OK\r\nContent-Type: multipart/x-mixed-replace; boundary=ictl\r\nCache-Control: no-store\r\n\
-                 X-Content-Type-Options: nosniff\r\nConnection: close\r\n\r\n";
+                 X-Content-Type-Options: nosniff\r\nReferrer-Policy: no-referrer\r\nConnection: close\r\n\r\n";
     // the first part's boundary and headers, without the line break that ends a part
     let header = [head.as_slice(), &NEXT[2..]].concat();
     if !write_with_progress(&mut client, &header, idle).await {

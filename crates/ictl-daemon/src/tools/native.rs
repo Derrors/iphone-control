@@ -547,13 +547,17 @@ impl Daemon {
     }
 
     /// Home, natively: not pressed under a system alert (it would do nothing), and confirmed by the home screen
-    /// coming to the front; when the key does nothing, a swipe up from the bottom edge does it
-    pub(crate) async fn native_home(&self, g: &mut Inner, watched: bool) -> crate::error::Result<String> {
+    /// coming to the front; when the key does nothing, a swipe up from the bottom edge does it. The bool: the text
+    /// reports a system alert ([`crate::protocol::Outcome::alert_reported`])
+    pub(crate) async fn native_home(&self, g: &mut Inner, watched: bool) -> crate::error::Result<(String, bool)> {
         if !watched && let (_, Some(text)) = self.native_alert(g).await? {
-            return Ok(ictl_l10n::trf!(
-                "{},按 Home 不会生效,没有按;{TAP_ALERT}",
-                "{}, pressing Home would have no effect, not pressed; {TAP_ALERT_EN}",
-                blocking(&text)
+            return Ok((
+                ictl_l10n::trf!(
+                    "{},按 Home 不会生效,没有按;{TAP_ALERT}",
+                    "{}, pressing Home would have no effect, not pressed; {TAP_ALERT_EN}",
+                    blocking(&text)
+                ),
+                true,
             ));
         }
         // the HID session opened first, the wait below counted from the press: opening it (the screen stream, about
@@ -568,7 +572,7 @@ impl Daemon {
             if let Some(left) = HOME_ANIMATION.checked_sub(pressed.elapsed()) {
                 tokio::time::sleep(left).await;
             }
-            return Ok(ictl_l10n::tr!("已按 home", "Pressed home").into());
+            return Ok((ictl_l10n::tr!("已按 home", "Pressed home").into(), false));
         }
         let s = self.screen(g).await?;
         let rot = self.hid_touch_rotation(g).await?;
@@ -581,24 +585,28 @@ impl Daemon {
         })
         .await?;
         if self.native_reached_home(g).await {
-            return Ok(ictl_l10n::tr!(
+            let text = ictl_l10n::tr!(
                 "已按 home(Home 键没反应,改为从屏幕底部上滑)",
                 "Pressed home (the key did nothing, swiped up from the bottom edge instead)"
-            )
-            .into());
+            );
+            return Ok((text.into(), false));
         }
         if let (_, Some(text)) = self.native_alert(g).await? {
-            return Ok(ictl_l10n::trf!(
-                "{},按 Home 没有生效,先点弹窗上的按钮",
-                "{}, pressing Home had no effect; first tap a button on the alert",
-                blocking(&text)
+            return Ok((
+                ictl_l10n::trf!(
+                    "{},按 Home 没有生效,先点弹窗上的按钮",
+                    "{}, pressing Home had no effect; first tap a button on the alert",
+                    blocking(&text)
+                ),
+                true,
             ));
         }
         let app = self.native_foreground(g).await.unwrap_or_default();
-        Ok(ictl_l10n::trf!(
+        let text = ictl_l10n::trf!(
             "已按 home,但前台还是 {app},先截图看看",
             "Pressed home, but the foreground is still {app}; take a screenshot"
-        ))
+        );
+        Ok((text, false))
     }
 
     /// Whether the home screen comes to the front within [`HOME_SETTLE`]

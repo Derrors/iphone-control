@@ -234,9 +234,6 @@ impl Daemon {
                 "No finger is down; send down first"
             )));
         };
-        if !contact {
-            g.dev.touch_rotation = None;
-        }
         // Reuse the open session without another WDA screen-size lookup on every move.
         let h = match g.tunnel.as_mut().and_then(|t| t.open_hid()) {
             Some(h) => h,
@@ -256,6 +253,8 @@ impl Daemon {
         let result = Box::pin(h.touch(contact, x, y)).await;
         g.hid_used = Some(Instant::now());
         match result {
+            // the finger is up once that was sent, not before: an up refused below leaves it down, to be lifted
+            Ok(()) if !contact => g.dev.touch_rotation = None,
             Ok(()) => {}
             // refused before anything was sent (a point that isn't a number, an unknown screen size): the tunnel and
             // its sessions are fine; a finger that is down stays where it was
@@ -454,12 +453,22 @@ impl Daemon {
         view: Option<&str>,
     ) -> crate::error::Result<String> {
         self.prepare_coordinates(g, view, true).await.map_err(Error::preflight)?;
-        match self.route(g) {
-            Route::Wda(w) => w.touch_and_hold(x, y, seconds).await.map_err(Error::wda_input)?,
-            Route::Native => Box::pin(self.native_long_press(g, x, y, seconds)).await?,
+        // as for a tap: without WDA (or when it can't be reached) by HID where the phone has it, unless the point was
+        // measured on the page's view through WDA
+        let by_hid = match self.route(g) {
+            Route::Wda(w) => match w.touch_and_hold(x, y, seconds).await {
+                Ok(()) => false,
+                Err(WdaError::Unavailable(_)) if view.is_none() && hid_supported(g.info.as_ref()) => true,
+                Err(e) => return Err(Error::wda_input(e)),
+            },
+            Route::Native => true,
+            Route::Hid if view.is_none() => true,
             Route::Hid | Route::Unavailable => {
                 return Err(Error::preflight(wda_down(&g.state, g.info.as_ref())));
             }
+        };
+        if by_hid {
+            Box::pin(self.native_long_press(g, x, y, seconds)).await?;
         }
         Ok(ictl_l10n::trf!("已长按 ({},{}) {} 秒", "Long-pressed ({},{}) for {} s", fmt_g(x), fmt_g(y), fmt_g(seconds)))
     }

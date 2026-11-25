@@ -95,7 +95,7 @@ impl<T: Transport> Screen for WdaClient<T> {
 pub enum UnlockError {
     #[error("{}", ictl_l10n::tr!("手机已锁屏，且没有配置锁屏密码，需要人工解锁", "The phone is locked and no passcode is configured; unlock it by hand"))]
     NoPasscode,
-    #[error("{}", ictl_l10n::tr!("自动解锁只支持纯数字锁屏密码", "Auto-unlock only supports numeric passcodes"))]
+    #[error("{}", ictl_l10n::tr!("自动解锁只支持至少 4 位的纯数字锁屏密码", "Auto-unlock only supports numeric passcodes of at least 4 digits"))]
     NotDigits,
     #[error("{}", ictl_l10n::tr!("手机已锁屏；自动解锁之前失败过已停用，请人工解锁、核对密码后运行 iphone-control unlock-reset", "The phone is locked; auto-unlock was disabled after an earlier failure. Unlock it by hand, check the passcode, then run iphone-control unlock-reset"))]
     Disabled,
@@ -215,7 +215,9 @@ fn passcode(cfg: &UnlockConfig) -> Result<String> {
         return Err(UnlockError::Disabled);
     }
     let code = std::fs::read_to_string(&cfg.passcode_file).map_err(|_| UnlockError::NoPasscode)?.trim().to_owned();
-    if code.is_empty() || !code.bytes().all(|b| b.is_ascii_digit()) {
+    // as `passcode set` takes it: an iPhone's passcode has at least 4 digits, and entering one relies on that (the
+    // first digit never completes it); a file edited by hand to fewer isn't used
+    if code.len() < 4 || !code.bytes().all(|b| b.is_ascii_digit()) {
         return Err(UnlockError::NotDigits);
     }
     Ok(code)
@@ -815,7 +817,10 @@ mod tests {
         assert!(matches!(ensure_unlocked(&mut WdaClient::new(&fake), &cfg_none).await, Err(UnlockError::NoPasscode)));
         let (cfg_alpha, d2) = cfg(Some("abc123"));
         assert!(matches!(ensure_unlocked(&mut WdaClient::new(&fake), &cfg_alpha).await, Err(UnlockError::NotDigits)));
+        let (cfg_short, d3) = cfg(Some("123"));
+        assert!(matches!(ensure_unlocked(&mut WdaClient::new(&fake), &cfg_short).await, Err(UnlockError::NotDigits)));
         std::fs::remove_dir_all(d1).unwrap();
         std::fs::remove_dir_all(d2).unwrap();
+        std::fs::remove_dir_all(d3).unwrap();
     }
 }

@@ -105,6 +105,11 @@ pub enum Request {
     /// can't), then sends [`ScreenMsg`] messages on the same connection until either side closes it. The client may
     /// write [`SCREEN_KEYFRAME`] to ask for a keyframe. Use [`open_screen_stream`]
     ScreenStream,
+    /// WDA's MJPEG stream (the phone's port 9100) for the control page on iOS 17–26, so the viewer doesn't reach for the
+    /// phone itself (D2). Streaming: the daemon answers one line ([`Response::Text`] when it streams,
+    /// [`Response::Error`] when it can't), then passes on WDA's HTTP answer, headers and multipart frames as they come,
+    /// until either side closes. Use [`open_mjpeg_stream`]
+    MjpegStream,
     /// 区域单位为点；None 表示整屏
     Screenshot {
         region: Option<(f64, f64, f64, f64)>,
@@ -644,6 +649,7 @@ impl Request {
             | Self::WebEval { .. } => true,
             Self::Status
             | Self::ScreenStream
+            | Self::MjpegStream
             | Self::Screenshot { .. }
             | Self::ListElements { .. }
             | Self::ListApps { .. }
@@ -747,6 +753,35 @@ fn restarting(socket: &std::path::Path) -> bool {
     std::fs::metadata(stopping_marker(socket))
         .and_then(|m| m.modified())
         .is_ok_and(|t| t.elapsed().is_ok_and(|e| e < RESTART_RECENT))
+}
+
+/// Opens a [`Request::MjpegStream`] for `expect_udid` (the device the page shows): `Ok(Ok(stream))` reads WDA's MJPEG
+/// answer from its first byte (buffered past the daemon's line); closing it ends the stream. `Ok(Err(why))` when the
+/// daemon can't, `Err` when it can't be reached
+pub async fn open_mjpeg_stream(
+    socket: &std::path::Path,
+    expect_udid: Option<&str>,
+) -> std::io::Result<Result<tokio::io::BufReader<tokio::net::UnixStream>, String>> {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    let mut stream = BufReader::new(connect(socket).await?);
+    let mut v = serde_json::to_value(Request::MjpegStream)?;
+    if let Some(o) = v.as_object_mut() {
+        o.insert(LANG.into(), ictl_l10n::lang().code().into());
+        if let Some(u) = expect_udid {
+            o.insert(EXPECT_UDID.into(), u.into());
+        }
+    }
+    let mut line = v.to_string();
+    line.push('\n');
+    stream.get_mut().write_all(line.as_bytes()).await?;
+    let mut first = String::new();
+    tokio::time::timeout(std::time::Duration::from_secs(30), stream.read_line(&mut first))
+        .await
+        .map_err(|_| std::io::Error::new(std::io::ErrorKind::TimedOut, "MJPEG stream: no answer"))??;
+    Ok(match serde_json::from_str::<Response>(&first).map_err(std::io::Error::other)? {
+        Response::Error { message, .. } => Err(message),
+        _ => Ok(stream),
+    })
 }
 
 /// Opens a [`Request::ScreenStream`]: `Ok(Ok(..))` with the reading half (buffered: it may already hold the first

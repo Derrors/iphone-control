@@ -17,6 +17,7 @@ pub mod eventlog;
 pub mod imaging;
 pub mod machine;
 pub mod maintenance;
+mod mjpeg;
 pub mod notify;
 pub mod procs;
 mod screen;
@@ -64,7 +65,7 @@ pub async fn run(cfg: Config) -> anyhow::Result<()> {
     }
     // up again: clients that waited for the restart connect now ([`protocol::connect`])
     let _ = std::fs::remove_file(protocol::stopping_marker(&socket));
-    // 处理设备的 future 不必是 Send（plume_core / 泛型 async 的 Send 推断有限制），全部跑在一个 LocalSet 里
+    // 处理设备的 future 不必是 Send（rustc 对泛型 async 的 Send 推断有局限，见 docs/architecture.md），全部跑在一个 LocalSet 里
     let local = tokio::task::LocalSet::new();
     let r = local.run_until(serve(cfg, listener)).await;
     let _ = std::fs::remove_file(&socket);
@@ -170,6 +171,12 @@ async fn serve_conn(daemon: Arc<Daemon>, stream: tokio::net::UnixStream) {
                 (Ok((protocol::Request::ScreenStream, _, ctx, lang)), Ok(lease)) => {
                     drop(lease);
                     ictl_l10n::scope(lang, daemon.screen_stream(reader, w, ctx.expect_udid, ctx.low_bandwidth)).await;
+                    return;
+                }
+                // the same for WDA's MJPEG picture (iOS 17-26)
+                (Ok((protocol::Request::MjpegStream, _, ctx, _lang)), Ok(lease)) => {
+                    drop(lease);
+                    mjpeg::stream(&daemon, reader, w, ctx.expect_udid).await;
                     return;
                 }
                 // also streams; an opened task's connection is its lease, so it isn't held against updates either

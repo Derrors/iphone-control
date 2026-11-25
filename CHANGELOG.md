@@ -24,6 +24,10 @@ What changed in each release, one line per change. Versions follow [Semantic Ver
 - An idle `iphone-control mcp` (kept running by Claude Desktop, Cursor, Claude Code…) no longer keeps updates from installing: it holds the maintenance lock only during a tool call, and its next call reaches the new daemon.
 - The phone's own video on the control page pauses while the phone unlocks itself or the bitrate changes, instead of dropping and reconnecting.
 
+### Improvements
+
+- On iOS 17–26 the control page's picture comes through the daemon instead of the viewer opening WebDriverAgent's picture port on the phone itself; apart from `wda-bridge`, only the daemon talks to the phone now.
+
 ## [0.2.14] - 2026-11-24
 
 ### New

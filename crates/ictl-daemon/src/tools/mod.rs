@@ -21,7 +21,7 @@ use ictl_wda::elements::{self, TapPoint, Tree};
 use ictl_wda::http::DeviceTransport;
 use ictl_wda::{Launch, WdaClient, WdaError};
 
-use crate::core::{Daemon, Inner, drop_tunnel, hid_supported, wda_down};
+use crate::core::{Daemon, Inner, Route, drop_tunnel, hid_supported, wda_down, wda_unavailable};
 use crate::error::Error;
 use crate::imaging::{self, fmt_g};
 use crate::notify::Event;
@@ -66,11 +66,11 @@ impl Daemon {
         if let Some(left) = g.dev.last_lock.and_then(|t| LOCK_SETTLE.checked_sub(t.elapsed())) {
             tokio::time::sleep(left).await;
         }
-        let native = self.native(g);
-        let r = match self.wda(g) {
-            Some(wda) => ictl_unlock::ensure_unlocked(wda, &cfg).await,
-            None if native => Box::pin(self.native_unlock(g, &cfg)).await,
-            None => return Ok(()),
+        let r = match self.route(g) {
+            Route::Wda(wda) => ictl_unlock::ensure_unlocked(wda, &cfg).await,
+            Route::Native => Box::pin(self.native_unlock(g, &cfg)).await,
+            // nothing reads the lock screen without WDA: the action says what it can't do
+            Route::Hid | Route::Unavailable => return Ok(()),
         };
         match r {
             Ok(ictl_unlock::Outcome::Unlocked) => {
@@ -149,24 +149,20 @@ impl Daemon {
     /// A screenshot as PNG for comparing pictures: through WDA, or natively through the tunnel; otherwise WDA's
     /// "unavailable"
     async fn raw_png(&self, g: &mut Inner) -> crate::error::Result<Vec<u8>> {
-        if let Some(w) = self.wda(g) {
-            return Ok(w.screenshot_png().await?);
+        match self.route(g) {
+            Route::Wda(w) => Ok(w.screenshot_png().await?),
+            Route::Native => self.hid_screenshot(g).await,
+            Route::Hid | Route::Unavailable => Err(wda_unavailable(g)),
         }
-        if self.native(g) {
-            return self.hid_screenshot(g).await;
-        }
-        Ok(self.require_wda(g)?.screenshot_png().await?)
     }
 
     /// A tap at a point: through WDA, or natively through HID
     async fn tap_at(&self, g: &mut Inner, x: f64, y: f64) -> crate::error::Result<()> {
-        if let Some(w) = self.wda(g) {
-            return w.tap(x, y).await.map_err(Error::wda_input);
+        match self.route(g) {
+            Route::Wda(w) => w.tap(x, y).await.map_err(Error::wda_input),
+            Route::Native => Box::pin(self.native_tap(g, x, y)).await,
+            Route::Hid | Route::Unavailable => Err(Error::preflight(wda_down(&g.state, g.info.as_ref()))),
         }
-        if self.native(g) {
-            return Box::pin(self.native_tap(g, x, y)).await;
-        }
-        self.require_wda(g).map_err(Error::preflight)?.tap(x, y).await.map_err(Error::wda_input)
     }
 
     /// 经隧道截图（WDA 不可用时）。失败就丢掉隧道，下次重建
@@ -295,8 +291,9 @@ impl Daemon {
             daemon_line = format!("{l}\n{daemon_line}");
         }
         let unlock = self.unlock_cfg(g.device.as_ref().map(|d| d.udid.as_str()));
-        let Some(w) = self.wda(g) else {
-            if self.native(g) {
+        let w = match self.route(g) {
+            Route::Wda(w) => w,
+            Route::Native => {
                 if g.state == crate::machine::DeviceState::Ready {
                     let (text, data) = Box::pin(self.native_status(g, &unlock)).await;
                     return (format!("{text}\n{daemon_line}"), data);
@@ -304,8 +301,10 @@ impl Daemon {
                 let text = format!("{}\n{daemon_line}", wda_down(&g.state, g.info.as_ref()));
                 return (text, StatusData { native: true, ..Default::default() });
             }
-            let text = format!("{}\n{}\n{daemon_line}", wda_down(&g.state, g.info.as_ref()), needs_wda());
-            return (text, StatusData::default());
+            Route::Hid | Route::Unavailable => {
+                let text = format!("{}\n{}\n{daemon_line}", wda_down(&g.state, g.info.as_ref()), needs_wda());
+                return (text, StatusData::default());
+            }
         };
         let r: Result<(String, StatusData), WdaError> = async {
             let ready = w.ready().await?;

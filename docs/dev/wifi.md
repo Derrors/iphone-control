@@ -30,7 +30,7 @@
 - **iOS 27 原生控制全走隧道**：读界面（remoteAXService）、点击按键（HID）、启动结束 App（AppService）、截图（screencaptureservice）、控制台画面（HEVC 媒体流）都在 CoreDeviceProxy 隧道里，隧道外只用 lockdown 的几个服务：设备信息、锁屏状态、开发者模式、方向（springboardservices）、App 列表和安装（installation_proxy）、描述文件（misagent）、崩溃报告、日志、Web Inspector。
 - **WDA 在后台启动、不带环境变量**（D18，`Tunnel::launch_in_background`）。WDA 不设 `USE_IP` 时监听手机的所有网卡：手机连着 Wi-Fi 时，8100（HTTP，没有认证）和 9100（MJPEG）**现在就能从局域网访问**，和用不用 Wi-Fi 控制无关。这违背 D3 的本意，见 4.2。
 - **TLS 不校验手机**：idevice 的 lockdown TLS（`sni.rs`）对服务器证书和握手签名一律放行。USB 上无所谓；在 Wi-Fi 上，能冒充手机 IP 的人就能冒充手机，看到主机发出的内容（输入的文字、自动解锁的密码、上传的包）。见 4.1。
-- **控制台**：iOS 27 的画面经守护进程（`Request::ScreenStream`），不直连手机；低版本的 MJPEG 画面由 viewer 自己 `Device::find` 连手机 9100（只认 USB）。
+- **控制台**：iOS 27 的画面经守护进程（`Request::ScreenStream`），不直连手机；低版本的 MJPEG 画面原来由 viewer 自己 `Device::find` 连手机 9100（只认 USB），2026-11 起改为向守护进程要（`Request::MjpegStream`，见 5.4），守护进程现在经 USB 连 9100。
 - **写操作不重放**已经有：WDA 请求开始写入后的失败归为 `WRITE_FAILED`/`AFTER_SENT`，不退到 HID 重做（`crates/ictl-wda/src/http.rs`、`client.rs`）。
 
 ## 3. 怎么连上手机
@@ -135,7 +135,7 @@ pub fn watch() -> impl Stream<Item = MuxEvent>;           // usbmuxd Listen：�
 
 - iOS 27 的画面本来就经守护进程（`ScreenStream`），Wi-Fi 上不用改。换线时守护进程结束旧的流，页面按现有逻辑重连，新流先发关键帧。
 - 换线期间（`handoff`）页面显示「正在换到 Wi-Fi / USB」，不发触摸：HID 的 `down` 在旧连接上、`move`/`up` 到了新连接上不成立。守护进程这边也拒绝：触摸序列记下开始时的连接编号，编号变了的 `move`/`up` 一律丢掉，页面重新按下。
-- 第二版：低版本 MJPEG 画面（`/stream`、本机编码的 `/video`）改为向守护进程要（新请求 `MjpegStream`，守护进程经 USB 或隧道连 9100），viewer 不再自己连手机。
+- 低版本 MJPEG 画面（`/stream`、本机编码的 `/video`）已改为向守护进程要（`MjpegStream`，`crates/ictl-daemon/src/mjpeg.rs`），viewer 不再自己连手机。第二版只剩守护进程这一侧：经隧道连 9100（现在经 USB）。
 
 ### 5.5 iOS 17～26（第二版）
 

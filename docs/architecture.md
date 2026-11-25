@@ -61,7 +61,7 @@
 
 见 `crates/ictl-daemon/src/core.rs` 开头的模块文档。
 
-- 全部跑在一个 `LocalSet` 里（单线程协作）；设备相关状态（隧道、HID 会话、runner、WDA 客户端）在一把锁后面。
+- 全部跑在一个 `LocalSet` 里（单线程协作）；设备相关状态（隧道、HID 会话、runner、WDA 客户端）在一把锁后面。签名（`plume_core`）早已放进 `spawn_blocking`，2026-11 评估过换成多线程：巡检（`tick`）的 future 已经是 `Send`；处理连接的只差一处真正的限制（`handle` 的 `may_continue` 回调没写 `+ Send`），其余报的是 rustc 对 async 里高阶生命周期的 `Send` 推断局限（「implementation of `Send` is not general enough」：跨 `await` 持有切片迭代器、借用进泛型 future 的引用），一路延伸到 `ictl-ax`、`ictl-device`，报错也不指出位置，要逐处改写。眼下也没有看到单线程拖慢画面转发（真机回归里原生视频只在锁屏、解锁时停顿），所以没有换。
 - 每个连接一个任务，请求在任务里等锁；主循环本身从不阻塞。
 - 10 秒巡检用 `try_lock`：有请求在用设备就跳过这一轮，不排队。
 - 耗时的事不持锁：
@@ -140,7 +140,7 @@
 | `ictl-unlock` | 锁屏密码键盘定位、逐位输入并核对密码栏、从第 2 位起先写停用标记 | `ictl-wda` |
 | `ictl-daemon` | `core`（共享状态、请求分发、快照）、`supervise`（巡检、后台启动 WDA、重签、会话检查）、`tools`（工具的实现、HID 后备）、`devtools`（日志采集、崩溃报告、安装、卸载）、`web`（Web Inspector 工具，保留一条连接复用）、`devices`（列出、选择设备）、`doctor`；通知（Bark/Telegram）、截图缩放/裁剪、控制接口服务端 | 以上全部、`tokio`、`reqwest`、`image` |
 | `ictl-mcp` | MCP stdio 服务，`iphone_*` 工具 18 个，开启开发者工具后 24 个：toolkit 的 13 个 + `iphone_wait_for`、`iphone_batch`、`iphone_list_devices`、`iphone_select_device`、`iphone_scroll_collect`，以及 6 个可选的开发者工具（D13）；操作类工具可带 `then` 顺带返回操作后的界面；任务里另有 `iphone_confirm`；经控制接口调用守护进程。同一套工具也给控制台的 `/mcp` 用（`http_service`，Streamable HTTP） | `ictl-protocol`、`ictl-l10n`、`rmcp`（`server`、`transport-io`、`transport-streamable-http-server`）、`http` |
-| `apps/iphone-control` | CLI 入口（`main.rs`；和守护进程打交道的公共函数在 `client.rs`，控制台、引导和更新器都用它）：不带命令时是首次运行引导或状态（`guide.rs`）、`daemon`、`mcp`、`mcp-config`、`status`、`doctor`、`setup [--reconfigure]`、`service`（`service.rs`：launchd / systemd 用户服务）、`login`、`sign`、`resign`、`passcode`、`unlock-reset`、`devices`、`select`、`wda-bridge`、`viewer`（`viewer.rs`：本机控制台网页，实时画面、设备面板；`video/`：画面的 H.264 编码（外部 ffmpeg）和 MJPEG 去重；`agent.rs`：页面上的 AI 任务，`viewer.html` 是页面）、`viewer token …`（命名令牌、只读令牌）、`task …`（`task.rs`、`remote.rs`）、`mcp --url`（`mcp_bridge.rs`）、`update …`（`update.rs`、`update/`：签名清单、事务式替换）、`completions`、`notify-test`；隐藏的 `debug <ddi\|hid\|screenshot\|soak\|wda\|e2e>` 真机诊断（原第 0 步 spike，不经守护进程；feature `debug-cmds`，默认不编译） | `clap` |
+| `apps/iphone-control` | CLI 入口（`main.rs`；和守护进程打交道的公共函数在 `client.rs`，控制台、引导和更新器都用它）：不带命令时是首次运行引导或状态（`guide.rs`）、`daemon`、`mcp`、`mcp-config`、`status`、`doctor`、`setup [--reconfigure]`、`service`（`service.rs`：launchd / systemd 用户服务）、`login`、`sign`、`resign`、`passcode`、`unlock-reset`、`devices`、`select`、`wda-bridge`、`viewer`（`viewer.rs`：本机控制台网页，实时画面、设备面板；`video/`：画面的 H.264 编码（外部 ffmpeg）和 MJPEG 去重；`agent.rs`：页面上的 AI 任务；页面的源文件在 `web/`：`index.html` 按 `@include` 依次引入 `viewer.css` 和 `js/*.js`，由 `build.rs` 拼成一个页面嵌进程序，几个脚本共用一个作用域，顺序就是运行顺序）、`viewer token …`（命名令牌、只读令牌）、`task …`（`task.rs`、`remote.rs`）、`mcp --url`（`mcp_bridge.rs`）、`update …`（`update.rs`、`update/`：签名清单、事务式替换）、`completions`、`notify-test`；隐藏的 `debug <ddi\|hid\|screenshot\|soak\|wda\|e2e>` 真机诊断（原第 0 步 spike，不经守护进程；feature `debug-cmds`，默认不编译） | `clap` |
 
 依赖方向：`apps` → `ictl-daemon` / `ictl-mcp`，还直接依赖 `ictl-device`、`ictl-sign`；`ictl-daemon` → `ictl-unlock` → `ictl-wda` → `ictl-device`；`ictl-daemon` 还直接依赖 `ictl-ax`、`ictl-webinspector`、`ictl-sign` 和 `ictl-protocol`。`ictl-device` 也依赖 `ictl-ax`（无障碍会话归隧道）和 `ictl-webinspector`（打开连接）。`ictl-mcp` 只依赖 `ictl-protocol` 和 `ictl-l10n`，不依赖守护进程和设备层。`ictl-l10n` 不依赖其他 crate，除 `ictl-webinspector` 外都用它。`apps` 的 `debug`（feature `debug-cmds`）直接调用 `ictl-device`、`ictl-wda`。
 

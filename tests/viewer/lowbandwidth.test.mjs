@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { runInNewContext } from 'node:vm';
+import { viewerPage } from './page.mjs';
 
-const html = readFileSync(new URL('../../apps/iphone-control/src/viewer.html', import.meta.url), 'utf8');
+const html = viewerPage();
 
 test('low-bandwidth mode is kept in the browser and asks the viewer for it with the picture', () => {
   const fn = html.match(/^const LOW_BANDWIDTH_KEY = .*\n^function lowBandwidthOn\(\)[^\n]*$/m)[0];

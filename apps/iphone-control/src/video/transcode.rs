@@ -172,6 +172,30 @@ async fn next_packet(t: &mut Option<Transcoder>) -> Option<Result<Packet, String
     }
 }
 
+/// The encoder failed [`TRIES`] times in a row without a frame: the next one, as the MJPEG pictures do
+/// ([`Encoders::give_up`]), and the command for it. False when there is none, or when ffmpeg only stood in for the
+/// encoder in use (the built-in one), whose failure here isn't that encoder's: the page gets the error and may retry
+async fn next_encoder(
+    enc: &Encoders,
+    cmd: &mut super::ffmpeg::HevcCommand,
+    points: Option<(f64, f64)>,
+    qp: u8,
+    failures: &mut usize,
+) -> bool {
+    let Some(index) = cmd.encoder else { return false };
+    if !enc.give_up(index).await {
+        return false;
+    }
+    match enc.hevc_command(points, qp) {
+        Ok(c) => {
+            *cmd = c;
+            *failures = 0;
+            true
+        }
+        Err(_) => false,
+    }
+}
+
 /// Sends the phone's video from the daemon's screen stream (`src`, `daemon_w` to ask for keyframes) to `client` as
 /// H.264, until either ends. `points`: the screen in points (its padding is cut off by it). The HTTP head is already
 /// sent
@@ -184,7 +208,7 @@ pub async fn serve(
     mut daemon_w: tokio::net::unix::OwnedWriteHalf,
     client: impl tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
 ) {
-    let (ffmpeg, args, label) = match enc.hevc_command(points, qp) {
+    let mut cmd = match enc.hevc_command(points, qp) {
         Ok(c) => c,
         Err(e) => {
             tracing::debug!("no H.264 of the phone's video: {e}");
@@ -219,7 +243,7 @@ pub async fn serve(
     let mut session: Option<Transcoder> = None;
     // frames out of the current ffmpeg; one that fails before any is not the stream's fault
     let mut produced = false;
-    let mut failures = 0;
+    let mut failures: usize = 0;
     // stopped: the page is behind or its queue was full; a keyframe and a new ffmpeg once it caught up
     let mut stopped = false;
     // when a keyframe was last asked for; asked again every [`ASK_EVERY`] until ffmpeg runs
@@ -248,7 +272,7 @@ pub async fn serve(
                     if !key {
                         continue;
                     }
-                    match Transcoder::spawn(&ffmpeg, &args) {
+                    match Transcoder::spawn(&cmd.ffmpeg, &cmd.args) {
                         Ok(t) => {
                             session = Some(t);
                             produced = false;
@@ -260,18 +284,33 @@ pub async fn serve(
                     }
                 }
                 let Some(t) = &session else { continue };
-                if t.input.try_send(body).is_err() {
+                match t.input.try_send(body) {
+                    Ok(()) => {}
                     // ffmpeg can't keep up: start over from a keyframe
-                    session = None;
-                    if !ask(&mut daemon_w, &mut asked).await {
-                        return;
+                    Err(mpsc::error::TrySendError::Full(_)) => {
+                        session = None;
+                        if !ask(&mut daemon_w, &mut asked).await {
+                            return;
+                        }
+                    }
+                    // its input is gone: ffmpeg ended, a failure like any other (it was started again for ever)
+                    Err(mpsc::error::TrySendError::Closed(_)) => {
+                        let why = session.take().as_ref().map(Transcoder::error).unwrap_or_default();
+                        tracing::debug!("HEVC to H.264 ended: {why}");
+                        failures += 1;
+                        if !produced && failures >= TRIES && !next_encoder(&enc, &mut cmd, points, qp, &mut failures).await {
+                            return;
+                        }
+                        if !ask(&mut daemon_w, &mut asked).await {
+                            return;
+                        }
                     }
                 }
             }
             p = next_packet(&mut session) => match p {
                 Some(Ok(Packet::Config(avcc))) => {
                     let size = points.map_or((0, 0), |(w, h)| (w.min(h) as u32, w.max(h) as u32));
-                    let Some(m) = config_message(&avcc, size, label, &ack_guard.id) else { continue };
+                    let Some(m) = config_message(&avcc, size, cmd.label, &ack_guard.id) else { continue };
                     flow.sent(m.len(), Instant::now());
                     if out_tx.send(m).await.is_err() {
                         return;
@@ -300,7 +339,7 @@ pub async fn serve(
                     tracing::debug!("HEVC to H.264 ended: {why}");
                     session = None;
                     failures += 1;
-                    if !produced && failures >= TRIES {
+                    if !produced && failures >= TRIES && !next_encoder(&enc, &mut cmd, points, qp, &mut failures).await {
                         return;
                     }
                     if !ask(&mut daemon_w, &mut asked).await {

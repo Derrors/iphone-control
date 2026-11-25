@@ -94,6 +94,9 @@ struct TaskState {
     thought: Option<String>,
     /// The latest step: id, when it started, still running, has a thought
     last: Option<(u64, Instant, bool, bool)>,
+    /// Steps started and not yet finished, oldest first: a tool call and the question it asks are both under way,
+    /// and so are calls an agent makes at once. The task's end stops them all
+    in_flight: Vec<u64>,
     /// Steps whose tool taps by text: where it tapped comes with the result
     taps_by_text: Vec<u64>,
     /// The screen may have changed under the agent (the user acted, or handed back): look before acting
@@ -378,6 +381,10 @@ impl Task {
     }
 
     fn emit(&self, st: &mut TaskState, name: &str, data: Value) {
+        // `done` is the last event: readers stop at it (the page, `task events`), and a log replayed later ends there
+        if !st.status.active() && name != "done" {
+            return;
+        }
         let e = TaskEvent { event: name.into(), data };
         if let Some(f) = &self.file {
             append(f, &e);
@@ -407,6 +414,11 @@ impl Task {
         let mut st = self.lock();
         if !st.status.active() {
             return false;
+        }
+        // the steps under way end with the task, said before `done` (nothing is written after it)
+        st.last = None;
+        for id in std::mem::take(&mut st.in_flight) {
+            self.emit(&mut st, "step", json!({"id": id, "status": "stopped"}));
         }
         st.status = Status::Ended(end);
         st.ended = Some(now_ms());
@@ -480,6 +492,7 @@ impl Task {
         st.next_step += 1;
         let thought = st.thought.take();
         st.last = Some((id, Instant::now(), true, thought.is_some()));
+        st.in_flight.push(id);
         let mut d = json!({"id": id, "tool": tool, "args": args, "status": status});
         if let Some(t) = thought {
             d["thought"] = t.into();
@@ -515,6 +528,7 @@ impl Task {
         {
             st.last = Some((last, at, false, th));
         }
+        st.in_flight.retain(|&s| s != id);
         // the user said no to going outside the scope: that's a choice, not something that went wrong
         let declined = st.declined.iter().position(|&s| s == id).map(|i| st.declined.swap_remove(i)).is_some();
         let status = match (ok, declined) {
@@ -566,6 +580,7 @@ impl Task {
         };
         let mut st = self.lock();
         st.last = None;
+        st.in_flight.retain(|&s| s != id);
         let ended = !st.status.active();
         let (asked, status, result) = match (answer, ended) {
             (_, true) => (Asked::Ended, "stopped", ictl_l10n::tr!("任务已停止。", "The task was stopped.")),
@@ -706,12 +721,17 @@ impl Task {
         match (action, st.status) {
             ("pause", Status::Running) => self.set_status(&mut st, Status::Paused),
             ("resume", Status::Paused) => self.set_status(&mut st, Status::Running),
-            ("takeover", Status::Running | Status::Paused) => self.set_status(&mut st, Status::Takeover),
+            // also while a step waits for the user: they may want to look or change something before answering; the
+            // question stays, to be answered under takeover or after handing back
+            ("takeover", Status::Running | Status::Paused | Status::Waiting) => {
+                self.set_status(&mut st, Status::Takeover)
+            }
             ("handback", Status::Takeover) => {
                 st.recheck = true;
-                self.set_status(&mut st, Status::Running);
+                let back = if st.confirm.is_some() { Status::Waiting } else { Status::Running };
+                self.set_status(&mut st, back);
             }
-            ("confirm", Status::Waiting) => match st.confirm.take() {
+            ("confirm", Status::Waiting | Status::Takeover) => match st.confirm.take() {
                 Some((waiting, tx)) if step.is_none_or(|s| s == waiting) => {
                     what["step"] = json!(waiting);
                     what["approve"] = json!(approve);
@@ -848,6 +868,7 @@ impl Tasks {
                 next_step: 1,
                 thought: None,
                 last: None,
+                in_flight: Vec::new(),
                 taps_by_text: Vec::new(),
                 recheck: false,
                 confirm: None,
@@ -1150,6 +1171,7 @@ fn restore(file: &Path) -> Option<Task> {
             next_step: steps.unwrap_or(0) + 1,
             thought: None,
             last: None,
+            in_flight: Vec::new(),
             taps_by_text: Vec::new(),
             recheck: false,
             confirm: None,
@@ -1521,6 +1543,87 @@ mod tests {
         t.control("confirm", None, true, None).unwrap();
         assert!(matches!(asked.await.unwrap(), Response::Text { .. }));
         assert_eq!(t.info().state, "running");
+    }
+
+    /// `done` is the last event: a step under way is stopped before it, and nothing that comes after is written
+    #[tokio::test]
+    async fn nothing_follows_done() {
+        let ts = Arc::new(tasks());
+        let t = open(&ts);
+        let asked = ask(&ts, &t);
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        t.end(End::Cancelled, "stopped");
+        let _ = asked.await.unwrap();
+        t.observed();
+        let (log, _, ended) = t.subscribe();
+        assert!(ended);
+        let names: Vec<&str> = log.iter().map(|e| e.event.as_str()).collect();
+        assert_eq!(names.last(), Some(&"done"), "{names:?}");
+        let stopped = &log[log.len() - 2];
+        assert_eq!((stopped.event.as_str(), stopped.data["status"].as_str()), ("step", Some("stopped")));
+    }
+
+    /// A tool call asking to leave the task's scope is two steps under way (the call, and the question); one the
+    /// agent made alongside is a third. Stopping the task ends them all before `done`, and the call's result coming in
+    /// after it is not written
+    #[tokio::test]
+    async fn every_step_under_way_is_stopped_before_done() {
+        let ts = Arc::new(tasks());
+        let t = ts.open("改设置", "test", Some(PHONE), scope(&["com.apple.Preferences"]), None).unwrap();
+        let req = |tool: &str| Request::TaskStep { tool: tool.into(), args: json!({}) };
+        let r = ts.handle(&req("iphone_screenshot"), Some(&t.token), None, &mut None).await;
+        assert_eq!(r, Some(Response::text("1")));
+        let r = ts.handle(&req("iphone_launch_app"), Some(&t.token), None, &mut None).await;
+        assert_eq!(r, Some(Response::text("2")));
+        let asking = {
+            let t = t.clone();
+            tokio::spawn(async move {
+                t.check_scope(&Target::Launch("com.apple.MobileSMS".into()), Some(2), &mut None).await
+            })
+        };
+        while t.info().state != "waiting" {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        t.end(End::Cancelled, "stopped");
+        assert!(asking.await.unwrap().is_err());
+        t.step_done(2, false, 5, "refused", None);
+        t.step_done(1, true, 5, "late", None);
+        let (log, _, _) = t.subscribe();
+        assert_eq!(log.last().map(|e| e.event.as_str()), Some("done"));
+        let last_status = |id: u64| {
+            log.iter().rev().find(|e| e.event == "step" && e.data["id"] == id).map(|e| e.data["status"].clone())
+        };
+        for id in 1..=3 {
+            assert_eq!(last_status(id), Some(json!("stopped")), "step {id}: {log:?}");
+        }
+    }
+
+    /// While a step waits for the user, they can take over (to look or change something first): the question stays,
+    /// answered under takeover (the task stays with the user) or after handing back (it waits again)
+    #[tokio::test]
+    async fn the_user_can_take_over_while_a_step_waits_for_them() {
+        let ts = Arc::new(tasks());
+        let t = open(&ts);
+        let asked = ask(&ts, &t);
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        assert_eq!(t.info().state, "waiting");
+        t.control("takeover", None, false, None).unwrap();
+        assert_eq!(t.info().state, "takeover");
+        assert!(matches!(admit(&ts, &tap(), None).await, Ok((Admission::Supervisor(_), _))));
+        t.control("confirm", None, true, None).unwrap();
+        assert!(matches!(asked.await.unwrap(), Response::Text { .. }));
+        assert_eq!(t.info().state, "takeover", "answered, but still the user's until handed back");
+        t.control("handback", None, false, None).unwrap();
+        assert_eq!(t.info().state, "running");
+
+        // handed back before answering: the question is still there
+        let asked = ask(&ts, &t);
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        t.control("takeover", None, false, None).unwrap();
+        t.control("handback", None, false, None).unwrap();
+        assert_eq!(t.info().state, "waiting");
+        t.control("confirm", None, false, None).unwrap();
+        assert!(matches!(asked.await.unwrap(), Response::Error { .. }), "rejected");
     }
 
     /// Two questions at once are asked one after the other, each answered on its own

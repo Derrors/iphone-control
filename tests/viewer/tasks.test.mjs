@@ -109,3 +109,117 @@ test('a task list from the info poll is used as it is', async () => {
   assert.deepEqual(followed.map(([, id]) => id), ['xyz']);
   assert.equal(wantsTasks(), false, 'following one now: the poll stops asking');
 });
+
+// While a step waits for the user they can take over first; the question stays and can be answered then or after
+test('a step waiting for the user can be answered after taking over', () => {
+  const step = { id: 3, status: 'waiting', confirm: { action: '发送消息' } };
+  const t = { id: 't1', source: 'live', status: 'waiting', steps: [{ id: 1, status: 'ok' }, step] };
+  const S = { tasks: [t] }, sent = [], shown = [];
+  const context = {
+    S, ACTIVE, tr: String, renderAll: noop, show: m => shown.push(m),
+    activeTask: () => S.tasks.find(x => ACTIVE.includes(x.status)),
+    liveControl: (task, action, body) => sent.push([action, body]),
+  };
+  const { control, answerConfirm } = handlers(['pendingConfirm', 'control', 'answerConfirm'], context);
+  control('takeover');
+  assert.equal(t.status, 'takeover');
+  control('handback');
+  assert.equal(t.status, 'waiting', 'handed back with the question unanswered: waiting again');
+  control('takeover');
+  answerConfirm(true);
+  assert.equal(JSON.stringify(sent.at(-1)), JSON.stringify(['confirm', { step: 3, approve: true }]));
+  assert.equal(step.status, 'running');
+  assert.equal(t.status, 'takeover', 'answered, but still the user\'s until handed back');
+  assert.equal(shown.at(-1), '已批准，交还 AI 后继续执行', 'says it goes on only once handed back');
+  control('handback');
+  assert.equal(t.status, 'running');
+});
+
+// The event stream replays the whole task on each connection: a step's mark is drawn once, not again on reconnecting
+function streams() {
+  const made = [];
+  class FakeES {
+    static CLOSED = 2;
+    constructor(url) { this.url = url; this.on = {}; this.readyState = 0; made.push(this); }
+    addEventListener(name, f) { this.on[name] = f; }
+    close() { this.readyState = 2; }
+    emit(name, data) { this.on[name]({ data: JSON.stringify(data) }); }
+  }
+  return { made, FakeES };
+}
+
+test('a step mark is drawn once however often the stream replays it', () => {
+  const { made, FakeES } = streams();
+  const marks = [];
+  const task = { id: 't1', status: 'running', steps: [] };
+  const context = { ACTIVE, EventSource: FakeES, tr: String, show: noop, renderAll: noop, renderTurns: noop, scrollConvo: noop, refreshStatusSoon: noop,
+    drawMark: (...a) => marks.push(a), finish: noop, streamClosed: noop };
+  const { follow } = handlers(['upsertStep', 'follow'], context);
+  const tap = { id: 1, tool: 'iphone_tap', status: 'running', gesture: { kind: 'tap', x: 1, y: 2 } };
+  follow(task, 'abc');
+  made[0].emit('step', tap);
+  follow(task, 'abc');                       // reconnected: the same step replayed
+  made[1].emit('step', tap);
+  made[1].emit('step', { ...tap, id: 2 });
+  assert.equal(marks.length, 2, 'step 1 once, step 2 once');
+});
+
+// The steps saved before a reload keep their gestures, so the replayed stream doesn't draw them again
+test('a mark drawn before a reload is not drawn again after it', () => {
+  const { made, FakeES } = streams();
+  const marks = [];
+  const S = { tasks: [{ id: 't1', status: 'running', remoteId: 'abc', steps: [] }] };
+  const context = { S, MAX_TASKS: 50, ACTIVE, EventSource: FakeES, tr: String, show: noop, renderAll: noop, renderTurns: noop, scrollConvo: noop,
+    refreshStatusSoon: noop, drawMark: (...a) => marks.push(a), finish: noop, streamClosed: noop };
+  const { follow, serializeTasks } = handlers(['upsertStep', 'follow', 'serializeTasks'], context);
+  const tap = { id: 1, tool: 'iphone_tap', status: 'ok', gesture: { kind: 'tap', x: 1, y: 2 } };
+  follow(S.tasks[0], 'abc');
+  made[0].emit('step', tap);
+  assert.equal(marks.length, 1);
+  const [saved] = JSON.parse(serializeTasks(false));   // the page reloads
+  follow(saved, 'abc');
+  made[1].emit('step', tap);
+  assert.equal(marks.length, 1, 'known before the reload');
+  made[1].emit('step', { ...tap, id: 2 });
+  assert.equal(marks.length, 2, 'a new one is drawn');
+});
+
+// A task that ends leaves no step spinning: an older daemon sends done with a step still open
+test('steps still open when a task ends are stopped', () => {
+  const task = { id: 't1', status: 'running', steps: [{ id: 1, status: 'ok' }, { id: 2, status: 'running' }, { id: 3, status: 'waiting' }] };
+  const context = { S: { expanded: new Set() }, tr: String, show: noop, renderAll: noop, scrollConvo: noop };
+  const { finish } = handlers(['finish'], context);
+  finish(task, 'stopped', '');
+  assert.deepEqual(task.steps.map(s => s.status), ['ok', 'stopped', 'stopped']);
+});
+
+test('an unknown task state is shown as it is and does not replace a known one', () => {
+  const { made, FakeES } = streams();
+  const task = { id: 't1', status: 'running', steps: [] };
+  const context = { ACTIVE, EventSource: FakeES, tr: String, show: noop, renderAll: noop, renderTurns: noop, scrollConvo: noop, refreshStatusSoon: noop, drawMark: noop, finish: noop, streamClosed: noop };
+  const { follow } = handlers(['upsertStep', 'follow'], context);
+  follow(task, 'abc');
+  made[0].emit('state', { state: 'something-new' });
+  assert.equal(task.status, 'running');
+  made[0].emit('state', { state: 'paused' });
+  assert.equal(task.status, 'paused');
+  const state = html.match(/^function taskStatus\([^]*?^}/m) || html.match(/^function taskStatus.*$/m);
+  const ts = runInNewContext(html.match(/^const TASK_STATUS = \{[^]*?^\};/m)[0] + '\n' + state[0] + '\ntaskStatus', { tr: String });
+  assert.equal(ts('something-new').label, 'something-new');
+  assert.equal(ts('paused').label, '已暂停');
+});
+
+test('a stream the browser gave up on is followed again if the task is still there, else marked stopped', async () => {
+  const { made, FakeES } = streams();
+  for (const [server, want] of [[[{ id: 'abc', state: 'running' }], 'followed'], [[], 'stopped']]) {
+    made.length = 0;
+    const task = { id: 't1', status: 'running', steps: [{ id: 1, status: 'running' }], remoteId: 'abc' };
+    const context = { ACTIVE, EventSource: FakeES, tr: String, show: noop, renderAll: noop, renderTurns: noop, scrollConvo: noop, refreshStatusSoon: noop, drawMark: noop, finish: noop,
+      sleep: async () => {}, api: async () => ({ tasks: server }) };
+    const h = handlers(['upsertStep', 'follow', 'lostTask', 'streamClosed'], context);
+    runInNewContext(html.match(/^const REFOLLOW_MS = .*$/m)[0] + '\n' + html.match(/^const LOST_STREAM = .*$/m)[0] + '\nthis.REFOLLOW_MS = REFOLLOW_MS; this.REFOLLOW_TRIES = REFOLLOW_TRIES; this.LOST_STREAM = LOST_STREAM;', context);
+    context.follow = h.follow; context.lostTask = h.lostTask; context.streamClosed = h.streamClosed;
+    await h.streamClosed(task, 'abc');
+    assert.equal(want === 'followed' ? made.length : task.status, want === 'followed' ? 1 : 'stopped', want);
+  }
+});

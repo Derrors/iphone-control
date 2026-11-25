@@ -444,6 +444,15 @@ pub struct Encoders {
     picking: tokio::sync::Mutex<()>,
 }
 
+/// How to turn the phone's HEVC into H.264 ([`Encoders::hevc_command`])
+pub struct HevcCommand {
+    pub ffmpeg: PathBuf,
+    pub args: Vec<String>,
+    pub label: &'static str,
+    /// The encoder in use, when it is the one ffmpeg runs here (its index, for [`Encoders::give_up`])
+    pub encoder: Option<usize>,
+}
+
 impl Encoders {
     /// Finds and checks an encoder. `Err`: why the page keeps MJPEG (no ffmpeg, none works, or turned off)
     pub async fn detect() -> Result<Arc<Self>, String> {
@@ -546,22 +555,20 @@ impl Encoders {
     /// ffmpeg and its command line for transcoding the phone's own HEVC video with the encoder in use
     /// ([`hevc_args`]); the native encoder (JPEG only) is replaced by VideoToolbox through ffmpeg. `Err` without
     /// ffmpeg or a working encoder
-    pub fn hevc_command(
-        &self,
-        points: Option<(f64, f64)>,
-        qp: u8,
-    ) -> Result<(PathBuf, Vec<String>, &'static str), String> {
+    pub fn hevc_command(&self, points: Option<(f64, f64)>, qp: u8) -> Result<HevcCommand, String> {
         let c = self.current().ok_or_else(|| ictl_l10n::tr!("没有可用的编码器", "no working encoder").to_owned())?;
         let ffmpeg = self.ffmpeg.clone().ok_or_else(|| {
             ictl_l10n::tr!("没有 ffmpeg,转不了手机的 HEVC 画面", "no ffmpeg to transcode the phone's HEVC picture")
                 .to_owned()
         })?;
-        let kind = match &self.list[c.index] {
-            Kind::Native => &Kind::VideoToolbox,
-            k => k,
+        let (kind, stand_in) = match &self.list[c.index] {
+            Kind::Native => (&Kind::VideoToolbox, true),
+            k => (k, false),
         };
         let args = hevc_args(kind, points, qp, self.old).ok_or("no encoder for HEVC input")?;
-        Ok((ffmpeg, args, kind.label()))
+        // the encoder in use, unless ffmpeg stands in for it (the built-in one takes JPEG only): only then is a failure
+        // here that encoder's, to give up ([`Self::give_up`])
+        Ok(HevcCommand { ffmpeg, args, label: kind.label(), encoder: (!stand_in).then_some(c.index) })
     }
 
     /// The quantizer set for the picture (`IPHONE_CONTROL_VIEWER_QP`)
@@ -697,7 +704,7 @@ async fn native_sample() -> Result<Vec<u8>, String> {
 async fn version_line(ffmpeg: &Path) -> Option<String> {
     let out = tokio::time::timeout(
         Duration::from_secs(10),
-        Command::new(ffmpeg).arg("-version").stdin(Stdio::null()).stderr(Stdio::null()).output(),
+        Command::new(ffmpeg).arg("-version").stdin(Stdio::null()).stderr(Stdio::null()).kill_on_drop(true).output(),
     )
     .await
     .ok()?
@@ -714,6 +721,7 @@ async fn sample_jpeg(ffmpeg: &Path) -> Result<Vec<u8>, String> {
             .args(["-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", &size, "-frames:v", "1"])
             .args(["-c:v", "mjpeg", "-pix_fmt", "yuvj420p", "-q:v", "5", "-f", "mjpeg", "pipe:1"])
             .stdin(Stdio::null())
+            .kill_on_drop(true)
             .output(),
     )
     .await

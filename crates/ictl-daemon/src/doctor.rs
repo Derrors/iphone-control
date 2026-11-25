@@ -330,7 +330,12 @@ async fn viewer_picture() -> String {
     }
     let mut version = None;
     for p in crate::config::ffmpeg_paths() {
-        let run = tokio::process::Command::new(&p).arg("-version").stdin(std::process::Stdio::null()).output();
+        // killed if it doesn't answer in time (the timeout drops it; without this it would run on)
+        let run = tokio::process::Command::new(&p)
+            .arg("-version")
+            .stdin(std::process::Stdio::null())
+            .kill_on_drop(true)
+            .output();
         if let Ok(Ok(o)) = tokio::time::timeout(Duration::from_secs(5), run).await
             && o.status.success()
         {

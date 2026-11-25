@@ -299,7 +299,7 @@ const TASKS_KEY = 'ictl.tasks', MAX_TASKS = 50;
 function serializeTasks(withThumbs) {
   return JSON.stringify(S.tasks.slice(-MAX_TASKS).map(t => ({
     id: t.id, prompt: t.prompt, status: t.status, source: t.source, agent: t.agent, apps: t.apps, startedAt: t.startedAt, endedAt: t.endedAt, summary: t.summary, remoteId: t.remoteId,
-    steps: t.steps.map(st => ({ id: st.id, n: st.n, thought: st.thought, tool: st.tool, args: st.args, status: st.status, ms: st.ms, result: st.result, confirm: st.confirm }))
+    steps: t.steps.map(st => ({ id: st.id, n: st.n, thought: st.thought, tool: st.tool, args: st.args, status: st.status, ms: st.ms, result: st.result, confirm: st.confirm, gesture: st.gesture }))
   })));
 }
 let saveTimer = 0;

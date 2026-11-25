@@ -931,6 +931,17 @@ impl Daemon {
         self.snap.borrow().device.as_ref().map(|d| d.udid.clone()).filter(|u| !u.is_empty())
     }
 
+    /// Returns once the daemon no longer controls `udid` (another device was selected, or this one went away)
+    pub(crate) async fn controlled_changes_from(&self, udid: &str) {
+        let mut snap = self.snap.subscribe();
+        loop {
+            let now = snap.borrow_and_update().device.as_ref().map(|d| d.udid.clone()).filter(|u| !u.is_empty());
+            if !now.is_some_and(|u| u.eq_ignore_ascii_case(udid)) || snap.changed().await.is_err() {
+                return;
+            }
+        }
+    }
+
     /// Tests: pretend the daemon controls `udid`
     #[cfg(test)]
     pub(crate) fn fake_controlled(&self, udid: &str) {

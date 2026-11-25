@@ -53,6 +53,7 @@ test('a task id from storage stays inside its attributes', () => {
   const fns = [/^const esc = .*$/m, /^function turnHtml\([^]*?^}/m].map(pick).join('\n');
   const ctx = {
     TASK_STATUS: { done: { tone: 'ok', icon: 'check', label: 'done' } }, ACTIVE: ['running'], BUILTIN_AGENTS: {},
+    taskStatus: s => ({ done: { tone: 'ok', icon: 'check', label: 'done' } })[s],
     S: { expanded: new Set(), pendingDelete: null, agents: [] }, activeTask: () => null, isExternal: () => false,
     icon: () => '', tr: String, hhmm: () => '00:00', mmss: () => '0:00', badge: () => '', mdLite: String,
     agentLabel: () => 'AI', scopeText: () => '', stepHtml: () => '<li></li>',

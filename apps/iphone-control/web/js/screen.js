@@ -114,7 +114,7 @@ function nudgeGuard() {
   const g = $('#guard');
   g.classList.remove('nudge'); void g.offsetWidth; g.classList.add('nudge');
   const t = activeTask();
-  show(t && t.status === 'waiting' ? tr('AI 在等你确认一步操作，确认前画面保持锁定。') : tr('AI 正在操作这台设备。要自己操作，先点「接管」。'), 'warn');
+  show(t && t.status === 'waiting' ? tr('AI 在等你确认一步操作。要自己操作，先点「接管」。') : tr('AI 正在操作这台设备。要自己操作，先点「接管」。'), 'warn');
 }
 /* 画面外的点夹到屏幕边上（拖动时手指不会离开屏幕） */
 function pointsPerPx() {

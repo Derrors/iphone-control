@@ -59,7 +59,10 @@ struct Viewer(Arc<Daemon>, bool);
 impl Drop for Viewer {
     fn drop(&mut self) {
         let (d, low) = (self.0.clone(), self.1);
-        tokio::spawn(async move {
+        // on the daemon's LocalSet like the connection it ends (`screen_stream`, the only place a Viewer is made): a task
+        // of the runtime's own outlived the LocalSet when the daemon stopped, and could close the HID session again
+        // after `Daemon::shutdown`
+        tokio::task::spawn_local(async move {
             let mut g = d.inner.lock().await;
             g.screen_viewers = g.screen_viewers.saturating_sub(1);
             if low {

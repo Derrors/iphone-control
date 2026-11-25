@@ -1274,6 +1274,7 @@ impl Daemon {
             Request::ScreenStream => {
                 Err("screen_stream is a streaming request: open it with open_screen_stream".into())
             }
+            Request::MjpegStream => Err("mjpeg_stream is a streaming request: open it with open_mjpeg_stream".into()),
             Request::Screenshot { region } => {
                 let r = self.screenshot(g, region).await.unwrap_or_else(Response::error);
                 return with_unlock_note(r, g.dev.unlocked.take());
@@ -1433,6 +1434,7 @@ fn lane(req: &Request) -> Lane {
         | Request::TaskFinish { .. } => Lane::Task,
         Request::Status
         | Request::ScreenStream
+        | Request::MjpegStream
         | Request::Screenshot { .. }
         | Request::ListElements { .. }
         | Request::Tap { .. }

@@ -242,6 +242,7 @@ pub fn scope_check(req: &Request) -> Option<Check> {
         | Request::SelectDevice { .. }
         | Request::Status
         | Request::ScreenStream
+        | Request::MjpegStream
         | Request::Screenshot { .. }
         | Request::ListElements { .. }
         | Request::ListApps { .. }

@@ -61,7 +61,7 @@
 
 见 `crates/ictl-daemon/src/core.rs` 开头的模块文档。
 
-- 全部跑在一个 `LocalSet` 里（单线程协作）；设备相关状态（隧道、HID 会话、runner、WDA 客户端）在一把锁后面。
+- 全部跑在一个 `LocalSet` 里（单线程协作）；设备相关状态（隧道、HID 会话、runner、WDA 客户端）在一把锁后面。签名（`plume_core`）早已放进 `spawn_blocking`，2026-11 评估过换成多线程：巡检（`tick`）的 future 已经是 `Send`；处理连接的只差一处真正的限制（`handle` 的 `may_continue` 回调没写 `+ Send`），其余报的是 rustc 对 async 里高阶生命周期的 `Send` 推断局限（「implementation of `Send` is not general enough」：跨 `await` 持有切片迭代器、借用进泛型 future 的引用），一路延伸到 `ictl-ax`、`ictl-device`，报错也不指出位置，要逐处改写。眼下也没有看到单线程拖慢画面转发（真机回归里原生视频只在锁屏、解锁时停顿），所以没有换。
 - 每个连接一个任务，请求在任务里等锁；主循环本身从不阻塞。
 - 10 秒巡检用 `try_lock`：有请求在用设备就跳过这一轮，不排队。
 - 耗时的事不持锁：

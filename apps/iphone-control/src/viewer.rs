@@ -49,8 +49,6 @@ use crate::agent::{self, Agents};
 
 /// The control page, put together from `web/` by build.rs
 const PAGE: &str = include_str!(concat!(env!("OUT_DIR"), "/viewer.html"));
-/// WDA's MJPEG server on the phone
-const MJPEG_PORT: u16 = 9100;
 const MAX_BODY: usize = 16 * 1024;
 /// Most elements the Elements tab lists
 const ELEMENT_LIMIT: usize = 300;
@@ -771,11 +769,13 @@ async fn picture(mut client: Conn, ctx: &Ctx, req: &Head) -> anyhow::Result<()> 
     } else {
         None
     };
-    // shared with the other pages on this phone: WDA captures a picture for each connection to its MJPEG port
+    // shared with the other pages on this phone: WDA captures a picture for each connection to its MJPEG port. The
+    // daemon opens it (the viewer doesn't reach for the phone itself, D2) and passes WDA's answer on as it comes
     let connect = || async {
-        let mut r = ictl_device::Device::find(Some(&udid)).await?.connect_port(MJPEG_PORT).await?;
-        r.write_all(b"GET / HTTP/1.1\r\nHost: localhost\r\n\r\n").await?;
-        anyhow::Ok(r)
+        match protocol::open_mjpeg_stream(&ctx.socket, Some(&udid)).await? {
+            Ok(stream) => anyhow::Ok(stream),
+            Err(why) => anyhow::bail!(why),
+        }
     };
     let remote = match tokio::time::timeout(crate::video::STREAM_IDLE, ctx.mjpeg.subscribe(&udid, connect)).await {
         Ok(Ok(r)) => r,

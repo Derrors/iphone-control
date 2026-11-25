@@ -31,6 +31,7 @@ pub fn wants_alert_check(req: &Request) -> bool {
         | Request::WebEval { .. }
         | Request::Status
         | Request::ScreenStream
+        | Request::MjpegStream
         | Request::Screenshot { .. }
         | Request::ScrollCollect(_)
         | Request::ListElements { .. }

@@ -20,6 +20,27 @@ use crate::core::Daemon;
 /// A kept connection is closed after this long without a request
 const WEB_IDLE: Duration = Duration::from_secs(5 * 60);
 
+/// A scoped task's `WebEval`: the app that shows the page must be in its scope. `approved`: the app the user just
+/// allowed (an unknown app, `""`, never joins the scope)
+pub(crate) struct Scope<'a> {
+    pub task: &'a crate::tasks::Task,
+    pub approved: Option<&'a str>,
+}
+
+/// Why a page wasn't evaluated: it failed; the user is to be asked about the page's app (without the Web Inspector
+/// held, then again from the start); or, asked already, the page's app is another one now (a whole answer)
+pub(crate) enum EvalError {
+    Failed(crate::error::Error),
+    Ask(String),
+    Refused(crate::protocol::Response),
+}
+
+impl<E: Into<crate::error::Error>> From<E> for EvalError {
+    fn from(e: E) -> Self {
+        Self::Failed(e.into())
+    }
+}
+
 /// The kept Web Inspector connection, for one device
 pub(crate) struct WebConn {
     udid: String,
@@ -65,7 +86,8 @@ impl Daemon {
         target: &str,
         expression: &str,
         timeout: Duration,
-    ) -> crate::error::Result<String> {
+        scope: Option<Scope<'_>>,
+    ) -> Result<String, EvalError> {
         let (apps, pages) = web_pages(slot, device).await?;
         let page = pick(&pages, target).map_err(|e| match e {
             Pick::None => ictl_l10n::trf!(
@@ -78,7 +100,11 @@ impl Daemon {
                 c.iter().map(|p| target_line(p, &apps)).collect::<Vec<_>>().join("\n")
             ),
         })?;
-        let conn = slot.as_mut().ok_or("Web Inspector")?;
+        // a task limited to some apps: the app that shows the page, which needn't be the one in front
+        if let Some(s) = scope {
+            page_in_scope(&s, host_bundle(page, &apps))?;
+        }
+        let conn = slot.as_mut().ok_or(crate::error::Error::from("Web Inspector"))?;
         conn.used = Instant::now();
         // not retried on a new connection: the script may already have run
         let r = match conn.w.evaluate(page, expression, timeout).await {
@@ -167,11 +193,48 @@ fn breaks_connection(e: &ictl_webinspector::Error) -> bool {
     !matches!(e, ictl_webinspector::Error::Timeout(_) | ictl_webinspector::Error::Command(_))
 }
 
+/// The app that shows a page: a WebContent process stands in for it
+fn shown_app<'a>(p: &Page, apps: &'a [App]) -> Option<&'a App> {
+    let app = apps.iter().find(|a| a.id == p.app_id);
+    app.and_then(|a| a.host.as_deref()).and_then(|h| apps.iter().find(|a| a.id == h)).or(app)
+}
+
+/// Whether a scoped task may run script in a page shown by `app`: within the scope, or the app the user just
+/// allowed; otherwise the user is to be asked, or, asked already about another one, it is refused
+fn page_in_scope(s: &Scope<'_>, app: String) -> Result<(), EvalError> {
+    if s.task.within_scope(&crate::tasks::Target::Foreground(app.clone())) || s.approved == Some(app.as_str()) {
+        return Ok(());
+    }
+    Err(match s.approved {
+        None => EvalError::Ask(app),
+        Some(_) => {
+            let shown = if app.is_empty() { ictl_l10n::tr!("不明 App", "an unknown app") } else { &app };
+            EvalError::Refused(crate::tasks::refuse(&ictl_l10n::trf!(
+                "页面所在的 App 刚变成了任务范围以外的「{shown}」，脚本没有执行。先用 iphone_web_targets 看看再继续",
+                "The page's app just became “{shown}”, outside the task's scope; the script wasn't run. Look with iphone_web_targets before going on"
+            )))
+        }
+    })
+}
+
+/// The bundle ID of the app that shows a page, for a task's scope; empty when that isn't known for sure: a
+/// WebContent process whose host isn't listed (or that is WebKit's own) must not stand for itself, or approving it
+/// once would let every unlisted web view in
+fn host_bundle(p: &Page, apps: &[App]) -> String {
+    let Some(app) = apps.iter().find(|a| a.id == p.app_id) else { return String::new() };
+    let shown = match app.host.as_deref() {
+        Some(h) => match apps.iter().find(|a| a.id == h) {
+            Some(host) => host,
+            None => return String::new(),
+        },
+        None => app,
+    };
+    if shown.bundle_id.starts_with("com.apple.WebKit.") { String::new() } else { shown.bundle_id.clone() }
+}
+
 /// `PID:812/1  WebPage  Safari (com.apple.mobilesafari)  Title — https://…`
 fn target_line(p: &Page, apps: &[App]) -> String {
-    let app = apps.iter().find(|a| a.id == p.app_id);
-    // a WebContent process stands in for the app that shows the page
-    let shown = app.and_then(|a| a.host.as_deref()).and_then(|h| apps.iter().find(|a| a.id == h)).or(app);
+    let shown = shown_app(p, apps);
     let who = shown.map(|a| format!("{} ({})", a.name, a.bundle_id)).unwrap_or_else(|| p.app_id.clone());
     let busy =
         if p.in_use { ictl_l10n::tr!(" [另一个调试器已连接]", " [another debugger is attached]") } else { "" };
@@ -216,6 +279,54 @@ mod tests {
 
     fn page(app: &str, id: u64, url: &str, title: &str) -> Page {
         Page { app_id: app.into(), id, kind: "WebPage".into(), title: title.into(), url: url.into(), in_use: false }
+    }
+
+    /// The app a scoped task's script runs in: the host a WebContent process renders for; unknown (`""`, never let
+    /// into the scope) when the host isn't listed or the process is WebKit's own
+    #[test]
+    fn a_page_s_app_for_the_scope_is_its_host_or_unknown() {
+        let app = |id: &str, bundle: &str, host: Option<&str>| App {
+            id: id.into(),
+            name: bundle.into(),
+            bundle_id: bundle.into(),
+            host: host.map(Into::into),
+            active: true,
+        };
+        let apps = [
+            app("PID:1", "com.apple.mobilesafari", None),
+            app("PID:2", "com.apple.WebKit.WebContent", Some("PID:1")),
+            app("PID:3", "com.apple.WebKit.WebContent", Some("PID:9")),
+            app("PID:4", "com.apple.WebKit.WebContent", None),
+            app("PID:5", "com.example.app", None),
+        ];
+        let host = |a: &str| host_bundle(&page(a, 1, "https://x", "x"), &apps);
+        assert_eq!(host("PID:1"), "com.apple.mobilesafari");
+        assert_eq!(host("PID:2"), "com.apple.mobilesafari", "WebContent stands in for its host");
+        assert_eq!(host("PID:3"), "", "host not listed: unknown, not WebContent itself");
+        assert_eq!(host("PID:4"), "", "WebKit's own process");
+        assert_eq!(host("PID:5"), "com.example.app");
+        assert_eq!(host("PID:7"), "", "an app not listed at all");
+    }
+
+    /// Asked once, without the Web Inspector held; the round after the user said yes runs only on that same app
+    #[test]
+    fn a_page_outside_the_scope_is_asked_about_once() {
+        let ts = crate::tasks::Tasks::load(None);
+        let task = ts.open("x", "test", Some("phone"), vec!["com.apple.Preferences".into()], None).unwrap();
+        let first = Scope { task: &task, approved: None };
+        assert!(page_in_scope(&first, "com.apple.Preferences".into()).is_ok());
+        assert!(
+            matches!(page_in_scope(&first, "com.apple.mobilesafari".into()), Err(EvalError::Ask(a)) if a == "com.apple.mobilesafari")
+        );
+        assert!(matches!(page_in_scope(&first, String::new()), Err(EvalError::Ask(a)) if a.is_empty()));
+        let unknown = Scope { task: &task, approved: Some("") };
+        assert!(page_in_scope(&unknown, String::new()).is_ok(), "the unknown app the user allowed");
+        let r = page_in_scope(&unknown, "com.tencent.xin".into());
+        assert!(
+            matches!(&r, Err(EvalError::Refused(crate::protocol::Response::Error { message, .. })) if message.contains("com.tencent.xin"))
+        );
+        let safari = Scope { task: &task, approved: Some("com.apple.mobilesafari") };
+        assert!(matches!(page_in_scope(&safari, String::new()), Err(EvalError::Refused(_))), "not asked twice");
     }
 
     #[test]

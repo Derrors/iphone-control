@@ -160,7 +160,7 @@ fn now_ms() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
 }
 
-fn refuse(msg: &str) -> Response {
+pub(crate) fn refuse(msg: &str) -> Response {
     Response::error(msg)
 }
 
@@ -196,6 +196,9 @@ pub enum Check {
     Url(String),
     /// Acts on whatever app is in front
     Foreground,
+    /// Runs script in a web page: checked against the app that shows the page, which needn't be the one in front, once
+    /// the page is known (`Daemon::web_eval`)
+    Page,
     /// Always asks, whatever the scope
     Always { action: String, detail: String },
 }
@@ -227,8 +230,8 @@ pub fn scope_check(req: &Request) -> Option<Check> {
         | Request::Swipe { .. }
         | Request::TypeText { .. }
         | Request::ReplaceText { .. }
-        | Request::WebEval { .. }
         | Request::Touch { phase: TouchPhase::Down | TouchPhase::Move, .. } => Some(Check::Foreground),
+        Request::WebEval { .. } => Some(Check::Page),
         Request::InstallApp { path } => {
             Some(Check::Always { action: ictl_l10n::tr!("安装 App", "Install an app").into(), detail: path.clone() })
         }
@@ -617,6 +620,11 @@ impl Task {
         !self.lock().scope.is_empty()
     }
 
+    /// Whether `target` is within the scope now, without asking anyone
+    pub fn within_scope(&self, target: &Target) -> bool {
+        out_of_scope(&self.lock().scope, target).is_none()
+    }
+
     /// Before an action of a scoped task: within its scope it goes on; outside it waits for the user. Approving lets
     /// the task into that app for the rest of it; rejecting refuses this action only, so the agent can go back
     /// (unlike a rejected [`Self::confirm`], the task doesn't end as rejected). `step`: the tool call the action
@@ -677,6 +685,12 @@ impl Task {
             _ => ictl_l10n::tr!("任务没有完成。", "The task didn't finish."),
         };
         self.end(end, if summary.is_empty() { fallback } else { summary });
+    }
+
+    /// The user's pause, resume and the like, for the daemon's own tests
+    #[cfg(test)]
+    pub(crate) fn control_as_user(&self, action: &str) -> Result<(), String> {
+        self.control(action, None, false, None)
     }
 
     /// `by`: who asked, for the log (a `control` event after the change)
@@ -1631,6 +1645,8 @@ mod tests {
         assert_eq!(scope_check(&Request::LaunchApp { app: "设置".into() }), Some(Check::Launch("设置".into())));
         assert_eq!(scope_check(&Request::OpenUrl { url: "tel:10086".into() }), Some(Check::Url("tel:10086".into())));
         assert!(matches!(scope_check(&Request::UninstallApp { app: "x".into() }), Some(Check::Always { .. })));
+        let eval = Request::WebEval { target: "1".into(), expression: "1".into(), timeout_ms: 1000 };
+        assert_eq!(scope_check(&eval), Some(Check::Page), "the page's app, not the one in front");
         // the ways back after a refusal, and looking, are never held
         assert_eq!(scope_check(&Request::PressButton { button: "home".into() }), None);
         assert_eq!(scope_check(&Request::TerminateApp { app: "x".into() }), None);
@@ -1677,8 +1693,11 @@ mod tests {
         let t = ts.open("改设置", "test", Some(PHONE), scope(&["com.apple.Preferences"]), None).unwrap();
         assert!(t.scoped());
         let wechat = Target::Foreground("com.tencent.xin".into());
+        assert!(!t.within_scope(&wechat), "outside, and nobody is asked");
+        assert_eq!(t.info().state, "running");
         answer_soon(&t, true).await;
         assert_eq!(t.check_scope(&wechat, None, &mut None).await.ok(), Some(true), "asked, then let through");
+        assert!(t.within_scope(&wechat));
         assert_eq!(t.check_scope(&wechat, None, &mut None).await.ok(), Some(false), "not asked again");
         assert_eq!(t.info().apps, scope(&["com.apple.Preferences", "com.tencent.xin"]));
         assert_eq!(t.info().state, "running");

@@ -87,7 +87,7 @@ impl Daemon {
 }
 
 /// A truncated read can omit the rows that moved. Only two complete, populated reads can show the end.
-fn unchanged_viewport(before: &Tree, after: &Tree) -> bool {
+pub(super) fn unchanged_viewport(before: &Tree, after: &Tree) -> bool {
     !before.incomplete && !after.incomplete && !after.elements.is_empty() && after.close_to(before, STILL_TOLERANCE)
 }
 

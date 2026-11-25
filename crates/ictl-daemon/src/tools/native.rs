@@ -171,6 +171,11 @@ impl Daemon {
     /// remoteAXService didn't answer: unless that was already tried within [`AX_RESTART_EVERY`], end axauditd on the
     /// phone ([`ictl_device::Tunnel::restart_ax_daemon`]). Whether it was ended, so the read is worth repeating
     async fn restart_stuck_ax(&self, g: &mut Inner, device: &ictl_device::Device, why: &str) -> bool {
+        // a background check (the page's alert and status polls) doesn't restart it: it may be dropped halfway for an
+        // action, and the next action finds out for itself
+        if crate::core::in_background() {
+            return false;
+        }
         if g.dev.ax_restarted.is_some_and(|t| t.elapsed() < AX_RESTART_EVERY) {
             return false;
         }
@@ -470,6 +475,7 @@ impl Daemon {
         text: &str,
         timeout: Duration,
         disappeared: bool,
+        may_continue: &mut dyn FnMut() -> bool,
     ) -> crate::error::Result<String> {
         use super::observe::Waited;
         let t0 = Instant::now();
@@ -511,6 +517,9 @@ impl Daemon {
             };
             if t0.elapsed() >= timeout {
                 return Err(super::observe::wait_timeout(text, timeout, why));
+            }
+            if !may_continue() {
+                return Err(super::observe::wait_interrupted(text, t0.elapsed()));
             }
             tokio::time::sleep(Duration::from_millis(300).min(timeout.saturating_sub(t0.elapsed()))).await;
         }

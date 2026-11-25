@@ -283,6 +283,7 @@ impl Daemon {
         index: usize,
         max_age: Duration,
         scroll: Option<crate::protocol::ScrollSearch>,
+        may_continue: &mut dyn FnMut() -> bool,
     ) -> crate::error::Result<(String, bool)> {
         self.ensure_unlocked(g).await.map_err(Error::preflight)?;
         let mut tree = self.tree(g, max_age).await.map_err(Error::preflight)?;
@@ -310,10 +311,14 @@ impl Daemon {
                 if at_end || scrolled >= s.max {
                     break;
                 }
+                // the task was paused or the caller went away: no more swiping, and nothing tapped
+                if !may_continue() {
+                    return Err(Error::preflight(stopped_searching(scrolled)));
+                }
                 let next =
                     Box::pin(self.search_scroll(g, s.down, None)).await.map_err(|e| failed_scroll(e, scrolled))?;
                 scrolled += 1;
-                at_end = next.close_to(&tree, STILL_TOLERANCE);
+                at_end = super::scroll::unchanged_viewport(&tree, &next);
                 tree = next;
             }
             // 没有文字完全相同的，包含它的又已经滑过去了：往回滑到看到它的地方（多滑一次，前后两屏有重叠）
@@ -322,6 +327,9 @@ impl Daemon {
                 && let Some(k) = partial_at
             {
                 while back <= scrolled - k && !reachable(&tree, text, index) {
+                    if !may_continue() {
+                        return Err(Error::preflight(stopped_searching(scrolled + back)));
+                    }
                     tree = Box::pin(self.search_scroll(g, !s.down, None))
                         .await
                         .map_err(|e| failed_scroll(e, scrolled + back))?;
@@ -401,6 +409,10 @@ impl Daemon {
                 ));
             }
         };
+        // paused, taken over or left while the tree was read or the list moved: nothing is tapped
+        if !may_continue() {
+            return Err(Error::preflight(stopped_searching(scrolled + back)));
+        }
         self.tap_at(g, x, y).await?;
         let note = if matches.len() > 1 {
             ictl_l10n::trf!("(共匹配 {} 个,点的是第 {index} 个)", " ({} matches, tapped number {index})", matches.len())
@@ -1073,6 +1085,14 @@ async fn verify_typed<T: ictl_wda::http::Transport>(w: &mut WdaClient<T>, before
         Reread::Value(now) => Typed::Mismatch(now),
         Reread::Unreadable => Typed::Unknown,
     }
+}
+
+/// [`Daemon::tap_element`] stopped before tapping: the task was paused or taken over, or the caller went away
+fn stopped_searching(completed: u32) -> String {
+    ictl_l10n::trf!(
+        "点击前被打断（任务暂停、被接管或调用方已离开），此前已完成 {completed} 次滑动，没有点击；请先查看屏幕",
+        "Interrupted before tapping (the task was paused or taken over, or the caller went away) after {completed} swipes; nothing was tapped. Look at the screen first"
+    )
 }
 
 #[cfg(test)]

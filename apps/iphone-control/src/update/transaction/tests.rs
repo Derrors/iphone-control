@@ -106,12 +106,14 @@ impl Services for TestService {
         Ok(())
     }
     async fn start_healthy(&self, version: &str) -> Result<()> {
-        let child = Command::new(&self.binary)
-            .arg("daemon")
-            .env("ICTL_TEST_TX_HARNESS", std::env::current_exe()?)
-            .env("ICTL_TEST_TX_SOCKET", &self.socket)
-            .stdout(Stdio::null())
-            .spawn()?;
+        let child = spawn_fixture(|| {
+            Command::new(&self.binary)
+                .arg("daemon")
+                .env("ICTL_TEST_TX_HARNESS", std::env::current_exe()?)
+                .env("ICTL_TEST_TX_SOCKET", &self.socket)
+                .stdout(Stdio::null())
+                .spawn()
+        })?;
         let pid = child.id();
         self.child.replace(Some(child));
         for _ in 0..2 {
@@ -128,6 +130,33 @@ impl Services for TestService {
         }
         Ok(())
     }
+}
+
+/// Starts a fixture binary that was just written. Another test that spawns a process meanwhile can leave a copy of the
+/// writing descriptor in its child until that execs, and executing the file then fails with "text file busy"
+/// (ETXTBSY): tried again shortly, as `archive.rs` does for the real candidate
+fn spawn_fixture(spawn: impl Fn() -> io::Result<Child>) -> io::Result<Child> {
+    for _ in 0..50 {
+        match spawn() {
+            Err(e) if e.raw_os_error() == Some(libc::ETXTBSY) => std::thread::sleep(Duration::from_millis(20)),
+            r => return r,
+        }
+    }
+    spawn()
+}
+
+/// [`Store::open`] once the updater lock is free: a test that spawns a process meanwhile briefly holds a copy of a
+/// dropped lock's descriptor in the child until it execs, and the lock with it (as in `maintenance::tests`)
+fn open_once_free(binary: &Path, receipt: PathBuf) -> Store {
+    for _ in 0..100 {
+        match Store::open(binary, receipt.clone()) {
+            Err(e) if e.downcast_ref::<io::Error>().is_some_and(|e| e.kind() == io::ErrorKind::WouldBlock) => {
+                std::thread::sleep(Duration::from_millis(20))
+            }
+            r => return r.unwrap(),
+        }
+    }
+    Store::open(binary, receipt).unwrap()
 }
 
 impl Fixture {
@@ -249,7 +278,7 @@ async fn interrupted_worker() {
     let dir = PathBuf::from(dir);
     let b = dir.join("iphone-control");
     let c = dir.join("patch");
-    let store = Store::open(&b, dir.join("receipt.json")).unwrap();
+    let store = open_once_free(&b, dir.join("receipt.json"));
     let old = receipt(&b, "0.2.0", digest(&b).unwrap());
     let new = receipt(&b, "0.2.1", digest(&c).unwrap());
     let host = Interrupted {
@@ -275,15 +304,25 @@ async fn recovers_after_process_death_using_only_durable_records() {
         let binary = f.store.binary.clone();
         let receipt_file = f.store.receipt.clone();
         drop(f.store);
+        // what the worker printed, shown if it wasn't killed. A file, not a pipe: the fixture daemon it may have
+        // started holds the descriptor on, and reading a pipe to its end would wait for that daemon
+        let log = binary.parent().unwrap().join("worker.log");
+        let out = File::create(&log).unwrap();
         let status = Command::new(std::env::current_exe().unwrap())
-            .args(["--exact", "update::transaction::tests::interrupted_worker"])
+            .args(["--exact", "update::transaction::tests::interrupted_worker", "--nocapture"])
             .env("ICTL_TEST_INTERRUPTED", binary.parent().unwrap())
             .env("ICTL_TEST_PHASE", phase)
-            .stdout(Stdio::null())
+            .stdout(out.try_clone().unwrap())
+            .stderr(out)
             .status()
             .unwrap();
-        assert_eq!(status.signal(), Some(libc::SIGKILL));
-        let store = Store::open(&binary, receipt_file).unwrap();
+        assert_eq!(
+            status.signal(),
+            Some(libc::SIGKILL),
+            "{phase}: the worker ended otherwise ({status}):\n{}",
+            fs::read_to_string(&log).unwrap_or_default()
+        );
+        let store = open_once_free(&binary, receipt_file);
         let mut tx: Transaction = read_json(&store.journal()).unwrap().unwrap();
         assert_eq!(
             digest(&store.binary).unwrap(),

@@ -275,11 +275,34 @@ fn main() -> anyhow::Result<()> {
     // 设置文件先读进环境（命令行上已设的优先），要在启动任何线程之前：语言、代理、通知等对所有命令都生效。
     // 控制台给它的 agent 起的 MCP 服务（`mcp --task-token-file`）只连本机：设置文件里给自己的命令连别处用的地址不读，
     // 读了会和这个参数冲突、服务起不来
-    let local_only = std::env::args().any(|a| a == "--task-token-file");
+    let local_only = mcp_with_token_file(std::env::args_os().skip(1));
     let skip: &[&str] =
         if local_only { &[ictl_daemon::protocol::env::URL, ictl_daemon::protocol::env::CA] } else { &[] };
     envfile::load_into_process(skip);
     tokio::runtime::Runtime::new()?.block_on(run())
+}
+
+/// `mcp --task-token-file FILE` (or `=FILE`): read off the raw arguments, before clap (which caches the language,
+/// known only once the settings are loaded). Not taken for an argument of another command that happens to read the
+/// same (a prompt of `task run`), and arguments that aren't UTF-8 are read too
+fn mcp_with_token_file(args: impl IntoIterator<Item = std::ffi::OsString>) -> bool {
+    let mut args = args.into_iter();
+    if completions::command(&mut args).is_none_or(|c| c != "mcp") {
+        return false;
+    }
+    while let Some(arg) = args.next() {
+        if arg == "--task-token-file" || arg.as_encoded_bytes().starts_with(b"--task-token-file=") {
+            return true;
+        }
+        if arg == "--" {
+            return false;
+        }
+        // an option's value isn't an option (`--ca --task-token-file` is a certificate of that name)
+        if arg == "--url" || arg == "--ca" {
+            args.next();
+        }
+    }
+    false
 }
 
 /// Commands that ask once, print the result and end; see [`restore_sigpipe`]
@@ -1613,5 +1636,25 @@ mod tests {
         assert!(!host_is_loopback(b"GET / HTTP/1.1\r\nHost: evil.example:8100\r\n\r\n"));
         assert!(!host_is_loopback(b"GET / HTTP/1.1\r\nHost: localhost.evil.example\r\n\r\n"));
         assert!(!host_is_loopback(b"GET / HTTP/1.1\r\n\r\n"));
+    }
+
+    /// Only `mcp`'s own option, in either form, after any root options; not a prompt that reads the same, and an
+    /// argument that isn't UTF-8 doesn't stop it
+    #[test]
+    fn the_token_file_option_is_found_only_for_mcp() {
+        use super::mcp_with_token_file;
+        use std::ffi::OsString;
+        use std::os::unix::ffi::OsStringExt;
+        let found = |args: &[&str]| mcp_with_token_file(args.iter().map(OsString::from));
+        assert!(found(&["mcp", "--task-token-file", "/t"]));
+        assert!(found(&["mcp", "--task-token-file=/t"]));
+        assert!(found(&["--socket", "/s.sock", "--data-dir=/d", "mcp", "--task-token-file", "/t"]));
+        assert!(!found(&["mcp"]));
+        assert!(!found(&["task", "run", "--", "echo", "--task-token-file"]), "another command's argument");
+        assert!(!found(&["--socket", "mcp", "status", "--task-token-file"]), "a root option's value isn't the command");
+        assert!(!found(&["mcp", "--ca", "--task-token-file"]), "an option's value");
+        let odd =
+            vec![OsString::from("mcp"), OsString::from_vec(vec![0xff, 0xfe]), OsString::from("--task-token-file=/t")];
+        assert!(mcp_with_token_file(odd));
     }
 }

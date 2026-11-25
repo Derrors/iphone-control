@@ -29,7 +29,7 @@ What changed in each release, one line per change. Versions follow [Semantic Ver
 - A viewer stopped while it made its certificate makes a new one on the next start, instead of failing to load a key that doesn't match (#202).
 - A token removed with `viewer token remove` is refused at once also within the same second, and `viewer token` commands run at the same time no longer lose each other's changes (#202).
 - A setting written twice in `~/.config/iphone-control/env` takes its last value, as the services read it (#202).
-- Services install from a program path with spaces, and refuse one with characters systemd or the shell would read as their own; an update that paused the viewer's service starts it again without turning on its start at login (#202).
+- Services install from a program path with spaces, and refuse one with characters systemd or the shell would read as their own; an update that paused the viewer's service starts it again without turning on its start at login; setting up the automatic update job and failing leaves none of its files behind, even when the service manager can't be reached (#202).
 - An AI task from the control page works when `IPHONE_CONTROL_URL` is set in the settings file (#202).
 - A read-only login no longer sends touches from the picture (each answered with an error) and shows no pointer on it (#202).
 - When pressing Home finds a system alert in the way, the daemon's answer now also marks it in its structured result (`alert_reported`), as launching an app or opening a link does; programs reading the result rather than its text missed it (#200).

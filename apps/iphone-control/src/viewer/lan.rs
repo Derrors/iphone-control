@@ -100,7 +100,7 @@ impl Access {
         };
         let rest = rest.to_ascii_lowercase();
         // a browser leaves the scheme's default port out
-        let default = if origin.starts_with("https://") { 443 } else { 80 };
+        let default = if https { 443 } else { 80 };
         // `[::1]` has colons but no port: what follows the last one isn't a number there
         let (name, p) = match rest.rsplit_once(':').and_then(|(n, p)| Some((n, p.parse::<u16>().ok()?))) {
             Some(np) => np,

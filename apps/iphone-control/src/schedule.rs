@@ -158,6 +158,10 @@ fn configure_job(socket: &Path, policy: update::Policy) -> Result<()> {
     if enabled {
         write_file(&launcher_file, launcher(&service::stable_exe()?, socket, &config)?.as_bytes())?;
     }
+    // Unloading the job when turning it off is tried, not required: when the service manager can't be reached (no
+    // user session: often why setting the job up just failed) the files written here still go, and the error is
+    // reported after that
+    let mut unload: Result<()> = Ok(());
     if mac {
         let domain = format!("gui/{}", unsafe { libc::geteuid() });
         let id = format!("{domain}/{LABEL}");
@@ -192,7 +196,7 @@ fn configure_job(socket: &Path, policy: update::Policy) -> Result<()> {
             write_file(&job, &xml)?;
             run("launchctl", &["bootstrap", &domain, path_str(&job)?])?;
         } else if loaded {
-            run("launchctl", &["bootout", &id])?;
+            unload = run("launchctl", &["bootout", &id]);
         }
     } else if enabled {
         let unit = format!(
@@ -205,7 +209,7 @@ fn configure_job(socket: &Path, policy: update::Policy) -> Result<()> {
         run("systemctl", &["--user", "enable", "--now", TIMER])?;
     } else if timer.try_exists()? {
         // Do not stop an already-running replacement. Manual prevents the next one.
-        run("systemctl", &["--user", "disable", "--now", TIMER])?;
+        unload = run("systemctl", &["--user", "disable", "--now", TIMER]);
     }
     if !enabled {
         let mut files = vec![job, launcher_file];
@@ -218,10 +222,11 @@ fn configure_job(socket: &Path, policy: update::Policy) -> Result<()> {
             }
         }
         if !mac {
-            run("systemctl", &["--user", "daemon-reload"])?;
+            let reload = run("systemctl", &["--user", "daemon-reload"]);
+            unload = unload.and(reload);
         }
     }
-    Ok(())
+    unload
 }
 
 #[cfg(test)]
@@ -280,6 +285,74 @@ esac
             .args(["--exact", "schedule::tests::configuration_worker"])
             .env("HOME", home)
             .env("ICTL_TEST_SCHEDULE_HOME", home)
+            .env("XDG_CONFIG_HOME", home.join("config"))
+            .env("PATH", home)
+            .status()
+            .unwrap();
+        assert!(status.success());
+    }
+
+    /// Run with a service manager that fails: setting the job up fails, and so does unloading it again in the
+    /// rollback [`set_policy`] does, yet nothing written for the job is left (a development build can't set a policy
+    /// other than manual, so the two steps are taken here)
+    #[test]
+    fn failed_configuration_worker() {
+        let Some(test_home) = std::env::var_os("ICTL_TEST_SCHEDULE_FAILING_HOME") else { return };
+        let home = Path::new(&test_home);
+        assert_eq!(envfile::home(), home);
+        let socket = home.join("daemon.sock");
+        assert!(configure_job(&socket, update::Policy::Notify).is_err());
+        assert!(configure_job(&socket, update::Policy::Manual).is_err(), "unloading failed too, and says so");
+        let calls = fs::read_to_string(home.join("manager.log")).unwrap();
+        let config = envfile::config_dir();
+        let mut left = vec![config.join("update-job.sh")];
+        if cfg!(target_os = "macos") {
+            assert!(calls.contains("bootout"), "{calls}");
+            left.push(home.join("Library/LaunchAgents").join(format!("{LABEL}.plist")));
+        } else {
+            assert!(calls.contains("disable"), "{calls}");
+            let jobs = config.parent().unwrap().join("systemd/user");
+            left.extend([jobs.join(UNIT), jobs.join(TIMER)]);
+        }
+        for f in left {
+            assert!(!f.exists(), "{} left behind ({calls})", f.display());
+        }
+    }
+
+    #[test]
+    fn a_failed_job_setup_leaves_nothing_behind() {
+        if ictl_daemon::protocol::running_as_root() {
+            return;
+        }
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path();
+        // the job is written and loaded, then the manager fails: starting it, and unloading it again
+        let (name, script) = if cfg!(target_os = "macos") {
+            (
+                "launchctl",
+                r#"#!/bin/sh
+echo "$1" >> "$HOME/manager.log"
+case "$1" in
+print) [ -f "$HOME/loaded" ] || exit 1
+       printf '\tpath = %s\n' "$HOME/Library/LaunchAgents/io.github.iphone-control.updates.plist" ;;
+bootstrap) : > "$HOME/loaded"; exit 1;;
+*) exit 1;;
+esac
+"#,
+            )
+        } else {
+            (
+                "systemctl",
+                "#!/bin/sh\necho \"$*\" >> \"$HOME/manager.log\"\ncase \"$2\" in enable|disable) exit 1;; esac\n",
+            )
+        };
+        let manager = home.join(name);
+        fs::write(&manager, script).unwrap();
+        fs::set_permissions(&manager, fs::Permissions::from_mode(0o700)).unwrap();
+        let status = Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "schedule::tests::failed_configuration_worker"])
+            .env("HOME", home)
+            .env("ICTL_TEST_SCHEDULE_FAILING_HOME", home)
             .env("XDG_CONFIG_HOME", home.join("config"))
             .env("PATH", home)
             .status()

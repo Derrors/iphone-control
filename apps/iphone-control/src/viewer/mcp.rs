@@ -13,11 +13,10 @@
 //! A task's agent sends the task's token in `Iphone-Control-Task-Token` ([`ictl_daemon::protocol::TASK_TOKEN_HEADER`]),
 //! as `IPHONE_CONTROL_TASK_TOKEN` does on stdio.
 
+use super::tls::Conn;
+use super::write_timed;
 use bytes::Bytes;
 use http_body_util::{BodyExt, Full};
-use tokio::io::AsyncWriteExt;
-
-use super::tls::Conn;
 
 /// A request body bigger than this is refused (a tool call is a few KB)
 pub const MAX_BODY: usize = 1024 * 1024;
@@ -26,14 +25,14 @@ pub const MAX_BODY: usize = 1024 * 1024;
 /// or the client goes away
 pub async fn serve(svc: &ictl_mcp::HttpService, client: &mut Conn, head: &[u8], body: Vec<u8>) -> anyhow::Result<()> {
     let Some(req) = request(head, body) else {
-        client.write_all(b"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").await?;
-        client.flush().await?;
-        return Ok(());
+        let bad = b"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nReferrer-Policy: no-referrer\r\nConnection: close\r\n\r\n";
+        return write_timed(client, bad).await;
     };
     let (parts, mut body) = svc.handle(req).await.into_parts();
     let chunked = sent_chunked(&parts);
-    client.write_all(response_head(&parts, chunked).as_bytes()).await?;
-    client.flush().await?;
+    // each write within the viewer's time limit, as its own answers: a client that stops reading doesn't hold its
+    // connection's place for good. Waiting for the next event of a stream has none
+    write_timed(client, response_head(&parts, chunked).as_bytes()).await?;
     while let Some(frame) = body.frame().await {
         let frame = match frame {
             Ok(f) => f,
@@ -42,20 +41,19 @@ pub async fn serve(svc: &ictl_mcp::HttpService, client: &mut Conn, head: &[u8], 
         if let Some(data) = frame.data_ref()
             && !data.is_empty()
         {
+            // each event goes out now, flushed (TLS holds the last record back otherwise)
             if chunked {
-                client.write_all(format!("{:x}\r\n", data.len()).as_bytes()).await?;
-                client.write_all(data).await?;
-                client.write_all(b"\r\n").await?;
+                let mut piece = format!("{:x}\r\n", data.len()).into_bytes();
+                piece.extend_from_slice(data);
+                piece.extend_from_slice(b"\r\n");
+                write_timed(client, &piece).await?;
             } else {
-                client.write_all(data).await?;
+                write_timed(client, data).await?;
             }
-            // each event goes out now (TLS holds the last record back otherwise)
-            client.flush().await?;
         }
     }
     if chunked {
-        client.write_all(b"0\r\n\r\n").await?;
-        client.flush().await?;
+        write_timed(client, b"0\r\n\r\n").await?;
     }
     Ok(())
 }
@@ -147,7 +145,7 @@ fn response_head(parts: &http::response::Parts, chunked: bool) -> String {
     let mut out =
         format!("HTTP/1.1 {} {}\r\n", parts.status.as_u16(), parts.status.canonical_reason().unwrap_or("Unknown"));
     for (k, v) in &parts.headers {
-        if k == http::header::CONNECTION || k == http::header::TRANSFER_ENCODING {
+        if k == http::header::CONNECTION || k == http::header::TRANSFER_ENCODING || k == http::header::REFERRER_POLICY {
             continue;
         }
         out.push_str(&format!("{}: {}\r\n", k.as_str(), String::from_utf8_lossy(v.as_bytes())));
@@ -155,14 +153,15 @@ fn response_head(parts: &http::response::Parts, chunked: bool) -> String {
     if chunked {
         out.push_str("Transfer-Encoding: chunked\r\n");
     }
-    out.push_str("Connection: close\r\n\r\n");
+    // as every answer of the viewer's
+    out.push_str("Referrer-Policy: no-referrer\r\nConnection: close\r\n\r\n");
     out
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tokio::io::AsyncReadExt;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     /// One HTTP request through [`serve`], as a client sees it: (head, body)
     async fn exchange(svc: &ictl_mcp::HttpService, raw: String) -> (String, String) {
@@ -231,6 +230,7 @@ mod tests {
         let done = r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#;
         let (head, _) = exchange(&svc, post(done, &sid)).await;
         assert!(head.starts_with("HTTP/1.1 202"), "{head}");
+        assert_eq!(header(&head, "referrer-policy"), Some("no-referrer"), "as every answer of the viewer's");
 
         let list = r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#;
         let (_, body) = exchange(&svc, post(list, &sid)).await;
@@ -259,6 +259,7 @@ mod tests {
             http::Response::builder().header("content-type", "text/event-stream").body(()).unwrap().into_parts();
         let head = response_head(&stream, true);
         assert!(head.contains("Transfer-Encoding: chunked\r\n") && head.ends_with("Connection: close\r\n\r\n"));
+        assert_eq!(head.matches("Referrer-Policy: no-referrer\r\n").count(), 1);
         let (json, _) = http::Response::builder().header("content-length", "2").body(()).unwrap().into_parts();
         let head = response_head(&json, false);
         assert!(head.contains("content-length: 2\r\n") && !head.contains("Transfer-Encoding"));

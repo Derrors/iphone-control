@@ -206,24 +206,25 @@ fn ensure_made(dir: &Path, names: &[String], now: u64) -> anyhow::Result<(Vec<u8
     Ok((c, k))
 }
 
-/// Writes `data` to a temporary file beside `file` (with `mode` from the start: the key is only ever this user's),
-/// syncs it and renames it into place: `file` is the old content or all of the new
+/// Writes `data` to a new temporary file beside `file` (with `mode` from the start: the key is only ever this
+/// user's), syncs it and renames it into place: `file` is the old content or all of the new. The temporary file is
+/// made here, never one already there (a leftover with other permissions would keep them)
 fn write_atomic(file: &Path, data: &[u8], mode: u32) -> io::Result<()> {
     use std::io::Write;
-    use std::os::unix::fs::OpenOptionsExt;
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let name = file.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-    let tmp = file.with_file_name(format!(".{name}.{}.tmp", std::process::id()));
-    let r = std::fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .mode(mode)
-        .open(&tmp)
-        .and_then(|mut f| {
-            f.write_all(data)?;
-            f.sync_all()
-        })
-        .and_then(|()| std::fs::rename(&tmp, file));
+    let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let tmp = file.with_file_name(format!(".{name}.{}-{n}.tmp", std::process::id()));
+    let f = std::fs::OpenOptions::new().write(true).create_new(true).mode(mode).open(&tmp)?;
+    let r = (|| {
+        let mut f = f;
+        // the umask may have taken bits off
+        f.set_permissions(std::fs::Permissions::from_mode(mode))?;
+        f.write_all(data)?;
+        f.sync_all()?;
+        std::fs::rename(&tmp, file)
+    })();
     if r.is_err() {
         let _ = std::fs::remove_file(&tmp);
     }
@@ -295,6 +296,21 @@ mod tests {
 
     fn names(n: &[&str]) -> Vec<String> {
         n.iter().map(|s| (*s).to_owned()).collect()
+    }
+
+    /// A key written over an old one is all new and only this user's, whatever the umask, and nothing is left beside it
+    #[test]
+    fn a_key_replaces_the_old_one_whole_and_private() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let key = dir.path().join("key.pem");
+        std::fs::write(&key, "old").unwrap();
+        std::fs::set_permissions(&key, std::fs::Permissions::from_mode(0o644)).unwrap();
+        write_atomic(&key, b"new", 0o600).unwrap();
+        assert_eq!(std::fs::read_to_string(&key).unwrap(), "new");
+        assert_eq!(std::fs::metadata(&key).unwrap().permissions().mode() & 0o777, 0o600);
+        let names: Vec<_> = std::fs::read_dir(dir.path()).unwrap().map(|e| e.unwrap().file_name()).collect();
+        assert_eq!(names, ["key.pem"]);
     }
 
     #[test]

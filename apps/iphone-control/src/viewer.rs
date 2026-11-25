@@ -273,6 +273,7 @@ pub async fn run(
             )
         );
     }
+    let page = page_in(ictl_l10n::lang());
     let ctx = Arc::new(Ctx {
         access,
         socket: socket.to_path_buf(),
@@ -284,8 +285,8 @@ pub async fn run(
         checking: Arc::default(),
         check_error: Arc::default(),
         names: tokio::sync::Mutex::default(),
-        page_csp: csp_for(&page_in(ictl_l10n::lang())),
-        page: page_in(ictl_l10n::lang()),
+        page_csp: csp_for(&page),
+        page,
         device_video_allowed,
         video,
         acks: Arc::default(),
@@ -1252,7 +1253,7 @@ async fn reply_with(client: &mut Conn, status: u16, kind: &str, body: &[u8], ext
 const WRITE_TIMEOUT: Duration = if cfg!(test) { Duration::from_millis(300) } else { Duration::from_secs(30) };
 
 /// Writes and flushes `bytes` within [`WRITE_TIMEOUT`]
-async fn write_timed<W: tokio::io::AsyncWrite + Unpin>(w: &mut W, bytes: &[u8]) -> anyhow::Result<()> {
+pub(crate) async fn write_timed<W: tokio::io::AsyncWrite + Unpin>(w: &mut W, bytes: &[u8]) -> anyhow::Result<()> {
     tokio::time::timeout(WRITE_TIMEOUT, async {
         w.write_all(bytes).await?;
         w.flush().await
@@ -1266,8 +1267,10 @@ async fn write_timed<W: tokio::io::AsyncWrite + Unpin>(w: &mut W, bytes: &[u8]) 
 /// it was read: 401, 403, 413) sends a reset, and the client may then never see the answer. So: end our side, then
 /// read what the client still sends until it closes too, for a second and 1 MB at most
 async fn linger(client: &mut Conn) {
-    let _ = client.shutdown().await;
     let deadline = tokio::time::Instant::now() + Duration::from_secs(1);
+    // within the same second: over TLS ending our side writes (close_notify), which a client that stopped reading
+    // with its buffers full would hold up for good
+    let _ = tokio::time::timeout_at(deadline, client.shutdown()).await;
     let (mut buf, mut left) = ([0u8; 8192], 1usize << 20);
     while left > 0 {
         match tokio::time::timeout_at(deadline, client.read(&mut buf)).await {
@@ -1422,9 +1425,7 @@ async fn redirect(client: &mut Conn, to: &str) -> anyhow::Result<()> {
         "HTTP/1.1 307 Temporary Redirect\r\nLocation: {to}\r\nContent-Length: 0\r\nCache-Control: no-store\r\n\
          Referrer-Policy: no-referrer\r\nConnection: close\r\n\r\n"
     );
-    client.write_all(head.as_bytes()).await?;
-    client.flush().await?;
-    Ok(())
+    write_timed(client, head.as_bytes()).await
 }
 
 struct Head {
@@ -2144,8 +2145,6 @@ mod tests {
         assert_eq!(at(b"GET / HTTP/1.1\r\n\r\n"), None);
     }
 
-    /// The redirect's `Location` is built from the request target: only a path is a target, so it can't send a
-    /// browser to another host (`@evil.example/` would make `https://host:port@evil.example/`) nor add a header line
     /// An answer to a client that reads nothing gives up after [`WRITE_TIMEOUT`] instead of holding the connection
     #[tokio::test]
     async fn a_client_that_reads_nothing_is_let_go() {
@@ -2181,6 +2180,8 @@ mod tests {
         assert!(csp_for("<p>no script</p>").contains("script-src 'none'"));
     }
 
+    /// The redirect's `Location` is built from the request target: only a path is a target, so it can't send a
+    /// browser to another host (`@evil.example/` would make `https://host:port@evil.example/`) nor add a header line
     #[test]
     fn only_a_plain_request_head_is_taken() {
         let ok = |s: &str| Head::parse(s.as_bytes()).is_some();

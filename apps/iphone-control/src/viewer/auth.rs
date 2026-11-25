@@ -89,8 +89,12 @@ fn locked<T>(data_dir: &Path, f: impl FnOnce() -> anyhow::Result<T>) -> anyhow::
         .mode(0o600)
         .custom_flags(libc::O_NOFOLLOW)
         .open(tokens_file(data_dir).with_extension("lock"))?;
-    if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX) } != 0 {
-        return Err(io::Error::last_os_error().into());
+    while unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX) } != 0 {
+        let e = io::Error::last_os_error();
+        // a signal while waiting: wait again
+        if e.kind() != io::ErrorKind::Interrupted {
+            return Err(e.into());
+        }
     }
     f()
 }

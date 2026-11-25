@@ -55,12 +55,25 @@ impl IosBackend {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Clone, Default)]
 pub struct NotifyConfig {
     pub tg_bot_token: Option<String>,
     pub tg_chat_id: Option<String>,
     pub bark_server: String,
     pub bark_key: Option<String>,
+}
+
+/// Written out (a `{:?}` of the [`Config`] in a log or a panic) without the keys: only whether each is set
+impl std::fmt::Debug for NotifyConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let set = |v: &Option<String>| if v.is_some() { "<set>" } else { "<unset>" };
+        f.debug_struct("NotifyConfig")
+            .field("tg_bot_token", &set(&self.tg_bot_token))
+            .field("tg_chat_id", &set(&self.tg_chat_id))
+            .field("bark_server", &self.bark_server)
+            .field("bark_key", &set(&self.bark_key))
+            .finish()
+    }
 }
 
 impl NotifyConfig {
@@ -198,5 +211,23 @@ impl Config {
             std::fs::set_permissions(self.data_dir.join(d), std::fs::Permissions::from_mode(0o700))?;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A debug print of the settings shows whether a key is set, never the key
+    #[test]
+    fn notification_keys_stay_out_of_debug_output() {
+        let n = NotifyConfig {
+            tg_bot_token: Some("123:secret-token".into()),
+            tg_chat_id: Some("42".into()),
+            bark_server: "https://api.day.app".into(),
+            bark_key: Some("bark-secret".into()),
+        };
+        let s = format!("{n:?}");
+        assert!(!s.contains("secret") && s.contains("<set>") && s.contains("api.day.app"), "{s}");
     }
 }

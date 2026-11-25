@@ -10,13 +10,13 @@ impl Daemon {
         g: &mut Inner,
         button: &str,
         watched: bool,
-    ) -> crate::error::Result<String> {
+    ) -> crate::error::Result<(String, bool)> {
         let hid_button = Button::parse(button).ok_or(ictl_l10n::tr!(
             "button 只能是 home / volume_up / volume_down / lock",
             "button must be home / volume_up / volume_down / lock"
         ))?;
         let wda_name = match hid_button {
-            Button::Lock => return self.lock_screen(g).await,
+            Button::Lock => return self.lock_screen(g).await.map(|t| (t, false)),
             Button::Home => "home",
             Button::VolumeUp => "volumeUp",
             Button::VolumeDown => "volumeDown",
@@ -30,10 +30,13 @@ impl Daemon {
                 && !watched
                 && let Ok(Some(text)) = w.alert_text().await
             {
-                return Ok(ictl_l10n::trf!(
-                    "{},按 Home 不会生效,没有按;{TAP_ALERT}",
-                    "{}, pressing Home would have no effect, not pressed; {TAP_ALERT_EN}",
-                    blocking(&text)
+                return Ok((
+                    ictl_l10n::trf!(
+                        "{},按 Home 不会生效,没有按;{TAP_ALERT}",
+                        "{}, pressing Home would have no effect, not pressed; {TAP_ALERT_EN}",
+                        blocking(&text)
+                    ),
+                    true,
                 ));
             }
             let mut home_worked = None;
@@ -52,17 +55,20 @@ impl Daemon {
                 && r.is_ok()
                 && let Ok(Some(text)) = w.alert_text().await
             {
-                return Ok(ictl_l10n::trf!(
-                    "{},按 Home 没有生效,先点弹窗上的按钮",
-                    "{}, pressing Home had no effect; first tap a button on the alert",
-                    blocking(&text)
+                return Ok((
+                    ictl_l10n::trf!(
+                        "{},按 Home 没有生效,先点弹窗上的按钮",
+                        "{}, pressing Home had no effect; first tap a button on the alert",
+                        blocking(&text)
+                    ),
+                    true,
                 ));
             }
             if let Some(via_xctest) = home_worked {
                 self.learn(g, |w| w.home_via_xctest = via_xctest);
             }
             match r {
-                Ok(text) => return Ok(text),
+                Ok(text) => return Ok((text, false)),
                 Err(WdaError::Unavailable(_)) => {}
                 Err(e) => return Err(e.into()),
             }
@@ -71,7 +77,7 @@ impl Daemon {
             return Box::pin(self.native_home(g, watched)).await;
         }
         self.hid_do(g, |h| Box::pin(h.press(hid_button))).await?;
-        Ok(ictl_l10n::trf!("已按 {button}", "Pressed {button}"))
+        Ok((ictl_l10n::trf!("已按 {button}", "Pressed {button}"), false))
     }
 
     pub(super) async fn lock_screen(&self, g: &mut Inner) -> crate::error::Result<String> {

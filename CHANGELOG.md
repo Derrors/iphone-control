@@ -16,6 +16,13 @@ What changed in each release, one line per change. Versions follow [Semantic Ver
 
 ### Fixes
 
+- When pressing Home finds a system alert in the way, the daemon's answer now also marks it in its structured result (`alert_reported`), as launching an app or opening a link does; programs reading the result rather than its text missed it (#200).
+- A long press falls back to HID like a tap when WebDriverAgent can't be reached (#200).
+- Requests that can't run (a tap count of 0, an empty tap sequence, an unknown button, a point that isn't a number) are refused at once, before waiting for the phone and without dropping the cached screen (#200).
+- The control page getting ready for a touch no longer counts as acting: it isn't refused while an AI task runs and doesn't make the agent look again after you take over (#200).
+- Requests for a list scan sent by a newer client with extra fields are no longer refused by an older daemon (#200).
+- Auto-unlock refuses a saved passcode shorter than 4 digits, as `passcode set` does; `state.json` is no longer replaced by an empty file if it can't be written out; notification keys are never shown in debug output (#200).
+
 - iPads with Touch ID in a language other than Chinese or English: the "Touch ID" prompt after swiping up is known as the lock screen, and auto-unlock taps "Use Passcode" on it; the iPad was taken for unlocked and never checked again (#198).
 - A malformed accessibility answer from the phone (iOS 27+) can no longer keep the daemon busy for ever; a malformed touch (a coordinate or duration that isn't a number) is refused instead of crashing or tapping the top-left corner (#198).
 - The phone's log is read from now on only: the daemon took old lines for new, such as a past "Enable UI Automation" prompt, and `iphone_app_logs` showed them as just logged (#198).

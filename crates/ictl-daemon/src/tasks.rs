@@ -1289,6 +1289,8 @@ mod tests {
         assert!(matches!(admit(&ts, &shot, None).await, Ok((Admission::Free, _))));
         let up = Request::Touch { phase: TouchPhase::Up, x: 0.0, y: 0.0 };
         assert!(admit(&ts, &up, None).await.is_ok(), "a finger that was down can always be lifted");
+        let prepare = Request::Touch { phase: TouchPhase::Prepare, x: 0.0, y: 0.0 };
+        assert!(matches!(admit(&ts, &prepare, None).await, Ok((Admission::Free, _))), "getting ready touches nothing");
         let select = Request::SelectDevice { device: "auto".into() };
         assert!(admit(&ts, &select, None).await.is_err());
 
@@ -1331,6 +1333,20 @@ mod tests {
         tx.send(()).unwrap();
         let r = ts.admit(&tap(), Some(&t.token), &mut None, &mut Some(rx)).await;
         assert!(message(r).contains("取消"));
+    }
+
+    /// The page getting ready for a touch isn't an action: let through while the task runs, and while the user has
+    /// taken over it doesn't count as the user acting (a [`Admission::Supervisor`])
+    #[tokio::test]
+    async fn getting_ready_for_a_touch_is_not_acting() {
+        let ts = tasks();
+        let t = open(&ts);
+        let prepare = Request::Touch { phase: TouchPhase::Prepare, x: 0.0, y: 0.0 };
+        t.control("takeover", None, false, None).unwrap();
+        assert!(matches!(admit(&ts, &prepare, None).await, Ok((Admission::Free, _))));
+        assert!(matches!(admit(&ts, &tap(), None).await, Ok((Admission::Supervisor(_), _))), "a tap is acting");
+        assert!(!prepare.is_device_action());
+        assert!(Request::Touch { phase: TouchPhase::Down, x: 0.0, y: 0.0 }.is_device_action());
     }
 
     #[tokio::test]

@@ -274,13 +274,16 @@ impl Persisted {
     pub(crate) fn save(&self, path: &Path) {
         use std::io::Write;
         let tmp = path.with_extension("json.tmp");
-        // sync before the rename, or a power cut can leave state.json empty
-        let r = std::fs::File::create(&tmp)
-            .and_then(|mut f| {
-                f.write_all(&serde_json::to_vec_pretty(self).unwrap_or_default())?;
-                f.sync_all()
-            })
-            .and_then(|_| std::fs::rename(&tmp, path));
+        // nothing written when it doesn't serialize: an empty file in its place would lose the whole state
+        let r = serde_json::to_vec_pretty(self).map_err(std::io::Error::other).and_then(|data| {
+            // sync before the rename, or a power cut can leave state.json empty
+            std::fs::File::create(&tmp)
+                .and_then(|mut f| {
+                    f.write_all(&data)?;
+                    f.sync_all()
+                })
+                .and_then(|_| std::fs::rename(&tmp, path))
+        });
         if let Err(e) = r {
             tracing::warn!("{}", ictl_l10n::log_trf!("保存 state.json 失败：{e}", "Saving state.json failed: {e}"));
         }
@@ -1440,7 +1443,10 @@ impl Daemon {
                     message
                 })
             }
-            Request::PressButton { button } => self.press_button(g, &button, watched).await,
+            Request::PressButton { button } => self.press_button(g, &button, watched).await.map(|(t, alert)| {
+                outcome.alert_reported = alert;
+                t
+            }),
             Request::Touch { phase, x, y } => {
                 return self
                     .touch(g, phase, x, y, view)
@@ -1755,8 +1761,42 @@ fn check_request(req: &Request) -> Result<(), String> {
                 MAX_WAIT_MS / 1000
             ));
         }
-        Request::Touch { x, y, .. } if !x.is_finite() || !y.is_finite() => {
+        Request::Touch { x, y, .. } | Request::Tap { x, y, .. } | Request::LongPress { x, y, .. }
+            if !x.is_finite() || !y.is_finite() =>
+        {
             return Err(ictl_l10n::tr!("x、y 要是有效的数", "x and y must be valid numbers").into());
+        }
+        Request::Swipe { from, to, .. } if ![from.0, from.1, to.0, to.1].iter().all(|v| v.is_finite()) => {
+            return Err(
+                ictl_l10n::tr!("起点、终点要是有效的数", "the start and end points must be valid numbers").into()
+            );
+        }
+        // checked before the device lock is taken and the element cache dropped: a request that can't run doesn't
+        // cost the next one its cached tree
+        Request::Tap { count, .. } if !(1..=crate::protocol::MAX_TAP_COUNT).contains(count) => {
+            return Err(ictl_l10n::trf!(
+                "count 要是 1 到 {} 的整数",
+                "count must be a whole number from 1 to {}",
+                crate::protocol::MAX_TAP_COUNT
+            ));
+        }
+        Request::TapSequence { points }
+            if points.is_empty()
+                || points.len() > crate::protocol::MAX_SEQUENCE_POINTS
+                || !points.iter().all(|(x, y)| x.is_finite() && y.is_finite()) =>
+        {
+            return Err(ictl_l10n::trf!(
+                "一个手势要点 1 到 {} 个点，坐标要是有效的数",
+                "a gesture takes 1 to {} points, with valid numbers",
+                crate::protocol::MAX_SEQUENCE_POINTS
+            ));
+        }
+        Request::PressButton { button } if ictl_device::hid::Button::parse(button).is_none() => {
+            return Err(ictl_l10n::tr!(
+                "button 只能是 home / volume_up / volume_down / lock",
+                "button must be home / volume_up / volume_down / lock"
+            )
+            .into());
         }
         Request::AppLogs { since_secs, limit, .. } if *since_secs > 3600 || *limit == 0 || *limit > 1000 => {
             return Err(ictl_l10n::tr!(
@@ -1813,8 +1853,12 @@ pub(crate) mod tests {
         assert!(!crate::tasks::observes(&req), "this cannot clear a takeover's observation requirement");
         let mut wire = serde_json::to_value(&req).unwrap();
         assert_eq!(serde_json::from_value::<Request>(wire.clone()).unwrap(), req);
-        wire["scroll"] = serde_json::json!("sideways");
-        assert!(serde_json::from_value::<Request>(wire).is_err(), "unknown direct protocol fields must fail");
+        // a key this daemon doesn't know (a newer client's) is ignored, as for every other request
+        wire["added_by_a_newer_client"] = serde_json::json!(true);
+        assert_eq!(serde_json::from_value::<Request>(wire.clone()).unwrap(), req);
+        // the scan's own fields are still checked: a wrong type is an error
+        wire["max_scrolls"] = serde_json::json!("sideways");
+        assert!(serde_json::from_value::<Request>(wire).is_err());
         for (max, limit) in [(0, 1), (16, 1), (1, 0), (1, 151)] {
             scan.max_scrolls = max;
             scan.limit = limit;
@@ -2100,6 +2144,34 @@ pub(crate) mod tests {
         let m = refused(recheck_front(&t, "", false));
         assert!(m.contains("看不出前台") || m.contains("Can't tell"), "{m}");
         assert!(!m.contains("的 ，"), "no empty name in the text: {m}");
+    }
+
+    /// Requests that can't run are refused before they take the device lock and drop the cached tree
+    #[test]
+    fn hopeless_requests_are_refused_up_front() {
+        let bad = [
+            Request::Tap { x: 1.0, y: 1.0, count: 0 },
+            Request::Tap { x: 1.0, y: 1.0, count: crate::protocol::MAX_TAP_COUNT + 1 },
+            Request::Tap { x: f64::NAN, y: 1.0, count: 1 },
+            Request::LongPress { x: 1.0, y: f64::INFINITY, seconds: 1.0 },
+            Request::Swipe { from: (1.0, f64::NAN), to: (1.0, 2.0), seconds: 0.3, hold: 0.0 },
+            Request::TapSequence { points: vec![] },
+            Request::TapSequence { points: vec![(1.0, 1.0); crate::protocol::MAX_SEQUENCE_POINTS + 1] },
+            Request::TapSequence { points: vec![(1.0, f64::NAN)] },
+            Request::PressButton { button: "power".into() },
+        ];
+        for r in bad {
+            assert!(check_request(&r).is_err(), "{r:?}");
+        }
+        let good = [
+            Request::Tap { x: 1.0, y: 1.0, count: crate::protocol::MAX_TAP_COUNT },
+            Request::TapSequence { points: vec![(1.0, 1.0); crate::protocol::MAX_SEQUENCE_POINTS] },
+            Request::PressButton { button: "home".into() },
+            Request::PressButton { button: "volume_up".into() },
+        ];
+        for r in good {
+            assert!(check_request(&r).is_ok(), "{r:?}");
+        }
     }
 
     #[test]

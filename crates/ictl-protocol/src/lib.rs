@@ -54,9 +54,10 @@ pub struct ScrollSearch {
 pub const MAX_SEARCH_SCROLLS: u32 = 15;
 pub const MAX_SCROLL_ROWS: usize = 150;
 
-/// Bounds and matching rules for a standalone list scan.
+/// Bounds and matching rules for a standalone list scan. Unknown fields are ignored, as in every other request: keys
+/// that apply to all requests (`lang`, `watched`, `cancel_on_close`…) sit beside these, and one a newer client adds
+/// would otherwise make an older daemon refuse this request alone
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct ScrollCollect {
     pub down: bool,
     pub max_scrolls: u32,
@@ -630,6 +631,8 @@ impl Request {
     /// Every variant is listed (no `_`), so a new request type has to be classified here
     pub fn is_device_action(&self) -> bool {
         match self {
+            // only opens the HID session ahead of the finger: nothing on the screen changes
+            Self::Touch { phase: TouchPhase::Prepare, .. } => false,
             Self::Tap { .. }
             | Self::ScrollCollect(_)
             | Self::TapElement { .. }

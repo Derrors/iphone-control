@@ -78,6 +78,8 @@ struct Ctx {
     video: Option<Arc<crate::video::Encoders>>,
     /// How much of each H.264 stream its page has read
     acks: Arc<crate::video::Acks>,
+    /// The phones' MJPEG streams, one per phone for all its pages
+    mjpeg: crate::video::hub::MjpegHub,
     /// HTTPS on the same port (`--lan`); plain HTTP from the network is then sent there
     tls: Option<Arc<tls::Tls>>,
     /// MCP over HTTP at `/mcp` (`--mcp`, on by default)
@@ -283,6 +285,7 @@ pub async fn run(
         device_video_allowed,
         video,
         acks: Arc::default(),
+        mjpeg: Default::default(),
         tls,
         mcp: mcp.then(|| ictl_mcp::http_service(socket.to_path_buf())),
         auth: Some(auth),
@@ -694,8 +697,13 @@ async fn picture(mut client: Conn, ctx: &Ctx, req: &Head) -> anyhow::Result<()> 
     } else {
         None
     };
-    let connection = async { ictl_device::Device::find(Some(&udid)).await?.connect_port(MJPEG_PORT).await };
-    let mut remote = match tokio::time::timeout(crate::video::STREAM_IDLE, connection).await {
+    // shared with the other pages on this phone: WDA captures a picture for each connection to its MJPEG port
+    let connect = || async {
+        let mut r = ictl_device::Device::find(Some(&udid)).await?.connect_port(MJPEG_PORT).await?;
+        r.write_all(b"GET / HTTP/1.1\r\nHost: localhost\r\n\r\n").await?;
+        anyhow::Ok(r)
+    };
+    let remote = match tokio::time::timeout(crate::video::STREAM_IDLE, ctx.mjpeg.subscribe(&udid, connect)).await {
         Ok(Ok(r)) => r,
         // no WDA (iOS 27 driven natively, or WDA down): the phone's own HEVC video transcoded to H.264, for a page
         // that can't decode HEVC
@@ -715,8 +723,6 @@ async fn picture(mut client: Conn, ctx: &Ctx, req: &Head) -> anyhow::Result<()> 
         }
         _ => return reply(&mut client, 502, "text/plain", b"device feed unavailable").await,
     };
-    tokio::time::timeout(crate::video::STREAM_IDLE, remote.write_all(b"GET / HTTP/1.1\r\nHost: localhost\r\n\r\n"))
-        .await??;
     match video {
         Some(enc) => {
             video_head(&mut client).await?;
@@ -1416,6 +1422,7 @@ mod tests {
             device_video_allowed: true,
             video: None,
             acks: Arc::default(),
+            mjpeg: Default::default(),
             feeds: Mutex::default(),
             tls: None,
             mcp: None,
@@ -1935,8 +1942,10 @@ mod tests {
         let frames = b"HTTP/1.1 200 OK\r\n\r\n--wda\r\nContent-Length: 4\r\n\r\n\xff\xd8\xff\xd9\r\n";
         let (client, mut browser) = tokio::io::duplex(512);
         let mut received = Vec::new();
+        let hub = crate::video::hub::MjpegHub::with_idle(Duration::from_secs(2));
+        let src = hub.subscribe("A", || async { anyhow::Ok(&frames[..]) }).await.unwrap();
         let (_, count) = tokio::join!(
-            crate::video::serve_mjpeg(&frames[..], client, Duration::from_secs(2)),
+            crate::video::serve_mjpeg(src, client, Duration::from_secs(2)),
             browser.read_to_end(&mut received),
         );
         assert!(count.unwrap() > frames.len());
@@ -1949,6 +1958,8 @@ mod tests {
         for capacity in [1, 512] {
             let (_phone, remote) = tokio::io::duplex(8);
             let (client, _browser) = tokio::io::duplex(capacity);
+            let hub = crate::video::hub::MjpegHub::with_idle(idle);
+            let remote = hub.subscribe("A", || async { anyhow::Ok(remote) }).await.unwrap();
             tokio::time::timeout(Duration::from_secs(2), crate::video::serve_mjpeg(remote, client, idle))
                 .await
                 .unwrap();

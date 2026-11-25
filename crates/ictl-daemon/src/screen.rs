@@ -29,7 +29,7 @@ use crate::protocol::{Response, SCREEN_KEYFRAME, ScreenMsg};
 use crate::tools::video_bitrate;
 
 /// How often the interface rotation is asked of WDA while streaming (about 20 ms each, only when the device lock is
-/// free)
+/// free). Once for all the pages watching ([`Daemon::sample_rotation`]), not once per page
 const ROTATION_EVERY: Duration = Duration::from_secs(1);
 
 fn degrees(r: Rotation) -> u32 {
@@ -106,7 +106,10 @@ impl Daemon {
         let mut need_key = true;
         let mut codec: Option<String> = None;
         let mut rotation: Option<u32> = None;
-        let mut asked_rotation = Instant::now() - ROTATION_EVERY;
+        let mut rotations = self.rotation.subscribe();
+        // the rotation already known goes out first
+        rotations.mark_changed();
+        self.sample_rotation();
         let mut tick = tokio::time::interval(Duration::from_millis(250));
         let mut buf = [0u8; 64];
         loop {
@@ -156,11 +159,13 @@ impl Daemon {
                     if need_key {
                         feed.request_keyframe();
                     }
-                    if asked_rotation.elapsed() < ROTATION_EVERY {
-                        continue;
+                    continue;
+                }
+                r = rotations.changed() => {
+                    if r.is_err() {
+                        return;
                     }
-                    asked_rotation = Instant::now();
-                    let Some(r) = self.current_rotation().await else { continue };
+                    let Some(r) = *rotations.borrow_and_update() else { continue };
                     if rotation == Some(r) {
                         continue;
                     }
@@ -172,6 +177,34 @@ impl Daemon {
                 return;
             }
         }
+    }
+
+    /// Starts the one rotation sampler for all the watching pages unless it runs: it samples every
+    /// [`ROTATION_EVERY`] and publishes to [`Daemon::rotation`] while anyone subscribes, then stops. Before, each page
+    /// sampled for itself, N lock attempts a second for N pages
+    fn sample_rotation(self: &Arc<Self>) {
+        use std::sync::atomic::Ordering::SeqCst;
+        if self.rotation_sampling.swap(true, SeqCst) {
+            return;
+        }
+        // what an earlier sampler saw may be out of date by now
+        self.rotation.send_replace(None);
+        let d = self.clone();
+        tokio::task::spawn_local(async move {
+            loop {
+                if d.rotation.receiver_count() == 0 {
+                    d.rotation_sampling.store(false, SeqCst);
+                    // a page that came just now saw the sampler still running: carry on for it
+                    if d.rotation.receiver_count() == 0 || d.rotation_sampling.swap(true, SeqCst) {
+                        return;
+                    }
+                }
+                if let Some(r) = d.current_rotation().await {
+                    d.rotation.send_if_modified(|v| v.replace(r) != Some(r));
+                }
+                tokio::time::sleep(ROTATION_EVERY).await;
+            }
+        });
     }
 
     /// The fresh interface rotation, if this poll could measure it.
@@ -249,6 +282,34 @@ mod tests {
             [Rotation::Portrait, Rotation::TopToRight, Rotation::UpsideDown, Rotation::TopToLeft].map(degrees),
             [0, 90, 180, 270]
         );
+    }
+
+    /// One sampler however many pages watch; it stops once none does, and the next page starts it again
+    #[tokio::test]
+    async fn one_rotation_sampler_while_pages_watch() {
+        use std::sync::atomic::Ordering::SeqCst;
+        let (d, dir) = test_daemon("stream-rotation-sampler");
+        tokio::task::LocalSet::new()
+            .run_until(async {
+                let pages: Vec<_> = (0..3).map(|_| d.rotation.subscribe()).collect();
+                for _ in &pages {
+                    d.sample_rotation();
+                }
+                assert!(d.rotation_sampling.load(SeqCst));
+                drop(pages);
+                tokio::time::timeout(ROTATION_EVERY * 3, async {
+                    while d.rotation_sampling.load(SeqCst) {
+                        tokio::time::sleep(Duration::from_millis(20)).await;
+                    }
+                })
+                .await
+                .expect("stops with the last page");
+                let _page = d.rotation.subscribe();
+                d.sample_rotation();
+                assert!(d.rotation_sampling.load(SeqCst));
+            })
+            .await;
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[tokio::test]

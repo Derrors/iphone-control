@@ -549,6 +549,11 @@ pub struct Daemon {
     give_way: tokio::sync::Notify,
     /// When the last action was done: background checks wait for a quiet moment ([`quiet_before`])
     last_action: std::sync::Mutex<Option<Instant>>,
+    /// The interface rotation (degrees) for the pages watching the screen video, sampled once for all of them
+    /// while any watches (see [`crate::screen`])
+    pub(crate) rotation: watch::Sender<Option<u32>>,
+    /// The rotation sampler is running
+    pub(crate) rotation_sampling: std::sync::atomic::AtomicBool,
 }
 
 impl Daemon {
@@ -700,6 +705,8 @@ impl Daemon {
             waiting: std::sync::atomic::AtomicUsize::new(0),
             give_way: tokio::sync::Notify::new(),
             last_action: std::sync::Mutex::new(None),
+            rotation: watch::channel(None).0,
+            rotation_sampling: std::sync::atomic::AtomicBool::new(false),
         })
     }
 

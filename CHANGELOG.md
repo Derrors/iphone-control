@@ -16,6 +16,8 @@ What changed in each release, one line per change. Versions follow [Semantic Ver
 - Responses from WebDriverAgent, accessibility messages and screen video frames have size limits, so a broken stream can't make the program use unbounded memory.
 - Screenshots of a phone driven natively say "via CoreDevice" instead of "via HID".
 - With nobody watching the control page, the phone's screen video is no longer assembled into frames, which saves CPU while an agent works.
+- Several control pages on one phone running WebDriverAgent share one picture stream from the phone instead of opening one each, which could push WebDriverAgent over the CPU limit at which iOS stops it.
+- Pages watching the phone's own video share one rotation check a second instead of one per page.
 
 ## [0.2.14] - 2026-11-24
 

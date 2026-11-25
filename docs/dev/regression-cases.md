@@ -179,3 +179,5 @@
 | 173 | 协议和媒体数据没有总大小上限：WDA 响应按对方给的 Content-Length 预分配，DTX 只限单片 64 MB、按包头先分配，HEVC 帧丢了 marker 又一直同一时间戳时无限拼接 | WDA 响应 64 MB（先核对 Content-Length 再分配）、DTX 整条消息 64 MB（各片合计，边收边读）、HEVC 帧 8 MB（超了整帧丢掉并请求关键帧） | 单测 `oversized_responses_are_refused`、`the_whole_message_is_limited_not_each_fragment`、`oversized_frames_are_dropped` |
 | 174 | `HidSession::held_drag`（`iphone_swipe` 带 `hold`）按下后没记下手指：中途失败或超时，关会话时不补发抬起，手指留在屏幕上 | 按下后记 `contact`，拖完清掉；会话关闭时照常抬起 | 代码审查（无法在单测里构造 HID 会话中途失败） |
 | 175 | 重签完成后不忘掉旧的后台 WDA 记录、不唤醒巡检，新 WDA 要等最多 10 秒的下一轮才拉起 | 重签成功后先忘掉这台设备的后台 WDA，再丢会话并唤醒巡检 | 代码审查（真机回归期间这个分支上没有触发重签） |
+| 176 | WDA 设备上每开一个控制台页面，viewer 就向手机 9100 端口多开一路 MJPEG：WDA 每路各截一次图，几个页面就能把 WDA 推过 iOS 的 CPU 上限被结束 | 每台手机一路 MJPEG，页面订阅它（`video/hub.rs`）：最后一个页面走了或流断了才关；新页面马上拿到当前一帧；H.264 编码器仍每页一个（各自的拥塞控制） | 单测 `pages_share_one_stream_per_phone`、`an_ended_stream_is_opened_again` + 真机（iPad mini 5：3 路 `/stream` 只多 1 条到 usbmuxd 的连接，关掉后释放；2 路 `/video` 1 条手机连接、2 个 VAAPI 编码器） |
+| 177 | 每个看手机原生视频的连接每秒各抢一次设备锁采样屏幕方向，N 个页面每秒 N 次 | 守护进程里一个按需的方向采样器，有人看时每秒一次，经 watch 通道发给所有连接 | 单测 `one_rotation_sampler_while_pages_watch` + 真机（iPhone 15 Pro Max：两路原生视频同时收到方向） |

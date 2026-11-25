@@ -2,8 +2,8 @@
 //! over the internet; H.264 of the same frames is about 1/15 of that at the same frame rate and, to the eye, the
 //! same picture.
 //!
-//! Per connection: WDA's MJPEG over usbmuxd → frames equal to the previous one dropped (WDA repeats a still screen
-//! about 25 times a second) → the encoder (on macOS VideoToolbox inside this program, `vt.rs`; else ffmpeg
+//! Per connection: WDA's MJPEG over usbmuxd, one stream per phone shared by its pages ([`hub`]), with frames equal to
+//! the previous one dropped (WDA repeats a still screen about 25 times a second) → the encoder (on macOS VideoToolbox inside this program, `vt.rs`; else ffmpeg
 //! ([`ffmpeg`]: hardware encoder first, `mpjpeg` in, FLV out)) → the page as
 //! messages of one type byte, a 4-byte big-endian length and the payload:
 //!
@@ -27,6 +27,7 @@
 pub mod device;
 mod ffmpeg;
 mod flv;
+pub mod hub;
 mod mjpeg;
 mod sps;
 pub mod transcode;
@@ -215,43 +216,21 @@ fn config_message(avcc: &[u8], size: (u32, u32), encoder: &str, stream: &str) ->
     Some(message(0, v.to_string().as_bytes()))
 }
 
-/// Sends the picture of `src` (WDA's MJPEG response) to `client` until either ends. The HTTP head is already sent
+/// Sends the picture of `src` (a phone's shared MJPEG stream) to `client` until either ends. The HTTP head is already
+/// sent
 pub async fn serve(
     enc: Arc<Encoders>,
     qp: u8,
     acks: Arc<Acks>,
-    src: impl AsyncRead + Unpin + Send + 'static,
+    src: hub::Subscription,
     client: impl AsyncRead + AsyncWrite + Unpin + Send + 'static,
 ) {
     let (ack_guard, mut acked) = acks.register();
     let mut flow = Flow::default();
 
     // the phone's frames, repeated ones dropped; the newest wins if encoding falls behind
-    let (frame_tx, mut frames) = watch::channel::<Option<Arc<Vec<u8>>>>(None);
-    let reader = tokio::spawn(async move {
-        let mut f = mjpeg::Frames::new(src);
-        let mut last: Option<Arc<Vec<u8>>> = None;
-        loop {
-            match tokio::time::timeout(STREAM_IDLE, f.next()).await {
-                Ok(Ok(Some(j))) => {
-                    if last.as_ref().is_some_and(|l| **l == j) {
-                        continue;
-                    }
-                    let j = Arc::new(j);
-                    last = Some(j.clone());
-                    if frame_tx.send(Some(j)).is_err() {
-                        return;
-                    }
-                }
-                Err(_) | Ok(Ok(None)) => return,
-                Ok(Err(e)) => {
-                    tracing::debug!("MJPEG stream: {e}");
-                    return;
-                }
-            }
-        }
-    });
-    let _reader = AbortOnDrop(reader);
+    let mut frames = src.frames.clone();
+    let _src = src;
 
     let (out_tx, out_rx) = mpsc::channel(QUEUE);
     let _writer = AbortOnDrop(tokio::spawn(send_video(client, out_rx, STREAM_IDLE)));
@@ -391,28 +370,9 @@ fn start(enc: &Encoders, size: (u32, u32), qp: u8) -> Option<ffmpeg::Session> {
 /// those (seen on Chrome 14x), and on a still screen no next frame would come. So the parts carry no
 /// `Content-Length` (the next one isn't known yet); browsers cut at the boundary anyway. The HTTP response head is
 /// written here
-pub async fn serve_mjpeg(
-    src: impl AsyncRead + Unpin + Send + 'static,
-    client: impl AsyncRead + AsyncWrite + Unpin,
-    idle: Duration,
-) {
-    let (tx, rx) = watch::channel::<Option<Arc<Vec<u8>>>>(None);
-    let reader = tokio::spawn(async move {
-        let mut f = mjpeg::Frames::new(src);
-        let mut last: Option<Arc<Vec<u8>>> = None;
-        while let Ok(Ok(Some(j))) = tokio::time::timeout(idle, f.next()).await {
-            if last.as_deref() == Some(&j) {
-                continue;
-            }
-            // kept and sent as the same allocation, not copied per frame
-            let j = Arc::new(j);
-            last = Some(j.clone());
-            if tx.send(Some(j)).is_err() {
-                return;
-            }
-        }
-    });
-    let _reader = AbortOnDrop(reader);
+pub async fn serve_mjpeg(src: hub::Subscription, client: impl AsyncRead + AsyncWrite + Unpin, idle: Duration) {
+    let rx = src.frames.clone();
+    let _src = src;
     let (rd, wr) = tokio::io::split(client);
     tokio::select! {
         _ = client_disconnected(rd) => {}
@@ -504,7 +464,9 @@ mod tests {
     async fn leaving_a_still_mjpeg_picture_releases_the_source() {
         let (mut phone, src) = tokio::io::duplex(512);
         let (client, mut browser) = tokio::io::duplex(512);
-        let relay = tokio::spawn(serve_mjpeg(src, client, Duration::from_secs(30)));
+        let hub = hub::MjpegHub::default();
+        let sub = hub.subscribe("A", || async { Ok(src) }).await.unwrap();
+        let relay = tokio::spawn(serve_mjpeg(sub, client, Duration::from_secs(30)));
         phone
             .write_all(b"HTTP/1.1 200 OK\r\n\r\n--wda\r\nContent-Length: 4\r\n\r\n\xff\xd8\xff\xd9\r\n")
             .await
@@ -674,6 +636,8 @@ mod tests {
         let mut page = tokio::net::TcpStream::connect(l.local_addr().unwrap()).await.unwrap();
         let (server_side, _) = l.accept().await.unwrap();
         let acks = Arc::new(Acks::default());
+        let hub = hub::MjpegHub::default();
+        let src = hub.subscribe("A", || async { Ok(src) }).await.unwrap();
         let _server = AbortOnDrop(tokio::spawn(serve(enc.clone(), enc.qp(), acks.clone(), src, server_side)));
         const RATE: f64 = 20.0 * 1024.0;
         let (mut buf, mut total, mut frames_in) = (Vec::new(), 0u64, 0);

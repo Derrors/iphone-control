@@ -4,7 +4,7 @@
 
 ## 准备
 
-- 一台主机：Mac（Apple 芯片），或 Linux（x86_64、aarch64）
+- 一台主机：Mac（Apple Silicon 或 Intel），或 Linux（x86_64、aarch64）
 - iPhone 或 iPad 和能传数据的线。**推荐 iOS 27 及以上**：原生控制，手机上什么都不装，不用 Apple ID；iOS 17–26 也能用，经 WebDriverAgent
 - iOS 26 及以下还要一个免费 Apple ID（建议专门注册一个），用来给 WebDriverAgent 签名
 - 主机能访问苹果服务器和 GitHub；国内网络一般要配代理（引导里会问）

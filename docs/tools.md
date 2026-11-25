@@ -8,10 +8,10 @@ Coordinates are in **points**, the same unit as the pixels of a full-screen `iph
 
 | Tool | Parameters | Notes |
 |---|---|---|
-| `iphone_status` | — | WDA ready, locked or not, foreground app, screen size, daemon state |
+| `iphone_status` | — | Ready (native control or WDA), locked or not, foreground app, screen size, daemon state |
 | `iphone_screenshot` | `x`, `y`, `width`, `height` (all optional, points) | Full screen scaled to points. With a region: cropped from the full-resolution capture and enlarged; the result says the zoom factor and how to convert back to screen points |
 | `iphone_list_elements` | `filter` (default `""`), `limit` (default 150) | Elements that carry text: type, label, id, value, center point and size. `filter` matches type, label, name or value, case-insensitive (for example `SearchField`). Visibility is judged by position, so something hidden behind a dialog can still be listed |
-| `iphone_wait_for` | `text`, `timeout` (seconds, default 5, max 30) | Returns as soon as an element containing `text` appears; text typed into input fields does not count. Use this instead of polling with screenshots |
+| `iphone_wait_for` | `text`, `state` (`appeared` by default, or `disappeared`), `timeout` (seconds, default 5, max 30) | Returns as soon as an element containing `text` appears, or with `state: "disappeared"` as soon as no element on screen contains it; text typed into input fields does not count. Use this instead of polling with screenshots |
 | `iphone_list_apps` | `include_system` (default false) | Name and bundle id of installed apps |
 
 ## Acting
@@ -74,7 +74,7 @@ Without the variable, the tool list and every call are unchanged; while a task r
 
 ## Auto-unlock and "read-only" tools
 
-When auto-unlock is configured for the controlled device, a locked phone is unlocked first by the action tools and by `iphone_screenshot`, `iphone_list_elements` and `iphone_wait_for`. `iphone_status`, `iphone_list_apps`, `iphone_list_devices`, `iphone_select_device`, the developer tools and `iphone_press_button` with `lock` never unlock it. While WDA is unavailable nothing is unlocked.
+When auto-unlock is configured for the controlled device, a locked phone is unlocked first by the action tools and by `iphone_screenshot`, `iphone_list_elements` and `iphone_wait_for`. `iphone_status`, `iphone_list_apps`, `iphone_list_devices`, `iphone_select_device`, the developer tools and `iphone_press_button` with `lock` never unlock it. Native control unlocks through the accessibility service and HID without WDA; on a device on WDA, while WDA is unavailable nothing is unlocked.
 
 Every tool carries MCP annotations: the six read-only tools (`iphone_status`, `iphone_screenshot`, `iphone_list_elements`, `iphone_list_apps`, `iphone_wait_for`, `iphone_list_devices`) are `readOnlyHint: true`, and with the developer tools on so are `iphone_app_logs`, `iphone_crash_reports` and `iphone_web_targets`, nine in all. "Read-only" means they don't change what's on screen; with auto-unlock on, `iphone_screenshot`, `iphone_list_elements` and `iphone_wait_for` still unlock the phone first. The action tools are not read-only, and taps, long-presses, `iphone_terminate_app` and `iphone_batch` are also marked `destructiveHint: true`, since what they hit on screen can delete or send things. So are `iphone_web_eval`, `iphone_install_app` and `iphone_uninstall_app`.
 
@@ -115,6 +115,14 @@ If the MCP client cancels the call, the remaining steps don't run; a request sti
   "then": "screenshot"
 }
 ```
+
+## Native control and WDA
+
+iOS 27 and later are controlled natively by default; `ICTL_IOS_BACKEND=wda` goes back to WebDriverAgent, which iOS 26 and earlier always use. The tools and their results are the same, so agents needn't care, with a few differences:
+
+- **Rows off the screen aren't listed:** scroll a long list to a row before finding or tapping it by text (WDA lists such rows but can't tap them).
+- **Text is always pasted:** `iphone_type_text` puts the text on the phone's pasteboard and pastes it; the daemon taps *Allow Paste*, reads the field back and restores the pasteboard at once.
+- **Coarser elements:** the accessibility service often makes one element of a whole row ("Wi-Fi, Derrors-5G"), so `iphone_list_elements` is shorter than with WDA; finding by contained text still works.
 
 ## HID fallback
 

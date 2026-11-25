@@ -4,7 +4,7 @@ Install the program, plug in the phone, run `iphone-control` and follow the guid
 
 ## You need
 
-- A host: a Mac with Apple silicon, or Linux (x86_64, aarch64)
+- A host: a Mac with Apple silicon or Intel, or Linux (x86_64, aarch64)
 - An iPhone or iPad and a cable that carries data. **iOS 27 or later is recommended**: native control, nothing installed on the phone, no Apple ID. iOS 17–26 work too, through WebDriverAgent
 - On iOS 26 and earlier, a free Apple ID (a dedicated one is recommended) to sign WebDriverAgent
 - Internet access to Apple and GitHub from the host (the guide asks for a proxy if you need one)

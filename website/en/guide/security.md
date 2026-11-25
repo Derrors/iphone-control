@@ -6,7 +6,7 @@ This page has the essentials. What is stored, who can reach it and the details o
 
 ## What is stored
 
-- **The data directory** holds pairing records, with WDA also the Apple ID session and the signing key, and, with auto-unlock on, the passcode in **plain text**. Keep it and its backups as safe as a password. The Apple ID password is never stored.
+- **The data directory** holds the signing key and the Apple ID session (WDA only), and, with auto-unlock on, the passcode in **plain text**. Keep it and its backups as safe as a password. The Apple ID password is never stored. Pairing records aren't in it: the system's usbmuxd keeps them in `/var/lib/lockdown` (Linux) or `/var/db/lockdown` (macOS).
 - **The control socket** is a Unix socket with mode 0600, and whoever can connect to it controls the phone: root on the host and the user the daemon runs as.
 - **Notification keys** are in the settings file `~/.config/iphone-control/env`, mode 0600.
 
@@ -16,7 +16,7 @@ This page has the essentials. What is stored, who can reach it and the details o
 - **No root.** The daemon runs as your regular user, as a per-user service; the install script refuses to run as root.
 - **Auto-unlock is off by default** and disables itself after one wrong attempt.
 - **Developer tools are off by default.**
-- Exact dependency versions; the WebDriverAgent download and the install script's download are sha256-checked.
+- Exact dependency versions. Each release archive and .deb comes with an Ed25519-signed manifest; the installer and `iphone-control update` check its signature, name, size and sha256 before installing, and the WebDriverAgent download is sha256-checked too.
 
 ## Risks to know about
 

@@ -20,6 +20,14 @@ Messages are in Simplified Chinese by default, and in English with `IPHONE_CONTR
 - **Cable:** some cables only charge. If `lsusb` doesn't show an Apple device (vendor `05ac`), try another cable or port.
 - **Drops every minute or so while charging:** with *Settings → Battery → Charging → 80% Limit* on, the phone keeps starting and stopping charging near 80%, and each switch renegotiates USB-C power, which briefly disconnects USB (3–5 s). The daemon reconnects by itself, but in-flight actions fail. Set the limit to 100% while the phone is used for automation.
 
+## Native control won't get ready
+
+iOS 27 and later are controlled natively by default, which needs only pairing, Developer Mode, the developer disk image and the accessibility service. When `status` keeps saying 「准备手机失败，稍后重试」:
+
+- **The disk image doesn't download:** it comes from GitHub; set a proxy if needed (`iphone-control setup --reconfigure`, pick *Proxy*).
+- **The phone is locked:** keep it unlocked while it gets ready.
+- **Still stuck:** run `doctor` to see which layer fails and [open an issue](https://github.com/Derrors/iphone-control/issues/new/choose). Meanwhile you can go back to WDA with `ICTL_IOS_BACKEND=wda` in `~/.config/iphone-control/env` and `iphone-control service restart` (needs an Apple ID; see the next section).
+
 ## WebDriverAgent won't start
 
 - **"Untrusted developer":** after the first install, trust your Apple ID under *Settings → General → VPN & Device Management* (needs internet on the phone).
@@ -44,7 +52,7 @@ Messages are in Simplified Chinese by default, and in English with `IPHONE_CONTR
 
 ## The phone shows a "paired computer" icon and won't auto-lock
 
-The HID fallback keeps a screen-mirroring session open while it is in use (the Dynamic Island shows a computer icon) and closes it after 30 seconds of inactivity. If the icon stays, restart the daemon; stopping it closes the session.
+The HID fallback keeps a screen-mirroring session open while it is in use (the Dynamic Island shows a computer icon), and so do taps, swipes and buttons under native control on iOS 27 and later, which go through HID; the control page showing the phone's own video uses the same session. It closes after 30 seconds of inactivity. If the icon stays, restart the daemon; stopping it closes the session.
 
 ## macOS
 

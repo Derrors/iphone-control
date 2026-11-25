@@ -12,7 +12,7 @@
 ## 2. 范围
 
 - iOS 27 及以上的手机，**全部工具**在不装 WDA 的情况下可用，结果和措辞对 Agent 尽量不变；可以改回 WDA。
-- 不做：iOS 26 及以下（没有 HID，只能 WDA）；双指缩放（本来就没有这个工具）；删掉 WDA 代码（低版本还要用，已经装着的 WDA 也照常重签）。
+- 不做：iOS 26 及以下（没有 HID，只能 WDA）；双指缩放（本来就没有这个工具）；删掉 WDA 代码（低版本还要用，改回 WDA 时也照常重签）。正在用原生控制的设备不自动重签、也不查 Apple ID 会话，即使以前装过 WDA。
 
 ## 3. 每项能力怎么做
 
@@ -41,7 +41,7 @@
 - **`ictl-ax`**：remoteAXService 的 DTX 会话。握手 `_notifyOfPublishedCapabilities:` → 等 `deviceAPIVersion` → `clientNeedsAccessibility: true`；回答 `hostAPIVersion = 7`；手机每条要回执的消息都回空回执。自己读帧（idevice 的 `RemoteServerClient` 遇到解不开的消息会退出）。两层 NSKeyedArchive 解码成 `AXPTranslatorResponse`，只解用到的字段。`tree::assemble` 按阅读顺序拼树，`xml` 转成 WDA 风格的 XML。
 - **会话归属**：和 HID 会话一样归 `Tunnel` 所有、常驻复用，空闲 60 秒关掉（`AX_IDLE`）。连接断了就重建，不重放操作。
 - **守护进程**：`ICTL_IOS_BACKEND`（`auto`、`native`、`wda`）决定 iOS 27 及以上走哪条路，低于 27 一律 WDA。各工具在设备走原生时改走 `tools/native.rs`；自动解锁复用 `ictl-unlock`，原生一侧实现它的 `Screen`。
-- **状态机和引导**：原生设备的「就绪」= 已配对 + 开发者模式 + 镜像已挂载 + 隧道 + 无障碍会话握手成功，没有 `NeedsSigning`、`WdaStarting`、`NeedsAutomationPin`。准备失败显示「准备手机失败，稍后重试」。重签、Apple ID 会话检查只对用 WDA 的设备做；`setup` 对原生设备跳过 Apple ID 和签名。`status`、`doctor`、控制台都标明「原生」。
+- **状态机和引导**：原生设备的「就绪」= 已配对 + 开发者模式 + 镜像已挂载 + 隧道 + 无障碍会话握手成功，没有 `NeedsSigning`、`WdaStarting`、`NeedsAutomationPin`。准备失败显示「准备手机失败，稍后重试」。自动重签和 Apple ID 会话检查只对用 WDA 的设备做（`supervise::wda_upkeep`）：正在控制的设备走原生控制时两样都不做，这一轮也不算数，换到用 WDA 的设备后下一轮就做；没连手机时会话检查照做（只要装过 WDA），重签不做；从没装过 WDA 的设备两样都不做。`setup` 对原生设备跳过 Apple ID 和签名。`status`、`doctor`、控制台都标明「原生」。
 
 ## 5. 对 Agent 可见的差别
 

@@ -21,7 +21,7 @@ Messages are in Simplified Chinese by default, and in English with `IPHONE_CONTR
 | 准备手机失败，稍后重试：…<br>Preparing the phone failed, retrying later: … | Native control isn't ready | Read the error after the colon and run `doctor`; see [Native control doesn't get ready](#native-control) |
 | WDA 还没签名安装<br>WDA not signed and installed yet | WDA not installed | Run `sign` or `setup` |
 | 正在启动 WDA<br>Starting WDA | Starting WDA (up to about 2 minutes) | Wait. On iOS 27 and later, taps, swipes and screenshots already work through the HID fallback, but a landscape touch needs an orientation from WDA in the last 30 seconds or it is refused, and an unknown screen size returns an error; see [Tools](../guide/tools#when-wda-is-down-the-hid-fallback). On older iOS, wait for WDA |
-| WDA 卡在手机上的「Enable UI Automation」密码框<br>WDA is stuck at the “Enable UI Automation” passcode prompt | The phone asks for the passcode for "XCTest" | Enter the passcode on the phone. This happens after a reboot, and sometimes after the daemon is restarted several times in a row. The daemon retries every 60 seconds and notifies you once |
+| WDA 卡在手机上的「Enable UI Automation」密码框<br>WDA is stuck at the “Enable UI Automation” passcode prompt | The phone asks for the passcode for "XCTest" | Enter the passcode on the phone. This happens after a reboot, and sometimes after the daemon is restarted several times in a row. The daemon retries every 5 seconds, each launch waiting about 25 seconds for the prompt, and notifies you once |
 | WDA 启动失败，稍后重试：…<br>WDA failed to start, retrying later: … | Other failure | Read the error after the colon and run `doctor`. Retries back off up to 5 minutes |
 | 就绪<br>Ready | Everything works | — |
 
@@ -101,7 +101,7 @@ If it still happens on a newer version, look on the phone under Settings → Pri
 
 ## "Paired computer" icon stays and the phone won't auto-lock
 
-The HID fallback, and the control page while it shows the phone's own video (iOS 27 and later), open a screen mirroring session; it closes 30 seconds after it was last used (after the page closes). If the icon doesn't go away, restart the daemon (`iphone-control service restart`).
+The HID fallback, taps, swipes and buttons under native control on iOS 27 and later (they go through HID too), and the control page while it shows the phone's own video (iOS 27 and later) open a screen mirroring session; it closes 30 seconds after it was last used (after the page closes). If the icon doesn't go away, restart the daemon (`iphone-control service restart`).
 ## Reporting a problem
 
 [Open an issue](https://github.com/Derrors/iphone-control/issues/new/choose) with the phone model, iOS version, how you installed it (one command, Homebrew, .deb or source), and the `doctor` output — with UDID, Apple ID and notification keys removed.

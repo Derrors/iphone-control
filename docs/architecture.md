@@ -3,30 +3,34 @@
 ## 1. 总览
 
 ```
-┌──────────────────── Linux / macOS 主机（以普通用户运行）────────────────────────┐
-│                                                                               │
-│  Claude Code ──stdio──▶ iphone-control mcp ──unix socket──┐                   │
-│  （每个会话一个，短命）    （ictl-mcp，经 ictl-protocol）      │                   │
-│                                                           ▼                   │
-│                         iphone-control daemon（ictl-daemon，常驻，唯一持有设备）  │
-│                         ┌───────────────────────────────────────────────────┐ │
-│   usbmuxd（系统的）◀──────┤ 设备状态机   usbmux 监听   重签调度   通知          │ │
-│        │                │     │                                             │ │
-│        │                │  ictl-device: lockdown · CoreDeviceProxy 隧道       │ │
-│        │                │               (jktcp 用户态 TCP) · RSD · cryptexd   │ │
-│        │                │               · HID · 截图 · App 列表/启动          │ │
-│        │                │  ictl-wda:    XCUITestService 启动 WDA ·            │ │
-│        │                │               WDA HTTP（直连设备端口，不监听本机）    │ │
-│        │                │  ictl-unlock: 锁屏解锁（可选）                        │ │
-│        │                │  ictl-sign:   plume_core 登录 · 描述文件 · 签名       │ │
-│        │                └───────────────────────────────────────────────────┘ │
-└────────┼──────────────────────────────────────────────────────────────────────┘
-         │ USB
-   ┌─────▼───────────────────────────────┐
-   │ iPhone / iPad（iOS 17+，开发者模式）   │
-   │ 开发者镜像（Cryptex，iOS 27 含 dtuhidd）│
-   │ WebDriverAgent（免费 Apple ID 签名）   │
-   └─────────────────────────────────────┘
+┌───────────────────────────── Linux / macOS 主机（以普通用户运行） ─────────────────────────────┐
+│                                                                                                │
+│  AI 客户端 ──stdio──▶ iphone-control mcp ──unix socket─────┐                                   │
+│  （Claude Code、Codex 等，每个会话一个；                   │                                   │
+│    ictl-mcp 翻成请求，ictl-protocol 定义协议）             │                                   │
+│                                                                                                │
+│  浏览器、远端 agent ──HTTPS、登录──▶ iphone-control viewer ┤                                   │
+│  （控制台，可选：实时画面、AI 任务、/mcp）                 │                                   │
+│                                                            ▼                                   │
+│                        ┌────────────────────────────────────────────────────────────────────┐  │
+│     usbmuxd（系统的）◀─┤ iphone-control daemon（ictl-daemon，常驻，唯一持有设备）           │  │
+│       │                │ 设备状态机 · 巡检 · 重签 · 任务 · 通知 · 控制接口服务端            │  │
+│       │                │ ictl-protocol：请求/响应类型、控制接口、默认路径                   │  │
+│       │                │ ictl-device：lockdown · CoreDeviceProxy 隧道（用户态 TCP）         │  │
+│       │                │              · HID · 截图 · App 管理 · 媒体流 · Web Inspector      │  │
+│       │                │ ictl-ax：remoteAXService 会话（iOS 27 原生读界面）                 │  │
+│       │                │ ictl-wda：后台启动 WDA · WDA HTTP · 元素树解析                     │  │
+│       │                │ ictl-unlock：自动解锁   ictl-sign：Apple ID 登录与签名             │  │
+│       │                │ ictl-l10n：界面文字的语言（其余 crate 都用它）                     │  │
+│                        └────────────────────────────────────────────────────────────────────┘  │
+└────────────────────────────────────────────────────────────────────────────────────────────────┘
+       │ USB
+     ┌─▼──────────────────────────────────────────────┐
+     │ iPhone / iPad（开发者模式）                    │
+     │ iOS 27+：原生控制，不装东西、不用 Apple ID     │
+     │ iOS 17–26：WebDriverAgent，免费 Apple ID 签名  │
+     │            8100/9100 只听手机回环              │
+     └────────────────────────────────────────────────┘
 ```
 
 和 toolkit 的根本区别：toolkit 每条 HID 命令都要重新建一次隧道（3～5 秒），WDA 端口转发要单独一个进程，各工具各建各的隧道。D 方案里**守护进程独占设备**，隧道、HID 会话（含显示媒体流）、WDA 会话都常驻复用；MCP 进程只是一个薄客户端。
@@ -117,7 +121,7 @@
 - **热插拔**：交给系统的 usbmuxd（Linux 上由 udev 通知）。守护进程每 10 秒向 usbmuxd 列一次设备；列设备连续 3 轮出错才当作离线，usbmuxd 抖一下不拆会话。`doctor` 另数 sysfs `/sys/bus/usb/devices/`（Linux）或 IORegistry（macOS）里的 iPhone/iPad/iPod（厂商号 `05ac` 且产品名匹配，键盘等配件不算），区分「USB 上没有手机」和「usbmuxd 看不到」。（以前的 Docker 镜像里没有 udev，守护进程自己看护 usbmuxd，台数对不上就重启它；去掉 Docker 后这部分删了，见 D5、D14。）
 - **隧道**：CoreDeviceProxy + jktcp 用户态 TCP 栈（idevice `tunnel_tcp_stack`），不需要 root，不创建 TUN 网卡。锁屏且从未解锁过（BFU）时报 `PasswordProtected`，进入 `NeedsUnlock`，只能人工解锁。HID 和截图用的隧道按需建立、常驻复用；WDA 掉线或 usbmuxd 重启时连隧道一起丢。
 - **HID 会话**：归 `Tunnel` 所有（`Tunnel::hid` / `close_hid` / `close`），持有屏幕媒体流。关闭时必须先停媒体流再断隧道，否则手机一直挂着「配对的电脑」会话（灵动岛图标常驻、不自动锁屏）。空闲 30 秒关闭，重开约 0.5 秒。
-- **开发者镜像**：每次启动 WDA 前都先 `installed_ddi()` 查询（toolkit 实测已挂载时约 1 秒），未挂载才走 `install_ddi()`（个性化 + TSS）。手机重启后镜像可能会掉，所以这一步不能省。默认缓存（`ddi/`）连续 3 次**挂载**失败才清掉重新下载，隧道建不起来不计入。设了 `ICTL_DDI_DIR` 时不下载、也不删里面的文件，缺文件时报错说明缺哪个。
+- **开发者镜像**：每次启动 WDA 前都先 `installed_ddi()` 查询（toolkit 实测已挂载时约 1 秒），未挂载才走 `install_ddi()`（个性化 + TSS）；iOS 17–18 不经 cryptexd，而是经 lockdown 的 `mobile_image_mounter` 挂经典个性化镜像（缓存在 `ddi/personalized/`，#185）。手机重启后镜像可能会掉，所以这一步不能省。默认缓存（`ddi/`）连续 3 次**挂载**失败才清掉重新下载，隧道建不起来不计入。设了 `ICTL_DDI_DIR` 时不下载、也不删里面的文件，缺文件时报错说明缺哪个。
 - **WDA 就绪判定**：守护进程在后台启动 WDA（DVT processcontrol），本进程不持有 XCTest 会话，就绪只看 `/status`，WDA 卡死另有探测（#103）。守护进程重启、切换设备再切回来时接上原来的进程（`state.json` 的 `detached_wdas`，每台设备一条）；`service stop`/`uninstall` 时结束它，见 [WDA 依赖调研](dev/wda-dependency-research.md#8-不挂-xctest-会话启动-wda)。用 XCTest 会话启动（`WdaRunner::start`，只剩 `debug` 子命令在用）时，必须同时满足「本进程持有的 XCTest 会话存活」和 `/status` 返回 ready：toolkit 踩过，host 侧 runner 退出后，手机上残留的 WDA 还会响应几十秒再自杀，单看 `/status` 会误判。
 - **自动化密码框**：手机重启后首次启用 UI 自动化会弹「为 XCTest 输入 iPhone 密码」，没人输就报 `Timed out while enabling automation mode`。识别到这个错误：进入 `NeedsAutomationPin`、只推送一次通知；之后每次启动只等 25 秒，没弹出密码框就 5 秒后再启动一次（密码框只在启动时出现、每次约 45 秒，且不是每次启动都出现；弹出来的那次会一直等到密码框消失），这样手机上大部分时间都有框可输。恢复后再推送一次。
 - **退避**：其它 WDA 启动失败按 60s → 120s → 240s → 300s 退避，上限 5 分钟；手机重新连上、WDA 就绪、重签完成时重置。
@@ -127,7 +131,8 @@
 | crate | 职责 | 主要依赖 |
 |---|---|---|
 | `ictl-device` | `Device` 句柄：usbmux 发现与监听、lockdown、配对状态、开发者模式状态、隧道（`Tunnel`，持有 HID 会话和显示媒体流）、开发者镜像（含下载缓存）、截图、剪贴板（HID 粘贴中文等非 ASCII 文字）、App 列表/启动/结束、安装 IPA、卸载、崩溃报告、系统日志流（`oslog`，开发者工具用）、打开 Web Inspector；所有设备调用都有时限 | `idevice`（锁上游 git 提交） |
-| `ictl-wda` | `WdaRunner`（XCUITestService 启动/停止）、`WdaClient`（会话、点击、W3C actions、keys、source、screenshot、appium settings、锁屏核对）、经 usbmuxd 直连设备 8100 端口的 HTTP 传输（区分连不上和请求超时）、元素树解析（纯函数，可单测） | `idevice`（`xctest`）、`quick-xml` |
+| `ictl-wda` | `WdaRunner`（经 XCTest 启动/停止，只剩 `debug` 子命令用）、后台启动 WDA（DVT processcontrol，不持 XCTest 会话，带 `USE_IP=127.0.0.1`）、`WdaClient`（会话、点击、W3C actions、keys、source、screenshot、appium settings、锁屏核对）、经 usbmuxd 直连设备 8100 端口的 HTTP 传输（区分连不上和请求超时）、元素树解析（纯函数，可单测） | `idevice`（`xctest`）、`quick-xml` |
+| `ictl-ax` | remoteAXService 的 DTX 会话：握手、读帧、按层读前台 App 和 SpringBoard 的元素，拼成树再转成 WDA `/source` 风格的 XML（iOS 27 及以上原生控制读界面用） | `idevice`、`plist` |
 | `ictl-webinspector` | Web Inspector 服务（`com.apple.webinspector`，经 lockdown）的客户端：列出可检查的网页和 WebView、在页面里执行 JavaScript（`Target` 域和旧版直接收命令两种都支持，Promise 用 `Runtime.awaitPromise` 等待）。纯协议，消息解析可单测 | `idevice`、`plist` |
 | `ictl-l10n` | 界面文字的语言：取当前语言，`tr!` / `trf!` / `log_tr!` / `log_trf!` 宏（每条文字在代码里原地写成中英一对，见 D12） | 无 |
 | `ictl-protocol` | 控制接口的 `Request`/`Response` 类型和客户端 `call(socket, req, timeout)`、任务的流式请求；`Response::Text` 除了给人和 agent 看的文字，还可以带 `data`（状态、元素、App 列表、系统弹窗的结构化字段，给控制台这类程序用，文字措辞改了也不影响它们）；默认的数据目录、socket 路径和 root 判断 | `serde`、`serde_json`、`tokio`、`libc`、`ictl-l10n` |
@@ -137,7 +142,7 @@
 | `ictl-mcp` | MCP stdio 服务，`iphone_*` 工具 18 个，开启开发者工具后 24 个：toolkit 的 13 个 + `iphone_wait_for`、`iphone_batch`、`iphone_list_devices`、`iphone_select_device`、`iphone_scroll_collect`，以及 6 个可选的开发者工具（D13）；操作类工具可带 `then` 顺带返回操作后的界面；任务里另有 `iphone_confirm`；经控制接口调用守护进程。同一套工具也给控制台的 `/mcp` 用（`http_service`，Streamable HTTP） | `ictl-protocol`、`ictl-l10n`、`rmcp`（`server`、`transport-io`、`transport-streamable-http-server`）、`http` |
 | `apps/iphone-control` | CLI 入口（`main.rs`；和守护进程打交道的公共函数在 `client.rs`，控制台、引导和更新器都用它）：不带命令时是首次运行引导或状态（`guide.rs`）、`daemon`、`mcp`、`mcp-config`、`status`、`doctor`、`setup [--reconfigure]`、`service`（`service.rs`：launchd / systemd 用户服务）、`login`、`sign`、`resign`、`passcode`、`unlock-reset`、`devices`、`select`、`wda-bridge`、`viewer`（`viewer.rs`：本机控制台网页，实时画面、设备面板；`video/`：画面的 H.264 编码（外部 ffmpeg）和 MJPEG 去重；`agent.rs`：页面上的 AI 任务，`viewer.html` 是页面）、`viewer token …`（命名令牌、只读令牌）、`task …`（`task.rs`、`remote.rs`）、`mcp --url`（`mcp_bridge.rs`）、`update …`（`update.rs`、`update/`：签名清单、事务式替换）、`completions`、`notify-test`；隐藏的 `debug <ddi\|hid\|screenshot\|soak\|wda\|e2e>` 真机诊断（原第 0 步 spike，不经守护进程；feature `debug-cmds`，默认不编译） | `clap` |
 
-依赖方向：`apps` → `ictl-daemon` / `ictl-mcp`，还直接依赖 `ictl-device`、`ictl-sign`；`ictl-daemon` → `ictl-unlock` → `ictl-wda` → `ictl-device`；`ictl-daemon` 还直接依赖 `ictl-webinspector`、`ictl-sign` 和 `ictl-protocol`。`ictl-device` 也依赖 `ictl-webinspector`（打开连接）。`ictl-mcp` 只依赖 `ictl-protocol` 和 `ictl-l10n`，不依赖守护进程和设备层。`ictl-l10n` 不依赖其他 crate，除 `ictl-webinspector` 外都用它。`apps` 的 `debug`（feature `debug-cmds`）直接调用 `ictl-device`、`ictl-wda`。
+依赖方向：`apps` → `ictl-daemon` / `ictl-mcp`，还直接依赖 `ictl-device`、`ictl-sign`；`ictl-daemon` → `ictl-unlock` → `ictl-wda` → `ictl-device`；`ictl-daemon` 还直接依赖 `ictl-ax`、`ictl-webinspector`、`ictl-sign` 和 `ictl-protocol`。`ictl-device` 也依赖 `ictl-ax`（无障碍会话归隧道）和 `ictl-webinspector`（打开连接）。`ictl-mcp` 只依赖 `ictl-protocol` 和 `ictl-l10n`，不依赖守护进程和设备层。`ictl-l10n` 不依赖其他 crate，除 `ictl-webinspector` 外都用它。`apps` 的 `debug`（feature `debug-cmds`）直接调用 `ictl-device`、`ictl-wda`。
 
 ## 5. 截图与坐标
 
@@ -158,7 +163,7 @@
 | `wda/` | 当前签好的包 `WDA-signed.ipa`，和未签名包 `WDA-unsigned.ipa`：第一次签名前下载 Appium 官方的未签名真机包（`WebDriverAgentRunner-Runner.zip` v16.15.3，校验 sha256）重新打包（`crates/ictl-daemon/src/wda_pkg.rs`）；计划改为本项目 macOS CI 编译。描述文件只嵌在签好的包里，到期时间记在 `state.json` | 默认 | 否（在本机下载） |
 | `secrets/passcodes/<UDID>` | 各设备的锁屏密码（仅启用自动解锁时）；旧版本的 `secrets/passcode` 在只接着一台时归到那台名下 | 0600 | 否 |
 | `logs/` | 事件日志 `daemon.log`（超过 5 MB 轮转成 `.1`）；自动解锁停用标记 `UNLOCK-DISABLED`（与 toolkit 一致，便于人工发现；全局，不分设备） | 默认 | 否 |
-| `state.json` | 最近一次签名的 Team ID、WDA Bundle ID、描述文件到期时间；选定的设备；每台设备的竖放屏幕尺寸（按 UDID）；上次重签结果 | 默认 | 否 |
+| `state.json` | 最近一次签名的 Team ID、WDA Bundle ID、描述文件到期时间；选定的设备；每台设备的竖放屏幕尺寸（按 UDID）；上次重签结果（`resign_result`）；每台设备后台启动的 WDA 进程号（`detached_wdas`，只听手机回环的另记在 `loopback_wdas`）；Home 和锁屏在各设备上走哪条路（`button_ways`） | 默认 | 否 |
 | `viewer-tokens.json` | 控制台的登录令牌（名字、权限、令牌） | 0600 | 否 |
 | `viewer-tls/` | 控制台局域网 HTTPS 的自签证书和私钥 | 0700 | 否 |
 | `tasks/` | 最近 50 个 AI 任务的事件记录，每个任务一个 `<id>.jsonl` | 默认 | 否 |
@@ -167,7 +172,7 @@
 
 ## 7. 重签与通知
 
-- 守护进程每 `RESIGN_CHECK_HOURS`（默认 6 小时）检查一次：描述文件剩余 < `RESIGN_MIN_DAYS`（默认 2 天）才重签；另外**每天验证一次 Apple ID 会话**（toolkit 的教训：只在要重签时才发现登录过期，只剩 2 天处理）。两者都在后台跑，不持设备锁。只检查正在控制的那台；手机重新连上或切换设备后 1 分钟内也查一次。
+- 守护进程每 `RESIGN_CHECK_HOURS`（默认 6 小时）检查一次：描述文件剩余 < `RESIGN_MIN_DAYS`（默认 2 天）才重签；另外**每天验证一次 Apple ID 会话**（toolkit 的教训：只在要重签时才发现登录过期，只剩 2 天处理）。两者都在后台跑，不持设备锁。只检查正在控制的那台；手机重新连上或切换设备后 1 分钟内也查一次。这两项都只为用 WDA 的设备做（`supervise::wda_upkeep`）：正在控制的设备走原生控制时都不做，这一轮也不算数；没连手机时会话检查照做（只要装过 WDA），重签不做。
 - 重签流程：`plume_core` 取新描述文件 → `ictl-sign` 签名（含 `.xctest`）→ `installation_proxy` 安装 → 下一轮巡检重启 WDA。安装成功后才替换旧文件。整个重签有总时限，超时按失败处理并推送通知。没装过当前 Apple ID 签的 WDA 的设备不自动重签（注册设备占 Apple ID 的名额，交给用户决定）。
 - **签名证书**：每个账号目录有自己的私钥（`account/keys/<团队>/key.pem`）和对应的开发证书；免费团队同时最多两张，新建时满了 plume 会吊销一张，不挑是谁的，用它签的 App 在所有设备上都起不来，描述文件却仍有效。所以：读设备上的 WDA 描述文件时顺带离线判断里面有没有本机公钥的证书（`foreign_wda`）；每天的会话检查顺带联网查本机证书还在不在团队里（`own_cert`）。设备拒绝启动 WDA（只报 `unexpected response`）时，两者任一有问题就自动重签这台，同一台 6 小时内最多一次；都没问题就多半是还没信任开发者，留给用户。签名新建或吊销证书时写日志、推送。`doctor` 显示这两项。
 - 通知事件：重签失败、Apple ID 会话失效、需要输入自动化密码、WDA 恢复、自动解锁失败已停用、手机离线超过 10 分钟、恢复在线、签名证书换了。通知标题带上是哪台设备（设备名和型号，离线时用离线前记下的）。去重：重签失败、会话失效 20 小时内不重复；等密码、离线、自动解锁停用推一次，直到恢复或 `unlock-reset`；只有等密码和离线有恢复推送；签名证书换了每次都推。去重记录只在内存里，守护进程重启后清空。

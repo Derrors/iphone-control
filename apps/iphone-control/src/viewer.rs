@@ -77,6 +77,8 @@ struct Ctx {
     video: Option<Arc<crate::video::Encoders>>,
     /// How much of each H.264 stream its page has read
     acks: Arc<crate::video::Acks>,
+    /// Places for pages getting the phone's HEVC transcoded ([`crate::video::transcode::MAX_TRANSCODERS`])
+    transcoders: crate::video::transcode::Slots,
     /// The phones' MJPEG streams, one per phone for all its pages
     mjpeg: crate::video::hub::MjpegHub,
     /// HTTPS on the same port (`--lan`); plain HTTP from the network is then sent there
@@ -284,6 +286,7 @@ pub async fn run(
         device_video_allowed,
         video,
         acks: Arc::default(),
+        transcoders: Default::default(),
         mjpeg: Default::default(),
         tls,
         mcp: mcp.then(|| ictl_mcp::http_service(socket.to_path_buf())),
@@ -638,6 +641,13 @@ async fn route(
                     if let Some(id) = req.query("feed") {
                         v["feed_open"] = json!(ctx.feeds.lock().unwrap_or_else(|p| p.into_inner()).contains(&id));
                     }
+                    // the task list, for a page that wants to pick up a task under way: with this poll instead of
+                    // one of its own (absent when it couldn't be read: the page asks again next time)
+                    if req.query("tasks").as_deref() == Some("1")
+                        && let Ok(t) = protocol::task_list(&ctx.socket).await
+                    {
+                        v["tasks"] = json!(t);
+                    }
                     // who the page is logged in as: a read-only token hides what it can't do
                     if let Some(w) = &pass.who {
                         v["login"] = json!({"name": w.name, "role": w.role.name()});
@@ -783,6 +793,17 @@ async fn picture(mut client: Conn, ctx: &Ctx, req: &Head) -> anyhow::Result<()> 
         // that can't decode HEVC
         _ if ctx.device_video_allowed && video.is_some() => {
             let Some(enc) = video else { unreachable!("checked") };
+            // one ffmpeg per page: past the limit the page retries shortly (it shows "retrying")
+            let Some(_slot) = ctx.transcoders.take() else {
+                return reply_with(
+                    &mut client,
+                    503,
+                    "text/plain",
+                    b"too many pages transcoding the phone's video",
+                    "Retry-After: 10\r\n",
+                )
+                .await;
+            };
             let (src, w) = match crate::video::device::open(&ctx.socket, &udid, low).await {
                 Ok(s) => s,
                 Err(e) => return reply(&mut client, 502, "text/plain; charset=utf-8", e.as_bytes()).await,
@@ -1526,6 +1547,7 @@ mod tests {
             device_video_allowed: true,
             video: None,
             acks: Arc::default(),
+            transcoders: Default::default(),
             mjpeg: Default::default(),
             feeds: Mutex::default(),
             tls: None,

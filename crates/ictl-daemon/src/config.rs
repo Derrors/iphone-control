@@ -183,6 +183,10 @@ impl Config {
     pub fn state_file(&self) -> PathBuf {
         self.data_dir.join("state.json")
     }
+    /// A marker per phone with a HID session open ([`crate::hidmark`])
+    pub fn hid_marker_dir(&self) -> PathBuf {
+        self.data_dir.join("hid-open")
+    }
 
     /// 建好数据目录并收紧权限：账号私钥、锁屏密码都在里面（配对记录归系统的 usbmuxd 管）
     pub fn prepare_dirs(&self) -> std::io::Result<()> {

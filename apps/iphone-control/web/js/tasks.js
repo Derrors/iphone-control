@@ -147,14 +147,18 @@ function lostTask(t) {
   t.summary = tr('页面刷新时这个任务还在执行，刷新后页面不再跟踪它的进度。');
   t.steps.forEach(st => { if (st.status === 'running' || st.status === 'waiting') st.status = 'stopped'; });
 }
-/* 正在进行、但这个页面还没跟着的任务（页面刷新过，或者是在别处开的）：接上，事件会从头重放 */
+/* 正在进行、但这个页面还没跟着的任务（页面刷新过，或者是在别处开的）：接上，事件会从头重放。
+ * 任务列表随 /api/info 的轮询一起来（loadInfo 在 wantsTasks() 时带 tasks=1），不再单独轮询 */
 let adopting = false;
-async function adoptTask() {
+function wantsTasks() {
+  return S.mode === 'live' && !adopting && (S.tasks.some(t => t.reattach) || !activeTask());
+}
+async function adoptTask(given) {
+  if (!wantsTasks()) return;
   const pending = S.tasks.filter(t => t.reattach);
-  if (S.mode !== 'live' || adopting || (!pending.length && activeTask())) return;
   adopting = true;
   try {
-    const list = (await api('/api/agent/tasks')).tasks || [];
+    const list = (Array.isArray(given) ? given : (await api('/api/agent/tasks')).tasks) || [];
     pending.forEach(t => { if (list.some(x => x.id === t.remoteId)) { t.reattach = false; follow(t, t.remoteId); } else lostTask(t); });
     if (pending.length) renderAll();
     const t = list.find(x => ACTIVE.includes(x.state));
@@ -342,22 +346,24 @@ function agentLabel(t) {
   return isExternal(t) ? `${name} · ${tr('外部任务')}` : name;
 }
 function turnHtml(t) {
+  // the id is the page's own (`t<n>`), but read back from localStorage: escaped like everything else put in HTML
+  const id = esc(t.id);
   const st = TASK_STATUS[t.status], active = ACTIVE.includes(t.status), open = S.expanded.has(t.id) || active;
   const busy = !!activeTask();
   const actions = active ? '' : S.pendingDelete === t.id
-    ? `<button type="button" class="mini confirm-del" data-action="del-yes" data-id="${t.id}" data-focus="dely-${t.id}">${icon('trash')}<span>${tr('确认删除')}</span></button><button type="button" class="mini" data-action="del-no" data-id="${t.id}" data-focus="deln-${t.id}">${tr('取消')}</button>`
-    : `${isExternal(t) ? '' : `<button type="button" class="mini" data-action="rerun" data-id="${t.id}" data-focus="rerun-${t.id}" ${busy ? 'disabled' : ''}>${icon('refresh')}<span>${tr('重新执行')}</span></button>`}<button type="button" class="mini danger" data-action="del-ask" data-id="${t.id}" data-focus="del-${t.id}" aria-label="${tr('删除这条记录')}" title="${tr('删除这条记录')}">${icon('trash')}<span>${tr('删除')}</span></button>`;
+    ? `<button type="button" class="mini confirm-del" data-action="del-yes" data-id="${id}" data-focus="dely-${id}">${icon('trash')}<span>${tr('确认删除')}</span></button><button type="button" class="mini" data-action="del-no" data-id="${id}" data-focus="deln-${id}">${tr('取消')}</button>`
+    : `${isExternal(t) ? '' : `<button type="button" class="mini" data-action="rerun" data-id="${id}" data-focus="rerun-${id}" ${busy ? 'disabled' : ''}>${icon('refresh')}<span>${tr('重新执行')}</span></button>`}<button type="button" class="mini danger" data-action="del-ask" data-id="${id}" data-focus="del-${id}" aria-label="${tr('删除这条记录')}" title="${tr('删除这条记录')}">${icon('trash')}<span>${tr('删除')}</span></button>`;
   const answer = !active && t.summary ? `<div class="answer tone-${st.tone}">${icon(st.icon)}<div class="answer-text"><span class="answer-title">${st.label}</span><div class="answer-body">${mdLite(t.summary)}</div></div></div>` : '';
-  const toggle = !active && t.steps.length ? `<button type="button" class="toggle-steps" data-action="toggle-steps" data-id="${t.id}" data-focus="ts-${t.id}" aria-expanded="${open}" aria-controls="steps-${t.id}"><span>${open ? tr('收起步骤') : `${tr('查看')} ${t.steps.length} ${tr('个步骤')}`}</span>${icon('chevron')}</button>` : '';
+  const toggle = !active && t.steps.length ? `<button type="button" class="toggle-steps" data-action="toggle-steps" data-id="${id}" data-focus="ts-${id}" aria-expanded="${open}" aria-controls="steps-${id}"><span>${open ? tr('收起步骤') : `${tr('查看')} ${t.steps.length} ${tr('个步骤')}`}</span>${icon('chevron')}</button>` : '';
   return `<li class="turn">
     <div class="msg-user">
-      ${isExternal(t) ? `<div class="bubble">${esc(t.prompt)}</div>` : `<button type="button" class="bubble" data-action="rerun" data-id="${t.id}" data-focus="bubble-${t.id}" title="${busy ? tr('当前任务结束后可以重新执行') : tr('点击重新执行这条指令')}" aria-label="${tr('重新执行：')}${esc(t.prompt)}" ${busy ? 'disabled' : ''}>${esc(t.prompt)}</button>`}
+      ${isExternal(t) ? `<div class="bubble">${esc(t.prompt)}</div>` : `<button type="button" class="bubble" data-action="rerun" data-id="${id}" data-focus="bubble-${id}" title="${busy ? tr('当前任务结束后可以重新执行') : tr('点击重新执行这条指令')}" aria-label="${tr('重新执行：')}${esc(t.prompt)}" ${busy ? 'disabled' : ''}>${esc(t.prompt)}</button>`}
       <div class="msg-meta"><span class="msg-time">${hhmm(new Date(t.startedAt))}</span>${t.apps?.length ? `<span class="msg-scope" title="${esc(tr('任务只在这些 App 里操作：'))}${esc(scopeText(t.apps))}">${icon('grid')}<span class="od-truncate">${esc(tr('只在') + ' ' + scopeText(t.apps))}</span></span>` : ''}${actions}</div>
     </div>
     <div class="msg-agent">
-      <div class="agent-line"><span class="avatar">${icon('bot')}</span><span class="agent-name">${esc(agentLabel(t))}</span><span class="agent-meta" data-elapsed="${t.id}">${t.steps.length} ${tr('步')} · ${mmss((t.endedAt || Date.now()) - t.startedAt)}</span>${badge(st)}</div>
+      <div class="agent-line"><span class="avatar">${icon('bot')}</span><span class="agent-name">${esc(agentLabel(t))}</span><span class="agent-meta" data-elapsed="${id}">${t.steps.length} ${tr('步')} · ${mmss((t.endedAt || Date.now()) - t.startedAt)}</span>${badge(st)}</div>
       ${answer}${toggle}
-      ${t.steps.length ? `<ol class="steps" id="steps-${t.id}" aria-label="${tr('执行步骤')}"${open ? '' : ' hidden'}>${t.steps.map(stepHtml).join('')}</ol>` : ''}
+      ${t.steps.length ? `<ol class="steps" id="steps-${id}" aria-label="${tr('执行步骤')}"${open ? '' : ' hidden'}>${t.steps.map(stepHtml).join('')}</ol>` : ''}
     </div></li>`;
 }
 function renderTurns(follow) {
@@ -379,7 +385,7 @@ function renderRunbar() {
     if (t.status === 'takeover') b.push(btn('handback', tr('交还 AI'), 'play', 'btn-primary'));
     if (t.status === 'waiting') b.push(btn('goto-confirm', tr('去确认'), 'arrow', 'btn-primary'));
     b.push(btn('stop', tr('停止'), 'stop', 'btn-danger'));
-    bar.innerHTML = `<span class="runbar-state t-${st.tone}">${icon(st.icon, st.icon === 'loader' ? 'spin' : '')}<span>${st.label}</span><span class="runbar-time" data-runtime="${t.id}">${mmss(Date.now() - t.startedAt)}</span></span>${b.join('')}`;
+    bar.innerHTML = `<span class="runbar-state t-${st.tone}">${icon(st.icon, st.icon === 'loader' ? 'spin' : '')}<span>${st.label}</span><span class="runbar-time" data-runtime="${esc(t.id)}">${mmss(Date.now() - t.startedAt)}</span></span>${b.join('')}`;
     bar.hidden = false;
   }
   const busy = !!t;

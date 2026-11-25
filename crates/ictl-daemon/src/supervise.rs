@@ -162,6 +162,7 @@ impl Daemon {
             Some(d) => {
                 self.online(g, &d).await;
                 self.adopt_legacy_passcode(g);
+                self.clear_left_viewed(g).await;
             }
         }
 
@@ -574,6 +575,39 @@ impl Daemon {
             && g.persisted.forget_detached(&udid, None)
         {
             g.persisted.save(&self.cfg.state_file());
+        }
+    }
+
+    /// The phone in use was left "viewed remotely" by an earlier daemon that ended with a HID session open
+    /// ([`crate::hidmark`]): once it is ready, a session opened and closed clears that. A session open now clears it
+    /// when it closes; after [`crate::hidmark::TRIES`] failed tries it is left alone
+    async fn clear_left_viewed(&self, g: &mut Inner) {
+        let Some(udid) = g.device.as_ref().map(|d| d.udid.clone()) else { return };
+        let Some(&tries) = g.hid_orphans.get(&udid) else { return };
+        if g.state != DeviceState::Ready
+            || !crate::core::hid_supported(g.info.as_ref())
+            || g.tunnel.as_ref().is_some_and(Tunnel::hid_open)
+        {
+            return;
+        }
+        match Box::pin(self.hid(g)).await {
+            Ok(_) => {
+                // removes the marker and the entry (`close_hid`)
+                close_hid(g).await;
+                self.log.log(ictl_l10n::log_tr!(
+                    "上次守护进程退出时没有停掉屏幕媒体流（卡死或被结束）：已清掉手机上残留的「正在被查看」",
+                    "The last daemon ended without stopping the screen media stream (stuck or killed): cleared the phone's leftover \"viewed remotely\""
+                ));
+            }
+            Err(e) => {
+                tracing::warn!("clearing the leftover HID state of {udid} failed: {e}");
+                if tries + 1 >= crate::hidmark::TRIES {
+                    g.hid_orphans.remove(&udid);
+                    crate::hidmark::clear(&self.cfg.hid_marker_dir(), &udid);
+                } else {
+                    g.hid_orphans.insert(udid, tries + 1);
+                }
+            }
         }
     }
 

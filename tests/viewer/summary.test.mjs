@@ -45,3 +45,21 @@ test('nothing gets through as HTML', () => {
   assert.equal(mdLite(''), '');
   assert.equal(mdLite(null), '');
 });
+
+// A task's id is the page's own (`t<n>`), but it comes back from localStorage on reload: an edited record can't
+// break out of the attributes it is put in
+test('a task id from storage stays inside its attributes', () => {
+  const pick = re => { const m = html.match(re); assert.ok(m, String(re)); return m[0]; };
+  const fns = [/^const esc = .*$/m, /^function turnHtml\([^]*?^}/m].map(pick).join('\n');
+  const ctx = {
+    TASK_STATUS: { done: { tone: 'ok', icon: 'check', label: 'done' } }, ACTIVE: ['running'], BUILTIN_AGENTS: {},
+    S: { expanded: new Set(), pendingDelete: null, agents: [] }, activeTask: () => null, isExternal: () => false,
+    icon: () => '', tr: String, hhmm: () => '00:00', mmss: () => '0:00', badge: () => '', mdLite: String,
+    agentLabel: () => 'AI', scopeText: () => '', stepHtml: () => '<li></li>',
+  };
+  const { turnHtml } = runInNewContext(fns + '\n({ turnHtml })', ctx);
+  const evil = 't1" onmouseover="alert(1)';
+  const out = turnHtml({ id: evil, status: 'done', prompt: 'p', steps: [{}], startedAt: 0, endedAt: 1, source: 'live' });
+  assert.ok(!out.includes('" onmouseover='), out);
+  assert.ok(out.includes('data-id="t1&quot; onmouseover=&quot;alert(1)"'));
+});

@@ -167,6 +167,7 @@
 | `viewer-tokens.json` | 控制台的登录令牌（名字、权限、令牌） | 0600 | 否 |
 | `viewer-tls/` | 控制台局域网 HTTPS 的自签证书和私钥 | 0700 | 否 |
 | `tasks/` | 最近 50 个 AI 任务的事件记录，每个任务一个 `<id>.jsonl` | 默认 | 否 |
+| `hid-open/<UDID>` | 空文件：这台设备的 HID 会话开着，正常关掉时删除；守护进程没收尾就退出（看门狗、崩溃、kill -9）留下的，下次启动时开关一次 HID 清掉手机上残留的「正在被查看」（`hidmark.rs`） | 默认 | 否 |
 
 守护进程的配置全部来自环境变量（`crates/ictl-daemon/src/config.rs`），都有默认值。整个项目的环境变量都登记在 `crates/ictl-protocol/src/env.rs`（名字、用途、是否在设置文件模板里），代码只经它的常量读；它的测试核对代码、配置页和 `packaging/env.example` 三者一致。设置文件 `~/.config/iphone-control/env`（`KEY=value`，0600，模板 `packaging/env.example`）由首次运行引导和 `setup --reconfigure` 写（`envfile.rs`：改一项就地替换，注释和其他项保留）；后台服务（launchd、systemd、`brew services`）把它读进守护进程的环境，其他命令启动时也读一遍，已有的环境变量优先。通知渠道的密钥也在这个文件里；其余秘密只放数据目录里的文件。
 

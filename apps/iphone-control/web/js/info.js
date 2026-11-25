@@ -223,18 +223,24 @@ refreshVisibleUpdates();
 setInterval(refreshVisibleUpdates, 60000);
 document.addEventListener('visibilitychange', refreshVisibleUpdates);
 
+let tasksAskedAt = 0;
 async function loadInfo() {
   const seq = ++infoSequence, epoch = feedEpoch;
   try {
-    const r = await fetch('/api/info?feed=' + encodeURIComponent(feedId), { headers: { 'X-Ictl-Lang': LANG }, signal: AbortSignal.timeout(4800) });
+    // at most every 3 s as when it had a poll of its own (the list is about 10 KB with 50 tasks)
+    const tasks = wantsTasks() && Date.now() - tasksAskedAt >= 3000;
+    if (tasks) tasksAskedAt = Date.now();
+    const r = await fetch('/api/info?feed=' + encodeURIComponent(feedId) + (tasks ? '&tasks=1' : ''), { headers: { 'X-Ictl-Lang': LANG }, signal: AbortSignal.timeout(4800) });
     if (loggedOut(r) || !r.ok) throw new Error('offline');
     const v = await r.json();
     if (seq === infoSequence && epoch === feedEpoch) applyInfo(v);
+    if (tasks && Array.isArray(v.tasks)) adoptTask(v.tasks);
   } catch {
     if (seq === infoSequence && epoch === feedEpoch) feedError();
   }
 }
+/* 标签页在后台时不问（看不见的页面不用跟），回到前台马上补一次（见 layout.js 的 visibilitychange） */
 async function pollInfo() {
-  await loadInfo();
+  if (!document.hidden) await loadInfo();
   setTimeout(pollInfo, 2000);
 }

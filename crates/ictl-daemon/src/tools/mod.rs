@@ -203,10 +203,16 @@ impl Daemon {
             .ensure_tunnel(g, &device)
             .await
             .map_err(|e| ictl_l10n::trf!("HID 后备路线不可用：{e}", "HID fallback unavailable: {e}"))?;
+        let was_open = t.hid_open();
         // boxed, as the screenshot above: opening the session is a large future
         if let Err(e) = Box::pin(t.hid(screen, max_bitrate)).await {
             drop_tunnel(g).await;
             return Err(ictl_l10n::trf!("HID 后备路线不可用：{e}", "HID fallback unavailable: {e}").into());
+        }
+        // a new session: marked until it closes properly, so a daemon that ends without closing it is noticed by the
+        // next one ([`crate::hidmark`])
+        if !was_open {
+            g.hid_marker = crate::hidmark::mark(&self.cfg.hid_marker_dir(), &device.udid);
         }
         // 第二次调用直接返回已开好的会话（这样写是为了绕开借用检查对条件返回的限制）
         Ok(Box::pin(g.tunnel.as_mut().expect("刚建好").hid(screen, max_bitrate)).await?)

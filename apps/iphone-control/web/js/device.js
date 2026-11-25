@@ -25,7 +25,9 @@ async function loadDeviceState() {
     S.devices = DEMO_DEVICES.map(d => ({ ...d, controlled: d === demoDev })); S.statusErr = ''; S.devicesErr = '';
   } else if (S.mode === 'live') {
     const udid = S.udid, sequence = ++statusSequence;
-    const [d, s, l] = await Promise.allSettled([api('/api/daemon'), api('/api/status'), api('/api/devices')]);
+    // /api/daemon 也带着设备列表（和它读同一份快照）：一轮两个请求
+    const [d, s] = await Promise.allSettled([api('/api/daemon'), api('/api/status')]);
+    const l = d;
     // Video can reconnect while the same device is still waiting for trust or signing.
     if (udid !== S.udid || sequence !== statusSequence) return;
     S.daemon = d.status === 'fulfilled' ? d.value : null;

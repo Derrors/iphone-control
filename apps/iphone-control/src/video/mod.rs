@@ -631,7 +631,7 @@ mod tests {
             (Instant::now(), phone)
         });
 
-        // the page, over a real TCP connection, reporting what it read every 100 ms like viewer.html
+        // the page, over a real TCP connection, reporting what it read every 100 ms like the control page
         let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let mut page = tokio::net::TcpStream::connect(l.local_addr().unwrap()).await.unwrap();
         let (server_side, _) = l.accept().await.unwrap();

@@ -21,6 +21,8 @@ cargo test --workspace --all-features --locked
 # Linux/macOS PTY regression; temporary settings only, no daemon or device actions
 python3 tests/terminal.py --binary target/debug/iphone-control --test-dir target/debug/deps
 cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+# the control page's tests (Node 22, no packages): the page is apps/iphone-control/web/, put together by build.rs
+node --test tests/viewer/*.test.mjs
 # vendor/ is upstream code and isn't formatted; check only this repository's packages:
 for p in ictl-l10n ictl-webinspector ictl-device ictl-wda ictl-sign ictl-unlock ictl-daemon ictl-mcp ictl-protocol iphone-control; do cargo fmt -p $p -- --check; done
 ```

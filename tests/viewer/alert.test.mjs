@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { runInNewContext } from 'node:vm';
+import { viewerPage } from './page.mjs';
 
-const html = readFileSync(new URL('../../apps/iphone-control/src/viewer.html', import.meta.url), 'utf8');
+const html = viewerPage();
 
 // The page's system-alert handlers, with the network and DOM replaced (same approach as actions.test.mjs)
 function page({ device = true, task = null, alert = null } = {}) {

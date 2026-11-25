@@ -1,0 +1,282 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>iphone-control 控制台</title>
+<link rel="icon" href="data:,">
+<style>
+@include viewer.css
+</style>
+</head>
+<body>
+<div class="shell" id="shell" data-view="agent" data-dev-open="false">
+
+  <!-- 窄屏顶栏 -->
+  <header class="mbar glass">
+    <div class="brand">
+      <svg class="brand-mark" viewBox="0 0 32 32" width="28" height="28" aria-hidden="true"><rect x="9" y="3" width="14" height="26" rx="3.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="M13.5 25h5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="16" cy="14" r="3" fill="var(--accent)"/></svg>
+      <div class="brand-text"><span class="brand-name">iphone-control</span><span class="brand-sub">控制台</span></div>
+    </div>
+    <div class="seg" role="tablist" aria-label="切换视图">
+      <button type="button" role="tab" id="vt-agent" aria-selected="true" aria-controls="pane-agent" data-action="view" data-view="agent"><span id="vt-agent-label">AI 助手</span></button>
+      <button type="button" role="tab" id="vt-screen" aria-selected="false" aria-controls="pane-stage" data-action="view" data-view="screen">屏幕</button>
+      <button type="button" role="tab" id="vt-device" aria-selected="false" aria-controls="pane-dev" data-action="view" data-view="device">设备</button>
+    </div>
+  </header>
+
+  <!-- 左：AI 助手 -->
+  <aside class="pane pane-agent glass" id="pane-agent" aria-label="AI 助手">
+    <div class="resizer" id="resizer" role="separator" aria-orientation="vertical" aria-controls="pane-agent" aria-label="调整 AI 助手栏宽度" title="拖动调整宽度，双击恢复默认" tabindex="0"></div>
+    <div class="pane-head">
+      <div class="brand agent-brand">
+        <svg class="brand-mark" viewBox="0 0 32 32" width="28" height="28" aria-hidden="true"><rect x="9" y="3" width="14" height="26" rx="3.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="M13.5 25h5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="16" cy="14" r="3" fill="var(--accent)"/></svg>
+        <div class="brand-text"><span class="brand-name">iphone-control</span></div>
+      </div>
+      <span id="agent-badge"></span>
+      <button type="button" class="btn btn-ghost btn-sm clear-btn" id="clear-btn" data-action="clear" data-focus="clear" hidden><span class="ic" data-icon="trash"></span><span>清空记录</span></button>
+    </div>
+    <div class="pane-body" id="agent-scroll">
+      <div class="convo">
+        <div class="intro" id="intro">
+          <h1 class="intro-title" tabindex="-1" id="intro-title">让 AI 操作你的 Apple 设备</h1>
+          <p class="intro-text">用一句话描述目标。AI 会看真实屏幕，用下面这些现成的操作一步步完成；遇到付款、删除、发消息这类操作会先停下来等你确认。</p>
+          <ul class="caps" aria-label="AI 能用的操作">
+            <li class="cap"><span class="ic" data-icon="eye"></span><span>看屏幕、读元素</span></li>
+            <li class="cap"><span class="ic" data-icon="tap"></span><span>点按、滑动、长按</span></li>
+            <li class="cap"><span class="ic" data-icon="keyboard"></span><span>输入文字</span></li>
+            <li class="cap"><span class="ic" data-icon="grid"></span><span>启动、关闭 App</span></li>
+            <li class="cap"><span class="ic" data-icon="link"></span><span>打开链接</span></li>
+            <li class="cap"><span class="ic" data-icon="home"></span><span>实体按键</span></li>
+          </ul>
+          <p class="demo-note" id="demo-note" hidden>演示模式：没有连上 iphone-control 服务。设备画面、App 列表、元素和 AI 的每一步都是本地模拟的。</p>
+        </div>
+        <ol class="turns" id="turns" aria-label="任务记录"></ol>
+      </div>
+    </div>
+    <div class="agent-foot">
+      <div class="composer" id="composer">
+        <div class="runbar" id="runbar" role="group" aria-label="任务控制" hidden></div>
+        <label class="sr-only" for="prompt">交给 AI 的任务</label>
+        <textarea class="textarea" id="prompt" rows="1" maxlength="4000" aria-describedby="composer-hint prompt-error" placeholder="想让设备做什么？"></textarea>
+        <div class="composer-row">
+          <div class="scope-pick" id="scope-pick" hidden>
+            <span class="sr-only" id="scope-label">任务范围</span>
+            <button type="button" class="picker-trigger scope-trigger" id="scope-btn" popovertarget="scope-menu" aria-haspopup="dialog" aria-controls="scope-menu" aria-expanded="false" aria-labelledby="scope-label scope-name"><span class="ic" data-icon="grid"></span><span class="od-truncate" id="scope-name">所有 App</span><span class="ic" data-icon="chevron"></span></button>
+            <div id="scope-menu" class="picker-menu scope-menu glass" role="dialog" aria-labelledby="scope-title" aria-describedby="scope-desc" popover="auto" tabindex="-1">
+              <p class="scope-title" id="scope-title">任务只在这些 App 里操作</p>
+              <p class="scope-desc" id="scope-desc">到了别的 App，每一步都先等你确认。不选就不限制。</p>
+              <div class="search"><label class="sr-only" for="scope-q">搜索 App</label><input class="input" id="scope-q" type="search" autocomplete="off" placeholder="按名称或 bundle id 搜索"><span class="search-ic" data-icon="search"></span></div>
+              <div class="scope-list" id="scope-list" role="group" aria-label="App"></div>
+              <div class="scope-foot"><span class="scope-count" id="scope-count"></span><button type="button" class="btn btn-sm" id="scope-clear">清空</button><button type="button" class="btn btn-sm btn-primary" id="scope-done">完成</button></div>
+            </div>
+          </div>
+          <div class="agent-pick" id="agent-pick" hidden>
+            <span class="sr-only" id="agent-label">执行任务的 AI</span>
+            <select id="agent-value" data-picker="agent" data-open-above hidden></select>
+          </div>
+          <span class="sr-only" id="composer-hint">Enter 发送 · Shift+Enter 换行</span>
+          <button type="button" class="btn btn-primary send" id="send" data-action="send" data-focus="send" aria-label="开始任务" title="Enter 发送 · Shift+Enter 换行"><span class="ic" data-icon="send"></span></button>
+        </div>
+      </div>
+      <p class="field-error" id="prompt-error" hidden></p>
+      <p class="readonly-note" id="readonly-note" role="status"></p>
+      <div class="sidebar-footer">
+        <button type="button" class="sidebar-settings" id="appearance-btn" aria-haspopup="dialog" aria-controls="appearance"><span class="ic" data-icon="settings"></span><span>设置</span></button>
+        <button type="button" class="btn btn-ghost btn-icon btn-sm" id="about-updates" popovertarget="updates-dialog" aria-controls="updates-dialog" aria-haspopup="dialog" aria-expanded="false" aria-label="关于与更新" title="关于与更新"><span class="ic" data-icon="info"></span><span id="update-dot" aria-hidden="true" hidden></span></button>
+      </div>
+      <section class="glass" id="updates-dialog" role="dialog" aria-label="关于与更新" popover="auto" tabindex="-1" autofocus>
+        <div class="update-head">
+          <h2 id="update-version">Viewer</h2>
+          <button class="btn btn-ghost btn-icon btn-sm" id="update-check" type="button" aria-label="检查更新" title="检查更新" disabled><span class="ic" data-icon="refresh"></span></button>
+          <button class="btn btn-ghost btn-icon btn-sm" id="update-close" type="button" popovertarget="updates-dialog" popovertargetaction="hide" aria-label="关闭版本信息" title="关闭版本信息"><span class="ic" data-icon="x"></span></button>
+        </div>
+        <p id="update-result" role="status"></p>
+        <p id="update-notes" class="od-clamp-3"></p>
+        <div class="update-actions">
+          <button class="btn btn-primary btn-sm" id="update-copy" type="button" hidden>复制升级命令</button>
+          <a class="btn btn-ghost btn-sm" id="update-release" target="_blank" rel="noopener noreferrer" hidden>发行说明</a>
+          <button class="btn btn-ghost btn-sm" id="update-more" type="button" aria-expanded="false" aria-controls="update-details"><span>版本详情</span><span class="ic" data-icon="chevron"></span></button>
+        </div>
+        <p class="update-detail" id="update-copy-status" role="status"></p>
+        <div id="update-details" hidden>
+          <p class="update-detail" id="update-guide"></p>
+          <div id="update-command-block" hidden><code id="update-command"></code></div>
+          <dl class="update-facts" id="update-facts"></dl>
+          <p class="update-detail" id="update-policy"></p>
+          <p class="update-detail" id="update-outcome"></p>
+          <p class="update-detail" id="update-mismatch"></p>
+        </div>
+      </section>
+    </div>
+  </aside>
+
+  <!-- 中：设备舞台 -->
+  <main class="pane pane-stage" id="pane-stage" aria-label="设备屏幕">
+    <div class="pane-head stage-head">
+      <div class="statusbar glass">
+        <div class="dev-select">
+          <label class="label" id="device-label" for="device">控制设备</label>
+          <div class="device-picker">
+            <select id="device-value" data-picker="device" disabled hidden><option>正在查找…</option></select>
+          </div>
+        </div>
+        <div class="chips" id="chips"></div>
+      </div>
+      <div class="head-tools">
+        <div class="zoom glass" role="group" aria-label="画面缩放">
+          <button type="button" data-action="zoom-out" id="zoom-out" aria-label="缩小画面" title="缩小画面"><span class="ic" data-icon="zoomout"></span></button>
+          <button type="button" class="zoom-val" data-action="zoom-actual" id="zoom-val" title="切换到实际尺寸（100%）" aria-label="当前缩放比例，点击切换到实际尺寸">100%</button>
+          <button type="button" data-action="zoom-in" id="zoom-in" aria-label="放大画面" title="放大画面"><span class="ic" data-icon="zoomin"></span></button>
+          <button type="button" class="zoom-fit" data-action="zoom-fit" id="zoom-fit" aria-pressed="true" title="按窗口大小自动适应">适应</button>
+        </div>
+        <button type="button" class="btn btn-ghost btn-icon glass" data-action="reconnect" aria-label="刷新画面" title="刷新画面"><span class="ic" data-icon="refresh"></span></button>
+        <button type="button" class="btn dev-toggle glass" data-action="dev-open" id="dev-toggle" aria-controls="pane-dev" aria-expanded="false"><span class="ic" data-icon="panel"></span><span>设备面板</span></button>
+      </div>
+    </div>
+    <div class="stage-area">
+    <div class="stage-wrap" id="stage-wrap">
+      <div class="frame" id="frame" data-ctl="user">
+        <div class="stage" id="stage" role="group" aria-label="设备实时画面：单击轻点，拖动或滚动滚轮滑动，按住长按" aria-describedby="status">
+          <img id="live" alt="设备的实时画面" draggable="false" hidden>
+          <canvas id="live-v" aria-label="设备的实时画面" hidden></canvas>
+          <div id="demo" class="ph" aria-hidden="true" hidden></div>
+          <svg id="marks" class="marks" viewBox="0 0 393 852" aria-hidden="true"></svg>
+          <div class="sa-layer" id="sys-alert" hidden></div>
+          <div class="stage-msg" id="stage-msg">正在连接 iphone-control 服务…</div>
+        </div>
+      </div>
+    </div>
+      <p class="toast" id="status" role="status" aria-live="polite"></p>
+    </div>
+    <div class="stage-foot">
+      <div class="dock-slot">
+      <div class="guard glass" id="guard" role="status" hidden></div>
+      <div class="dock glass" id="dock" role="group" aria-label="设备按键和输入">
+        <div class="keys" role="group" aria-label="实体按键">
+          <button type="button" class="key" data-key="home" aria-label="主屏幕" title="主屏幕"><span class="ic" data-icon="home"></span></button>
+          <button type="button" class="key" data-key="lock" aria-label="锁屏" title="锁屏"><span class="ic" data-icon="lock"></span></button>
+          <button type="button" class="key" data-key="volume_down" aria-label="音量减" title="音量减"><span class="ic" data-icon="voldown"></span></button>
+          <button type="button" class="key" data-key="volume_up" aria-label="音量加" title="音量加"><span class="ic" data-icon="volup"></span></button>
+        </div>
+        <div class="type-field">
+          <label class="sr-only" for="type-text">向设备输入文字</label>
+          <input class="input" id="type-text" autocomplete="off" placeholder="向设备输入文字">
+          <button type="button" class="btn btn-ghost" id="type-btn">输入</button>
+          <button type="button" class="btn btn-ghost btn-icon" id="type-submit" aria-label="输入并回车" title="输入并回车"><span class="ic" data-icon="enter"></span></button>
+        </div>
+        <button type="button" class="btn btn-primary" id="dock-handback" data-action="handback" data-focus="dock-handback" hidden><span class="ic" data-icon="play"></span><span>交还 AI</span></button>
+      </div>
+      </div>
+      <div class="meta-row">
+        <div class="feed"><span class="feed-dot wait" id="feed-dot"></span><span class="od-truncate" id="feed-text">正在连接…</span></div>
+      </div>
+    </div>
+  </main>
+
+  <!-- 右：设备面板 -->
+  <aside class="pane pane-dev glass" id="pane-dev" aria-label="设备面板">
+    <div class="resizer resizer-left" id="resizer-dev" role="separator" aria-orientation="vertical" aria-controls="pane-dev" aria-label="调整设备面板宽度" title="拖动调整宽度，双击恢复默认" tabindex="0"></div>
+    <div class="pane-head">
+      <div class="seg" role="tablist" aria-label="设备面板">
+        <button type="button" role="tab" id="tab-status" aria-selected="true" aria-controls="tp-status" data-action="dev-tab" data-tab="status">状态</button>
+        <button type="button" role="tab" id="tab-apps" aria-selected="false" aria-controls="tp-apps" data-action="dev-tab" data-tab="apps">应用</button>
+        <button type="button" role="tab" id="tab-elements" aria-selected="false" aria-controls="tp-elements" data-action="dev-tab" data-tab="elements">元素</button>
+      </div>
+      <button type="button" class="btn btn-ghost btn-icon dev-close" id="dev-close" data-action="dev-close" aria-label="隐藏设备面板" title="隐藏设备面板"><span class="ic" data-icon="panel"></span></button>
+    </div>
+    <div class="pane-body">
+      <section class="tabpanel" id="tp-status" role="tabpanel" aria-labelledby="tab-status">
+        <div><h2 class="nav-caption">设备列表</h2><ul class="nav-device-list" id="nav-devices"></ul></div>
+        <dl class="nav-readout" id="nav-facts" hidden></dl>
+        <details class="nav-disclosure" id="device-identifiers" hidden>
+          <summary>设备标识</summary><dl class="nav-readout" id="nav-ids"></dl>
+        </details>
+        <details class="nav-disclosure" id="connection-checks">
+          <summary>连接检查</summary><div id="nav-checks"></div>
+        </details>
+      </section>
+      <section class="tabpanel" id="tp-apps" role="tabpanel" aria-labelledby="tab-apps" hidden>
+        <p class="nav-offline-panel">连接设备后可查看应用。</p>
+        <div class="sec">
+          <label class="label" for="url">打开链接</label>
+          <div class="url-row">
+            <input class="input" id="url" type="url" inputmode="url" autocomplete="off" placeholder="https://… 或 App 的 URL scheme">
+            <button type="button" class="btn" data-action="open-url" id="url-btn">打开</button>
+          </div>
+        </div>
+        <div class="sec">
+          <div class="sec-head"><span class="sec-title">已安装的 App</span><span class="count" id="apps-count"></span><button type="button" class="btn btn-ghost btn-icon btn-sm" data-action="load-apps" aria-label="刷新 App 列表" title="刷新"><span class="ic" data-icon="refresh"></span></button></div>
+          <div class="search"><label class="sr-only" for="app-q">搜索 App</label><input class="input" id="app-q" type="search" autocomplete="off" placeholder="按名称或 bundle id 搜索"><span class="search-ic" data-icon="search"></span></div>
+          <label class="switch-row"><input type="checkbox" id="app-sys" checked><span>包含系统 App</span></label>
+          <ul class="list" id="apps"></ul>
+        </div>
+      </section>
+      <section class="tabpanel" id="tp-elements" role="tabpanel" aria-labelledby="tab-elements" hidden>
+        <p class="nav-offline-panel">连接设备后可查看界面元素。</p>
+        <div class="sec">
+          <div class="sec-head"><span class="sec-title">当前界面的元素</span><span class="count" id="el-count"></span></div>
+          <div class="panel-tools">
+            <div class="search"><label class="sr-only" for="el-q">筛选元素</label><input class="input" id="el-q" type="search" autocomplete="off" placeholder="按文字或类型筛选"><span class="search-ic" data-icon="search"></span></div>
+            <button type="button" class="btn" data-action="load-elements" id="el-btn"><span class="ic" data-icon="refresh"></span><span>读取</span></button>
+          </div>
+          <ul class="list" id="elements"></ul>
+        </div>
+        <div class="sec">
+          <label class="label" for="wait-q">等一段文字出现</label>
+          <div class="url-row">
+            <input class="input" id="wait-q" autocomplete="off" placeholder="例如：秒表">
+            <button type="button" class="btn" data-action="wait-for" id="wait-btn">等待 5 秒</button>
+          </div>
+          <p class="wait-result" id="wait-result" role="status" hidden></p>
+        </div>
+      </section>
+    </div>
+  </aside>
+</div>
+
+<dialog class="dialog glass" id="appearance" aria-labelledby="appearance-title">
+  <h2 id="appearance-title">设置</h2>
+  <div class="appearance-options">
+    <div class="appearance-row"><label for="language" id="language-label">界面语言</label><div class="appearance-picker"><select id="language-value" data-picker="language" hidden><option value="zh" lang="zh-CN">简体中文</option><option value="en" lang="en">English</option></select></div></div>
+    <div class="appearance-row"><label for="theme" id="theme-label">明暗</label><div class="appearance-picker"><select id="theme-value" data-picker="theme" hidden><option value="system">跟随系统</option><option value="light">浅色</option><option value="dark">深色</option></select></div></div>
+    <div class="appearance-row"><label for="text-size" id="text-size-label">界面字号</label><div class="appearance-picker"><select id="text-size-value" data-picker="text-size" hidden><option value="standard">标准</option><option value="large">大</option><option value="xlarge">特大</option></select></div></div>
+    <div class="appearance-row appearance-low"><label for="low-bandwidth" id="low-bandwidth-label">弱网模式</label><input type="checkbox" class="toggle" id="low-bandwidth" role="switch" aria-describedby="low-bandwidth-hint"></div>
+    <p class="appearance-hint" id="low-bandwidth-hint">画面流量减少约一半，帧率不变，适合外网或信号差时用；画面动起来时会略糊。手机自己的画面（HEVC）只有一路，开着时所有在看这台手机的页面都会一起降，切换时画面会断开半秒左右。</p>
+  </div>
+  <form method="dialog" class="dialog-actions"><button class="btn btn-primary" type="submit">完成</button></form>
+</dialog>
+<dialog class="dialog glass" id="clear-dialog" aria-labelledby="clear-title" aria-describedby="clear-desc">
+  <h2 id="clear-title">清空全部操作记录？</h2>
+  <p id="clear-desc">只清除左侧的任务和步骤记录，不会影响设备上已经做过的操作。清空后无法恢复。</p>
+  <div class="dialog-actions">
+    <button type="button" class="btn" id="clear-cancel">取消</button>
+    <button type="button" class="btn btn-danger-solid" id="clear-confirm">清空</button>
+  </div>
+</dialog>
+
+<dialog class="dialog glass" id="stop-dialog" aria-labelledby="stop-title" aria-describedby="stop-desc">
+  <h2 id="stop-title">停止这个任务？</h2>
+  <p id="stop-desc">AI 会立刻停下。已经在设备上做完的操作不会撤销。</p>
+  <div class="dialog-actions">
+    <button type="button" class="btn" id="stop-cancel">继续执行</button>
+    <button type="button" class="btn btn-danger-solid" id="stop-confirm">停止任务</button>
+  </div>
+</dialog>
+
+<script>
+@include js/i18n.js
+@include js/ui.js
+@include js/state.js
+@include js/demo.js
+@include js/screen.js
+@include js/info.js
+@include js/video.js
+@include js/device.js
+@include js/tasks.js
+@include js/alert.js
+@include js/scope.js
+@include js/layout.js
+</script>
+</body>
+</html>

@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { runInNewContext } from 'node:vm';
+import { viewerPage } from './page.mjs';
 
-const html = readFileSync(new URL('../../apps/iphone-control/src/viewer.html', import.meta.url), 'utf8');
+const html = viewerPage();
 
 // Exercise the embedded page's handlers with their network and DOM boundaries replaced.
 function handlers(names, context) {

@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { Script } from 'node:vm';
+import { viewerPage } from './page.mjs';
 
-const html = readFileSync(new URL('../../apps/iphone-control/src/viewer.html', import.meta.url), 'utf8');
+const html = viewerPage();
 
 // The other tests take single functions out of the page; a mistake elsewhere in its script (a name declared twice
 // in one function) stopped the whole page at "connecting" while they all passed

@@ -47,7 +47,8 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::agent::{self, Agents};
 
-const PAGE: &str = include_str!("viewer.html");
+/// The control page, put together from `web/` by build.rs
+const PAGE: &str = include_str!(concat!(env!("OUT_DIR"), "/viewer.html"));
 /// WDA's MJPEG server on the phone
 const MJPEG_PORT: u16 = 9100;
 const MAX_BODY: usize = 16 * 1024;
@@ -2073,6 +2074,16 @@ mod tests {
             assert_eq!(req["expect_udid"], "phone");
             assert_eq!(result["retry_as_gesture"], allow);
         }
+    }
+
+    /// build.rs put the page together whole: every include expanded, one stylesheet and one script, in order
+    #[test]
+    fn the_embedded_page_is_assembled() {
+        assert!(!PAGE.lines().any(|l| l.starts_with("@include ")));
+        assert!(PAGE.starts_with("<!doctype html>") && PAGE.trim_end().ends_with("</html>"));
+        assert_eq!((PAGE.matches("<style>").count(), PAGE.matches("<script>").count()), (1, 1));
+        // the first script's first statement, so the whole page script stays strict
+        assert!(PAGE.split("<script>").nth(1).is_some_and(|s| s.trim_start().starts_with("'use strict';")));
     }
 
     #[tokio::test]

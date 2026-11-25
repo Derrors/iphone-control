@@ -108,9 +108,14 @@ impl Daemon {
         conn.used = Instant::now();
         // not retried on a new connection: the script may already have run
         let r = match conn.w.evaluate(page, expression, timeout).await {
+            // the value came, but closing the session couldn't be written: the next request gets a new connection
+            Ok(r) if conn.w.is_broken() => {
+                *slot = None;
+                r
+            }
             Ok(r) => r,
             Err(e) => {
-                if breaks_connection(&e) {
+                if breaks_connection(&e) || conn.w.is_broken() {
                     *slot = None;
                 }
                 return Err(page_error(&e).into());

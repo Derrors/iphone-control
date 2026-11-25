@@ -188,17 +188,20 @@ const MAX_DEPTH: usize = 60;
 /// Elements in reading order from `root`, depth first, each with the attributes `attrs` holds for it. Elements
 /// without attributes are left out with their descendants
 pub fn assemble(root: ObjectRef, attrs: &HashMap<ObjectRef, Obj>) -> Vec<Element> {
+    // an element is its process and ID: a reference to it may carry another `is_app` than the one its attributes came
+    // under (looked up as it was, its whole subtree was left out without a word); it keeps the attributes' own
+    let by_id: HashMap<(i64, u64), (&ObjectRef, &Obj)> = attrs.iter().map(|(k, v)| ((k.pid, k.id), (k, v))).collect();
     let mut out = Vec::new();
     let mut seen = HashSet::new();
     let mut stack = vec![(root, None, 0usize)];
     while let Some((o, parent, depth)) = stack.pop() {
         // the same element can be listed under two parents
         let key = (o.pid, o.id);
-        let Some(a) = attrs.get(&o) else { continue };
+        let Some(&(o, a)) = by_id.get(&key) else { continue };
         if depth > MAX_DEPTH || !seen.insert(key) {
             continue;
         }
-        let (e, kids) = element(Some(o), a, parent, depth);
+        let (e, kids) = element(Some(*o), a, parent, depth);
         out.push(e);
         let idx = out.len() - 1;
         for k in kids.into_iter().rev() {
@@ -308,6 +311,29 @@ mod tests {
         assert_eq!(p.elements[1].value, "0");
         assert_eq!(p.elements[2].xc_type, 9);
         assert_eq!(p.elements[2].identifier, "com.apple.settings.general");
+    }
+
+    /// A child referenced with another `is_app` than its attributes were stored under is still found, with its
+    /// subtree, and keeps the attributes' own reference
+    #[test]
+    fn a_child_is_found_whatever_its_reference_says_about_being_an_app() {
+        let r = |id, is_app| ObjectRef { pid: 10, id, is_app };
+        let mut stored = HashMap::new();
+        stored.insert(r(1, true), attrs(vec![(attr::LABEL, Obj::Str("app".into()))]));
+        stored.insert(r(2, true), attrs(vec![(attr::LABEL, Obj::Str("listed as an app".into()))]));
+        stored.insert(r(3, false), attrs(vec![(attr::LABEL, Obj::Str("its child".into()))]));
+        // the children as the parents name them: 2 without the app flag
+        let mut with_kids = |of: ObjectRef, kids: Vec<Obj>| {
+            if let Some(Obj::Dict(d)) = stored.get_mut(&of) {
+                d.push((Obj::Int(attr::CHILDREN), Obj::Array(kids)));
+            }
+        };
+        with_kids(r(1, true), vec![obj(10, 2)]);
+        with_kids(r(2, true), vec![obj(10, 3)]);
+        let els = assemble(r(1, true), &stored);
+        let labels: Vec<_> = els.iter().map(|e| e.label.as_str()).collect();
+        assert_eq!(labels, ["app", "listed as an app", "its child"]);
+        assert_eq!(els[1].object, Some(r(2, true)), "the stored reference");
     }
 
     #[test]

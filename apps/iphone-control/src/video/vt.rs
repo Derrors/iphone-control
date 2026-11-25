@@ -317,7 +317,13 @@ struct Sink {
     /// H.264: the `avcC` sent last, so a new one goes out before the frame that needs it. JPEG: unused
     avcc: Mutex<Vec<u8>>,
     h264: bool,
+    /// The session counting H.264 frames sent and not yet taken ([`Shared::queued`]); none for a JPEG
+    queued: Option<Arc<Shared>>,
 }
+
+/// H.264 frames the encoding thread may have sent ahead of the caller: a caller that falls behind (a slow page) no
+/// longer makes the channel grow without end; meanwhile the newest JPEG replaces the one waiting ([`Session::push`])
+const MAX_AHEAD: usize = 8;
 
 extern "C" fn on_encoded(refcon: *mut c_void, _frame: *mut c_void, status: OSStatus, _flags: u32, sample: *mut c_void) {
     let sink = unsafe { &*(refcon as *const Sink) };
@@ -349,7 +355,15 @@ extern "C" fn on_encoded(refcon: *mut c_void, _frame: *mut c_void, status: OSSta
             let _ = sink.tx.send(Ok(Packet::Config(avcc)));
         }
     }
-    let _ = sink.tx.send(Ok(Packet::Frame { key, data }));
+    // counted before it is sent: the caller may take it at once, and its count must not go below zero
+    if let Some(s) = &sink.queued {
+        s.queued.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
+    if sink.tx.send(Ok(Packet::Frame { key, data })).is_err()
+        && let Some(s) = &sink.queued
+    {
+        s.queued.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    }
 }
 
 unsafe fn sample_bytes(sample: *mut c_void) -> Option<Vec<u8>> {
@@ -385,7 +399,8 @@ unsafe fn avcc_of(desc: *mut c_void) -> Option<Vec<u8>> {
         let name = cfstr(c"avcC");
         let d = unsafe { CFDictionaryGetValue(atoms, name.ptr()) };
         if !d.is_null() {
-            let n = unsafe { CFDataGetLength(d) } as usize;
+            // a CFIndex: negative would make a huge length
+            let n = usize::try_from(unsafe { CFDataGetLength(d) }).unwrap_or(0);
             let p = unsafe { CFDataGetBytePtr(d) };
             if n > 6 && !p.is_null() {
                 return Some(unsafe { std::slice::from_raw_parts(p, n) }.to_vec());
@@ -417,7 +432,14 @@ fn build_avcc(sets: &[Vec<u8>], nal_len: i32) -> Option<Vec<u8>> {
     let sps: Vec<&Vec<u8>> = sets.iter().filter(|s| s.first().is_some_and(|b| b & 0x1f == 7)).collect();
     let pps: Vec<&Vec<u8>> = sets.iter().filter(|s| s.first().is_some_and(|b| b & 0x1f == 8)).collect();
     let first = sps.first().filter(|s| s.len() >= 4)?;
-    if pps.is_empty() || !(1..=4).contains(&nal_len) {
+    // what the avcC's fields hold: 5 bits of SPS count, a byte of PPS count, 16-bit lengths (cut short, the
+    // record would describe other bytes than follow)
+    if pps.is_empty()
+        || !(1..=4).contains(&nal_len)
+        || sps.len() > 31
+        || pps.len() > 255
+        || sets.iter().any(|s| s.len() > usize::from(u16::MAX))
+    {
         return None;
     }
     let mut v = vec![1, first[1], first[2], first[3], 0xFC | (nal_len as u8 - 1), 0xE0 | sps.len() as u8];
@@ -732,6 +754,9 @@ impl Drop for Decoder {
 struct Shared {
     state: Mutex<State>,
     wake: Condvar,
+    /// H.264 frames sent and not yet taken ([`Session::next`]); the encoding thread waits while there are
+    /// [`MAX_AHEAD`]. Counted as sent, not as given to the encoder: a frame the encoder drops sends nothing
+    queued: std::sync::atomic::AtomicUsize,
 }
 
 #[derive(Default)]
@@ -771,7 +796,11 @@ impl Session {
     /// Starts the thread; `kicks`: copies after each frame (0 unless measured otherwise). `info` is told once the
     /// encoder is set up
     pub fn start(w: u32, h: u32, qp: u8, kicks: usize, info: Option<tokio::sync::oneshot::Sender<Info>>) -> Self {
-        let shared = Arc::new(Shared { state: Mutex::default(), wake: Condvar::new() });
+        let shared = Arc::new(Shared {
+            state: Mutex::default(),
+            wake: Condvar::new(),
+            queued: std::sync::atomic::AtomicUsize::new(0),
+        });
         let (tx, out) = mpsc::unbounded_channel();
         let sh = shared.clone();
         let spawned = std::thread::Builder::new().name("ictl-videotoolbox".into()).spawn(move || {
@@ -793,7 +822,15 @@ impl Session {
 
     /// The next packet; `None` once the thread has ended. Cancel-safe
     pub async fn next(&mut self) -> Option<Result<Packet, String>> {
-        self.out.recv().await
+        let p = self.out.recv().await;
+        if let Some(Ok(Packet::Frame { .. })) = &p {
+            // counted before it was sent ([`on_encoded`]): at least one
+            self.shared.queued.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+            // under the lock: the thread checks the count with it held, so this wake-up can't come in between
+            let _held = self.shared.state.lock().unwrap_or_else(|p| p.into_inner());
+            self.shared.wake.notify_all();
+        }
+        p
     }
 
     pub fn written(&self) -> usize {
@@ -819,7 +856,7 @@ fn note(sh: &Shared, e: &str) {
 }
 
 fn run(
-    sh: &Shared,
+    sh: &Arc<Shared>,
     w: u32,
     h: u32,
     qp: u8,
@@ -828,7 +865,8 @@ fn run(
     info: Option<tokio::sync::oneshot::Sender<Info>>,
 ) -> Result<(), String> {
     let (ew, eh) = even((w, h));
-    let (mut enc, pinned_qp) = h264(ew, eh, qp, Sink { tx, avcc: Mutex::default(), h264: true })?;
+    let sink = Sink { tx, avcc: Mutex::default(), h264: true, queued: Some(sh.clone()) };
+    let (mut enc, pinned_qp) = h264(ew, eh, qp, sink)?;
     let mut dec = Decoder::new(w, h)?;
     if let Some(i) = info {
         let _ = i.send(Info { hardware: enc.hardware, pinned_qp });
@@ -840,7 +878,10 @@ fn run(
                 if s.stop {
                     return Ok(());
                 }
-                if let Some(j) = s.next.take() {
+                // the caller is behind: wait for it (the frame waiting meanwhile is replaced by newer ones)
+                if sh.queued.load(std::sync::atomic::Ordering::SeqCst) < MAX_AHEAD
+                    && let Some(j) = s.next.take()
+                {
                     break j;
                 }
                 s = sh.wake.wait(s).unwrap_or_else(|p| p.into_inner());
@@ -867,7 +908,8 @@ pub fn sample_jpeg(w: u32, h: u32, n: u32) -> Result<Vec<u8>, String> {
     let (tx, mut rx) = mpsc::unbounded_channel();
     let image = pattern(w, h, n)?;
     let tune = |s: *mut c_void| set(s, unsafe { kVTCompressionPropertyKey_Quality }, number_f64(0.8).ptr(), "Quality");
-    let mut e = Encoder::new(w, h, kCMVideoCodecType_JPEG, tune, Sink { tx, avcc: Mutex::default(), h264: false })?;
+    let sink = Sink { tx, avcc: Mutex::default(), h264: false, queued: None };
+    let mut e = Encoder::new(w, h, kCMVideoCodecType_JPEG, tune, sink)?;
     e.encode(image.ptr())?;
     drop(e);
     match rx.try_recv() {
@@ -963,6 +1005,11 @@ mod tests {
         let a = build_avcc(&[sps, pps], 4).unwrap();
         assert_eq!(a, [1, 0x64, 0x00, 0x28, 0xFF, 0xE1, 0, 5, 0x67, 0x64, 0x00, 0x28, 0xAC, 1, 0, 3, 0x68, 0xEE, 0x3C]);
         assert!(build_avcc(&[vec![0x68, 1]], 4).is_none(), "no SPS");
+        // more than the record's fields hold
+        let sps = vec![0x67, 0x64, 0x00, 0x28];
+        assert!(build_avcc(&[[sps.clone(), vec![0; 70_000]].concat(), vec![0x68, 1]], 4).is_none(), "a set over 64 KB");
+        let many: Vec<Vec<u8>> = std::iter::repeat_n(sps, 32).chain([vec![0x68, 1]]).collect();
+        assert!(build_avcc(&many, 4).is_none(), "32 SPS");
     }
 
     #[test]

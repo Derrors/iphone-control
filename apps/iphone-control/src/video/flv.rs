@@ -21,6 +21,9 @@ pub struct Parser {
     started: bool,
 }
 
+/// The longest FLV file header taken (FLV 1's is 9 bytes)
+const MAX_HEADER: usize = 1024;
+
 impl Parser {
     pub fn push(&mut self, data: &[u8]) {
         self.buf.extend_from_slice(data);
@@ -36,8 +39,13 @@ impl Parser {
                 if &self.buf[..3] != b"FLV" {
                     return Err("ffmpeg's output isn't FLV".into());
                 }
-                // the header's own length, then the first "previous tag size" (0)
-                let skip = u32::from_be_bytes([self.buf[5], self.buf[6], self.buf[7], self.buf[8]]) as usize + 4;
+                // the header's own length (9 in FLV 1), then the first "previous tag size" (0). A length past any real
+                // header means the stream isn't FLV: waited for, it would have grown the buffer up to 4 GB
+                let len = u32::from_be_bytes([self.buf[5], self.buf[6], self.buf[7], self.buf[8]]) as usize;
+                if !(9..=MAX_HEADER).contains(&len) {
+                    return Err(format!("FLV header of {len} bytes, not FLV"));
+                }
+                let skip = len + 4;
                 if self.buf.len() < skip {
                     return Ok(None);
                 }
@@ -137,5 +145,13 @@ pub(crate) mod tests {
         p.push(&header());
         p.push(&tag(9, &[0x1C, 1, 0, 0, 0]));
         assert!(p.next().is_err(), "HEVC isn't expected");
+        // a header length no FLV has: refused at once, not waited for
+        for len in [0u32, 8, 1025, u32::MAX] {
+            let mut p = Parser::default();
+            let mut h = b"FLV\x01\x01".to_vec();
+            h.extend(len.to_be_bytes());
+            p.push(&h);
+            assert!(p.next().is_err(), "{len}");
+        }
     }
 }

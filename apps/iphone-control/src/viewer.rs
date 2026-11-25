@@ -35,7 +35,7 @@ pub mod tls;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::bail;
 use api::*;
@@ -290,10 +290,17 @@ pub async fn run(
         mcp: mcp.then(|| ictl_mcp::http_service(socket.to_path_buf())),
         auth: Some(auth),
     });
-    let slots = Arc::new(tokio::sync::Semaphore::new(crate::MAX_CONNECTIONS));
+    let slots = Arc::new(tokio::sync::Semaphore::new(MAX_CONNECTIONS));
+    let busy = Arc::new(tokio::sync::Semaphore::new(BUSY_ANSWERS));
+    let mut last_full: Option<Instant> = None;
     let arriving = Arriving::default();
+    let mut stop = std::pin::pin!(shutdown_signal());
     loop {
-        let (client, peer) = match listener.accept().await {
+        let accepted = tokio::select! {
+            r = listener.accept() => r,
+            () = &mut stop => break,
+        };
+        let (client, peer) = match accepted {
             Ok(c) => c,
             // for example out of file descriptors: the viewer goes on (and retrying at once would only spin)
             Err(e) => {
@@ -310,8 +317,24 @@ pub async fn run(
         }
         // one machine on the network can't take every place with connections that never send a request
         let Some(early) = arriving.enter(peer.ip()) else { continue };
-        // too many open connections (for example many tabs): drop the new one
-        let Ok(slot) = slots.clone().try_acquire_owned() else { continue };
+        // too many open connections (for example many tabs): the new one is told so (503), a few at a time, and
+        // the event goes to the log now and then
+        let Ok(slot) = slots.clone().try_acquire_owned() else {
+            if last_full.is_none_or(|t| t.elapsed() >= Duration::from_secs(60)) {
+                last_full = Some(Instant::now());
+                tracing::warn!(
+                    "viewer: all {MAX_CONNECTIONS} connections are in use (pictures, task events, /mcp, open pages); new ones get 503"
+                );
+            }
+            if let Ok(permit) = busy.clone().try_acquire_owned() {
+                let tls = ctx.tls.clone();
+                tokio::spawn(async move {
+                    let _ = tokio::time::timeout(Duration::from_secs(3), answer_busy(client, tls)).await;
+                    drop(permit);
+                });
+            }
+            continue;
+        };
         let ctx = ctx.clone();
         let room = slots.clone();
         tokio::spawn(async move {
@@ -338,6 +361,43 @@ pub async fn run(
             drop(slot);
         });
     }
+    // SIGTERM (the service stopping, an update) or Ctrl-C: no new connections; the agents of the tasks started
+    // here are stopped (they run in process groups of their own, which nothing else would end); open pictures and
+    // event streams end with the process, and the pages reconnect to the next viewer
+    tracing::info!("viewer: stopping");
+    ctx.agents.stop_all().await;
+    Ok(())
+}
+
+/// Open connections at most: a page takes 3 to 5 (picture, task events, the API kept open, `/mcp` for an agent)
+const MAX_CONNECTIONS: usize = 64;
+/// At most this many connections over [`MAX_CONNECTIONS`] are answered 503 at a time; more are just closed
+const BUSY_ANSWERS: usize = 4;
+
+/// Resolves on SIGTERM or SIGINT (never, if they can't be watched)
+async fn shutdown_signal() {
+    use tokio::signal::unix::{SignalKind, signal};
+    let (Ok(mut term), Ok(mut int)) = (signal(SignalKind::terminate()), signal(SignalKind::interrupt())) else {
+        return std::future::pending().await;
+    };
+    tokio::select! {
+        _ = term.recv() => {}
+        _ = int.recv() => {}
+    }
+}
+
+/// `503 Service Unavailable` to a connection over [`MAX_CONNECTIONS`] (after the TLS handshake on HTTPS), so the page
+/// says why instead of seeing a connection drop
+async fn answer_busy(client: tokio::net::TcpStream, tls: Option<Arc<tls::Tls>>) {
+    let mut conn = match tls {
+        Some(t) => match t.accept(client).await {
+            Ok(c) => c,
+            Err(_) => return,
+        },
+        None => Conn::Plain(client),
+    };
+    let _ =
+        reply_with(&mut conn, 503, "text/plain", b"too many connections, retry shortly", "Retry-After: 2\r\n").await;
 }
 
 /// Connections from a machine on the network that haven't sent their request yet (handshake and head), at most
@@ -399,7 +459,7 @@ fn page_in(lang: ictl_l10n::Lang) -> String {
 /// How long a connection kept open waits for the page's next request (short in tests, which wait it out)
 const KEEP_IDLE: Duration = if cfg!(test) { Duration::from_millis(300) } else { Duration::from_secs(15) };
 
-/// Free places ([`crate::MAX_CONNECTIONS`]) below which a connection isn't kept open: idle ones would leave none
+/// Free places ([`MAX_CONNECTIONS`]) below which a connection isn't kept open: idle ones would leave none
 /// for a new tab or another machine, whose connections are dropped when they are all taken
 const KEEP_ROOM: usize = 8;
 
@@ -630,14 +690,27 @@ async fn route(
             if req.origin.as_deref().is_some_and(|o| !ctx.access.origin_allowed(o, ctx.port)) {
                 return reply(client, 403, "text/plain", b"forbidden").await;
             }
-            if req.method == "POST" && req.content_length.is_none() {
+            // a length or chunked, not both (a request read two ways is how requests are smuggled past proxies),
+            // and no other transfer coding
+            if req.chunked && (req.content_length.is_some() || !req.transfer_chunked_only) {
+                return reply(client, 400, "text/plain", b"bad request").await;
+            }
+            if req.method == "POST" && req.content_length.is_none() && !req.chunked {
                 return reply(client, 411, "text/plain", b"length required").await;
             }
-            let len = req.content_length.unwrap_or(0);
-            if len > mcp::MAX_BODY {
-                return reply(client, 413, "text/plain", b"too large").await;
-            }
-            read_body(client, &mut body, len).await?;
+            let body = if req.chunked {
+                match read_chunked(client, body, mcp::MAX_BODY).await? {
+                    Some(b) => b,
+                    None => return reply(client, 413, "text/plain", b"too large").await,
+                }
+            } else {
+                let len = req.content_length.unwrap_or(0);
+                if len > mcp::MAX_BODY {
+                    return reply(client, 413, "text/plain", b"too large").await;
+                }
+                read_body(client, &mut body, len).await?;
+                body
+            };
             let svc = ctx.mcp.as_ref().expect("checked above");
             mcp::serve(svc, client, &head, body).await
         }
@@ -1016,6 +1089,28 @@ async fn read_body(client: &mut Conn, body: &mut Vec<u8>, len: usize) -> anyhow:
 
 const BODY_TIMEOUT: Duration = Duration::from_secs(60);
 
+/// A chunked body (`/mcp` only): read until its last chunk, decoded. `None` when it is bigger than `max`. What
+/// follows it is left unread: the connection closes after the answer
+async fn read_chunked(client: &mut Conn, mut raw: Vec<u8>, max: usize) -> anyhow::Result<Option<Vec<u8>>> {
+    let read = async {
+        loop {
+            match mcp::dechunk(&raw, max) {
+                mcp::Chunked::Done(body, _) => return anyhow::Ok(Some(body)),
+                mcp::Chunked::TooLarge => return Ok(None),
+                mcp::Chunked::Invalid => bail!("bad chunked body"),
+                mcp::Chunked::Partial => {}
+            }
+            let mut buf = [0u8; 4096];
+            let n = tokio::time::timeout(crate::READ_TIMEOUT, client.read(&mut buf)).await??;
+            if n == 0 {
+                bail!("body cut off");
+            }
+            raw.extend_from_slice(&buf[..n]);
+        }
+    };
+    tokio::time::timeout(BODY_TIMEOUT, read).await.map_err(|_| anyhow::anyhow!("body took too long"))?
+}
+
 async fn json_reply(client: &mut Conn, status: u16, v: &Value) -> anyhow::Result<()> {
     reply(client, status, "application/json", v.to_string().as_bytes()).await
 }
@@ -1038,6 +1133,7 @@ async fn reply_with(client: &mut Conn, status: u16, kind: &str, body: &[u8], ext
         411 => "Length Required",
         413 => "Payload Too Large",
         429 => "Too Many Requests",
+        503 => "Service Unavailable",
         _ => "Bad Gateway",
     };
     // the request allows it ([`keepable`]): the connection stays for the next one
@@ -1236,8 +1332,10 @@ struct Head {
     task_token: Option<String>,
     /// HTTP/1.0, or `Connection: close`: the client closes after the answer
     close: bool,
-    /// `Transfer-Encoding` (chunked): a body without a length, which this server doesn't read
+    /// `Transfer-Encoding`: a body without a length, which this server reads only for `/mcp` ([`read_chunked`])
     chunked: bool,
+    /// … and it is just `chunked`
+    transfer_chunked_only: bool,
 }
 
 impl Head {
@@ -1263,6 +1361,7 @@ impl Head {
             task_token: None,
             close,
             chunked: false,
+            transfer_chunked_only: false,
         };
         for l in lines {
             let Some((k, v)) = l.split_once(':') else { continue };
@@ -1275,7 +1374,11 @@ impl Head {
                 "x-ictl-lang" => h.lang = ictl_l10n::parse(v),
                 "x-ictl-device" if !v.is_empty() => h.device = Some(v.to_owned()),
                 "connection" => h.close |= v.split(',').any(|t| t.trim().eq_ignore_ascii_case("close")),
-                "transfer-encoding" => h.chunked = true,
+                "transfer-encoding" => {
+                    // a second Transfer-Encoding line adds codings to the first
+                    h.transfer_chunked_only = !h.chunked && v.eq_ignore_ascii_case("chunked");
+                    h.chunked = true;
+                }
                 k if k == protocol::TASK_TOKEN_HEADER && !v.is_empty() => h.task_token = Some(v.to_owned()),
                 _ => {}
             }
@@ -1514,6 +1617,41 @@ mod tests {
         }
     }
 
+    /// `/mcp` takes a chunked body (an MCP client or a proxy that streams the request) and answers a stream chunked;
+    /// a body both chunked and with a length is refused
+    #[tokio::test]
+    async fn mcp_over_http_takes_a_chunked_body() {
+        let temp = tempfile::tempdir_in("/tmp").unwrap();
+        let mut ctx = test_ctx(temp.path(), &temp.path().join("none.sock"));
+        let entry = auth::Entry { name: "owner".into(), role: auth::Role::Operate, token: "t".repeat(64), created: 0 };
+        ctx.auth = Some(auth::Auth::fixed(vec![entry], 8202));
+        ctx.mcp = Some(ictl_mcp::http_service(temp.path().join("none.sock")));
+        let init = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"test","version":"1"}}}"#;
+        let (a, b) = init.split_at(40);
+        let head = |framing: &str| {
+            format!(
+                "POST /mcp HTTP/1.1\r\nHost: 127.0.0.1:8202\r\nAuthorization: Bearer {}\r\nContent-Type: application/json\r\n\
+                 Accept: application/json, text/event-stream\r\n{framing}\r\n",
+                "t".repeat(64)
+            )
+        };
+        let chunked = format!(
+            "{}{:x}\r\n{a}\r\n{:x}\r\n{b}\r\n0\r\n\r\n",
+            head("Transfer-Encoding: chunked\r\n"),
+            a.len(),
+            b.len()
+        );
+        let r = exchange(&ctx, chunked).await;
+        assert!(r.starts_with("HTTP/1.1 200"), "{r}");
+        assert!(r.contains("Transfer-Encoding: chunked\r\n") && r.ends_with("\r\n0\r\n\r\n"), "{r}");
+        assert!(r.contains("iphone"), "{r}");
+        let both =
+            format!("{}{init}", head(&format!("Transfer-Encoding: chunked\r\nContent-Length: {}\r\n", init.len())));
+        assert!(exchange(&ctx, both).await.starts_with("HTTP/1.1 400"));
+        let gzip = format!("{}0\r\n\r\n", head("Transfer-Encoding: gzip, chunked\r\n"));
+        assert!(exchange(&ctx, gzip).await.starts_with("HTTP/1.1 400"));
+    }
+
     /// Before the login nothing is kept open: without a token a machine on the network can't hold the places
     #[tokio::test]
     async fn only_a_logged_in_request_keeps_its_connection() {
@@ -1542,7 +1680,7 @@ mod tests {
     }
 
     /// A connection kept open that sends nothing more is closed after [`KEEP_IDLE`]: an idle one holds one of the
-    /// [`crate::MAX_CONNECTIONS`] places
+    /// [`MAX_CONNECTIONS`] places
     #[tokio::test]
     async fn an_idle_kept_connection_closes() {
         let temp = tempfile::tempdir_in("/tmp").unwrap();

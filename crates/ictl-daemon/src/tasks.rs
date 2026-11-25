@@ -88,7 +88,12 @@ impl Status {
 
 struct TaskState {
     status: Status,
+    /// The events so far, kept here only while they aren't all in the task's file ([`Self::on_disk`]): the daemon
+    /// keeps the last [`KEEP`] tasks, and their logs have no bound of their own
     log: Vec<TaskEvent>,
+    /// Every event is in [`Task::file`]: read from there when wanted, not held in memory. Off without a file, and from
+    /// the first write to it that fails (the events so far are read into [`Self::log`] then)
+    on_disk: bool,
     next_step: u64,
     /// What the agent said it is about to do, for the next step
     thought: Option<String>,
@@ -386,10 +391,15 @@ impl Task {
             return;
         }
         let e = TaskEvent { event: name.into(), data };
-        if let Some(f) = &self.file {
-            append(f, &e);
+        let saved = self.file.as_deref().is_some_and(|f| append(f, &e));
+        if st.on_disk && !saved {
+            // what the file has so far, here from now on
+            st.log = self.file.as_deref().map(read_events).unwrap_or_default();
+            st.on_disk = false;
         }
-        st.log.push(e.clone());
+        if !st.on_disk {
+            st.log.push(e.clone());
+        }
         let _ = self.tx.send(e);
     }
 
@@ -406,7 +416,15 @@ impl Task {
     /// The whole task so far and the events after it (taken together, so nothing falls between), and whether it ended
     pub fn subscribe(&self) -> (Vec<TaskEvent>, broadcast::Receiver<TaskEvent>, bool) {
         let st = self.lock();
-        (st.log.clone(), self.tx.subscribe(), !st.status.active())
+        (self.events(&st), self.tx.subscribe(), !st.status.active())
+    }
+
+    /// Every event so far, in order (under `st`'s lock, which every event is written under)
+    fn events(&self, st: &TaskState) -> Vec<TaskEvent> {
+        match self.file.as_deref() {
+            Some(f) if st.on_disk => read_events(f),
+            _ => st.log.clone(),
+        }
     }
 
     /// Ends the task unless it already ended. Returns whether it did
@@ -852,8 +870,10 @@ impl Tasks {
             .into());
         }
         let id = uuid::Uuid::new_v4().simple().to_string()[..12].to_owned();
+        let file = self.dir.as_ref().map(|d| d.join(format!("{id}.jsonl")));
+        let on_disk = file.is_some();
         let task = Arc::new(Task {
-            file: self.dir.as_ref().map(|d| d.join(format!("{id}.jsonl"))),
+            file,
             id,
             token: uuid::Uuid::new_v4().simple().to_string(),
             title: title.chars().take(4000).collect(),
@@ -865,6 +885,7 @@ impl Tasks {
             st: Mutex::new(TaskState {
                 status: Status::Running,
                 log: Vec::new(),
+                on_disk,
                 next_step: 1,
                 thought: None,
                 last: None,
@@ -1106,13 +1127,15 @@ fn from_agent(task: &Task, token: Option<&str>, pids: [Option<u32>; 2]) -> bool 
     pids.into_iter().flatten().any(|p| p != opener && crate::procs::descends_from(p, opener))
 }
 
-fn append(file: &Path, e: &TaskEvent) {
+/// Whether the event was written
+fn append(file: &Path, e: &TaskEvent) -> bool {
     use std::io::Write;
     let line = json!({"t": now_ms(), "event": e.event, "data": e.data});
     let r = std::fs::OpenOptions::new().create(true).append(true).open(file).and_then(|mut f| writeln!(f, "{line}"));
-    if let Err(err) = r {
+    if let Err(err) = &r {
         tracing::warn!("{}", ictl_l10n::log_trf!("写任务日志失败：{err}", "Writing the task log failed: {err}"));
     }
+    r.is_ok()
 }
 
 fn drop_unreadable(file: &Path) {
@@ -1167,7 +1190,9 @@ fn restore(file: &Path) -> Option<Task> {
         file: Some(file.to_owned()),
         st: Mutex::new(TaskState {
             status: Status::Running,
-            log,
+            // read again from the file when wanted
+            log: Vec::new(),
+            on_disk: true,
             next_step: steps.unwrap_or(0) + 1,
             thought: None,
             last: None,
@@ -1703,6 +1728,39 @@ mod tests {
         assert!(t.is_active(), "unplugged, or the same phone: the task waits");
         ts.device_is(Some("00008150-000B"));
         assert_eq!(t.info().state, "interrupted");
+    }
+
+    /// A task with a file holds none of its events in memory (the daemon keeps 50 tasks, each log of any size): they
+    /// are read from the file, the same and in the same order as they were sent. Once writing the file fails, the
+    /// events are kept in memory from then on, those before included
+    #[test]
+    fn a_task_s_events_are_kept_on_disk_not_in_memory() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("ictl-tasks-disk-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let ts = Tasks::load(Some(dir.clone()));
+        let t = open(&ts);
+        let (_, mut rx, _) = t.subscribe();
+        t.thought("看一下");
+        t.step_done(1, true, 5, "ok", None);
+        assert!(t.lock().log.is_empty() && t.lock().on_disk);
+        let mut sent = Vec::new();
+        while let Ok(e) = rx.try_recv() {
+            sent.push(e);
+        }
+        let (log, _, _) = t.subscribe();
+        assert_eq!(log.first().map(|e| e.event.as_str()), Some("task"));
+        assert_eq!(log[1..], sent[..], "what was sent, from the file");
+
+        // the file can't be written any more: from here on in memory, with what came before
+        let file = t.file.clone().unwrap();
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o444)).unwrap();
+        t.end(End::Completed, "好了");
+        let (after, _, ended) = t.subscribe();
+        assert!(ended && !t.lock().on_disk);
+        assert_eq!(after[..log.len()], log[..]);
+        assert_eq!(after.last().map(|e| e.event.as_str()), Some("done"));
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

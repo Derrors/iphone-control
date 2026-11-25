@@ -14,7 +14,7 @@ function applyInfo(v) {
     highlight(null); marks.replaceChildren(); hoverDot = null;
     if (changed) {
       S.daemon = null; S.dstatus = null; S.apps = []; S.appsState = 'idle'; appNames.map = null; appNames.loading = false;
-      T.warm = 0; V.noDevice = false; V.devRetries = 0;
+      T.warm = 0; V.noDevice = false; V.devRetries = 0; clearTimeout(V.devTimer); V.devTimer = 0;
     }
   }
   const reconnect = feedId && (changed || S.display?.id !== display?.id);

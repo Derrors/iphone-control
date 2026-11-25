@@ -445,6 +445,9 @@ pub(crate) struct PerDevice {
     pub last_rotation: Option<(Instant, Rotation)>,
     /// 开发者镜像连续挂载失败次数，到 3 次清缓存重新下载
     pub ddi_failures: u32,
+    /// 原生控制就绪后，上次查开发者镜像和无障碍服务还在不在的时间，和接连几次没查成（[`crate::supervise::Liveness`]）
+    pub alive_checked: Option<Instant>,
+    pub alive_misses: u32,
     /// 最近一次经本进程锁屏的时间（自动解锁要等锁屏过渡走完，见 [`crate::tools::LOCK_SETTLE`]）
     pub last_lock: Option<Instant>,
     /// The orientation of the finger the web viewer is moving (`Request::Touch`), worked out when it touched down
@@ -470,9 +473,55 @@ pub(crate) struct PerDevice {
     /// [`Daemon::dispatch`], which says so in the answer
     pub unlocked: Option<Duration>,
     /// 原生控制：进程号 → Bundle ID（前台 App 由无障碍服务给进程号）
-    pub bundles: HashMap<i64, String>,
+    pub bundles: PidCache<String>,
     /// 原生控制：进程号 → 是不是网页内容进程（WebKit WebContent，网页的元素来自它）
-    pub web_pids: HashMap<i64, bool>,
+    pub web_pids: PidCache<bool>,
+}
+
+/// What a process of the phone is, by its number, for a while ([`PidCache::FOR`]). A number is given to another
+/// process only once the phone has gone through all of them (iOS: up to 99999), which takes far longer than that; kept
+/// for good, an entry could name an app that is long gone, and a task's scope would go by it (a daemon runs for weeks)
+#[derive(Debug)]
+pub struct PidCache<V> {
+    entries: HashMap<i64, (Instant, V)>,
+}
+
+impl<V> Default for PidCache<V> {
+    fn default() -> Self {
+        Self { entries: HashMap::new() }
+    }
+}
+
+impl<V> PidCache<V> {
+    pub const FOR: Duration = Duration::from_secs(10 * 60);
+    /// More than this and it starts again (processes come and go)
+    const MAX: usize = 200;
+
+    pub fn get(&self, pid: i64) -> Option<&V> {
+        self.get_at(pid, Instant::now())
+    }
+
+    fn get_at(&self, pid: i64, now: Instant) -> Option<&V> {
+        self.entries.get(&pid).filter(|(at, _)| now.saturating_duration_since(*at) < Self::FOR).map(|(_, v)| v)
+    }
+
+    pub fn insert(&mut self, pid: i64, v: V) {
+        self.insert_at(pid, v, Instant::now());
+    }
+
+    fn insert_at(&mut self, pid: i64, v: V, now: Instant) {
+        if self.entries.len() >= Self::MAX {
+            self.entries.retain(|_, (at, _)| now.saturating_duration_since(*at) < Self::FOR);
+            if self.entries.len() >= Self::MAX {
+                self.entries.clear();
+            }
+        }
+        self.entries.insert(pid, (now, v));
+    }
+
+    pub fn remove(&mut self, pid: i64) {
+        self.entries.remove(&pid);
+    }
 }
 
 /// What preparing a phone for native control gives: the developer disk image's version if it was mounted just now,
@@ -1847,6 +1896,26 @@ fn check_request(req: &Request) -> Result<(), String> {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+
+    /// What a process is, is known for a while, then asked again: by then its number may be another process's
+    #[test]
+    fn what_a_process_is_is_asked_again_after_a_while() {
+        let t0 = Instant::now();
+        let mut c = PidCache::default();
+        c.insert_at(42, "com.apple.Preferences".to_owned(), t0);
+        assert_eq!(c.get_at(42, t0 + Duration::from_secs(60)).map(String::as_str), Some("com.apple.Preferences"));
+        assert_eq!(c.get_at(42, t0 + PidCache::<String>::FOR), None, "too old to go by");
+        c.remove(42);
+        assert_eq!(c.get_at(42, t0), None);
+        // full: the old ones go first, and only when all are recent does it start again
+        for p in 0..PidCache::<String>::MAX as i64 {
+            c.insert_at(p, String::new(), if p == 0 { t0 } else { t0 + PidCache::<String>::FOR });
+        }
+        c.insert_at(1000, String::new(), t0 + PidCache::<String>::FOR + Duration::from_secs(1));
+        assert_eq!(c.entries.len(), PidCache::<String>::MAX, "the stale one made room");
+        c.insert_at(1001, String::new(), t0 + PidCache::<String>::FOR + Duration::from_secs(2));
+        assert_eq!(c.entries.len(), 1, "all recent: cleared");
+    }
 
     #[test]
     fn raw_scroll_collect_validates_scope_and_bounds() {

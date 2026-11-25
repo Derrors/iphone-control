@@ -16,6 +16,10 @@ What changed in each release, one line per change. Versions follow [Semantic Ver
 
 ### Fixes
 
+- iOS 27+: a phone ready for native control is checked every 5 minutes while nobody uses it. When the developer disk image is gone or the tunnel no longer answers, it is prepared again instead of staying "ready" until the next action fails (#PR).
+- iOS 27+: what a process of the phone is (the app in front, a web page's process) is looked up again after 10 minutes, and SpringBoard's process after a minute or when reading it fails. A daemon running for weeks could otherwise go by a process number another app had taken, or miss alerts after SpringBoard restarted (#PR).
+- The daemon no longer keeps the events of its last 50 tasks in memory: they are read from the task's log file when a page or `task events` replays them (#PR).
+- The control page's H.264 picture lost before its first frame (a restart, a dropped connection) is tried again later instead of being given up for good; only a refused one (no encoder, a codec the browser can't decode) is. A retry left over from before switching devices no longer reconnects the picture out of turn (#PR).
 - AI tasks: while a step waits for your confirmation you can take over first (to look or change something); the question stays, and can be answered while you're in control or after handing back (#201).
 - The control page no longer stays on "running" when a task's event stream is closed for good: it follows the task again if it is still there, or marks it stopped. Reconnecting or reloading the page no longer redraws old gesture marks (#201).
 - A page or `task events` that fell behind a busy task no longer misses its end and stays open; a task's end stops every step still under way (a step asking to leave the task's scope, and its question, are two), so none keeps spinning; nothing is recorded after the end (#201).

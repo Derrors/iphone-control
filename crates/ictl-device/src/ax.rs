@@ -31,6 +31,15 @@ impl From<ictl_ax::AxError> for DeviceError {
 /// After axauditd is ended, how long launchd is given before the next connection starts it again
 const AX_DAEMON_RESTART: Duration = Duration::from_secs(1);
 
+/// SpringBoard's process number is looked up again this long after it was found: a respring gives it a new one, and
+/// the frontmost app would then not be known as SpringBoard (a tunnel can last for days)
+const SPRINGBOARD_RECHECK: Duration = Duration::from_secs(60);
+
+/// A process number found at `found` is still the one to go by at `now`
+fn still_fresh(found: Instant, now: Instant) -> bool {
+    now.saturating_duration_since(found) < SPRINGBOARD_RECHECK
+}
+
 /// The phone's process behind remoteAXService
 pub fn is_ax_daemon(exe: &str) -> bool {
     exe.ends_with("/AccessibilityAudit.framework/Support/axauditd")
@@ -134,6 +143,8 @@ impl Tunnel {
             return Err(nothing_read());
         }
         let (overlays, overlays_complete) = if overlays { self.ax_overlays(app.pid).await } else { (Vec::new(), true) };
+        // reading the overlays may have found SpringBoard's number anew (it had restarted)
+        let sb = self.springboard.map(|(_, p)| p).or(sb);
         Ok(AxScreen {
             app: elements,
             app_complete: complete,
@@ -148,30 +159,39 @@ impl Tunnel {
     /// What SpringBoard shows over the app of process `app_pid` (alerts, banners, its status bar); empty when
     /// SpringBoard is that app, or can't be read
     pub async fn ax_overlays(&mut self, app_pid: i64) -> (Vec<Element>, bool) {
-        let Some(sb) = self.springboard_pid().await else { return (Vec::new(), false) };
-        if sb == app_pid {
-            return (Vec::new(), true);
-        }
-        let r = async {
-            let root = match self.springboard_app {
-                Some(o) => o,
-                None => {
-                    let o = self.ax().await?.app_object(sb).await?;
-                    self.springboard_app = Some(o);
-                    o
+        let mut tried = None;
+        loop {
+            let Some(sb) = self.springboard_pid().await else { return (Vec::new(), false) };
+            if sb == app_pid {
+                return (Vec::new(), true);
+            }
+            match self.springboard_elements(sb).await {
+                Ok(r) => return r,
+                Err(e) => {
+                    tracing::debug!("SpringBoard's elements: {e}");
+                    self.springboard_app = None;
+                    // it may have restarted under another number: found again, and read once more if so
+                    self.springboard = None;
+                    if tried.replace(sb).is_some() {
+                        return (Vec::new(), false);
+                    }
                 }
-            };
-            let s = self.ax().await?;
-            Ok::<_, DeviceError>(
-                s.walk_children(root, OVERLAY_LIMIT, OVERLAY_BUDGET, ictl_ax::tree::trait_bit::STATUS_BAR).await?,
-            )
+            }
         }
-        .await;
-        r.unwrap_or_else(|e| {
-            tracing::debug!("SpringBoard's elements: {e}");
-            self.springboard_app = None;
-            (Vec::new(), false)
-        })
+    }
+
+    /// The elements SpringBoard (process `sb`) shows: alerts, banners, the status bar
+    async fn springboard_elements(&mut self, sb: i64) -> Result<(Vec<Element>, bool)> {
+        let root = match self.springboard_app {
+            Some(o) => o,
+            None => {
+                let o = self.ax().await?.app_object(sb).await?;
+                self.springboard_app = Some(o);
+                o
+            }
+        };
+        let s = self.ax().await?;
+        Ok(s.walk_children(root, OVERLAY_LIMIT, OVERLAY_BUDGET, ictl_ax::tree::trait_bit::STATUS_BAR).await?)
     }
 
     /// Ends axauditd, the phone's process behind remoteAXService; the next connection starts it again. It can get stuck
@@ -197,19 +217,27 @@ impl Tunnel {
         Ok(frontmost(s, wait).await?.pid)
     }
 
-    /// SpringBoard's process, found once per tunnel
+    /// SpringBoard's process, looked up again [`SPRINGBOARD_RECHECK`] after it was found
     async fn springboard_pid(&mut self) -> Option<i64> {
-        if self.springboard.is_none() {
-            let found = self
-                .processes()
-                .await
-                .ok()?
-                .into_iter()
-                .find(|(_, exe)| exe.ends_with("/SpringBoard.app/SpringBoard"))
-                .map(|(pid, _)| pid as i64);
-            self.springboard = found;
+        let now = Instant::now();
+        if let Some((found, pid)) = self.springboard
+            && still_fresh(found, now)
+        {
+            return Some(pid);
         }
-        self.springboard
+        let found = self
+            .processes()
+            .await
+            .ok()?
+            .into_iter()
+            .find(|(_, exe)| exe.ends_with("/SpringBoard.app/SpringBoard"))
+            .map(|(pid, _)| pid as i64);
+        // another SpringBoard (it restarted): its application element is another one too
+        if found != self.springboard.map(|(_, p)| p) {
+            self.springboard_app = None;
+        }
+        self.springboard = found.map(|p| (now, p));
+        found
     }
 }
 
@@ -243,6 +271,15 @@ async fn frontmost(s: &AxSession, wait: Duration) -> Result<ObjectRef> {
 #[cfg(test)]
 mod wedge_tests {
     use super::*;
+
+    /// SpringBoard's number is gone by for a minute, then looked up again (it gets a new one when it restarts)
+    #[test]
+    fn springboard_s_number_is_looked_up_again() {
+        let t0 = Instant::now();
+        assert!(still_fresh(t0, t0 + Duration::from_secs(30)));
+        assert!(!still_fresh(t0, t0 + SPRINGBOARD_RECHECK));
+        assert!(still_fresh(t0 + Duration::from_secs(5), t0), "a clock read before it: still fresh");
+    }
 
     /// remoteAXService not answering is an error of its own (the daemon restarts axauditd for it), worded as before
     #[test]

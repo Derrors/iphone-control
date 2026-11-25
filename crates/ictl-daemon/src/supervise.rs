@@ -34,6 +34,57 @@ pub(crate) const AX_IDLE: Duration = Duration::from_secs(60);
 const LIST_ERRORS_OFFLINE: u32 = 3;
 /// 开发者镜像连续挂载失败这么多次就清缓存重新下载
 const DDI_FAILURES_INVALIDATE: u32 = 3;
+/// 原生控制就绪以后，这么久查一次开发者镜像还挂着、无障碍服务还在（[`Liveness`]）：巡检平时只看屏幕方向，
+/// 镜像掉了（别的工具卸了它）或隧道坏了也一直报「就绪」，要等下一个操作失败才知道
+const LIVENESS_EVERY: Duration = Duration::from_secs(5 * 60);
+/// 只在这么久没人操作时查（查一次要锁着设备）
+const LIVENESS_QUIET: Duration = Duration::from_secs(30);
+/// 接连这么多次查不成（不是查到没挂，是查不出来）就当隧道坏了，重新准备
+const LIVENESS_MISSES: u32 = 2;
+/// 查一次最多等这么久
+const LIVENESS_WAIT: Duration = Duration::from_secs(8);
+
+/// What a check that native control still works found, and what to do ([`liveness`])
+#[derive(Debug, PartialEq)]
+pub(crate) enum Liveness {
+    Alive,
+    /// Couldn't tell: asked again at the next round
+    Unsure,
+    /// Prepared again from the start (the image mounted, the accessibility service connected)
+    Prepare(String),
+}
+
+/// `found`: whether the image is mounted with the accessibility service listed, or the error of asking; `misses`:
+/// checks in a row that couldn't tell, this one included when it couldn't
+pub(crate) fn liveness(found: Result<bool, String>, misses: &mut u32) -> Liveness {
+    match found {
+        Ok(true) => {
+            *misses = 0;
+            Liveness::Alive
+        }
+        Ok(false) => {
+            *misses = 0;
+            Liveness::Prepare(
+                ictl_l10n::tr!(
+                    "开发者镜像或无障碍服务不在了，重新准备",
+                    "The developer disk image or the accessibility service is gone, preparing again"
+                )
+                .into(),
+            )
+        }
+        Err(e) => {
+            *misses += 1;
+            if *misses < LIVENESS_MISSES {
+                return Liveness::Unsure;
+            }
+            *misses = 0;
+            Liveness::Prepare(ictl_l10n::trf!(
+                "接连几次查不到开发者镜像（{e}），重新准备",
+                "Couldn't check the developer disk image several times in a row ({e}), preparing again"
+            ))
+        }
+    }
+}
 /// 整个重签（登录会话、注册设备、签名、上传安装）的时限：苹果服务器或安装卡住时不能永远「正在重签」
 const RESIGN_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 /// Apple ID 会话检查的时限
@@ -412,6 +463,8 @@ impl Daemon {
                                 "原生控制就绪（无障碍服务、HID，不用 WDA）",
                                 "Native control ready (accessibility service and HID, no WDA)"
                             ));
+                            g.dev.alive_checked = Some(Instant::now());
+                            g.dev.alive_misses = 0;
                             g.backoff.reset();
                             self.set_state(g, DeviceState::Ready);
                             self.sample_display(g, false).await;
@@ -439,7 +492,11 @@ impl Daemon {
         }
         if g.state == DeviceState::Ready {
             self.sample_display(g, false).await;
-            return;
+            let due = g.dev.alive_checked.is_none_or(|t| t.elapsed() >= LIVENESS_EVERY);
+            // ready still: nothing more this round. Gone: prepared again right away, below
+            if !due || self.acting_now(LIVENESS_QUIET) || !self.native_gone(g, &device).await {
+                return;
+            }
         }
         if g.preparing.is_some() || !g.backoff.ready(Instant::now()) {
             return;
@@ -491,6 +548,40 @@ impl Daemon {
         };
         if g.persisted.forget_detached(udid, Some(pid)) {
             g.persisted.save(&self.cfg.state_file());
+        }
+    }
+
+    /// Whether native control, ready until now, no longer works: the developer disk image went (unmounted by
+    /// something else) or the tunnel can't be used. Then the phone is back to being prepared, and true
+    async fn native_gone(&self, g: &mut Inner, device: &Device) -> bool {
+        g.dev.alive_checked = Some(Instant::now());
+        let legacy = ictl_device::ddi::legacy(g.info.as_ref().map_or(0, |i| i.major_version()));
+        let found = tokio::time::timeout(LIVENESS_WAIT, async {
+            let t = self.ensure_tunnel(g, device).await.map_err(|e| e.to_string())?;
+            if !t.ax_supported() {
+                return Ok(false);
+            }
+            let mounted =
+                if legacy { device.legacy_ddi_mounted().await } else { t.ddi_mounted().await.map(|v| v.is_some()) };
+            mounted.map_err(|e| e.to_string())
+        })
+        .await
+        .unwrap_or_else(|_| Err(ictl_l10n::tr!("查询超时", "the check timed out").into()));
+        tracing::debug!("native liveness: {found:?}");
+        match liveness(found, &mut g.dev.alive_misses) {
+            Liveness::Alive => false,
+            Liveness::Unsure => {
+                // asked again at the next round, not in five minutes
+                g.dev.alive_checked = None;
+                false
+            }
+            Liveness::Prepare(why) => {
+                self.log.log(&ictl_l10n::log_trf!("原生控制：{why}", "Native control: {why}"));
+                // the tunnel lists the services as they were when it was opened
+                drop_tunnel(g).await;
+                self.set_state(g, DeviceState::Preparing { last_error: Some(why) });
+                true
+            }
         }
     }
 
@@ -1226,6 +1317,21 @@ mod display_tests {
 #[cfg(test)]
 mod upkeep_tests {
     use super::*;
+
+    /// Native control found gone is prepared again: the image unmounted (or the service not listed) at once, a
+    /// check that can't tell only after a second one in a row; one that works again clears the count
+    #[test]
+    fn native_control_found_gone_is_prepared_again() {
+        let mut misses = 0;
+        assert_eq!(liveness(Ok(true), &mut misses), Liveness::Alive);
+        assert!(matches!(liveness(Ok(false), &mut misses), Liveness::Prepare(_)));
+        assert_eq!(liveness(Err("timeout".into()), &mut misses), Liveness::Unsure);
+        assert_eq!(liveness(Ok(true), &mut misses), Liveness::Alive);
+        assert_eq!(misses, 0, "an answer clears the count");
+        assert_eq!(liveness(Err("timeout".into()), &mut misses), Liveness::Unsure);
+        assert!(matches!(liveness(Err("timeout".into()), &mut misses), Liveness::Prepare(w) if w.contains("timeout")));
+        assert_eq!(misses, 0, "and starts again after preparing");
+    }
 
     #[test]
     fn wda_upkeep_is_only_for_devices_that_use_wda() {

@@ -85,14 +85,25 @@ function connect() {
  * 真走不通的不会一直断画面 */
 const VIDEO_RETRY_MS = [30000, 60000, 120000];
 function giveUpVideo(dev, permanent) {
+  // 每一路只有一个等着的重试：再放弃一次时换成新的，切换设备时清掉（info.js），不会过后冒出来重连一次
+  const key = dev ? 'devTimer' : 'offTimer';
+  clearTimeout(V[key]); V[key] = 0;
   if (dev) V.noDevice = true; else V.off = true;
   if (permanent) return;
   const n = dev ? (V.devRetries = (V.devRetries || 0) + 1) : (V.offRetries = (V.offRetries || 0) + 1);
   if (n > VIDEO_RETRY_MS.length) return;
-  setTimeout(() => {
+  V[key] = setTimeout(() => {
+    V[key] = 0;
     if (dev) V.noDevice = false; else V.off = false;
     if (S.mode === 'live') connect();
   }, VIDEO_RETRY_MS[n - 1]);
+}
+/* 一路画面结束了：出过画面就是断了，照常重连；没出过画面时，服务端或浏览器明确说不行（404、解不了这种编码，
+ * `refused`）才不再试，只是断开（服务正在重启、网络抖了一下、解码出错）的过一阵再试，先用下一种 */
+function videoEnded(dev, got, refused) {
+  if (got) { feedError(); return; }
+  giveUpVideo(dev, refused);
+  connect();
 }
 function stopVideo() {
   if (V.ctrl) V.ctrl.abort();
@@ -103,13 +114,12 @@ function stopVideo() {
 }
 async function startVideo(q, dev) {
   const ctrl = new AbortController(); V.ctrl = ctrl;
-  const ended = permanent => {
+  // `refused`：这一路走不通（见 videoEnded）
+  const ended = (refused = false) => {
     if (V.ctrl !== ctrl) return;   // 已经换了一条连接
     const got = V.got;
     stopVideo();
-    // 这一路从没出过画面就走不通：手机的视频走不通改用本机编码，本机编码也不行改用 MJPEG，之后不再试
-    if (permanent && !got) { giveUpVideo(dev, true); connect(); return; }
-    feedError();
+    videoEnded(dev, got, refused);
   };
   const onFrame = f => {
     if (V.ctrl !== ctrl) { f.close(); return; }
@@ -129,6 +139,8 @@ async function startVideo(q, dev) {
     } else cvx.drawImage(f, 0, 0, sw, sh, 0, 0, sw, sh);
     f.close();
     const reoriented = V.frameRotation !== r;
+    // 这一路出了画面：之前断开过几次不算数了，以后再断开还能重试那么多次
+    if (!V.got) { if (dev) V.devRetries = 0; else V.offRetries = 0; }
     V.frameRotation = r; V.got = true;
     refreshFrame(reoriented);
   };
@@ -141,7 +153,7 @@ async function startVideo(q, dev) {
     for (;;) {
       const { value, done } = await rd.read();
       if (V.ctrl !== ctrl) return;
-      if (done) return ended(!V.got);
+      if (done) return ended();
       V.bytes += value.length; V.recv += value.length;
       const n = new Uint8Array(buf.length + value.length); n.set(buf); n.set(value, buf.length); buf = n;
       while (buf.length >= 5) {
@@ -159,7 +171,7 @@ async function startVideo(q, dev) {
           try { ok = (await VideoDecoder.isConfigSupported(config)).supported; } catch { /* 当作不支持 */ }
           if (!ok) return ended(true);
           if (V.ctrl !== ctrl) return;
-          if (!V.dec) V.dec = new VideoDecoder({ output: onFrame, error: () => ended(!V.got) });
+          if (!V.dec) V.dec = new VideoDecoder({ output: onFrame, error: () => ended() });
           V.dec.configure(config); V.label = c.encoder || ''; V.stream = c.stream || '';
         } else if (kind === 3) {
           // 手机的视频：界面转了多少度（竖放的顶边顺时针转过去的角度），下一帧按它转正
@@ -170,7 +182,7 @@ async function startVideo(q, dev) {
       }
     }
   } catch {
-    if (!ctrl.signal.aborted) ended(!V.got);
+    if (!ctrl.signal.aborted) ended();
   }
 }
 /* 每秒算一次 H.264 画面的流量，显示在画面下方 */

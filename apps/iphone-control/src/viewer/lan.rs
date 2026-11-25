@@ -95,8 +95,14 @@ impl Access {
             return false;
         };
         let rest = rest.to_ascii_lowercase();
-        let Some((name, p)) = rest.rsplit_once(':') else { return false };
-        p.parse::<u16>().ok() == Some(port) && self.knows(name)
+        // a browser leaves the scheme's default port out
+        let default = if origin.starts_with("https://") { 443 } else { 80 };
+        // `[::1]` has colons but no port: what follows the last one isn't a number there
+        let (name, p) = match rest.rsplit_once(':').and_then(|(n, p)| Some((n, p.parse::<u16>().ok()?))) {
+            Some(np) => np,
+            None => (rest.as_str(), default),
+        };
+        p == port && self.knows(name)
     }
 }
 
@@ -231,6 +237,9 @@ mod tests {
         assert!(!a.origin_allowed("http://192.168.10.100:3000", 8202), "another port");
         assert!(!a.origin_allowed("http://evil.example:8202", 8202));
         assert!(!a.origin_allowed("null", 8202));
+        // the scheme's default port, which a browser leaves out
+        assert!(a.origin_allowed("https://nas.local", 443) && a.origin_allowed("http://nas.local", 80));
+        assert!(!a.origin_allowed("https://nas.local", 8202) && !a.origin_allowed("http://nas.local", 443));
         // what its certificate covers
         assert_eq!(a.names(), ["localhost", "127.0.0.1", "::1", "192.168.10.100", "nas.local", "nas"]);
         assert_eq!(Access::with_hosts(["[fd00::5]".into()]).names()[3], "fd00::5");

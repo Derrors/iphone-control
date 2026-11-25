@@ -423,8 +423,17 @@ impl McpServer {
 /// 在 stdin/stdout 上运行 MCP 服务直到客户端断开
 /// The MCP server on stdin/stdout. `lease` is taken for each tool call, not for the life of the process: agents keep
 /// this process running for hours, and an update has to wait only for calls under way
-pub async fn serve_stdio(socket: PathBuf, lease: Option<Lease>) -> anyhow::Result<()> {
-    let running = McpServer { socket, task: task::join_from_env(), lease }.serve(rmcp::transport::stdio()).await?;
+/// `task_token`: the task to work for, given by the caller; without it the environment's
+/// ([`crate::task::join_from_env`])
+pub async fn serve_stdio(socket: PathBuf, lease: Option<Lease>, task_token: Option<String>) -> anyhow::Result<()> {
+    let task = match task_token {
+        Some(t) => {
+            protocol::join_task(t.trim());
+            true
+        }
+        None => task::join_from_env(),
+    };
+    let running = McpServer { socket, task, lease }.serve(rmcp::transport::stdio()).await?;
     running.waiting().await?;
     Ok(())
 }

@@ -19,13 +19,24 @@ pub const FILES: [&str; 5] =
 /// in the same upstream repository
 pub const PERSONALIZED_FILES: [&str; 3] = ["BuildManifest.plist", "Image.dmg", "Image.dmg.trustcache"];
 
+/// Whether a phone takes the classic personalized image through mobile_image_mounter: iOS 17–18 (Apple went from
+/// 18 to 26; iOS 26 and later mount the cryptex image through cryptexd). 0 = version unreadable: cryptexd, as before
+pub fn legacy(major: u32) -> bool {
+    (1..26).contains(&major)
+}
+
+/// The files of the image the phone takes (see [`legacy`])
+pub fn files_for(legacy: bool) -> &'static [&'static str] {
+    if legacy { &PERSONALIZED_FILES } else { &FILES }
+}
+
 /// Where the classic personalized image is downloaded from: the `Xcode_iOS_DDI_Personalized` directory next to
 /// the cryptex one (`ICTL_DDI_URL` points at a mirror of the upstream layout)
 pub fn personalized_url(base_url: &str) -> String {
     let base = base_url.trim_end_matches('/');
     match base.rsplit_once('/') {
-        Some((parent, _)) => format!("{parent}/Xcode_iOS_DDI_Personalized"),
-        None => base.to_owned(),
+        Some((parent, _)) if !parent.ends_with(":/") => format!("{parent}/Xcode_iOS_DDI_Personalized"),
+        _ => base.to_owned(),
     }
 }
 
@@ -132,7 +143,7 @@ mod tests {
     }
 
     #[test]
-    fn the_personalized_image_needs_its_three_files_and_sits_next_to_the_cryptex_one() {
+    fn only_ios_17_and_18_take_the_personalized_image_with_its_three_files_next_to_the_cryptex_one() {
         let dir = std::env::temp_dir().join(format!("ictl-ddi-personalized-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         for f in &PERSONALIZED_FILES[..2] {
@@ -147,6 +158,11 @@ mod tests {
             personalized_url(DEFAULT_BASE_URL),
             "https://raw.githubusercontent.com/doronz88/DeveloperDiskImage/main/PersonalizedImages/Xcode_iOS_DDI_Personalized"
         );
+        assert_eq!(personalized_url("https://mirror.example"), "https://mirror.example");
+        assert!(legacy(17) && legacy(18));
+        assert!(!legacy(26) && !legacy(27) && !legacy(0));
+        assert_eq!(files_for(true), PERSONALIZED_FILES);
+        assert_eq!(files_for(false), FILES);
         assert_eq!(
             personalized_url("https://mirror.example/ddi/Xcode_iOS_DDI_Cryptex/"),
             "https://mirror.example/ddi/Xcode_iOS_DDI_Personalized"

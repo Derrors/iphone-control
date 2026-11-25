@@ -446,7 +446,7 @@ impl Daemon {
         if !matches!(g.state, DeviceState::Preparing { .. }) {
             self.set_state(g, DeviceState::Preparing { last_error: None });
         }
-        let legacy = legacy_ddi(g.info.as_ref().map_or(0, |i| i.major_version()));
+        let legacy = ictl_device::ddi::legacy(g.info.as_ref().map_or(0, |i| i.major_version()));
         let (cache, url, user_dir) =
             (self.cfg.ddi_cache_for(legacy), self.cfg.ddi_url.clone(), self.cfg.ddi_dir.clone());
         // a WDA launched in the background before (WDA control earlier): not wanted now, ended once the image is up
@@ -520,8 +520,8 @@ impl Daemon {
             if g.dev.ddi_failures >= DDI_FAILURES_INVALIDATE {
                 self.log.log(&ictl_l10n::log_trf!("开发者镜像连续 {} 次挂载失败，清掉缓存，下次重新下载", "Mounting the developer disk image failed {} times in a row, clearing the cache to download it again", g.dev.ddi_failures));
                 // the cache of the image this phone takes (the classic personalized one on iOS 17–18)
-                let legacy = legacy_ddi(g.info.as_ref().map_or(0, |i| i.major_version()));
-                ictl_device::ddi::invalidate(&self.cfg.ddi_cache_for(legacy), ddi_files(legacy));
+                let legacy = ictl_device::ddi::legacy(g.info.as_ref().map_or(0, |i| i.major_version()));
+                ictl_device::ddi::invalidate(&self.cfg.ddi_cache_for(legacy), ictl_device::ddi::files_for(legacy));
                 g.dev.ddi_failures = 0;
             }
         }
@@ -610,7 +610,7 @@ impl Daemon {
                 "The background WDA on the phone (pid {pid}) was launched by an older version and listens on every interface of the phone: launching it again, listening on the phone's loopback only"
             ));
         }
-        let legacy = legacy_ddi(g.info.as_ref().map_or(0, |i| i.major_version()));
+        let legacy = ictl_device::ddi::legacy(g.info.as_ref().map_or(0, |i| i.major_version()));
         let (cache, url, user_dir) =
             (self.cfg.ddi_cache_for(legacy), self.cfg.ddi_url.clone(), self.cfg.ddi_dir.clone());
         let Ok(lease) = crate::maintenance::shared() else { return };
@@ -626,6 +626,12 @@ impl Daemon {
                 let r = ensure_ddi(&device, &mut t, legacy, &cache, &url, user_dir.as_deref()).await;
                 let r = match r {
                     Ok(m) => {
+                        if m.is_some() {
+                            // a tunnel opened before the image was mounted doesn't list its services
+                            // (dtservicehub): a new one, so WDA starts on the first attempt
+                            t.close().await;
+                            t = device.open_tunnel().await.map_err(|e| (e, false))?;
+                        }
                         // 后台启动前先开系统日志流：认「Enable UI Automation」密码框靠它（见 WdaRunner::attach）
                         let log = open_log(&device).await;
                         Ok((m, prepare_detached(&mut t, known, &bundle).await, log))
@@ -1060,19 +1066,8 @@ fn now_secs() -> u64 {
     std::time::SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs()
 }
 
-/// Whether the phone takes the classic personalized image through mobile_image_mounter: iOS 17–18 (Apple went from
-/// 18 to 26; iOS 26 and later mount the cryptex image through cryptexd). 0 = version unreadable: cryptexd, as before
-fn legacy_ddi(major: u32) -> bool {
-    (1..26).contains(&major)
-}
-
-/// The files of the image the phone takes (see [`legacy_ddi`])
-fn ddi_files(legacy: bool) -> &'static [&'static str] {
-    if legacy { &ictl_device::ddi::PERSONALIZED_FILES } else { &ictl_device::ddi::FILES }
-}
-
 /// 手机重启后开发者镜像可能掉了：没挂就挂上（返回挂上的版本），已挂载时只是一次查询。
-/// 错误带上「是不是挂载这一步」（才可能是缓存坏了）。`legacy`: iOS 17–18 (see [`legacy_ddi`]), `cache` is that
+/// 错误带上「是不是挂载这一步」（才可能是缓存坏了）。`legacy`: iOS 17–18 (see [`ictl_device::ddi::legacy`]), `cache` is that
 /// image's cache; cryptexd isn't asked on that path
 async fn ensure_ddi(
     device: &Device,
@@ -1089,12 +1084,10 @@ async fn ensure_ddi(
     } else if t.ddi_mounted().await.map_err(|e| (e, false))?.is_some() {
         return Ok(None);
     }
-    let files = ddi_files(legacy);
+    let files = ictl_device::ddi::files_for(legacy);
     let dir = match user_dir {
         Some(d) => ictl_device::ddi::require_complete(d, files),
-        None if legacy => {
-            ictl_device::ddi::ensure_cache(cache, &ictl_device::ddi::personalized_url(url), files).await
-        }
+        None if legacy => ictl_device::ddi::ensure_cache(cache, &ictl_device::ddi::personalized_url(url), files).await,
         None => ictl_device::ddi::ensure_cache(cache, url, files).await,
     }
     .map_err(|e| (e, false))?;
@@ -1128,18 +1121,6 @@ async fn open_log(device: &Device) -> Option<LogStream> {
             );
             None
         }
-    }
-}
-
-#[cfg(test)]
-mod ddi_tests {
-    #[test]
-    fn only_ios_17_and_18_take_the_classic_personalized_image() {
-        use super::{ddi_files, legacy_ddi};
-        assert!(legacy_ddi(17) && legacy_ddi(18));
-        assert!(!legacy_ddi(26) && !legacy_ddi(27) && !legacy_ddi(0));
-        assert_eq!(ddi_files(true), ictl_device::ddi::PERSONALIZED_FILES);
-        assert_eq!(ddi_files(false), ictl_device::ddi::FILES);
     }
 }
 

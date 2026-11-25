@@ -150,7 +150,8 @@ pub(crate) async fn limit<T>(what: &str, d: Duration, f: impl Future<Output = Re
 impl From<IdeviceError> for DeviceError {
     fn from(e: IdeviceError) -> Self {
         match e {
-            IdeviceError::PasswordProtected => Self::PasswordProtected,
+            // lockdown says PasswordProtected, mobile_image_mounter DeviceLocked
+            IdeviceError::PasswordProtected | IdeviceError::DeviceLocked => Self::PasswordProtected,
             IdeviceError::DeviceNotFound => Self::NotConnected,
             IdeviceError::InvalidHostID => Self::NotPaired,
             IdeviceError::PairingDialogResponsePending => Self::PairingPending,
@@ -452,6 +453,9 @@ impl Device {
             // wants any lockdown session opened after the mounter (mount_personalized opens its own)
             let ecid = {
                 let mut lockdown = LockdownClient::connect(&*self.provider).await?;
+                // asked without a session, lockdown may answer GetProhibited
+                let pairing = idevice::provider::IdeviceProvider::get_pairing_file(&*self.provider).await?;
+                lockdown.start_session(&pairing).await?;
                 lockdown
                     .get_value(Some("UniqueChipID"), None)
                     .await?

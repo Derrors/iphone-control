@@ -36,6 +36,7 @@ use idevice::{
     installation_proxy::InstallationProxyClient,
     lockdown::LockdownClient,
     misagent::MisagentClient,
+    mobile_image_mounter::ImageMounter,
     provider::{IdeviceProvider, UsbmuxdProvider},
     rsd::RsdHandshake,
     springboardservices::{InterfaceOrientation, SpringBoardServicesClient},
@@ -149,7 +150,8 @@ pub(crate) async fn limit<T>(what: &str, d: Duration, f: impl Future<Output = Re
 impl From<IdeviceError> for DeviceError {
     fn from(e: IdeviceError) -> Self {
         match e {
-            IdeviceError::PasswordProtected => Self::PasswordProtected,
+            // lockdown says PasswordProtected, mobile_image_mounter DeviceLocked
+            IdeviceError::PasswordProtected | IdeviceError::DeviceLocked => Self::PasswordProtected,
             IdeviceError::DeviceNotFound => Self::NotConnected,
             IdeviceError::InvalidHostID => Self::NotPaired,
             IdeviceError::PairingDialogResponsePending => Self::PairingPending,
@@ -419,6 +421,49 @@ impl Device {
             let record = lockdown.pair_once(host_id, buid, Some(host_name)).await?;
             let mut mux = self.provider.addr.connect(0).await?;
             mux.save_pair_record(&self.udid, record.serialize()?).await?;
+            Ok(())
+        })
+        .await
+    }
+
+    /// iOS 17–18: whether the classic personalized image is mounted (by us, Xcode or `devicectl`). A locked phone
+    /// or a dropped connection is an error, not «not mounted»
+    pub async fn legacy_ddi_mounted(&self) -> Result<bool> {
+        limit(ictl_l10n::tr!("查询开发者镜像", "query the developer disk image"), QUERY, async {
+            let mut mounter = ImageMounter::connect(&*self.provider).await?;
+            match mounter.lookup_image("Personalized").await {
+                Ok(_) => Ok(true),
+                Err(IdeviceError::NotFound) => Ok(false),
+                Err(e) => Err(e.into()),
+            }
+        })
+        .await
+    }
+
+    /// iOS 17–18: mounts the classic personalized image from `dir` ([`ddi::PERSONALIZED_FILES`], checked by the
+    /// caller) through lockdown's `mobile_image_mounter` (cryptexd stalls there)
+    pub async fn mount_legacy_ddi(&self, dir: &std::path::Path) -> Result<()> {
+        let (image, trustcache, manifest) = (
+            tokio::fs::read(dir.join("Image.dmg")).await?,
+            tokio::fs::read(dir.join("Image.dmg.trustcache")).await?,
+            tokio::fs::read(dir.join("BuildManifest.plist")).await?,
+        );
+        limit(ictl_l10n::tr!("挂载开发者镜像", "mount the developer disk image"), Duration::from_secs(180), async {
+            // the chip id from a lockdown session closed before the mounter connects: idevice's ImageMounter note
+            // wants any lockdown session opened after the mounter (mount_personalized opens its own)
+            let ecid = {
+                let mut lockdown = LockdownClient::connect(&*self.provider).await?;
+                // asked without a session, lockdown may answer GetProhibited
+                let pairing = idevice::provider::IdeviceProvider::get_pairing_file(&*self.provider).await?;
+                lockdown.start_session(&pairing).await?;
+                lockdown
+                    .get_value(Some("UniqueChipID"), None)
+                    .await?
+                    .as_unsigned_integer()
+                    .ok_or_else(|| DeviceError::Idevice("the phone gave no UniqueChipID".into()))?
+            };
+            let mut mounter = ImageMounter::connect(&*self.provider).await?;
+            mounter.mount_personalized(&*self.provider, image, trustcache, &manifest, None, ecid).await?;
             Ok(())
         })
         .await

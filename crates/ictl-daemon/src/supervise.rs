@@ -446,7 +446,9 @@ impl Daemon {
         if !matches!(g.state, DeviceState::Preparing { .. }) {
             self.set_state(g, DeviceState::Preparing { last_error: None });
         }
-        let (cache, url, user_dir) = (self.cfg.ddi_cache(), self.cfg.ddi_url.clone(), self.cfg.ddi_dir.clone());
+        let legacy = ictl_device::ddi::legacy(g.info.as_ref().map_or(0, |i| i.major_version()));
+        let (cache, url, user_dir) =
+            (self.cfg.ddi_cache_for(legacy), self.cfg.ddi_url.clone(), self.cfg.ddi_dir.clone());
         // a WDA launched in the background before (WDA control earlier): not wanted now, ended once the image is up
         // (AppService needs it)
         let known = g.persisted.detached_for(&device.udid);
@@ -455,7 +457,7 @@ impl Daemon {
         g.preparing = Some(tokio::task::spawn_local(then_wake(wake, async move {
             let _lease = lease;
             let mut t = device.open_tunnel().await.map_err(|e| (e, false))?;
-            let r = ensure_ddi(&mut t, &cache, &url, user_dir.as_deref()).await;
+            let r = ensure_ddi(&device, &mut t, legacy, &cache, &url, user_dir.as_deref()).await;
             let stopped = match (&r, known) {
                 (Ok(_), Some(pid)) => Some((device.udid.clone(), detached::stop(&mut t, pid).await)),
                 _ => None,
@@ -517,7 +519,9 @@ impl Daemon {
             g.dev.ddi_failures += 1;
             if g.dev.ddi_failures >= DDI_FAILURES_INVALIDATE {
                 self.log.log(&ictl_l10n::log_trf!("开发者镜像连续 {} 次挂载失败，清掉缓存，下次重新下载", "Mounting the developer disk image failed {} times in a row, clearing the cache to download it again", g.dev.ddi_failures));
-                ictl_device::ddi::invalidate(&self.cfg.ddi_cache());
+                // the cache of the image this phone takes (the classic personalized one on iOS 17–18)
+                let legacy = ictl_device::ddi::legacy(g.info.as_ref().map_or(0, |i| i.major_version()));
+                ictl_device::ddi::invalidate(&self.cfg.ddi_cache_for(legacy), ictl_device::ddi::files_for(legacy));
                 g.dev.ddi_failures = 0;
             }
         }
@@ -606,7 +610,9 @@ impl Daemon {
                 "The background WDA on the phone (pid {pid}) was launched by an older version and listens on every interface of the phone: launching it again, listening on the phone's loopback only"
             ));
         }
-        let (cache, url, user_dir) = (self.cfg.ddi_cache(), self.cfg.ddi_url.clone(), self.cfg.ddi_dir.clone());
+        let legacy = ictl_device::ddi::legacy(g.info.as_ref().map_or(0, |i| i.major_version()));
+        let (cache, url, user_dir) =
+            (self.cfg.ddi_cache_for(legacy), self.cfg.ddi_url.clone(), self.cfg.ddi_dir.clone());
         let Ok(lease) = crate::maintenance::shared() else { return };
         let wake = self.wake.clone();
         g.starting = Some(tokio::task::spawn_local(then_wake(wake, async move {
@@ -617,9 +623,15 @@ impl Daemon {
             type Ready = (Option<String>, Result<Detached, DeviceError>, Option<LogStream>);
             let ddi: Result<Ready, (DeviceError, bool)> = async {
                 let mut t = device.open_tunnel().await.map_err(|e| (e, false))?;
-                let r = ensure_ddi(&mut t, &cache, &url, user_dir.as_deref()).await;
+                let r = ensure_ddi(&device, &mut t, legacy, &cache, &url, user_dir.as_deref()).await;
                 let r = match r {
                     Ok(m) => {
+                        if m.is_some() {
+                            // a tunnel opened before the image was mounted doesn't list its services
+                            // (dtservicehub): a new one, so WDA starts on the first attempt
+                            t.close().await;
+                            t = device.open_tunnel().await.map_err(|e| (e, false))?;
+                        }
                         // 后台启动前先开系统日志流：认「Enable UI Automation」密码框靠它（见 WdaRunner::attach）
                         let log = open_log(&device).await;
                         Ok((m, prepare_detached(&mut t, known, &bundle).await, log))
@@ -1055,21 +1067,34 @@ fn now_secs() -> u64 {
 }
 
 /// 手机重启后开发者镜像可能掉了：没挂就挂上（返回挂上的版本），已挂载时只是一次查询。
-/// 错误带上「是不是挂载这一步」（才可能是缓存坏了）
+/// 错误带上「是不是挂载这一步」（才可能是缓存坏了）。`legacy`: iOS 17–18 (see [`ictl_device::ddi::legacy`]), `cache` is that
+/// image's cache; cryptexd isn't asked on that path
 async fn ensure_ddi(
+    device: &Device,
     t: &mut Tunnel,
+    legacy: bool,
     cache: &std::path::Path,
     url: &str,
     user_dir: Option<&std::path::Path>,
 ) -> Result<Option<String>, (DeviceError, bool)> {
-    if t.ddi_mounted().await.map_err(|e| (e, false))?.is_some() {
+    if legacy {
+        if device.legacy_ddi_mounted().await.map_err(|e| (e, false))? {
+            return Ok(None);
+        }
+    } else if t.ddi_mounted().await.map_err(|e| (e, false))?.is_some() {
         return Ok(None);
     }
+    let files = ictl_device::ddi::files_for(legacy);
     let dir = match user_dir {
-        Some(d) => ictl_device::ddi::require_complete(d),
-        None => ictl_device::ddi::ensure_cache(cache, url).await,
+        Some(d) => ictl_device::ddi::require_complete(d, files),
+        None if legacy => ictl_device::ddi::ensure_cache(cache, &ictl_device::ddi::personalized_url(url), files).await,
+        None => ictl_device::ddi::ensure_cache(cache, url, files).await,
     }
     .map_err(|e| (e, false))?;
+    if legacy {
+        device.mount_legacy_ddi(&dir).await.map_err(|e| (e, true))?;
+        return Ok(Some("personalized".to_owned()));
+    }
     Ok(Some(t.mount_ddi(&dir).await.map_err(|e| (e, true))?))
 }
 

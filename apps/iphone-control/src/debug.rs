@@ -103,13 +103,17 @@ fn check(step: &str, t0: Instant, ok: bool, detail: String) -> anyhow::Result<()
     }
 }
 
-async fn e2e(device: &Device, bundle_id: &str, out: &std::path::Path) -> anyhow::Result<()> {
+async fn e2e(device: &Device, legacy_ddi: bool, bundle_id: &str, out: &std::path::Path) -> anyhow::Result<()> {
     let t = Instant::now();
     let mut tunnel = device.open_tunnel().await?;
     check(ictl_l10n::tr!("建隧道", "open tunnel"), t, true, String::new())?;
 
     let t = Instant::now();
-    let ddi = tunnel.ddi_mounted().await?;
+    let ddi = if legacy_ddi {
+        device.legacy_ddi_mounted().await?.then(|| "personalized".to_owned())
+    } else {
+        tunnel.ddi_mounted().await?
+    };
     check(
         ictl_l10n::tr!("开发者镜像", "developer disk image"),
         t,
@@ -219,8 +223,16 @@ pub async fn run(udid: Option<&str>, args: DebugArgs) -> anyhow::Result<()> {
     let screen = ScreenSize { width: args.width, height: args.height };
     match args.check {
         Check::Ddi { restore_dir, url } => {
+            // iOS 17–18: the classic personalized image through mobile_image_mounter, in `<restore_dir>/personalized`
+            let legacy = ictl_device::ddi::legacy(info.major_version());
+            let files = ictl_device::ddi::files_for(legacy);
             let mut t = device.open_tunnel().await?;
-            match t.ddi_mounted().await? {
+            let mounted = if legacy {
+                device.legacy_ddi_mounted().await?.then(|| "personalized".to_owned())
+            } else {
+                t.ddi_mounted().await?
+            };
+            match mounted {
                 Some(v) => println!(
                     "{}",
                     ictl_l10n::trf!(
@@ -229,9 +241,20 @@ pub async fn run(udid: Option<&str>, args: DebugArgs) -> anyhow::Result<()> {
                     )
                 ),
                 None => {
-                    let dir = ictl_device::ddi::ensure_cache(&restore_dir, &url).await?;
                     let t0 = Instant::now();
-                    let v = t.mount_ddi(&dir).await?;
+                    let v = if legacy {
+                        let dir = ictl_device::ddi::ensure_cache(
+                            &restore_dir.join("personalized"),
+                            &ictl_device::ddi::personalized_url(&url),
+                            files,
+                        )
+                        .await?;
+                        device.mount_legacy_ddi(&dir).await?;
+                        "personalized".to_owned()
+                    } else {
+                        let dir = ictl_device::ddi::ensure_cache(&restore_dir, &url, files).await?;
+                        t.mount_ddi(&dir).await?
+                    };
                     println!(
                         "{}",
                         ictl_l10n::trf!(
@@ -242,6 +265,7 @@ pub async fn run(udid: Option<&str>, args: DebugArgs) -> anyhow::Result<()> {
                     );
                 }
             }
+            t.close().await;
             let t = device.open_tunnel().await?;
             println!("universalhidservice: {}", t.has_service("com.apple.coredevice.hid.universalhidservice"));
         }
@@ -477,7 +501,7 @@ pub async fn run(udid: Option<&str>, args: DebugArgs) -> anyhow::Result<()> {
         }
         Check::E2e { bundle_id, out } => {
             let t0 = Instant::now();
-            e2e(&device, &bundle_id, &out).await?;
+            e2e(&device, ictl_device::ddi::legacy(info.major_version()), &bundle_id, &out).await?;
             println!(
                 "{}",
                 ictl_l10n::trf!("全部通过，总耗时 {:.1}s", "All passed in {:.1}s", t0.elapsed().as_secs_f64())

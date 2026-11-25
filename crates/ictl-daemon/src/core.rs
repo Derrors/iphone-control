@@ -504,6 +504,11 @@ pub(crate) struct Inner {
     pub offline_target: Option<crate::notify::Target>,
     /// HID 会话最近一次使用的时间；空闲超过 [`crate::supervise::HID_IDLE`] 就关掉（它持有屏幕媒体流）
     pub hid_used: Option<Instant>,
+    /// The marker of the HID session open now ([`crate::hidmark`]), removed when it closes properly
+    pub hid_marker: Option<std::path::PathBuf>,
+    /// Phones an earlier daemon left "viewed remotely" (it ended with a HID session open), and the tries at clearing
+    /// that so far ([`crate::hidmark`])
+    pub hid_orphans: HashMap<String, u32>,
     /// 原生控制：无障碍会话最近一次使用的时间；空闲超过 [`crate::supervise::AX_IDLE`] 就关掉
     pub ax_used: Option<Instant>,
     /// 原生控制：后台挂开发者镜像（结果：挂上的版本，已挂载为 None；失败时带上「是不是挂载这一步」）
@@ -572,6 +577,18 @@ pub(crate) async fn close_hid(g: &mut Inner) {
     if let Some(t) = g.tunnel.as_mut() {
         t.close_hid().await;
     }
+    hid_closed(g);
+}
+
+/// The HID session was closed properly: its marker goes, and with it any state an earlier daemon left on that phone
+/// (closing a session clears it, see [`crate::hidmark`])
+fn hid_closed(g: &mut Inner) {
+    if let Some(p) = g.hid_marker.take() {
+        if let Some(udid) = p.file_name().and_then(|n| n.to_str()) {
+            g.hid_orphans.remove(udid);
+        }
+        let _ = std::fs::remove_file(p);
+    }
 }
 
 /// 丢掉隧道。一律走这里：先停 HID 媒体流再断（见 [`close_hid`]）
@@ -581,6 +598,7 @@ pub(crate) async fn drop_tunnel(g: &mut Inner) {
         // boxed: the future holds the whole tunnel, and every tool that may drop it would carry that
         Box::pin(t.close()).await;
     }
+    hid_closed(g);
 }
 
 /// 一台设备的简短说明：`名字(型号 iOS 版本,UDID)`，英文是 `name (model iOS version, UDID)`；读不到名字时只有 UDID
@@ -684,6 +702,8 @@ impl Daemon {
             offline_since: Some(now),
             offline_target: None,
             hid_used: None,
+            hid_marker: None,
+            hid_orphans: crate::hidmark::left_over(&cfg.hid_marker_dir()),
             ax_used: None,
             preparing: None,
             screen_viewers: 0,

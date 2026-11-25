@@ -14,6 +14,7 @@ mod devtools;
 mod doctor;
 pub mod error;
 pub mod eventlog;
+mod hidmark;
 pub mod imaging;
 pub mod machine;
 pub mod maintenance;

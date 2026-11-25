@@ -409,6 +409,10 @@ impl Daemon {
                 ));
             }
         };
+        // paused, taken over or left while the tree was read or the list moved: nothing is tapped
+        if !may_continue() {
+            return Err(Error::preflight(stopped_searching(scrolled + back)));
+        }
         self.tap_at(g, x, y).await?;
         let note = if matches.len() > 1 {
             ictl_l10n::trf!("(共匹配 {} 个,点的是第 {index} 个)", " ({} matches, tapped number {index})", matches.len())
@@ -1083,11 +1087,11 @@ async fn verify_typed<T: ictl_wda::http::Transport>(w: &mut WdaClient<T>, before
     }
 }
 
-/// [`Daemon::tap_element`] stopped searching: the task was paused or taken over, or the caller went away
+/// [`Daemon::tap_element`] stopped before tapping: the task was paused or taken over, or the caller went away
 fn stopped_searching(completed: u32) -> String {
     ictl_l10n::trf!(
-        "查找目标时被打断（任务暂停、被接管或调用方已离开），此前已完成 {completed} 次滑动，没有点击；请先查看屏幕",
-        "The scroll search was interrupted (the task was paused or taken over, or the caller went away) after {completed} swipes; nothing was tapped. Look at the screen first"
+        "点击前被打断（任务暂停、被接管或调用方已离开），此前已完成 {completed} 次滑动，没有点击；请先查看屏幕",
+        "Interrupted before tapping (the task was paused or taken over, or the caller went away) after {completed} swipes; nothing was tapped. Look at the screen first"
     )
 }
 

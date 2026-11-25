@@ -98,6 +98,8 @@ async fn serve(cfg: Config, listener: tokio::net::UnixListener) -> anyhow::Resul
     loop {
         if woken && ticking.is_none() {
             woken = false;
+            // this round is the one asked for: should it not run either, it asks again when it ends
+            retry = None;
             ticking = Some((tokio::task::spawn_local(daemon.clone().tick()), true));
         }
         tokio::select! {
@@ -107,9 +109,25 @@ async fn serve(cfg: Config, listener: tokio::net::UnixListener) -> anyhow::Resul
             // the round that runs ended: an asked-for one that couldn't take the device is asked for again
             r = async { (&mut ticking.as_mut().expect("guarded").0).await }, if ticking.is_some() => {
                 let asked = ticking.take().is_some_and(|(_, asked)| asked);
-                if asked && !r.unwrap_or(true) {
-                    retry = Some(tokio::time::Instant::now() + RETRY_ROUND);
+                match r.unwrap_or(true) {
+                    // a round that ran did what the one waiting to be retried would have
+                    true => retry = None,
+                    false if asked => retry = Some(tokio::time::Instant::now() + RETRY_ROUND),
+                    false => {}
                 }
+            }
+            // the rounds before new clients: a stream of short connections mustn't starve the supervision (and the
+            // watchdog's heartbeat it carries)
+            _ = tick.tick() => {
+                // 上一轮还没跑完（例如在重启 usbmuxd）就不叠加
+                if ticking.is_none() {
+                    ticking = Some((tokio::task::spawn_local(daemon.clone().tick()), false));
+                }
+            }
+            () = daemon.wake.notified() => woken = true,
+            () = tokio::time::sleep_until(retry.unwrap_or_else(tokio::time::Instant::now)), if retry.is_some() => {
+                retry = None;
+                woken = true;
             }
             Some(_) = conns.join_next(), if !conns.is_empty() => {}
             // at most MAX_CONNECTIONS clients at once: more wait in the socket's queue
@@ -123,17 +141,6 @@ async fn serve(cfg: Config, listener: tokio::net::UnixListener) -> anyhow::Resul
                     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                 }
             },
-            _ = tick.tick() => {
-                // 上一轮还没跑完（例如在重启 usbmuxd）就不叠加
-                if ticking.is_none() {
-                    ticking = Some((tokio::task::spawn_local(daemon.clone().tick()), false));
-                }
-            }
-            () = daemon.wake.notified() => woken = true,
-            () = tokio::time::sleep_until(retry.unwrap_or_else(tokio::time::Instant::now)), if retry.is_some() => {
-                retry = None;
-                woken = true;
-            }
         }
     }
     // stopping: new clients are refused at once (instead of waiting in the queue for a reply that never comes), and

@@ -99,10 +99,12 @@ impl<S> Drop for Session<S> {
 }
 
 /// One request on the stream: unless [`InFlight::done`] is called, dropping it (the request was cancelled, or failed
-/// writing) abandons the session ([`Session::is_closed`]), and the answer channel is let go either way
+/// writing) abandons the session ([`Session::is_closed`]) and stops its reader, which would otherwise go on answering
+/// the phone on a stream that may hold half a message; the answer channel is let go either way
 struct InFlight<'a> {
     abandoned: &'a AtomicBool,
     waiter: &'a Waiter,
+    reader: &'a tokio::task::JoinHandle<()>,
     done: bool,
 }
 
@@ -116,6 +118,7 @@ impl Drop for InFlight<'_> {
     fn drop(&mut self) {
         if !self.done {
             self.abandoned.store(true, Ordering::SeqCst);
+            self.reader.abort();
         }
         self.waiter.lock().unwrap_or_else(|p| p.into_inner()).take();
     }
@@ -210,8 +213,12 @@ async fn read_loop<S: AsyncRead + AsyncWrite + Unpin + Send>(
                 break;
             }
         };
+        // a reply that can't be written in time: the link stopped, the session is done
         if let Some(b) = answer(&f)
-            && send(&mut *writer.lock().await, &b).await.is_err()
+            && !matches!(
+                tokio::time::timeout(WRITE_TIMEOUT, async { send(&mut *writer.lock().await, &b).await }).await,
+                Ok(Ok(()))
+            )
         {
             break;
         }
@@ -266,7 +273,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> Session<S> {
     fn start(&self) -> Result<(mpsc::UnboundedReceiver<Response>, InFlight<'_>)> {
         let (tx, rx) = mpsc::unbounded_channel();
         *self.waiter.lock().unwrap_or_else(|p| p.into_inner()) = Some(tx);
-        let flight = InFlight { abandoned: &self.abandoned, waiter: &self.waiter, done: false };
+        let flight = InFlight { abandoned: &self.abandoned, waiter: &self.waiter, reader: &self.reader, done: false };
         if self.is_closed() {
             flight.done();
             return Err(AxError::Closed);
@@ -601,6 +608,14 @@ mod tests {
         assert!(cancelled.await.is_err());
         assert!(s.is_closed(), "abandoned");
         assert!(matches!(s.request(request::FRONTMOST_APP, None, &[]).await, Err(AxError::Closed)));
+        // nothing reads or answers on that stream any more
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while !s.reader.is_finished() {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("the reader stopped");
     }
 
     /// Not answered in time (the service is stuck, which the daemon may restart it for): the request was written

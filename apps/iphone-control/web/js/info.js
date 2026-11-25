@@ -223,10 +223,13 @@ refreshVisibleUpdates();
 setInterval(refreshVisibleUpdates, 60000);
 document.addEventListener('visibilitychange', refreshVisibleUpdates);
 
+let tasksAskedAt = 0;
 async function loadInfo() {
   const seq = ++infoSequence, epoch = feedEpoch;
   try {
-    const tasks = wantsTasks();
+    // at most every 3 s as when it had a poll of its own (the list is about 10 KB with 50 tasks)
+    const tasks = wantsTasks() && Date.now() - tasksAskedAt >= 3000;
+    if (tasks) tasksAskedAt = Date.now();
     const r = await fetch('/api/info?feed=' + encodeURIComponent(feedId) + (tasks ? '&tasks=1' : ''), { headers: { 'X-Ictl-Lang': LANG }, signal: AbortSignal.timeout(4800) });
     if (loggedOut(r) || !r.ok) throw new Error('offline');
     const v = await r.json();

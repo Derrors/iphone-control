@@ -151,8 +151,11 @@ async function detect() {
     setInterval(refreshFrame, 250);
     setTimeout(pollInfo, 2000);
     alertLoop();
-    setInterval(loadDeviceState, 10000);
-    adoptTask(); setInterval(adoptTask, 3000);
+    setInterval(() => { if (!document.hidden) loadDeviceState(); }, 10000);
+    // 之后的任务列表随 /api/info 的轮询来
+    adoptTask();
+    // 后台标签页不轮询（pollInfo、上面的设备状态、alertLoop 都看 document.hidden）：回到前台时马上补一次
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) { loadInfo(); loadDeviceState(); } });
   } else {
     S.tasks.filter(t => t.reattach).forEach(lostTask);
   }

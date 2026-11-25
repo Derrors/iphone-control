@@ -29,7 +29,7 @@ function page(tasks, serverTasks) {
     calls: 0,
     async api(path) { context.calls++; assert.equal(path, '/api/agent/tasks'); return { tasks: serverTasks }; },
   };
-  return { S, followed, shown, context, ...handlers(['isExternal', 'lostTask', 'adoptTask'], context) };
+  return { S, followed, shown, context, ...handlers(['isExternal', 'lostTask', 'wantsTasks', 'adoptTask'], context) };
 }
 
 test('a task that was running before the reload is followed again', async () => {
@@ -98,4 +98,14 @@ test('a task opened elsewhere is never run again as a prompt', () => {
   rerunTask('t1');
   rerunTask('t2');
   assert.deepEqual(started, ['打开设置']);
+});
+
+// The list comes with the page's /api/info poll (`?tasks=1` while it wants one): no request of its own then
+test('a task list from the info poll is used as it is', async () => {
+  const { followed, context, wantsTasks, adoptTask } = page([], []);
+  assert.equal(wantsTasks(), true, 'no task followed: the poll asks for the list');
+  await adoptTask([{ id: 'xyz', state: 'running', title: 'from elsewhere', owner: 'external' }]);
+  assert.equal(context.calls, 0, 'no request of its own');
+  assert.deepEqual(followed.map(([, id]) => id), ['xyz']);
+  assert.equal(wantsTasks(), false, 'following one now: the poll stops asking');
 });

@@ -19,6 +19,7 @@ What changed in each release, one line per change. Versions follow [Semantic Ver
 - Several control pages on one phone running WebDriverAgent share one picture stream from the phone instead of opening one each, which could push WebDriverAgent over the CPU limit at which iOS stops it.
 - Pages watching the phone's own video share one rotation check a second instead of one per page.
 - At most 4 control pages at once get the phone's own video transcoded to H.264 (browsers without HEVC, one ffmpeg each); more retry until one closes, instead of starting another ffmpeg each.
+- The control page polls less: the task list comes with the device-info poll instead of a poll of its own, the device panel asks two requests a round instead of three, and a page in a background tab stops polling until it is shown again.
 - MCP over HTTP (`/mcp`) accepts request bodies sent chunked, which some clients and reverse proxies do; they got 411 Length Required. Streamed answers are sent chunked, so a proxy can tell their end from a dropped connection.
 - The control page's server allows 64 connections instead of 32, and answers 503 (and logs it) when they are all taken instead of dropping the connection silently.
 - Stopping the viewer (`systemctl stop`, an update, Ctrl-C) also stops the agents of AI tasks started from the page; they kept running on their own.

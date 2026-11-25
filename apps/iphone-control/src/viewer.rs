@@ -641,6 +641,13 @@ async fn route(
                     if let Some(id) = req.query("feed") {
                         v["feed_open"] = json!(ctx.feeds.lock().unwrap_or_else(|p| p.into_inner()).contains(&id));
                     }
+                    // the task list, for a page that wants to pick up a task under way: with this poll instead of
+                    // one of its own (absent when it couldn't be read: the page asks again next time)
+                    if req.query("tasks").as_deref() == Some("1")
+                        && let Ok(t) = protocol::task_list(&ctx.socket).await
+                    {
+                        v["tasks"] = json!(t);
+                    }
                     // who the page is logged in as: a read-only token hides what it can't do
                     if let Some(w) = &pass.who {
                         v["login"] = json!({"name": w.name, "role": w.role.name()});

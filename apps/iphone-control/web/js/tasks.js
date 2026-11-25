@@ -147,14 +147,18 @@ function lostTask(t) {
   t.summary = tr('页面刷新时这个任务还在执行，刷新后页面不再跟踪它的进度。');
   t.steps.forEach(st => { if (st.status === 'running' || st.status === 'waiting') st.status = 'stopped'; });
 }
-/* 正在进行、但这个页面还没跟着的任务（页面刷新过，或者是在别处开的）：接上，事件会从头重放 */
+/* 正在进行、但这个页面还没跟着的任务（页面刷新过，或者是在别处开的）：接上，事件会从头重放。
+ * 任务列表随 /api/info 的轮询一起来（loadInfo 在 wantsTasks() 时带 tasks=1），不再单独轮询 */
 let adopting = false;
-async function adoptTask() {
+function wantsTasks() {
+  return S.mode === 'live' && !adopting && (S.tasks.some(t => t.reattach) || !activeTask());
+}
+async function adoptTask(given) {
+  if (!wantsTasks()) return;
   const pending = S.tasks.filter(t => t.reattach);
-  if (S.mode !== 'live' || adopting || (!pending.length && activeTask())) return;
   adopting = true;
   try {
-    const list = (await api('/api/agent/tasks')).tasks || [];
+    const list = (Array.isArray(given) ? given : (await api('/api/agent/tasks')).tasks) || [];
     pending.forEach(t => { if (list.some(x => x.id === t.remoteId)) { t.reattach = false; follow(t, t.remoteId); } else lostTask(t); });
     if (pending.length) renderAll();
     const t = list.find(x => ACTIVE.includes(x.state));

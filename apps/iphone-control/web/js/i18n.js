@@ -63,12 +63,12 @@ language.addEventListener('change', () => {
  *
  * 画面与手动操作，都经守护进程，和 MCP 工具一样排队、自动解锁、只作用于这个页面跟着的设备：
  *   GET  /stream                  → WebDriverAgent 的 MJPEG 画面
- *   GET  /api/info                → { width, height, udid, device, warning? }
+ *   GET  /api/info                → { width, height, udid, device, warning?, tasks? }  // ?tasks=1 时带上任务列表（同 GET /api/agent/tasks 的 tasks）
  *   POST /api/tap | swipe | long_press | type | button | launch_app | terminate_app | open_url | tap_element | wait_for
  *                                 → { ok, message }
  *
  * 设备面板：
- *   GET  /api/daemon              → { state, state_text, last_error?, device: { name, model, ios, udid }, auto_unlock }
+ *   GET  /api/daemon              → { state, state_text, last_error?, device: { name, model, ios, udid }, auto_unlock, devices, fixed, auto }  // 设备列表同 /api/devices
  *   GET  /api/status              → { wda_ready, locked, foreground, foreground_id, width, height, route: "wda"|"hid"|"none" }
  *   GET  /api/devices             → { devices: [{ udid, name, model, ios, controlled }], fixed, auto }
  *   POST /api/select              { device } // UDID、设备名或 "auto"

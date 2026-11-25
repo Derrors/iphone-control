@@ -74,11 +74,12 @@ pub(super) fn device_json(d: &ictl_device::DeviceInfo) -> Value {
     })
 }
 
-/// `{ state, last_error?, device: { name, model, model_name, family, ios, udid }, auto_unlock }`
+/// `{ state, last_error?, device: { name, model, model_name, family, ios, udid }, auto_unlock, devices, fixed, auto }`:
+/// with [`devices`]'s list too (the same snapshot), so the device panel asks one request less each round
 pub(super) async fn daemon(ctx: &Ctx) -> Result<Value, String> {
     let s = crate::client::snapshot(&ctx.socket).await.map_err(|e| e.to_string())?;
     let (state, last_error) = state_of(&s.state);
-    Ok(json!({
+    let mut v = json!({
         "state": state,
         "state_text": s.state.describe(),
         "last_error": last_error,
@@ -86,12 +87,21 @@ pub(super) async fn daemon(ctx: &Ctx) -> Result<Value, String> {
         "auto_unlock": s.auto_unlock && !s.unlock_disabled,
         // the page offers to sign and install WDA (NeedsSigning) only with an Apple ID to sign with
         "signed_in": crate::client::account_dir(&ctx.data_dir).selected_email().await.is_ok(),
-    }))
+    });
+    let list = devices_of(&s);
+    for k in ["devices", "fixed", "auto"] {
+        v[k] = list[k].clone();
+    }
+    Ok(v)
 }
 
 /// `{ devices: [{ udid, name, model, model_name, family, ios, controlled }], fixed }`
 pub(super) async fn devices(ctx: &Ctx) -> Result<Value, String> {
     let s = crate::client::snapshot(&ctx.socket).await.map_err(|e| e.to_string())?;
+    Ok(devices_of(&s))
+}
+
+fn devices_of(s: &ictl_daemon::Snapshot) -> Value {
     let cur = s.device.as_ref().map(|d| d.udid.to_ascii_lowercase());
     let list: Vec<Value> = s
         .devices
@@ -102,7 +112,7 @@ pub(super) async fn devices(ctx: &Ctx) -> Result<Value, String> {
             v
         })
         .collect();
-    Ok(json!({"devices": list, "fixed": s.pinned_by_env, "auto": s.pinned.is_none()}))
+    json!({"devices": list, "fixed": s.pinned_by_env, "auto": s.pinned.is_none()})
 }
 
 /// `{ wda_ready, locked, foreground, foreground_id, width, height, route }`

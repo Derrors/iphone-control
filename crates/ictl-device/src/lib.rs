@@ -632,9 +632,12 @@ impl Device {
     /// Asking for debug messages (what idevice's `start_trace` does) makes every process on the phone produce them:
     /// about 650 lines a second instead of about 80 on an idle iPhone 15 Pro Max (iOS 27.0.1), and gestures got
     /// slower and some failed while the stream ran. Most info messages go with them, but some processes still send
-    /// Info entries (MobileTimer on iOS 27.2.1); callers that promise default, Error and Fault only drop those
+    /// Info entries (MobileTimer on iOS 27.2.1); callers that promise default, Error and Fault only drop those.
+    /// Only what is logged from now on: the historical entries (what idevice asks for too) came first, and readers
+    /// took them for new: the WDA runner a past "Enabling Automation Mode" for a passcode prompt now, `app_logs`
+    /// old lines stamped with the time they arrived
     pub async fn log_stream(&self) -> Result<LogStream> {
-        let flags = oslog::flags::IDEVICE_DEFAULT & !oslog::flags::DEBUG;
+        let flags = oslog::flags::LIVE;
         let inner =
             limit(ictl_l10n::tr!("打开日志流", "open the log stream"), QUERY, oslog::start(&*self.provider, flags))
                 .await?;

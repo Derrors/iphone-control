@@ -696,8 +696,11 @@ impl Decoder {
             "CMSampleBufferCreateReady",
         )?;
         let sample = Cf(sample);
-        let slot = unsafe { &mut *self.out };
-        *slot = DecodedSlot::default();
+        // the callback ([`on_decoded`]) writes the slot through its own pointer while the calls below run: no
+        // reference to it is held across them (two live `&mut` to one place are undefined behaviour), only short
+        // accesses through the raw pointer before and after
+        // SAFETY: `self.out` is the Box made in `new`, alive until `drop`; nothing else touches it meanwhile
+        unsafe { *self.out = DecodedSlot::default() };
         let s = self.session.ptr();
         check(
             unsafe {
@@ -706,8 +709,10 @@ impl Decoder {
             "VTDecompressionSessionDecodeFrame",
         )?;
         unsafe { VTDecompressionSessionWaitForAsynchronousFrames(s) };
-        check(slot.status, "decoder")?;
-        slot.image.take().ok_or_else(|| "decoder: no picture".to_owned())
+        // SAFETY: as above; the callback has run (the wait returns once every frame is out)
+        let (status, image) = unsafe { ((*self.out).status, (*self.out).image.take()) };
+        check(status, "decoder")?;
+        image.ok_or_else(|| "decoder: no picture".to_owned())
     }
 }
 

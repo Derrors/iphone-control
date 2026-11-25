@@ -92,11 +92,22 @@ impl Obj {
     }
 }
 
-/// Deeper than this is a cycle or garbage: such a value reads as [`Obj::Null`]
+/// Deeper than this is garbage: such a value reads as [`Obj::Null`]
 const MAX_DEPTH: usize = 200;
+
+/// Values an archive may decode to, per byte of it (plus a floor). Each reference in an archive takes at least a
+/// byte, so a real one stays well below this; one whose objects share children over and over (a DAG built to blow
+/// up, `2^depth` values from a few hundred bytes) is refused instead of decoded for ever
+const BUDGET_PER_BYTE: usize = 8;
+const BUDGET_FLOOR: usize = 10_000;
 
 /// Decodes one archive
 pub fn decode(bytes: &[u8]) -> Result<Obj> {
+    decode_within(bytes, bytes.len().saturating_mul(BUDGET_PER_BYTE).saturating_add(BUDGET_FLOOR)).map(|(o, _)| o)
+}
+
+/// [`decode`] with at most `budget` values; also how many it took
+fn decode_within(bytes: &[u8], budget: usize) -> Result<(Obj, usize)> {
     let top = Value::from_reader(Cursor::new(bytes)).map_err(|e| AxError::Archive(e.to_string()))?;
     let dict = top.as_dictionary().ok_or_else(|| AxError::Archive("not a dictionary".into()))?;
     let objects =
@@ -106,11 +117,29 @@ pub fn decode(bytes: &[u8]) -> Result<Obj> {
         .and_then(Value::as_dictionary)
         .and_then(|t| t.get("root").or_else(|| t.values().next()))
         .ok_or_else(|| AxError::Archive("no $top root".into()))?;
-    Ok(Reader { objects }.resolve(root, 0))
+    let reader = Reader {
+        objects,
+        visiting: Default::default(),
+        exhausted: std::cell::Cell::new(false),
+        budget: std::cell::Cell::new(budget),
+    };
+    let obj = reader.resolve(root, 0);
+    if reader.exhausted.get() {
+        return Err(AxError::Archive("too many values for its size".into()));
+    }
+    Ok((obj, budget - reader.budget.get()))
 }
 
 struct Reader<'a> {
     objects: &'a [Value],
+    /// The objects being decoded on the way down: one that refers back to one of them is a cycle, read as
+    /// [`Obj::Null`]
+    visiting: std::cell::RefCell<std::collections::HashSet<u64>>,
+    /// Values still to be decoded ([`BUDGET_PER_BYTE`]); at 0 everything reads as [`Obj::Null`] and the archive is
+    /// refused
+    budget: std::cell::Cell<usize>,
+    /// A value was left out for want of [`Self::budget`] (one that used the last of it exactly is fine)
+    exhausted: std::cell::Cell<bool>,
 }
 
 impl Reader<'_> {
@@ -118,10 +147,23 @@ impl Reader<'_> {
         if depth > MAX_DEPTH {
             return Obj::Null;
         }
+        if self.budget.get() == 0 {
+            self.exhausted.set(true);
+            return Obj::Null;
+        }
+        self.budget.set(self.budget.get() - 1);
         match v {
-            Value::Uid(u) => match self.objects.get(u.get() as usize) {
+            // (on a 32-bit target a UID past usize isn't truncated to another object)
+            Value::Uid(u) => match usize::try_from(u.get()).ok().and_then(|i| self.objects.get(i)) {
                 Some(Value::String(s)) if s == "$null" => Obj::Null,
-                Some(o) => self.resolve(o, depth + 1),
+                Some(o) => {
+                    if !self.visiting.borrow_mut().insert(u.get()) {
+                        return Obj::Null;
+                    }
+                    let r = self.resolve(o, depth + 1);
+                    self.visiting.borrow_mut().remove(&u.get());
+                    r
+                }
                 None => Obj::Null,
             },
             Value::Boolean(b) => Obj::Bool(*b),
@@ -359,6 +401,70 @@ pub fn encode_request(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An archive of `objects` (object 0 is `$null`, the root is object 1), as the phone would send one
+    fn archive(objects: Vec<Value>) -> Vec<u8> {
+        let mut all = vec![Value::String("$null".into())];
+        all.extend(objects);
+        let mut top = Dictionary::new();
+        top.insert("root".into(), Value::Uid(plist::Uid::new(1)));
+        let mut d = Dictionary::new();
+        d.insert("$archiver".into(), Value::String("NSKeyedArchiver".into()));
+        d.insert("$objects".into(), Value::Array(all));
+        d.insert("$top".into(), Value::Dictionary(top));
+        let mut out = Vec::new();
+        Value::Dictionary(d).to_writer_binary(&mut out).unwrap();
+        out
+    }
+
+    /// An `NSArray` instance of the given objects, its class at `class`
+    fn ns_array(items: &[u64], class: u64) -> Value {
+        let mut d = Dictionary::new();
+        d.insert("$class".into(), Value::Uid(plist::Uid::new(class)));
+        d.insert("NS.objects".into(), Value::Array(items.iter().map(|&u| Value::Uid(plist::Uid::new(u))).collect()));
+        Value::Dictionary(d)
+    }
+
+    fn class(name: &str) -> Value {
+        let mut d = Dictionary::new();
+        d.insert("$classname".into(), Value::String(name.into()));
+        Value::Dictionary(d)
+    }
+
+    /// An object that holds itself is a cycle: it reads as null there, not as a recursion 200 deep
+    #[test]
+    fn a_cycle_reads_as_null() {
+        // 1: an array holding itself and a string; 2: its class; 3: the string
+        let bytes = archive(vec![ns_array(&[1, 3], 2), class("NSArray"), Value::String("x".into())]);
+        let Obj::Array(items) = decode(&bytes).unwrap() else { panic!("not an array") };
+        assert!(matches!(items[0], Obj::Null), "{items:?}");
+        assert_eq!(items[1].as_str(), Some("x"));
+    }
+
+    /// Objects that each hold the next one twice: 2^60 values from a few hundred bytes. Refused at once
+    #[test]
+    fn an_archive_built_to_blow_up_is_refused() {
+        const LEVELS: u64 = 60;
+        let class_at = LEVELS + 2;
+        let mut objects: Vec<Value> = (1..=LEVELS).map(|i| ns_array(&[i + 1, i + 1], class_at)).collect();
+        objects.push(Value::String("leaf".into()));
+        objects.push(class("NSArray"));
+        let bytes = archive(objects);
+        let t0 = std::time::Instant::now();
+        assert!(matches!(decode(&bytes), Err(AxError::Archive(_))));
+        assert!(t0.elapsed() < std::time::Duration::from_secs(2), "{:?}", t0.elapsed());
+        // shared, but small: decoded
+        let mut objects: Vec<Value> = (1..=4).map(|i| ns_array(&[i + 1, i + 1], 6)).collect();
+        objects.push(Value::String("leaf".into()));
+        objects.push(class("NSArray"));
+        let bytes = archive(objects);
+        let Obj::Array(top) = decode(&bytes).unwrap() else { panic!("not an array") };
+        assert_eq!(top.len(), 2);
+        // a budget used up exactly is enough; one value short isn't
+        let (_, took) = decode_within(&bytes, usize::MAX).unwrap();
+        assert!(decode_within(&bytes, took).is_ok());
+        assert!(decode_within(&bytes, took - 1).is_err());
+    }
 
     #[test]
     fn scalars_round_trip() {

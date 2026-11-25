@@ -1,7 +1,7 @@
 //! .ipa 解包和打包（就是 zip，里面是 `Payload/X.app`）。保留 Unix 权限位，否则可执行文件会丢掉 x 位。
 
 use std::fs::File;
-use std::io::{self, Read, Write};
+use std::io;
 use std::path::{Path, PathBuf};
 
 use zip::{ZipArchive, ZipWriter, write::SimpleFileOptions};
@@ -26,12 +26,30 @@ pub fn find_app(payload: &Path) -> io::Result<PathBuf> {
         })
 }
 
-/// 把 `root` 下的 `Payload/` 打成 ipa
+/// 把 `root` 下的 `Payload/` 打成 ipa。写在旁边的临时文件里，写完才换上去：`out` 要么是原来的，要么是完整的新包
 pub fn pack(root: &Path, out: &Path) -> io::Result<()> {
-    let mut zip = ZipWriter::new(File::create(out)?);
-    add_dir(&mut zip, root, &root.join("Payload"))?;
-    zip.finish().map_err(io::Error::other)?;
-    Ok(())
+    write_atomically(out, |f| {
+        let mut zip = ZipWriter::new(f);
+        add_dir(&mut zip, root, &root.join("Payload"))?;
+        zip.finish().map_err(io::Error::other)?;
+        Ok(())
+    })
+}
+
+/// 在 `out` 同一个目录里写一个临时文件，写完 fsync 后改名成 `out`；出错就删掉临时文件，`out` 不动
+fn write_atomically(out: &Path, write: impl FnOnce(File) -> io::Result<()>) -> io::Result<()> {
+    let name = out.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let tmp = out.with_file_name(format!(".{name}.{}.part", uuid::Uuid::new_v4()));
+    let r = File::create(&tmp).and_then(|f| {
+        let sync = f.try_clone()?;
+        write(f)?;
+        sync.sync_all()
+    });
+    let r = r.and_then(|()| std::fs::rename(&tmp, out));
+    if r.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    r
 }
 
 /// 根目录直接是 `X.app/` 的 zip（Appium 发布的 WDA 真机包）改成 ipa：每项加上 `Payload/` 前缀，
@@ -45,20 +63,22 @@ pub fn from_app_zip(src: &Path, out: &Path) -> io::Result<()> {
             ictl_l10n::tr!("zip 根目录下没有 .app", "no .app at the root of the zip"),
         ));
     }
-    let mut w = ZipWriter::new(File::create(out)?);
-    w.add_directory("Payload/", SimpleFileOptions::default().unix_permissions(0o755)).map_err(io::Error::other)?;
-    for i in 0..zip.len() {
-        let f = zip.by_index_raw(i).map_err(io::Error::other)?;
-        let name = format!("Payload/{}", f.name().map_err(io::Error::other)?);
-        if f.is_dir() {
-            let mode = f.unix_mode().map_or(0o755, |m| m & 0o7777);
-            w.add_directory(name, SimpleFileOptions::default().unix_permissions(mode)).map_err(io::Error::other)?;
-        } else {
-            w.raw_copy_file_rename(f, name).map_err(io::Error::other)?;
+    write_atomically(out, |f| {
+        let mut w = ZipWriter::new(f);
+        w.add_directory("Payload/", SimpleFileOptions::default().unix_permissions(0o755)).map_err(io::Error::other)?;
+        for i in 0..zip.len() {
+            let f = zip.by_index_raw(i).map_err(io::Error::other)?;
+            let name = format!("Payload/{}", f.name().map_err(io::Error::other)?);
+            if f.is_dir() {
+                let mode = f.unix_mode().map_or(0o755, |m| m & 0o7777);
+                w.add_directory(name, SimpleFileOptions::default().unix_permissions(mode)).map_err(io::Error::other)?;
+            } else {
+                w.raw_copy_file_rename(f, name).map_err(io::Error::other)?;
+            }
         }
-    }
-    w.finish().map_err(io::Error::other)?;
-    Ok(())
+        w.finish().map_err(io::Error::other)?;
+        Ok(())
+    })
 }
 
 fn add_dir(zip: &mut ZipWriter<File>, root: &Path, dir: &Path) -> io::Result<()> {
@@ -77,9 +97,7 @@ fn add_dir(zip: &mut ZipWriter<File>, root: &Path, dir: &Path) -> io::Result<()>
             zip.add_symlink(rel, target.to_string_lossy(), opts).map_err(io::Error::other)?;
         } else {
             zip.start_file(rel, opts).map_err(io::Error::other)?;
-            let mut buf = Vec::new();
-            File::open(&path)?.read_to_end(&mut buf)?;
-            zip.write_all(&buf)?;
+            io::copy(&mut File::open(&path)?, zip)?;
         }
     }
     Ok(())
@@ -88,6 +106,23 @@ fn add_dir(zip: &mut ZipWriter<File>, root: &Path, dir: &Path) -> io::Result<()>
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
+
+    /// A package that fails halfway leaves the old one as it was and nothing beside it
+    #[test]
+    fn a_failed_pack_leaves_the_old_package() {
+        let root = std::env::temp_dir().join(format!("ictl-ipa-fail-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let out = root.join("out.ipa");
+        std::fs::write(&out, b"old").unwrap();
+        assert!(pack(&root, &out).is_err(), "no Payload/ to pack");
+        assert_eq!(std::fs::read(&out).unwrap(), b"old");
+        let left: Vec<_> = std::fs::read_dir(&root).unwrap().flatten().map(|e| e.file_name()).collect();
+        assert_eq!(left, vec![std::ffi::OsString::from("out.ipa")], "no temporary file left");
+        assert!(from_app_zip(&root.join("missing.zip"), &out).is_err());
+        assert_eq!(std::fs::read(&out).unwrap(), b"old");
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn pack_then_unpack_keeps_exec_bit() {

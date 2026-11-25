@@ -255,11 +255,22 @@ impl Daemon {
         h.rotation = rot;
         let result = Box::pin(h.touch(contact, x, y)).await;
         g.hid_used = Some(Instant::now());
-        if let Err(e) = result {
-            // A failed write may still have reached the phone.
-            g.dev.touch_rotation = None;
-            drop_tunnel(g).await;
-            return Err(Response::error(ictl_l10n::trf!("HID 命令失败: {e}", "HID command failed: {e}")));
+        match result {
+            Ok(()) => {}
+            // refused before anything was sent (a point that isn't a number, an unknown screen size): the tunnel and
+            // its sessions are fine; a finger that is down stays where it was
+            Err(e @ ictl_device::DeviceError::InvalidInput(_)) => {
+                if phase == TouchPhase::Down {
+                    g.dev.touch_rotation = None;
+                }
+                return Err(Response::error(e.to_string()).with_failure(Delivery::NotSent, FailureStage::Preflight));
+            }
+            Err(e) => {
+                // A failed write may still have reached the phone.
+                g.dev.touch_rotation = None;
+                drop_tunnel(g).await;
+                return Err(Response::error(ictl_l10n::trf!("HID 命令失败: {e}", "HID command failed: {e}")));
+            }
         }
         Ok(())
     }

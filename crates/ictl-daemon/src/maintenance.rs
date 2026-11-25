@@ -141,11 +141,31 @@ mod tests {
         std::fs::create_dir_all(install.parent().unwrap()).unwrap();
         std::fs::write(&install, "prepared").unwrap();
         drop(lease);
-        assert_eq!(shared_in(&dir).unwrap_err().kind(), io::ErrorKind::WouldBlock);
+        // refused for the journal left behind, not because the lock is still held
+        assert!(is_pending(&shared_once_free(&dir).unwrap_err()));
         assert_eq!(remember(&dir, &other).unwrap_err().kind(), io::ErrorKind::WouldBlock);
         std::fs::remove_file(install).unwrap();
-        shared_in(&dir).unwrap();
+        shared_once_free(&dir).unwrap();
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// The refusal for a pending transaction ([`shared_in`]), not for a lock held by someone
+    fn is_pending(e: &io::Error) -> bool {
+        e.kind() == io::ErrorKind::WouldBlock && e.to_string().contains("recovery pending")
+    }
+
+    /// [`shared_in`] once the lock is free again (see [`once_free`]): a refusal for a pending transaction is returned
+    /// at once
+    fn shared_once_free(dir: &Path) -> io::Result<File> {
+        for _ in 0..100 {
+            match shared_in(dir) {
+                Err(e) if e.kind() == io::ErrorKind::WouldBlock && !is_pending(&e) => {
+                    std::thread::sleep(std::time::Duration::from_millis(20))
+                }
+                r => return r,
+            }
+        }
+        shared_in(dir)
     }
     /// A lock that is free again: another test spawning a process meanwhile (procs.rs) briefly holds a copy of the
     /// dropped descriptor in the child until it execs, and the lock with it

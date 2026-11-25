@@ -32,6 +32,44 @@ const TRIES: usize = 3;
 /// Asking for a keyframe again while none came to start ffmpeg at
 const ASK_EVERY: Duration = Duration::from_millis(500);
 
+/// Transcoding pages at once, at most: each runs its own ffmpeg that decodes the phone's 60 fps HEVC and encodes it
+/// again, a core or more apiece without a hardware decoder (and hardware encoders take only a few sessions)
+pub const MAX_TRANSCODERS: usize = 4;
+
+/// The places for transcoding pages ([`MAX_TRANSCODERS`]), shared by the viewer's connections
+pub struct Slots {
+    free: Arc<tokio::sync::Semaphore>,
+    /// When "all taken" was last logged
+    logged: Mutex<Option<Instant>>,
+}
+
+impl Default for Slots {
+    fn default() -> Self {
+        Self::new(MAX_TRANSCODERS)
+    }
+}
+
+impl Slots {
+    pub fn new(n: usize) -> Self {
+        Self { free: Arc::new(tokio::sync::Semaphore::new(n)), logged: Mutex::new(None) }
+    }
+
+    /// A place for one page, held for as long as it watches; `None` when all are taken (logged once a minute)
+    pub fn take(&self) -> Option<tokio::sync::OwnedSemaphorePermit> {
+        let slot = self.free.clone().try_acquire_owned().ok();
+        if slot.is_none() {
+            let mut last = self.logged.lock().unwrap_or_else(|p| p.into_inner());
+            if last.is_none_or(|t| t.elapsed() >= Duration::from_secs(60)) {
+                *last = Some(Instant::now());
+                tracing::warn!(
+                    "viewer: {MAX_TRANSCODERS} pages already get the phone's video transcoded to H.264; more get 503 until one closes"
+                );
+            }
+        }
+        slot
+    }
+}
+
 /// One ffmpeg process: HEVC in, H.264 in FLV out
 struct Transcoder {
     input: mpsc::Sender<Vec<u8>>,
@@ -297,5 +335,21 @@ pub async fn serve(
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn transcoding_pages_are_limited_and_their_places_come_back() {
+        let slots = Slots::new(2);
+        let (a, b) = (slots.take().unwrap(), slots.take().unwrap());
+        assert!(slots.take().is_none(), "all taken");
+        drop(a);
+        let c = slots.take().expect("a page left: its place is free");
+        assert!(slots.take().is_none());
+        drop((b, c));
     }
 }

@@ -1034,6 +1034,8 @@ impl Daemon {
     /// A request's lock, once the tasks still let it through ([`crate::tasks::Tasks::still`]): it may have queued
     /// behind other requests while the user paused, took over or handed back. A task's request waits for the task to
     /// run again, without the lock
+    /// `counted`: while it waits for the lock it counts in [`Daemon::waiting`] (background checks give way to it); not
+    /// while it waits for a paused task, which may be for minutes: the page's checks go on meanwhile
     async fn lock_admitted<'a, T>(
         &self,
         lock: &'a Mutex<T>,
@@ -1041,10 +1043,13 @@ impl Daemon {
         admission: &crate::tasks::Admission,
         queued_at: &mut Instant,
         gone: &mut Option<tokio::sync::oneshot::Receiver<()>>,
+        counted: bool,
     ) -> Result<tokio::sync::MutexGuard<'a, T>, Response> {
         use crate::tasks::Still;
         loop {
+            let waiting = counted.then(|| Waiting::new(self));
             let g = acquire(lock, gone).await?;
+            drop(waiting);
             match self.tasks.still(admission, req) {
                 Still::Admitted => return Ok(g),
                 Still::Refused(r) => return Err(r),
@@ -1070,34 +1075,59 @@ impl Daemon {
         let Some(check) = crate::tasks::scope_check(req) else { return Ok(false) };
         let target = match check {
             Check::Url(u) => Target::Url(u),
+            // the page's app is checked once the page is picked, in the Web lane
+            Check::Page => return Ok(false),
             Check::Always { action, detail } => Target::Always { action, detail },
             Check::Launch(app) => {
                 let mut g = acquire(&self.inner, gone).await?;
                 Target::Launch(self.resolve_app(&mut g, &app).await.map_err(Response::error)?)
             }
             Check::Foreground => {
+                // the lock is let go before the user is asked (below); the action checks again once it holds it
                 let mut g = acquire(&self.inner, gone).await?;
-                // can't tell which app is in front: a scoped task doesn't act blind
-                let unknown = |why: String| {
-                    Response::error(ictl_l10n::trf!(
-                        "看不出前台是哪个 App（{why}）；这个任务限定了 App 范围，所以没有操作。稍后截图再试",
-                        "Can't tell which app is in front ({why}); this task is limited to some apps, so nothing was done. Take a screenshot and try again shortly"
-                    ))
-                };
-                // the lock is let go before the user is asked (below)
-                let app = match self.route(&mut g) {
-                    Route::Wda(w) => w.active_app().await.map_err(|e| unknown(e.to_string()))?,
-                    Route::Native => {
-                        Box::pin(self.native_foreground(&mut g)).await.map_err(|e| unknown(e.to_string()))?
-                    }
-                    Route::Hid | Route::Unavailable => {
-                        return Err(unknown(ictl_l10n::tr!("WDA 不可用", "WDA unavailable").into()));
-                    }
-                };
-                Target::Foreground(app)
+                Target::Foreground(self.front_app(&mut g).await?)
             }
         };
         task.check_scope(&target, step, gone).await
+    }
+
+    /// The app in front, for a scoped task's check. `Err`: why it can't be told, and so nothing is done
+    async fn front_app(&self, g: &mut Inner) -> Result<String, Response> {
+        // can't tell which app is in front: a scoped task doesn't act blind
+        let unknown = |why: String| {
+            Response::error(ictl_l10n::trf!(
+                "看不出前台是哪个 App（{why}）；这个任务限定了 App 范围，所以没有操作。稍后截图再试",
+                "Can't tell which app is in front ({why}); this task is limited to some apps, so nothing was done. Take a screenshot and try again shortly"
+            ))
+        };
+        match self.route(g) {
+            Route::Wda(w) => w.active_app().await.map_err(|e| unknown(e.to_string())),
+            Route::Native => Box::pin(self.native_foreground(g)).await.map_err(|e| unknown(e.to_string())),
+            Route::Hid | Route::Unavailable => Err(unknown(ictl_l10n::tr!("WDA 不可用", "WDA unavailable").into())),
+        }
+    }
+
+    /// A scoped task's action on the app in front, checked again once it holds the device lock: the app may have
+    /// changed since [`Self::scope_gate`] looked (it lets the lock go, and a request of the agent's or the user may
+    /// come in between). Nobody is asked now (that would hold the lock): out of scope by now, it is refused
+    async fn scope_recheck(
+        &self,
+        g: &mut Inner,
+        req: &Request,
+        admission: &crate::tasks::Admission,
+    ) -> Result<(), Response> {
+        let crate::tasks::Admission::Actor(t) = admission else { return Ok(()) };
+        if !t.scoped() || !matches!(crate::tasks::scope_check(req), Some(crate::tasks::Check::Foreground)) {
+            return Ok(());
+        }
+        let app = self.front_app(g).await?;
+        if t.within_scope(&crate::tasks::Target::Foreground(app.clone())) {
+            return Ok(());
+        }
+        Err(crate::tasks::refuse(&ictl_l10n::trf!(
+            "前台 App 刚变成了任务范围以外的 {app}，这一步没有执行。先截图看看再继续",
+            "The app in front just became {app}, outside the task's scope; this step wasn't done. Take a screenshot before going on"
+        )))
     }
 
     /// A task's scope from names or bundle IDs: the bundle IDs, each once. `Err` names the app that isn't there
@@ -1143,11 +1173,11 @@ impl Daemon {
             }
             // Web Inspector talks to the page, not to WDA: its own lock, the device lock only to look up the device
             Lane::Web => {
-                let mut slot = match self.lock_admitted(&self.web, &req, admission, &mut queued_at, &mut ctx.gone).await
-                {
-                    Ok(s) => s,
-                    Err(r) => return r,
-                };
+                let mut slot =
+                    match self.lock_admitted(&self.web, &req, admission, &mut queued_at, &mut ctx.gone, false).await {
+                        Ok(s) => s,
+                        Err(r) => return r,
+                    };
                 let device = self.inner.lock().await.device.clone();
                 if let Err(r) = admit(&req, queued_at, &ctx, device.as_ref().map(|d| d.udid.as_str())) {
                     return r;
@@ -1158,7 +1188,20 @@ impl Daemon {
                 return text(match req {
                     Request::WebTargets => self.web_targets(&mut slot, &device).await,
                     Request::WebEval { target, expression, timeout_ms } => {
-                        self.web_eval(&mut slot, &device, &target, &expression, Duration::from_millis(timeout_ms)).await
+                        // a scoped task: the app that shows the page must be in its scope, whatever is in front
+                        let scope = match admission {
+                            crate::tasks::Admission::Actor(t) if t.scoped() => Some(t),
+                            _ => None,
+                        };
+                        let gate = crate::web::Gate { task: scope, step: ctx.task_step, gone: &mut ctx.gone };
+                        let timeout = Duration::from_millis(timeout_ms);
+                        match self.web_eval(&mut slot, &device, &target, &expression, timeout, gate).await {
+                            Ok(v) => Ok(v),
+                            Err(crate::web::EvalError::Refused(r)) => {
+                                return r.with_failure(Delivery::NotSent, FailureStage::Preflight);
+                            }
+                            Err(crate::web::EvalError::Failed(e)) => Err(e),
+                        }
                     }
                     _ => unreachable!("lane"),
                 });
@@ -1211,15 +1254,17 @@ impl Daemon {
                 _ => return gave_way(),
             }
         } else {
-            let _waiting = Waiting::new(self);
             // still let through now that it holds the lock: the task may have been paused or taken over meanwhile
-            match self.lock_admitted(&self.inner, &req, admission, &mut queued_at, &mut ctx.gone).await {
+            match self.lock_admitted(&self.inner, &req, admission, &mut queued_at, &mut ctx.gone, true).await {
                 Ok(g) => g,
                 Err(r) => return r.with_failure(Delivery::NotSent, FailureStage::Preflight),
             }
         };
         let g = &mut *g;
         if let Err(r) = admit(&req, queued_at, &ctx, g.device.as_ref().map(|d| d.udid.as_str())) {
+            return r.with_failure(Delivery::NotSent, FailureStage::Preflight);
+        }
+        if let Err(r) = self.scope_recheck(g, &req, admission).await {
             return r.with_failure(Delivery::NotSent, FailureStage::Preflight);
         }
         let view = ctx.expect_view.as_deref();
@@ -1243,8 +1288,13 @@ impl Daemon {
             if self.waiting.load(std::sync::atomic::Ordering::SeqCst) > 0 {
                 gave_way()
             } else {
+                // dropping it halfway may leave the accessibility session's stream mid-message: the session then
+                // counts as closed and is opened again (`ictl_ax::Session`); a check doesn't restart the phone's
+                // accessibility daemon either, that is for actions to decide
+                let check =
+                    BACKGROUND.scope(true, Box::pin(self.dispatch(g, req, view, ctx.watched, &mut may_continue)));
                 tokio::select! {
-                    r = Box::pin(self.dispatch(g, req, view, ctx.watched, &mut may_continue)) => r,
+                    r = check => r,
                     () = action => gave_way(),
                 }
             }
@@ -1315,8 +1365,9 @@ impl Daemon {
             }
             Request::Tap { x, y, count } => self.tap(g, x, y, count, view).await,
             Request::TapSequence { points } => self.tap_sequence(g, &points).await,
-            Request::TapElement { text, index, max_age_ms, scroll } => {
-                let r = self.tap_element(g, &text, index, Duration::from_millis(max_age_ms), scroll).await;
+            Request::TapElement { ref text, index, max_age_ms, scroll } => {
+                let age = Duration::from_millis(max_age_ms);
+                let r = self.tap_element(g, text, index, age, scroll, &mut || may_continue(&req)).await;
                 r.map(|(t, missed)| {
                     outcome.tapped_nothing = missed;
                     // nothing was tapped: there is no "before the action" to compare the screen with, or the next
@@ -1369,11 +1420,11 @@ impl Daemon {
                 data = Some(crate::protocol::Data::Alert { text: alert });
                 text
             }),
-            Request::WaitFor { text, timeout_ms } => {
-                self.wait_for(g, &text, Duration::from_millis(timeout_ms), false).await
+            Request::WaitFor { ref text, timeout_ms } => {
+                self.wait_for(g, text, Duration::from_millis(timeout_ms), false, &mut || may_continue(&req)).await
             }
-            Request::WaitForDisappearance { text, timeout_ms } => {
-                self.wait_for(g, &text, Duration::from_millis(timeout_ms), true).await
+            Request::WaitForDisappearance { ref text, timeout_ms } => {
+                self.wait_for(g, text, Duration::from_millis(timeout_ms), true, &mut || may_continue(&req)).await
             }
             Request::Doctor => Ok(self.doctor(g).await),
             Request::UnlockReset => {
@@ -1553,6 +1604,17 @@ fn gave_way() -> Response {
     )
 }
 
+tokio::task_local! {
+    /// A background check is being dispatched ([`ictl_protocol::BACKGROUND`]): it may be dropped halfway for an action
+    /// and has no business with side effects such as restarting the phone's accessibility daemon
+    pub(crate) static BACKGROUND: bool;
+}
+
+/// Whether the request being dispatched is a background check ([`BACKGROUND`])
+pub(crate) fn in_background() -> bool {
+    BACKGROUND.try_with(|b| *b).unwrap_or(false)
+}
+
 /// An action waiting for the device lock, counted in [`Daemon::waiting`] until it has it
 struct Waiting<'a>(&'a Daemon);
 
@@ -1603,6 +1665,13 @@ fn check_request(req: &Request) -> Result<(), String> {
                 || !(1..=crate::protocol::MAX_SCROLL_ROWS).contains(&scan.limit) =>
         {
             return Err(ictl_l10n::tr!("超出滚动或行数上限", "scroll or row limit is out of range").into());
+        }
+        Request::TapElement { scroll: Some(s), .. } if !(1..=crate::protocol::MAX_SEARCH_SCROLLS).contains(&s.max) => {
+            return Err(ictl_l10n::trf!(
+                "scroll 最多滑 1 到 {} 次",
+                "scroll can swipe 1 to {} times",
+                crate::protocol::MAX_SEARCH_SCROLLS
+            ));
         }
         Request::ScrollCollect(scan) if scan.x.is_some_and(|x| !x.is_finite() || x < 0.0) => {
             return Err(ictl_l10n::tr!("x 不能是负数", "x can't be negative").into());
@@ -1884,6 +1953,85 @@ pub(crate) mod tests {
             "unless asked outright"
         );
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// An action counts as waiting for the phone (background checks give way) only while it waits for the lock, not
+    /// while its task is paused: the page's checks went on giving way for as long as the pause lasted
+    #[tokio::test]
+    async fn waiting_for_a_paused_task_doesnt_hold_off_the_checks() {
+        use std::sync::atomic::Ordering::SeqCst;
+        let (d, dir) = test_daemon("waiting-paused");
+        let t = d.tasks.open("x", "test", Some("phone"), Vec::new(), None).unwrap();
+        let tap = Request::Tap { x: 1.0, y: 1.0, count: 1 };
+        let admission = crate::tasks::Admission::Actor(t.clone());
+        let (mut queued, mut gone) = (Instant::now(), None);
+        {
+            let held = d.inner.lock().await;
+            let locked = d.lock_admitted(&d.inner, &tap, &admission, &mut queued, &mut gone, true);
+            tokio::pin!(locked);
+            assert!(tokio::time::timeout(Duration::from_millis(30), &mut locked).await.is_err());
+            assert_eq!(d.waiting.load(SeqCst), 1, "waits for the lock: counted");
+            t.control_as_user("pause").unwrap();
+            drop(held);
+            assert!(tokio::time::timeout(Duration::from_millis(30), &mut locked).await.is_err(), "the task is paused");
+            assert_eq!(d.waiting.load(SeqCst), 0, "waits for the task: not counted");
+            t.control_as_user("resume").unwrap();
+            assert!(locked.await.is_ok());
+            assert_eq!(d.waiting.load(SeqCst), 0);
+        }
+        // the Web lane's lock isn't the device's: never counted
+        let held = d.web.lock().await;
+        let web = d.lock_admitted(&d.web, &tap, &admission, &mut queued, &mut gone, false);
+        tokio::pin!(web);
+        assert!(tokio::time::timeout(Duration::from_millis(30), &mut web).await.is_err());
+        assert_eq!(d.waiting.load(SeqCst), 0);
+        drop(held);
+        assert!(web.await.is_ok());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// A scoped task's action on the app in front is checked again with the lock held; it can't act blind. Unscoped
+    /// tasks, requests that don't act on the front app and scripts in pages (checked by the page's app) aren't
+    #[tokio::test]
+    async fn a_scoped_action_is_checked_again_with_the_lock_held() {
+        let (d, dir) = test_daemon("scope-recheck");
+        let scoped = d.tasks.open("x", "test", Some("phone"), vec!["com.apple.Preferences".into()], None).unwrap();
+        let tap = Request::Tap { x: 1.0, y: 1.0, count: 1 };
+        let mut g = d.inner.lock().await;
+        let actor = crate::tasks::Admission::Actor(scoped.clone());
+        let r = d.scope_recheck(&mut g, &tap, &actor).await;
+        assert!(
+            matches!(&r, Err(Response::Error { message, .. }) if message.contains("看不出前台") || message.contains("Can't tell")),
+            "{r:?}"
+        );
+        let home = Request::PressButton { button: "home".into() };
+        assert!(d.scope_recheck(&mut g, &home, &actor).await.is_ok(), "the way back is never held");
+        let eval = Request::WebEval { target: String::new(), expression: "1".into(), timeout_ms: 1000 };
+        assert!(d.scope_recheck(&mut g, &eval, &actor).await.is_ok(), "the page's app is checked in the Web lane");
+        assert!(d.scope_recheck(&mut g, &tap, &crate::tasks::Admission::Free).await.is_ok());
+        scoped.end(crate::tasks::End::Cancelled, "");
+        let open = d.tasks.open("y", "test", Some("phone"), Vec::new(), None).unwrap();
+        let r = d.scope_recheck(&mut g, &tap, &crate::tasks::Admission::Actor(open)).await;
+        assert!(r.is_ok(), "no scope: nothing to look up");
+        drop(g);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_tap_by_text_scrolls_within_bounds() {
+        let tap = |max| Request::TapElement {
+            text: "x".into(),
+            index: 0,
+            max_age_ms: 0,
+            scroll: Some(crate::protocol::ScrollSearch { down: true, max }),
+        };
+        for (max, ok) in
+            [(0, false), (1, true), (crate::protocol::MAX_SEARCH_SCROLLS, true), (16, false), (u32::MAX, false)]
+        {
+            assert_eq!(check_request(&tap(max)).is_ok(), ok, "{max}");
+        }
+        let plain = Request::TapElement { text: "x".into(), index: 0, max_age_ms: 0, scroll: None };
+        assert!(check_request(&plain).is_ok());
     }
 
     /// 调用方已经断开：还在排队等设备锁的请求不执行

@@ -16,6 +16,11 @@ What changed in each release, one line per change. Versions follow [Semantic Ver
 
 ### Fixes
 
+- iOS 27+: an action that comes while the control page checks the phone in the background no longer leaves the accessibility connection half-read, and those checks no longer restart the phone's accessibility daemon; only actions decide that (#197).
+- A task paused for a long time no longer keeps the control page's background checks from running (#197).
+- Switching back to a phone made ready in the background takes effect at once even when the daemon was busy at that moment; it could wait 10 seconds. The daemon serves at most 256 clients at once; more wait their turn (#197).
+- AI tasks limited to some apps: an action is checked again once it has the phone, in case another app came to the front meanwhile, and `iphone_web_eval` is checked against the app that shows the page (#197).
+- `iphone_tap_element`'s scroll search and `iphone_wait_for` stop as soon as the task is paused or taken over or the caller goes away, instead of holding the phone until they time out; the daemon also limits a scroll search to 15 swipes (#197).
 - iOS 17–18: the developer disk image is mounted the way these versions need, so WebDriverAgent starts on them again (#186).
 - Times in `status`, `doctor` and the event log are shown in local time with the time zone; they were UTC without saying so (#184).
 - Errors from `iphone-control update`, `service` and the update panel on the control page follow the chosen language; they were always in English (#184).

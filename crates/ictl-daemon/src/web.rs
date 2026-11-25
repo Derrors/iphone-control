@@ -20,6 +20,25 @@ use crate::core::Daemon;
 /// A kept connection is closed after this long without a request
 const WEB_IDLE: Duration = Duration::from_secs(5 * 60);
 
+/// A scoped task's check for `WebEval` (`task` is `None` for anyone else)
+pub(crate) struct Gate<'a> {
+    pub task: Option<&'a std::sync::Arc<crate::tasks::Task>>,
+    pub step: Option<u64>,
+    pub gone: &'a mut Option<tokio::sync::oneshot::Receiver<()>>,
+}
+
+/// Why a page wasn't evaluated: it failed, or the task's scope refused it (a whole answer, passed on as it is)
+pub(crate) enum EvalError {
+    Failed(crate::error::Error),
+    Refused(crate::protocol::Response),
+}
+
+impl<E: Into<crate::error::Error>> From<E> for EvalError {
+    fn from(e: E) -> Self {
+        Self::Failed(e.into())
+    }
+}
+
 /// The kept Web Inspector connection, for one device
 pub(crate) struct WebConn {
     udid: String,
@@ -65,7 +84,8 @@ impl Daemon {
         target: &str,
         expression: &str,
         timeout: Duration,
-    ) -> crate::error::Result<String> {
+        gate: Gate<'_>,
+    ) -> Result<String, EvalError> {
         let (apps, pages) = web_pages(slot, device).await?;
         let page = pick(&pages, target).map_err(|e| match e {
             Pick::None => ictl_l10n::trf!(
@@ -78,7 +98,14 @@ impl Daemon {
                 c.iter().map(|p| target_line(p, &apps)).collect::<Vec<_>>().join("\n")
             ),
         })?;
-        let conn = slot.as_mut().ok_or("Web Inspector")?;
+        // a task limited to some apps: the app that shows the page, which needn't be the one in front
+        if let Some(t) = gate.task {
+            let app = shown_app(page, &apps).map(|a| a.bundle_id.clone()).unwrap_or_default();
+            t.check_scope(&crate::tasks::Target::Foreground(app), gate.step, gate.gone)
+                .await
+                .map_err(EvalError::Refused)?;
+        }
+        let conn = slot.as_mut().ok_or(crate::error::Error::from("Web Inspector"))?;
         conn.used = Instant::now();
         // not retried on a new connection: the script may already have run
         let r = match conn.w.evaluate(page, expression, timeout).await {
@@ -167,11 +194,15 @@ fn breaks_connection(e: &ictl_webinspector::Error) -> bool {
     !matches!(e, ictl_webinspector::Error::Timeout(_) | ictl_webinspector::Error::Command(_))
 }
 
+/// The app that shows a page: a WebContent process stands in for it
+fn shown_app<'a>(p: &Page, apps: &'a [App]) -> Option<&'a App> {
+    let app = apps.iter().find(|a| a.id == p.app_id);
+    app.and_then(|a| a.host.as_deref()).and_then(|h| apps.iter().find(|a| a.id == h)).or(app)
+}
+
 /// `PID:812/1  WebPage  Safari (com.apple.mobilesafari)  Title — https://…`
 fn target_line(p: &Page, apps: &[App]) -> String {
-    let app = apps.iter().find(|a| a.id == p.app_id);
-    // a WebContent process stands in for the app that shows the page
-    let shown = app.and_then(|a| a.host.as_deref()).and_then(|h| apps.iter().find(|a| a.id == h)).or(app);
+    let shown = shown_app(p, apps);
     let who = shown.map(|a| format!("{} ({})", a.name, a.bundle_id)).unwrap_or_else(|| p.app_id.clone());
     let busy =
         if p.in_use { ictl_l10n::tr!(" [另一个调试器已连接]", " [another debugger is attached]") } else { "" };

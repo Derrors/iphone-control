@@ -73,6 +73,11 @@ pub async fn run(cfg: Config) -> anyhow::Result<()> {
     r
 }
 
+/// A supervision round asked for that couldn't take the device is asked for again this much later
+const RETRY_ROUND: std::time::Duration = std::time::Duration::from_millis(200);
+/// Clients served at once on the control socket; more wait in its queue
+const MAX_CONNECTIONS: usize = 256;
+
 async fn serve(cfg: Config, listener: tokio::net::UnixListener) -> anyhow::Result<()> {
     let daemon = Daemon::new(cfg);
     daemon.log.log(ictl_l10n::log_tr!("守护进程启动", "Daemon started"));
@@ -86,14 +91,11 @@ async fn serve(cfg: Config, listener: tokio::net::UnixListener) -> anyhow::Resul
     // the round running, and whether it was asked for (`Daemon::wake`)
     let mut ticking: Option<(JoinHandle<bool>, bool)> = None;
     // a round asked for while one was still running: it starts once that one is done. One asked for that couldn't
-    // run (a request held the device) is asked for again: a phone made ready in the background waited 10 s for the
-    // next round when switching back to it
+    // run (a request held the device) is asked for again shortly (`retry`): a phone made ready in the background
+    // waited 10 s for the next round when switching back to it
     let mut woken = false;
+    let mut retry: Option<tokio::time::Instant> = None;
     loop {
-        if let Some((h, asked)) = ticking.take_if(|(h, _)| h.is_finished()) {
-            let ran = h.await.unwrap_or(true);
-            woken |= asked && !ran;
-        }
         if woken && ticking.is_none() {
             woken = false;
             ticking = Some((tokio::task::spawn_local(daemon.clone().tick()), true));
@@ -102,7 +104,16 @@ async fn serve(cfg: Config, listener: tokio::net::UnixListener) -> anyhow::Resul
             biased;
             _ = term.recv() => break,
             _ = tokio::signal::ctrl_c() => break,
-            r = listener.accept() => match r {
+            // the round that runs ended: an asked-for one that couldn't take the device is asked for again
+            r = async { (&mut ticking.as_mut().expect("guarded").0).await }, if ticking.is_some() => {
+                let asked = ticking.take().is_some_and(|(_, asked)| asked);
+                if asked && !r.unwrap_or(true) {
+                    retry = Some(tokio::time::Instant::now() + RETRY_ROUND);
+                }
+            }
+            Some(_) = conns.join_next(), if !conns.is_empty() => {}
+            // at most MAX_CONNECTIONS clients at once: more wait in the socket's queue
+            r = listener.accept(), if conns.len() < MAX_CONNECTIONS => match r {
                 Ok((stream, _)) => {
                     conns.spawn_local(serve_conn(daemon.clone(), stream));
                 }
@@ -112,16 +123,17 @@ async fn serve(cfg: Config, listener: tokio::net::UnixListener) -> anyhow::Resul
                     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                 }
             },
-            Some(_) = conns.join_next(), if !conns.is_empty() => {}
             _ = tick.tick() => {
                 // 上一轮还没跑完（例如在重启 usbmuxd）就不叠加
-                if ticking.as_ref().is_none_or(|(h, _)| h.is_finished()) {
+                if ticking.is_none() {
                     ticking = Some((tokio::task::spawn_local(daemon.clone().tick()), false));
                 }
             }
             () = daemon.wake.notified() => woken = true,
-            // waiting for the round that runs to end, before the one asked for
-            () = tokio::time::sleep(std::time::Duration::from_millis(200)), if woken => {}
+            () = tokio::time::sleep_until(retry.unwrap_or_else(tokio::time::Instant::now)), if retry.is_some() => {
+                retry = None;
+                woken = true;
+            }
         }
     }
     // stopping: new clients are refused at once (instead of waiting in the queue for a reply that never comes), and

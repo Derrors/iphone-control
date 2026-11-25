@@ -7,7 +7,7 @@
 //! `deviceAPIVersion` before `clientNeedsAccessibility:` keeps it answering without WDA (round 3).
 
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -84,6 +84,9 @@ pub struct Session<S> {
     /// When the phone last said the screen is changing (a notification before the next tree)
     changes: watch::Receiver<Option<Instant>>,
     closed: watch::Receiver<bool>,
+    /// A request stopped halfway (cancelled, or its write failed): what is on the stream is no longer known (half a
+    /// message written, an answer still to come for nobody), so the session counts as closed and is opened again
+    abandoned: AtomicBool,
     requests: tokio::sync::Mutex<()>,
     next_id: AtomicU32,
     reader: tokio::task::JoinHandle<()>,
@@ -93,6 +96,38 @@ impl<S> Drop for Session<S> {
     fn drop(&mut self) {
         self.reader.abort();
     }
+}
+
+/// One request on the stream: unless [`InFlight::done`] is called, dropping it (the request was cancelled, or failed
+/// writing) abandons the session ([`Session::is_closed`]), and the answer channel is let go either way
+struct InFlight<'a> {
+    abandoned: &'a AtomicBool,
+    waiter: &'a Waiter,
+    done: bool,
+}
+
+impl InFlight<'_> {
+    fn done(mut self) {
+        self.done = true;
+    }
+}
+
+impl Drop for InFlight<'_> {
+    fn drop(&mut self) {
+        if !self.done {
+            self.abandoned.store(true, Ordering::SeqCst);
+        }
+        self.waiter.lock().unwrap_or_else(|p| p.into_inner()).take();
+    }
+}
+
+/// Writing one request, at most this long: a stream that takes no more means the phone or the link stopped
+const WRITE_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// A write that didn't finish in time: the link, not the service (an unanswered service is [`AxError::Timeout`],
+/// which the daemon restarts it for)
+fn write_stalled() -> AxError {
+    AxError::Io(std::io::Error::new(std::io::ErrorKind::TimedOut, "writing a request took too long"))
 }
 
 async fn send<W: AsyncWrite + Unpin>(w: &mut W, bytes: &[u8]) -> Result<()> {
@@ -151,6 +186,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> Session<S> {
             pushes,
             changes,
             closed,
+            abandoned: AtomicBool::new(false),
             requests: tokio::sync::Mutex::new(()),
             next_id: AtomicU32::new(4),
             reader,
@@ -225,8 +261,21 @@ fn describe(o: &Obj) -> String {
 }
 
 impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> Session<S> {
+    /// Registers for the next answers, once the stream is known to be open (checked after registering: a stream
+    /// that closed in between would otherwise leave the request waiting out its timeout)
+    fn start(&self) -> Result<(mpsc::UnboundedReceiver<Response>, InFlight<'_>)> {
+        let (tx, rx) = mpsc::unbounded_channel();
+        *self.waiter.lock().unwrap_or_else(|p| p.into_inner()) = Some(tx);
+        let flight = InFlight { abandoned: &self.abandoned, waiter: &self.waiter, done: false };
+        if self.is_closed() {
+            flight.done();
+            return Err(AxError::Closed);
+        }
+        Ok((rx, flight))
+    }
+
     pub fn is_closed(&self) -> bool {
-        *self.closed.borrow()
+        *self.closed.borrow() || self.abandoned.load(Ordering::SeqCst)
     }
 
     /// The last tree the phone pushed
@@ -271,29 +320,43 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> Session<S> {
             return Err(AxError::Closed);
         }
         let _one = self.requests.lock().await;
-        let (tx, mut rx) = mpsc::unbounded_channel();
-        *self.waiter.lock().unwrap_or_else(|p| p.into_inner()) = Some(tx);
+        let (mut rx, flight) = self.start()?;
+        let mut closed = self.closed.clone();
         let r = async {
             let body = archive::encode_data(&archive::encode_request(request_type, 0, object, params, CLIENT_TYPE));
             let id = self.next_id.fetch_add(1, Ordering::Relaxed);
-            send(&mut *self.writer.lock().await, &dtx::invocation(id, "processDataFromHost:", vec![body], false))
-                .await?;
+            let msg = dtx::invocation(id, "processDataFromHost:", vec![body], false);
+            match tokio::time::timeout(WRITE_TIMEOUT, async { send(&mut *self.writer.lock().await, &msg).await }).await
+            {
+                Ok(r) => r?,
+                Err(_) => return Err(write_stalled()),
+            }
             let deadline = tokio::time::Instant::now() + REQUEST_TIMEOUT;
             loop {
-                let r = match tokio::time::timeout_at(deadline, rx.recv()).await {
-                    Ok(Some(r)) => r,
-                    Ok(None) => return Err(AxError::Closed),
-                    Err(_) => return Err(AxError::Timeout("request")),
+                let r = tokio::select! {
+                    r = tokio::time::timeout_at(deadline, rx.recv()) => match r {
+                        Ok(Some(r)) => r,
+                        Ok(None) => return Err(AxError::Closed),
+                        Err(_) => return Ok(Err(AxError::Timeout("request"))),
+                    },
+                    _ = closed.wait_for(|c| *c) => return Err(AxError::Closed),
                 };
                 let same_object = object.is_none_or(|o| r.object.is_none_or(|a| (a.pid, a.id) == (o.pid, o.id)));
                 if r.request_type == request_type && same_object {
-                    return Ok(r);
+                    return Ok(Ok(r));
                 }
                 tracing::debug!("remoteAXService: passed over a late answer to request type {}", r.request_type);
             }
         }
         .await;
-        self.waiter.lock().unwrap_or_else(|p| p.into_inner()).take();
+        // written whole: an unanswered request (a timeout) leaves the stream as it was; a late answer is passed over
+        let r = match r {
+            Ok(r) => {
+                flight.done();
+                r
+            }
+            Err(e) => return Err(e),
+        };
         let r = r?;
         if r.error != 0 {
             return Err(AxError::Protocol(format!("request type {request_type} failed: error {}", r.error)));
@@ -312,11 +375,11 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> Session<S> {
             return Ok(out);
         }
         let _one = self.requests.lock().await;
-        let (tx, mut rx) = mpsc::unbounded_channel();
-        *self.waiter.lock().unwrap_or_else(|p| p.into_inner()) = Some(tx);
+        let (mut rx, flight) = self.start()?;
+        let mut closed = self.closed.clone();
         let r = async {
             let list = Param::Ints(attr::WALK.to_vec());
-            {
+            let write = async {
                 let mut w = self.writer.lock().await;
                 for o in objects {
                     let req = archive::encode_request(
@@ -331,15 +394,24 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> Session<S> {
                     w.write_all(&msg).await?;
                 }
                 w.flush().await?;
+                Ok::<_, AxError>(())
+            };
+            let many = WRITE_TIMEOUT + Duration::from_millis(5) * objects.len() as u32;
+            match tokio::time::timeout(many, write).await {
+                Ok(r) => r?,
+                Err(_) => return Err(write_stalled()),
             }
             let mut pending: Vec<ObjectRef> = objects.to_vec();
             let deadline =
                 tokio::time::Instant::now() + REQUEST_TIMEOUT + Duration::from_millis(20) * objects.len() as u32;
             while !pending.is_empty() {
-                let r = match tokio::time::timeout_at(deadline, rx.recv()).await {
-                    Ok(Some(r)) => r,
-                    Ok(None) => return Err(AxError::Closed),
-                    Err(_) => return Err(AxError::Timeout("attributes")),
+                let r = tokio::select! {
+                    r = tokio::time::timeout_at(deadline, rx.recv()) => match r {
+                        Ok(Some(r)) => r,
+                        Ok(None) => return Err(AxError::Closed),
+                        Err(_) => return Ok(Err(AxError::Timeout("attributes"))),
+                    },
+                    _ = closed.wait_for(|c| *c) => return Err(AxError::Closed),
                 };
                 if r.request_type != request::ATTRIBUTES {
                     continue;
@@ -355,11 +427,16 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> Session<S> {
                     out.insert(o, r.result);
                 }
             }
-            Ok(())
+            Ok(Ok(()))
         }
         .await;
-        self.waiter.lock().unwrap_or_else(|p| p.into_inner()).take();
-        r.map(|()| out)
+        match r {
+            Ok(r) => {
+                flight.done();
+                r.map(|()| out)
+            }
+            Err(e) => Err(e),
+        }
     }
 
     /// The frontmost application's element
@@ -474,6 +551,11 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> Session<S> {
 
     /// Tells the phone this client no longer needs accessibility (it then closes the connection)
     pub async fn close(&self) {
+        // half a request may be on the stream: nothing more is written, the connection just goes
+        if self.abandoned.load(Ordering::SeqCst) {
+            self.reader.abort();
+            return;
+        }
         let no = archive::encode_scalar(Value::Boolean(false));
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let msg = dtx::invocation(id, "clientNeedsAccessibility:", vec![no], false);
@@ -481,5 +563,68 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> Session<S> {
             tokio::time::timeout(Duration::from_secs(1), async { send(&mut *self.writer.lock().await, &msg).await })
                 .await;
         self.reader.abort();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A phone that answers the handshake and then reads everything without answering, until `hang_up` fires
+    async fn phone(hang_up: tokio::sync::oneshot::Receiver<()>) -> Session<tokio::io::DuplexStream> {
+        let (ours, theirs) = tokio::io::duplex(1 << 20);
+        tokio::spawn(async move {
+            let (mut r, mut w) = tokio::io::split(theirs);
+            let serve = async {
+                while let Ok(f) = dtx::read_frame(&mut r).await {
+                    if f.selector().as_deref() == Some("deviceAPIVersion") {
+                        let _ = send(&mut w, &dtx::reply(&f, Some(Value::Integer(7u64.into())))).await;
+                    }
+                }
+            };
+            tokio::select! {
+                () = serve => {}
+                _ = hang_up => {}
+            }
+        });
+        Session::connect(ours, Duration::from_secs(2)).await.unwrap()
+    }
+
+    /// A request dropped halfway (a background check that gave way to an action) leaves the stream in an unknown
+    /// state: the session counts as closed, so the next request opens a new one instead of reading a stale answer
+    #[tokio::test]
+    async fn a_cancelled_request_abandons_the_session() {
+        let (_keep, rx) = tokio::sync::oneshot::channel();
+        let s = phone(rx).await;
+        assert!(!s.is_closed());
+        let cancelled = tokio::time::timeout(Duration::from_millis(50), s.request(request::FRONTMOST_APP, None, &[]));
+        assert!(cancelled.await.is_err());
+        assert!(s.is_closed(), "abandoned");
+        assert!(matches!(s.request(request::FRONTMOST_APP, None, &[]).await, Err(AxError::Closed)));
+    }
+
+    /// Not answered in time (the service is stuck, which the daemon may restart it for): the request was written
+    /// whole, so the session stays usable
+    #[tokio::test]
+    async fn an_unanswered_request_keeps_the_session() {
+        let (_keep, rx) = tokio::sync::oneshot::channel();
+        let s = phone(rx).await;
+        assert!(matches!(s.request(request::FRONTMOST_APP, None, &[]).await, Err(AxError::Timeout(_))));
+        assert!(!s.is_closed());
+    }
+
+    /// The phone hangs up while a request waits: it ends at once, not when its time is up
+    #[tokio::test]
+    async fn a_closed_connection_ends_the_wait() {
+        let (hang_up, rx) = tokio::sync::oneshot::channel();
+        let s = phone(rx).await;
+        let t0 = Instant::now();
+        let asked = s.request(request::FRONTMOST_APP, None, &[]);
+        let (r, ()) = tokio::join!(asked, async {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            let _ = hang_up.send(());
+        });
+        assert!(matches!(r, Err(AxError::Closed)), "{r:?}");
+        assert!(t0.elapsed() < REQUEST_TIMEOUT, "{:?}", t0.elapsed());
     }
 }

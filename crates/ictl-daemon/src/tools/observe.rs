@@ -251,12 +251,13 @@ impl Daemon {
         text: &str,
         timeout: Duration,
         disappeared: bool,
+        may_continue: &mut dyn FnMut() -> bool,
     ) -> crate::error::Result<String> {
         self.ensure_unlocked(g).await?;
         let t0 = Instant::now();
         let w = match self.route(g) {
             Route::Wda(w) => w,
-            Route::Native => return Box::pin(self.native_wait_for(g, text, timeout, disappeared)).await,
+            Route::Native => return Box::pin(self.native_wait_for(g, text, timeout, disappeared, may_continue)).await,
             Route::Hid | Route::Unavailable => return Err(wda_unavailable(g)),
         };
         // 轮询时不等界面空闲：页面还在加载、播放动画时每次读树也只要约 0.2 秒
@@ -282,6 +283,9 @@ impl Daemon {
                 if t0.elapsed() >= timeout {
                     return Err(wait_timeout(text, timeout, why));
                 }
+                if !may_continue() {
+                    return Err(wait_interrupted(text, t0.elapsed()));
+                }
                 tokio::time::sleep(Duration::from_millis(300).min(timeout.saturating_sub(t0.elapsed()))).await;
             }
         }
@@ -289,6 +293,15 @@ impl Daemon {
         w.end_polling().await;
         r
     }
+}
+
+/// [`Daemon::wait_for`] stopped before it was done: the task was paused or taken over, or the caller went away
+pub(super) fn wait_interrupted(text: &str, waited: Duration) -> Error {
+    let waited = waited.as_secs_f64();
+    Error::from(ictl_l10n::trf!(
+        "等「{text}」时被打断（任务暂停、被接管或调用方已离开），已等 {waited:.1} 秒",
+        "Waiting for \"{text}\" was interrupted (the task was paused or taken over, or the caller went away) after {waited:.1} s"
+    ))
 }
 
 pub(super) fn wait_match(tree: &Tree, text: &str, disappeared: bool, elapsed: Duration) -> Option<String> {

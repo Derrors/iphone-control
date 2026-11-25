@@ -400,7 +400,7 @@ async fn update_command(action: UpdateAction, socket: &Path) -> anyhow::Result<(
                 println!("{report}");
             }
             if let Some(code) = report.error_code {
-                bail!("Update check failed: {code}")
+                bail!("{}", ictl_l10n::trf!("检查更新失败：{code}", "Update check failed: {code}"))
             }
             Ok(())
         }

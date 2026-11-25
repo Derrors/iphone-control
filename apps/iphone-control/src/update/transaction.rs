@@ -45,7 +45,10 @@ struct Transaction {
 const LEGACY_PREVIOUS: [&str; 2] = ["previous", "previous.json"];
 
 fn state_dir(exe: &Path) -> Result<PathBuf> {
-    Ok(exe.parent().context("invalid installation path")?.join(".iphone-control-update"))
+    Ok(exe
+        .parent()
+        .context(ictl_l10n::tr!("安装路径不对", "invalid installation path"))?
+        .join(".iphone-control-update"))
 }
 
 fn read_json<T: DeserializeOwned>(path: &Path) -> Result<Option<T>> {
@@ -54,7 +57,11 @@ fn read_json<T: DeserializeOwned>(path: &Path) -> Result<Option<T>> {
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(e.into()),
     };
-    ensure!(file.metadata()?.is_file() && file.metadata()?.len() <= 64 * 1024, "invalid updater state file");
+    ensure!(
+        file.metadata()?.is_file() && file.metadata()?.len() <= 64 * 1024,
+        "{}",
+        ictl_l10n::tr!("更新器的状态文件不对", "invalid updater state file")
+    );
     Ok(Some(serde_json::from_reader(file)?))
 }
 
@@ -71,12 +78,13 @@ struct Store {
 
 impl Store {
     fn open(binary: &Path, receipt: PathBuf) -> Result<Self> {
-        let parent = binary.parent().context("invalid installation path")?;
+        let parent = binary.parent().context(ictl_l10n::tr!("安装路径不对", "invalid installation path"))?;
         let uid = unsafe { libc::geteuid() };
         let meta = parent.metadata()?;
         ensure!(
             uid != 0 && binary.canonicalize()? == binary && meta.uid() == uid && meta.mode() & 0o022 == 0,
-            "unsafe installation directory"
+            "{}",
+            ictl_l10n::tr!("安装目录不安全（所有者或权限不对）", "unsafe installation directory")
         );
         let lock = File::options()
             .read(true)
@@ -87,9 +95,14 @@ impl Store {
             .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
             .open(parent.join(".iphone-control-update.lock"))?;
         let meta = lock.metadata()?;
-        ensure!(meta.is_file() && meta.uid() == uid && meta.mode() & 0o077 == 0, "unsafe updater lock");
+        ensure!(
+            meta.is_file() && meta.uid() == uid && meta.mode() & 0o077 == 0,
+            "{}",
+            ictl_l10n::tr!("更新器的锁文件不安全", "unsafe updater lock")
+        );
         if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
-            return Err(io::Error::last_os_error()).context("another installation transaction is running");
+            return Err(io::Error::last_os_error())
+                .context(ictl_l10n::tr!("另一个安装正在进行", "another installation transaction is running"));
         }
         let dir = state_dir(binary)?;
         match fs::DirBuilder::new().mode(0o700).create(&dir) {
@@ -98,7 +111,11 @@ impl Store {
             Err(e) => return Err(e.into()),
         }
         let meta = dir.symlink_metadata()?;
-        ensure!(meta.is_dir() && meta.uid() == uid && meta.mode() & 0o077 == 0, "unsafe updater directory");
+        ensure!(
+            meta.is_dir() && meta.uid() == uid && meta.mode() & 0o077 == 0,
+            "{}",
+            ictl_l10n::tr!("更新器的目录不安全", "unsafe updater directory")
+        );
         Ok(Self { binary: binary.into(), receipt, dir, _lock: lock })
     }
 
@@ -135,7 +152,8 @@ impl Store {
         }
         fs::hard_link(source, &tmp)?;
         fs::rename(&tmp, dest)?;
-        File::open(dest.parent().context("missing destination directory")?)?.sync_all()?;
+        File::open(dest.parent().context(ictl_l10n::tr!("目标目录不存在", "missing destination directory"))?)?
+            .sync_all()?;
         File::open(&self.dir)?.sync_all()?;
         Ok(())
     }
@@ -180,7 +198,7 @@ fn process_path(pid: u32) -> Result<PathBuf> {
     use std::os::unix::ffi::OsStrExt;
     let mut buf = [0u8; libc::PROC_PIDPATHINFO_MAXSIZE as usize];
     let n = unsafe { libc::proc_pidpath(pid as i32, buf.as_mut_ptr().cast(), buf.len() as u32) };
-    ensure!(n > 0, "cannot identify daemon process");
+    ensure!(n > 0, "{}", ictl_l10n::tr!("认不出守护进程是哪个程序", "cannot identify daemon process"));
     Ok(PathBuf::from(std::ffi::OsStr::from_bytes(&buf[..n as usize])))
 }
 
@@ -193,21 +211,32 @@ fn check_clients(daemon: Option<u32>) -> Result<()> {
     // Older binaries don't take a shared lease. Refuse an existing client (also an installation
     // using a different socket) before restarting the service.
     let output = std::process::Command::new("ps").args(["-A", "-o", "uid=,pid=,comm="]).env("LC_ALL", "C").output()?;
-    ensure!(output.status.success(), "cannot enumerate running clients");
+    ensure!(
+        output.status.success(),
+        "{}",
+        ictl_l10n::tr!("列不出正在运行的客户端", "cannot enumerate running clients")
+    );
     let uid = unsafe { libc::geteuid() };
     for line in std::str::from_utf8(&output.stdout)?.lines() {
         let mut parts = line.split_whitespace();
         if parts.next().and_then(|s| s.parse::<u32>().ok()) != Some(uid) {
             continue;
         }
-        let pid = parts.next().and_then(|s| s.parse::<u32>().ok()).context("invalid process list")?;
+        let pid = parts
+            .next()
+            .and_then(|s| s.parse::<u32>().ok())
+            .context(ictl_l10n::tr!("进程列表读不懂", "invalid process list"))?;
         if daemon == Some(pid) || pid == std::process::id() {
             continue;
         }
         let command = parts.collect::<Vec<_>>().join(" ");
         ensure!(
             !Path::new(&command).file_name().is_some_and(|s| s == "iphone-control"),
-            "busy: another iphone-control process ({pid}) is running"
+            "{}",
+            ictl_l10n::trf!(
+                "正忙：另一个 iphone-control 进程（{pid}）在运行",
+                "busy: another iphone-control process ({pid}) is running"
+            )
         );
     }
     Ok(())
@@ -228,8 +257,16 @@ impl Host<'_> {
         match tokio::net::UnixStream::connect(self.socket).await {
             Ok(s) => {
                 let cred = s.peer_cred()?;
-                ensure!(cred.uid() == unsafe { libc::geteuid() }, "unexpected daemon socket owner");
-                Ok(Some(cred.pid().context("unknown daemon socket PID")?.try_into()?))
+                ensure!(
+                    cred.uid() == unsafe { libc::geteuid() },
+                    "{}",
+                    ictl_l10n::tr!("控制接口的所有者不对", "unexpected daemon socket owner")
+                );
+                Ok(Some(
+                    cred.pid()
+                        .context(ictl_l10n::tr!("不知道控制接口是哪个进程在服务", "unknown daemon socket PID"))?
+                        .try_into()?,
+                ))
             }
             Err(e) if matches!(e.kind(), io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused) => Ok(None),
             Err(e) => Err(e.into()),
@@ -249,8 +286,10 @@ impl Services for Host<'_> {
         Ok(ictl_daemon::maintenance::mark_pending(journal)?)
     }
     fn exclusive(&self) -> Result<File> {
-        ictl_daemon::maintenance::exclusive()
-            .context("busy; retry in a minute (the automatic job tries again next hour)")
+        ictl_daemon::maintenance::exclusive().context(ictl_l10n::tr!(
+            "正忙，一分钟后再试（自动更新下个小时会再试）",
+            "busy; retry in a minute (the automatic job tries again next hour)"
+        ))
     }
 
     async fn idle(&self, current: &Receipt) -> Result<bool> {
@@ -260,19 +299,32 @@ impl Services for Host<'_> {
         if let Some(pid) = pid {
             ensure!(
                 self.socket_owner().await? == Some(pid) && self.healthy(pid, &current.version).await,
-                "busy: service and socket identity do not match"
+                "{}",
+                ictl_l10n::tr!("正忙：后台服务和控制接口对不上", "busy: service and socket identity do not match")
             );
         } else {
-            ensure!(self.socket_owner().await?.is_none(), "busy: a foreground daemon is running");
+            ensure!(
+                self.socket_owner().await?.is_none(),
+                "{}",
+                ictl_l10n::tr!("正忙：有一个在前台运行的守护进程", "busy: a foreground daemon is running")
+            );
         }
         Ok(pid.is_some())
     }
 
     async fn stop(&self) -> Result<()> {
         let pid = service::managed_pid(&self.service, true)?;
-        ensure!(pid.is_none_or(|p| self.owns_pid(p)), "service PID belongs to another executable");
+        ensure!(
+            pid.is_none_or(|p| self.owns_pid(p)),
+            "{}",
+            ictl_l10n::tr!("后台服务的进程是另一个程序", "service PID belongs to another executable")
+        );
         if let Some(peer) = self.socket_owner().await? {
-            ensure!(Some(peer) == pid, "busy: socket is served by a different process");
+            ensure!(
+                Some(peer) == pid,
+                "{}",
+                ictl_l10n::tr!("正忙：控制接口由另一个进程服务", "busy: socket is served by a different process")
+            );
         }
         service::stop(&self.service)?;
         let end = tokio::time::Instant::now() + Duration::from_secs(45);
@@ -284,7 +336,11 @@ impl Services for Host<'_> {
             {
                 return Ok(());
             }
-            ensure!(tokio::time::Instant::now() < end, "timed out waiting for daemon exit");
+            ensure!(
+                tokio::time::Instant::now() < end,
+                "{}",
+                ictl_l10n::tr!("等守护进程退出超时", "timed out waiting for daemon exit")
+            );
             tokio::time::sleep(Duration::from_millis(200)).await;
         }
     }
@@ -307,16 +363,26 @@ impl Services for Host<'_> {
                 tokio::time::sleep(Duration::from_millis(500)).await;
             }
         };
-        tokio::time::timeout(Duration::from_secs(60), poll).await.context("daemon health check timed out")?;
+        tokio::time::timeout(Duration::from_secs(60), poll)
+            .await
+            .context(ictl_l10n::tr!("守护进程健康检查超时", "daemon health check timed out"))?;
         Ok(())
     }
 }
 
 async fn restore(store: &Store, host: &impl Services, tx: &Transaction, why: &str) -> Result<()> {
     let current = digest(&store.binary)?;
-    ensure!(current == tx.old.sha256 || current == tx.new.sha256, "installed digest unknown; recovery stopped");
+    ensure!(
+        current == tx.old.sha256 || current == tx.new.sha256,
+        "{}",
+        ictl_l10n::tr!("不知道已安装程序的摘要，恢复已停止", "installed digest unknown; recovery stopped")
+    );
     let backup = store.dir.join("recovery");
-    ensure!(digest(&backup)? == tx.old.sha256, "recovery executable digest mismatch");
+    ensure!(
+        digest(&backup)? == tx.old.sha256,
+        "{}",
+        ictl_l10n::tr!("用来恢复的程序摘要对不上", "recovery executable digest mismatch")
+    );
     host.stop().await?;
     if current != tx.old.sha256 {
         store.link(&backup, &store.binary)?;
@@ -340,7 +406,7 @@ async fn replace(
     let activity = async {
         let lease = host.exclusive()?;
         let running = host.idle(&old).await?;
-        ensure!(running || !auto, "busy: managed service is stopped");
+        ensure!(running || !auto, "{}", ictl_l10n::tr!("正忙：后台服务已停止", "busy: managed service is stopped"));
         Ok::<_, anyhow::Error>((lease, running))
     }
     .await;
@@ -353,10 +419,18 @@ async fn replace(
         }
     };
     if auto {
-        ensure!(matches!(super::cached()?.policy, super::Policy::AutoPatch), "automatic installation was disabled");
+        ensure!(
+            matches!(super::cached()?.policy, super::Policy::AutoPatch),
+            "{}",
+            ictl_l10n::tr!("自动安装已关闭", "automatic installation was disabled")
+        );
     }
     validate_receipt(&old, &store.binary)?;
-    ensure!(digest(candidate)? == new.sha256, "staged executable changed");
+    ensure!(
+        digest(candidate)? == new.sha256,
+        "{}",
+        ictl_l10n::tr!("准备安装的程序被改动过", "staged executable changed")
+    );
     eprintln!(
         "{} → {} ({}; {})",
         old.version,
@@ -385,7 +459,10 @@ async fn replace(
     .await;
     if let Err(e) = swap {
         restore_or_report(store, host, &tx, &format!("{e:#}")).await?;
-        bail!("update failed; restored {}: {e:#}", tx.old.version);
+        bail!(
+            "{}",
+            ictl_l10n::trf!("升级失败，已恢复到 {}：{e:#}", "update failed; restored {}: {e:#}", tx.old.version)
+        );
     }
     tx.phase = Phase::Confirmed;
     write_json(&store.journal(), &tx)?;
@@ -408,17 +485,26 @@ async fn restore_or_report(store: &Store, host: &impl Services, tx: &Transaction
 pub(super) fn eligible(old: &str, new: &str, automatic: bool) -> Result<()> {
     let old = Version::parse(old)?;
     let new = Version::parse(new)?;
-    ensure!(old.pre.is_empty() && new.pre.is_empty() && new.cmp_precedence(&old).is_gt(), "no newer stable release");
+    ensure!(
+        old.pre.is_empty() && new.pre.is_empty() && new.cmp_precedence(&old).is_gt(),
+        "{}",
+        ictl_l10n::tr!("没有更新的正式版", "no newer stable release")
+    );
     ensure!(
         !automatic || (old.major == new.major && old.minor == new.minor && old.patch < new.patch),
-        "only patch releases can be installed automatically"
+        "{}",
+        ictl_l10n::tr!("只有补丁版本能自动安装", "only patch releases can be installed automatically")
     );
     Ok(())
 }
 
 fn managed(receipt: &Receipt) -> Result<(Store, Service)> {
     validate_receipt(receipt, &std::env::current_exe()?)?;
-    ensure!(receipt.version == env!("CARGO_PKG_VERSION"), "running updater version differs from installed version");
+    ensure!(
+        receipt.version == env!("CARGO_PKG_VERSION"),
+        "{}",
+        ictl_l10n::tr!("正在运行的更新器和已安装的版本不同", "running updater version differs from installed version")
+    );
     let store = Store::open(&receipt.binary_path, receipt_path())?;
     let reread = read_receipt()?;
     ensure!(
@@ -426,10 +512,18 @@ fn managed(receipt: &Receipt) -> Result<(Store, Service)> {
             && reread.sha256 == receipt.sha256
             && reread.version == receipt.version
             && reread.pinned == receipt.pinned,
-        "installation changed; retry"
+        "{}",
+        ictl_l10n::tr!("安装在这期间变了，请重试", "installation changed; retry")
     );
     validate_receipt(receipt, &store.binary)?;
-    ensure!(!store.journal().try_exists()?, "interrupted update; run iphone-control update recover");
+    ensure!(
+        !store.journal().try_exists()?,
+        "{}",
+        ictl_l10n::tr!(
+            "上次升级中断了，运行 iphone-control update recover",
+            "interrupted update; run iphone-control update recover"
+        )
+    );
     let svc = service::managed(&store.binary, &receipt.service)?;
     Ok((store, svc))
 }
@@ -437,10 +531,19 @@ fn managed(receipt: &Receipt) -> Result<(Store, Service)> {
 pub async fn apply(socket: &Path, background: bool, report: super::Report) -> Result<()> {
     let receipt = read_receipt()?;
     let (store, service) = managed(&receipt)?;
-    ensure!(!receipt.pinned, "this installation is pinned; unpin it locally first");
-    ensure!(report.error_code.is_none(), "release check failed: {:?}", report.error_code);
+    ensure!(
+        !receipt.pinned,
+        "{}",
+        ictl_l10n::tr!("这个安装固定了版本，先在本机解除固定", "this installation is pinned; unpin it locally first")
+    );
+    ensure!(
+        report.error_code.is_none(),
+        "{}",
+        ictl_l10n::trf!("检查新版本失败：{:?}", "release check failed: {:?}", report.error_code)
+    );
     ensure!(matches!(report.availability, super::Availability::Available), "{}", report.guidance);
-    let version = report.available_version.context("no stable release is available")?;
+    let version =
+        report.available_version.context(ictl_l10n::tr!("没有可用的正式版", "no stable release is available"))?;
     eligible(&receipt.version, &version, background)?;
     let host = Host { service, socket, binary: &store.binary };
     // the control page's service is an always-running client: it would keep the update busy forever, so it stops
@@ -448,11 +551,19 @@ pub async fn apply(socket: &Path, background: bool, report: super::Report) -> Re
     let paused = pause_viewer(socket).await?;
     let result = async {
         if background {
-            ensure!(matches!(report.policy, super::Policy::AutoPatch), "automatic installation is disabled");
+            ensure!(
+                matches!(report.policy, super::Policy::AutoPatch),
+                "{}",
+                ictl_l10n::tr!("自动安装已关闭", "automatic installation is disabled")
+            );
             let suppressed = outcome(&store.binary)?.and_then(|o| o.suppressed_version);
             ensure!(
                 suppressed.as_ref() != Some(&version),
-                "automatic retry suppressed for {version}; run iphone-control update to retry"
+                "{}",
+                ictl_l10n::trf!(
+                    "{version} 不再自动重试；要重试，运行 iphone-control update",
+                    "automatic retry suppressed for {version}; run iphone-control update to retry"
+                )
             );
             // An always-open client may stay busy for days. The lease here is deliberately
             // short-lived; replacement reacquires it and rechecks identity after download.
@@ -492,7 +603,7 @@ async fn pause_viewer(socket: &Path) -> Result<Option<Service>> {
     if crate::service::viewer_find().is_some_and(|s| crate::service::running(&s))
         && ictl_daemon::protocol::task_list(socket).await.is_ok_and(|l| l.iter().any(|t| t.active()))
     {
-        anyhow::bail!("busy: an AI task is running");
+        anyhow::bail!("{}", ictl_l10n::tr!("正忙：有 AI 任务在进行", "busy: an AI task is running"));
     }
     service::pause_viewer()
 }
@@ -524,7 +635,14 @@ async fn resume(store: &Store, host: &impl Services, tx: &Transaction) -> Result
     host.mark_pending(&store.journal())?;
     let current = digest(&store.binary)?;
     if matches!(tx.phase, Phase::Confirmed) {
-        ensure!(current == tx.new.sha256, "confirmed executable changed; preserving transaction");
+        ensure!(
+            current == tx.new.sha256,
+            "{}",
+            ictl_l10n::tr!(
+                "已确认的程序被改动过，保留这次升级的记录",
+                "confirmed executable changed; preserving transaction"
+            )
+        );
         store.finish(tx)
     } else {
         restore_or_report(store, host, tx, "interrupted installation").await
@@ -538,19 +656,27 @@ pub async fn recover(socket: &Path, scheduled: bool) -> Result<()> {
     if scheduled
         && outcome(&store.binary)?.is_some_and(|o| o.status == "recovery_failed" && o.target_version == tx.new.version)
     {
-        bail!("automatic recovery paused; resolve the recorded error and run update recover");
+        bail!(
+            "{}",
+            ictl_l10n::tr!(
+                "自动恢复已暂停：先处理记下的错误，再运行 iphone-control update recover",
+                "automatic recovery paused; resolve the recorded error and run update recover"
+            )
+        );
     }
     ensure!(
         same_install(&receipt, &tx.old)
             && same_install(&receipt, &tx.new)
             && (receipt.sha256 == tx.old.sha256 || receipt.sha256 == tx.new.sha256),
-        "journal and receipt do not match"
+        "{}",
+        ictl_l10n::tr!("升级记录和安装记录对不上", "journal and receipt do not match")
     );
     let caller = std::env::current_exe()?.canonicalize()?;
     let backup = store.dir.join("recovery");
     ensure!(
         caller == store.binary || (caller == backup && digest(&backup)? == tx.old.sha256),
-        "invalid recovery entry point"
+        "{}",
+        ictl_l10n::tr!("恢复的入口不对", "invalid recovery entry point")
     );
     let service = service::managed(&store.binary, &receipt.service)?;
     let paused = pause_viewer(socket).await?;

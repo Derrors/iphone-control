@@ -236,7 +236,7 @@ impl Persisted {
         before != (self.detached_wdas.len(), self.detached_wda.is_some())
     }
 
-    /// 记下这次重签的结果：新字段，加上旧版本认的中文整句
+    /// 记下这次重签的结果：新字段，加上旧版本认的中文整句（这句照旧用 UTC，和旧版本写的一样）
     pub fn record_resign(&mut self, at: u64, error: Option<String>) {
         let when = crate::eventlog::format_utc(at);
         self.last_resign = Some(match &error {
@@ -249,7 +249,7 @@ impl Persisted {
     /// 上次重签的结果，按当前语言；只有旧格式时原样给出
     pub fn last_resign_text(&self) -> Option<String> {
         let Some(r) = &self.resign_result else { return self.last_resign.clone() };
-        let when = crate::eventlog::format_utc(r.at);
+        let when = crate::eventlog::format_local(r.at);
         Some(match &r.error {
             None => ictl_l10n::trf!("{when} 成功", "{when} succeeded"),
             Some(e) => ictl_l10n::trf!("{when} 失败：{e}", "{when} failed: {e}"),
@@ -1718,11 +1718,17 @@ pub(crate) mod tests {
         use ictl_l10n::{Lang, with_lang};
         let mut p = Persisted::default();
         p.record_resign(1_800_000_000, None);
-        assert_eq!(p.last_resign.as_deref(), Some("2027-01-15 08:00:00 成功"));
-        assert_eq!(with_lang(Lang::En, || p.last_resign_text()).as_deref(), Some("2027-01-15 08:00:00 succeeded"));
-        assert_eq!(with_lang(Lang::Zh, || p.last_resign_text()).as_deref(), Some("2027-01-15 08:00:00 成功"));
+        assert_eq!(
+            p.last_resign.as_deref(),
+            Some("2027-01-15 08:00:00 成功"),
+            "for old versions: UTC, as they wrote it"
+        );
+        // shown in local time with its offset (this machine's zone, whatever it is)
+        let when = crate::eventlog::format_local(1_800_000_000);
+        assert_eq!(with_lang(Lang::En, || p.last_resign_text()), Some(format!("{when} succeeded")));
+        assert_eq!(with_lang(Lang::Zh, || p.last_resign_text()), Some(format!("{when} 成功")));
         p.record_resign(1_800_000_000, Some("boom".into()));
-        assert_eq!(with_lang(Lang::En, || p.last_resign_text()).as_deref(), Some("2027-01-15 08:00:00 failed: boom"));
+        assert_eq!(with_lang(Lang::En, || p.last_resign_text()), Some(format!("{when} failed: boom")));
 
         // 旧版本写的：只有中文整句，原样显示
         let old: Persisted = serde_json::from_str(r#"{"last_resign":"2026-11-07 01:11:54 成功"}"#).unwrap();

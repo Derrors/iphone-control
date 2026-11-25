@@ -20,7 +20,13 @@ pub fn set_policy(socket: &Path, policy: update::Policy) -> Result<()> {
     if let Err(e) = configure_job(socket, policy) {
         // A partial timer install must not later run with unintended permission to replace files.
         update::set_policy(update::Policy::Manual)?;
-        bail!("Update policy is manual; could not configure the user job: {e:#}")
+        bail!(
+            "{}",
+            ictl_l10n::trf!(
+                "更新策略已改为手动：配置不了自动更新任务：{e:#}",
+                "Update policy is manual; could not configure the user job: {e:#}"
+            )
+        )
     }
     println!(
         "{}: {}",
@@ -44,7 +50,8 @@ fn configuration_locks() -> Result<(File, File)> {
         .custom_flags(libc::O_NOFOLLOW)
         .open(config.join("update-schedule.lock"))?;
     if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX) } != 0 {
-        return Err(std::io::Error::last_os_error()).context("could not lock the update schedule");
+        return Err(std::io::Error::last_os_error())
+            .context(ictl_l10n::tr!("锁不住自动更新的设置", "could not lock the update schedule"));
     }
     Ok((lock, ictl_daemon::maintenance::shared()?))
 }
@@ -55,7 +62,7 @@ pub fn configure(socket: &Path) -> Result<()> {
 }
 
 fn write_file(path: &Path, bytes: &[u8]) -> Result<()> {
-    fs::create_dir_all(path.parent().context("invalid job path")?)?;
+    fs::create_dir_all(path.parent().context(ictl_l10n::tr!("自动更新任务的路径不对", "invalid job path"))?)?;
     crate::update::write_atomic(path, bytes)
 }
 
@@ -71,15 +78,19 @@ fn run(program: &str, args: &[&str]) -> Result<()> {
 }
 
 fn path_str(path: &Path) -> Result<&str> {
-    let s = path.to_str().context("non UTF-8 update job path")?;
-    ensure!(path.is_absolute() && !s.contains(['\r', '\n']), "expected an absolute update job path");
+    let s = path.to_str().context(ictl_l10n::tr!("自动更新任务的路径不是 UTF-8", "non UTF-8 update job path"))?;
+    ensure!(
+        path.is_absolute() && !s.contains(['\r', '\n']),
+        "{}",
+        ictl_l10n::tr!("自动更新任务的路径要是绝对路径", "expected an absolute update job path")
+    );
     Ok(s)
 }
 
 fn launcher(exe: &Path, socket: &Path, config: &Path) -> Result<String> {
     let exe = shell_quote(path_str(exe)?);
     let sock = shell_quote(path_str(socket)?);
-    let xdg = shell_quote(path_str(config.parent().context("missing config home")?)?);
+    let xdg = shell_quote(path_str(config.parent().context(ictl_l10n::tr!("找不到配置目录", "missing config home"))?)?);
     // launchd and the interactive shell often have different XDG environments. The timer
     // must see the same release cache as Viewer, including a custom cache location.
     let mut xdg_env = String::new();
@@ -111,7 +122,7 @@ fn configure_job(socket: &Path, policy: update::Policy) -> Result<()> {
     let jobs = if mac {
         envfile::home().join("Library/LaunchAgents")
     } else {
-        config.parent().context("missing config home")?.join("systemd/user")
+        config.parent().context(ictl_l10n::tr!("找不到配置目录", "missing config home"))?.join("systemd/user")
     };
     let job = jobs.join(if mac { format!("{LABEL}.plist") } else { UNIT.into() });
     let timer = jobs.join(TIMER);
@@ -121,15 +132,24 @@ fn configure_job(socket: &Path, policy: update::Policy) -> Result<()> {
     if launcher_file.try_exists()? {
         ensure!(
             fs::read_to_string(&launcher_file)?.lines().nth(2) == Some(owner.as_str()),
-            "the updater job belongs to a different executable"
+            "{}",
+            ictl_l10n::tr!("自动更新任务属于另一个程序", "the updater job belongs to a different executable")
         );
     } else {
-        ensure!(!job.try_exists()? && (mac || !timer.try_exists()?), "an unrecognized update job already exists");
+        ensure!(
+            !job.try_exists()? && (mac || !timer.try_exists()?),
+            "{}",
+            ictl_l10n::tr!("已经有一个认不出来的自动更新任务", "an unrecognized update job already exists")
+        );
         if !enabled {
             return Ok(());
         }
     }
-    ensure!(!ictl_daemon::protocol::running_as_root(), "only user update jobs are supported");
+    ensure!(
+        !ictl_daemon::protocol::running_as_root(),
+        "{}",
+        ictl_l10n::tr!("只支持用户级的自动更新任务", "only user update jobs are supported")
+    );
     if enabled {
         write_file(&launcher_file, launcher(&service::stable_exe()?, socket, &config)?.as_bytes())?;
     }
@@ -140,7 +160,11 @@ fn configure_job(socket: &Path, policy: update::Policy) -> Result<()> {
         let loaded = if loaded.status.success() {
             let listing = std::str::from_utf8(&loaded.stdout)?;
             let path = listing.lines().find_map(|line| line.strip_prefix('\t')?.strip_prefix("path = "));
-            ensure!(path.map(Path::new) == Some(&job), "launchd loaded a different updater plist");
+            ensure!(
+                path.map(Path::new) == Some(&job),
+                "{}",
+                ictl_l10n::tr!("launchd 载入的是另一个自动更新 plist", "launchd loaded a different updater plist")
+            );
             true
         } else {
             false

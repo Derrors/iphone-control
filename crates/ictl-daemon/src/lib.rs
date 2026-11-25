@@ -106,6 +106,12 @@ async fn single_instance(socket: &std::path::Path, wait: std::time::Duration) ->
         if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
             return Ok(file);
         }
+        // held by another daemon (or interrupted): wait for it below. Anything else (a file system without flock)
+        // won't change by waiting, and isn't another daemon
+        let e = std::io::Error::last_os_error();
+        if !matches!(e.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted) {
+            return Err(anyhow::Error::new(e).context(path.display().to_string()));
+        }
         let running =
             || ictl_l10n::trf!("已经有守护进程在运行（{}）", "A daemon is already running ({})", socket.display());
         if tokio::net::UnixStream::connect(socket).await.is_ok() || Instant::now() >= deadline {

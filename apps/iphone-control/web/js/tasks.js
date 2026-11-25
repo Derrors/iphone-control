@@ -111,6 +111,8 @@ async function runDemo(task) {
 }
 function finish(task, status, summary) {
   task.status = status; task.endedAt = Date.now(); task.summary = summary; task.es?.close();
+  // a step still open when the task ends was cut off (an older daemon doesn't close them all before done)
+  task.steps.forEach(st => { if (st.status === 'running' || st.status === 'waiting') st.status = 'stopped'; });
   S.expanded.delete(task.id);  // 完成后步骤自动收起，用户可以手动展开
   renderAll(); scrollConvo();
   show(status === 'success' ? tr('AI 任务已完成') : status === 'failed' ? tr('AI 任务没有完成') : tr('AI 任务已停止'), status === 'failed' ? 'err' : null);
@@ -288,6 +290,7 @@ function control(action) {
 function pendingConfirm(t) { return t.steps.find(x => x.status === 'waiting' && x.confirm); }
 function answerConfirm(approve) {
   const t = activeTask(); if (!t || !(t.status === 'waiting' || (t.status === 'takeover' && pendingConfirm(t)))) return;
+  const held = t.status === 'takeover';
   if (t.source === 'live') {
     const s = t.steps.find(x => x.status === 'waiting');
     liveControl(t, 'confirm', { step: s?.id, approve });
@@ -295,7 +298,7 @@ function answerConfirm(approve) {
     if (t.status === 'waiting') t.status = 'running';
     renderAll();
   } else t.confirmResolve?.(approve);
-  show(approve ? tr('已批准，AI 继续执行') : tr('已拒绝这一步'));
+  show(!approve ? tr('已拒绝这一步') : held ? tr('已批准，交还 AI 后继续执行') : tr('已批准，AI 继续执行'));
 }
 function stopTask() {
   const t = activeTask(); if (!t) return;

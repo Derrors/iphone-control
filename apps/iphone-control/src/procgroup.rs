@@ -47,16 +47,21 @@ pub fn any_left(pid: u32) -> bool {
 /// [`stop`] for several groups, waiting for them here instead of in a task (the program is about to exit, which a
 /// task wouldn't outlive): SIGTERM to each, then SIGKILL to those still there after [`GRACE`]
 pub async fn stop_and_wait(leaders: &[u32]) {
-    let groups: Vec<libc::pid_t> =
+    let mut groups: Vec<libc::pid_t> =
         leaders.iter().filter_map(|&p| libc::pid_t::try_from(p).ok()).filter(|&g| g > 1).collect();
     for &g in &groups {
         unsafe { libc::kill(-g, libc::SIGTERM) };
     }
     let deadline = tokio::time::Instant::now() + GRACE;
-    while groups.iter().any(|&g| alive(g)) && tokio::time::Instant::now() < deadline {
+    loop {
+        // a group seen gone is dropped at once: its number may go to another group while the others still have time
+        groups.retain(|&g| alive(g));
+        if groups.is_empty() || tokio::time::Instant::now() >= deadline {
+            break;
+        }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
-    for &g in groups.iter().filter(|&&g| alive(g)) {
+    for &g in &groups {
         unsafe { libc::kill(-g, libc::SIGKILL) };
     }
 }

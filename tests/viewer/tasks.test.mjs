@@ -130,6 +130,7 @@ test('a step waiting for the user can be answered after taking over', () => {
   assert.equal(JSON.stringify(sent.at(-1)), JSON.stringify(['confirm', { step: 3, approve: true }]));
   assert.equal(step.status, 'running');
   assert.equal(t.status, 'takeover', 'answered, but still the user\'s until handed back');
+  assert.equal(shown.at(-1), '已批准，交还 AI 后继续执行', 'says it goes on only once handed back');
   control('handback');
   assert.equal(t.status, 'running');
 });
@@ -161,6 +162,35 @@ test('a step mark is drawn once however often the stream replays it', () => {
   made[1].emit('step', tap);
   made[1].emit('step', { ...tap, id: 2 });
   assert.equal(marks.length, 2, 'step 1 once, step 2 once');
+});
+
+// The steps saved before a reload keep their gestures, so the replayed stream doesn't draw them again
+test('a mark drawn before a reload is not drawn again after it', () => {
+  const { made, FakeES } = streams();
+  const marks = [];
+  const S = { tasks: [{ id: 't1', status: 'running', remoteId: 'abc', steps: [] }] };
+  const context = { S, MAX_TASKS: 50, ACTIVE, EventSource: FakeES, tr: String, show: noop, renderAll: noop, renderTurns: noop, scrollConvo: noop,
+    refreshStatusSoon: noop, drawMark: (...a) => marks.push(a), finish: noop, streamClosed: noop };
+  const { follow, serializeTasks } = handlers(['upsertStep', 'follow', 'serializeTasks'], context);
+  const tap = { id: 1, tool: 'iphone_tap', status: 'ok', gesture: { kind: 'tap', x: 1, y: 2 } };
+  follow(S.tasks[0], 'abc');
+  made[0].emit('step', tap);
+  assert.equal(marks.length, 1);
+  const [saved] = JSON.parse(serializeTasks(false));   // the page reloads
+  follow(saved, 'abc');
+  made[1].emit('step', tap);
+  assert.equal(marks.length, 1, 'known before the reload');
+  made[1].emit('step', { ...tap, id: 2 });
+  assert.equal(marks.length, 2, 'a new one is drawn');
+});
+
+// A task that ends leaves no step spinning: an older daemon sends done with a step still open
+test('steps still open when a task ends are stopped', () => {
+  const task = { id: 't1', status: 'running', steps: [{ id: 1, status: 'ok' }, { id: 2, status: 'running' }, { id: 3, status: 'waiting' }] };
+  const context = { S: { expanded: new Set() }, tr: String, show: noop, renderAll: noop, scrollConvo: noop };
+  const { finish } = handlers(['finish'], context);
+  finish(task, 'stopped', '');
+  assert.deepEqual(task.steps.map(s => s.status), ['ok', 'stopped', 'stopped']);
 });
 
 test('an unknown task state is shown as it is and does not replace a known one', () => {

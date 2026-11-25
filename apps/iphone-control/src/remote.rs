@@ -333,6 +333,9 @@ mod tests {
                 }
             }
         });
+        // as `Remote::new` does: a client built without a crypto provider panics, unless another test happened to
+        // install one first in this process
+        let _ = rustls::crypto::ring::default_provider().install_default();
         let client = reqwest::Client::builder().no_proxy().build().unwrap();
         let resp = client.get(format!("http://{addr}/")).send().await.unwrap();
         let mut events = Events::new(resp);

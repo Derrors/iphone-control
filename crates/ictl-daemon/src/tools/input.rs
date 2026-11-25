@@ -470,7 +470,15 @@ impl Daemon {
         if by_hid {
             Box::pin(self.native_long_press(g, x, y, seconds)).await?;
         }
-        Ok(ictl_l10n::trf!("已长按 ({},{}) {} 秒", "Long-pressed ({},{}) for {} s", fmt_g(x), fmt_g(y), fmt_g(seconds)))
+        let (px, py, s) = (fmt_g(x), fmt_g(y), fmt_g(seconds));
+        // said like the other gestures when HID stood in for WDA (natively it is the way, not a fallback)
+        if by_hid && !self.native(g) {
+            return Ok(ictl_l10n::trf!(
+                "已长按 ({px},{py}) {s} 秒(经 HID)",
+                "Long-pressed ({px},{py}) for {s} s (via HID)"
+            ));
+        }
+        Ok(ictl_l10n::trf!("已长按 ({px},{py}) {s} 秒", "Long-pressed ({px},{py}) for {s} s"))
     }
 
     pub(crate) async fn swipe(

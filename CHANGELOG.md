@@ -16,7 +16,7 @@ What changed in each release, one line per change. Versions follow [Semantic Ver
 
 ### Fixes
 
-- `iphone_press_button` that finds a system alert in the way says so in a way the MCP server reads, so it no longer checks for the alert a second time (#200).
+- When pressing Home finds a system alert in the way, the daemon's answer now also marks it in its structured result (`alert_reported`), as launching an app or opening a link does; programs reading the result rather than its text missed it (#200).
 - A long press falls back to HID like a tap when WebDriverAgent can't be reached (#200).
 - Requests that can't run (a tap count of 0, an empty tap sequence, an unknown button, a point that isn't a number) are refused at once, before waiting for the phone and without dropping the cached screen (#200).
 - The control page getting ready for a touch no longer counts as acting: it isn't refused while an AI task runs and doesn't make the agent look again after you take over (#200).

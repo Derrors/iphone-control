@@ -490,7 +490,6 @@ fn parse_listing(app_id: &str, arg: &Dictionary) -> Vec<Page> {
     pages
 }
 
-/// The result of command `id` in an inspector message, unwrapping `Target.dispatchMessageFromTarget`
 /// The answer to command `id` in `m`, if it is one; or the error of `outer`, the `Target.sendMessageToTarget` that
 /// carried it: when that is refused (the target went away), no answer to the command comes, and waiting for one ran
 /// to the timeout
@@ -504,6 +503,7 @@ fn answer_to(m: &serde_json::Value, id: u64, outer: Option<u64>) -> Option<Resul
     }
 }
 
+/// The result of command `id` in an inspector message, unwrapping `Target.dispatchMessageFromTarget`
 fn response_for(m: &serde_json::Value, id: u64) -> Option<Result<serde_json::Value>> {
     let inner;
     let m = if m["method"] == "Target.dispatchMessageFromTarget" {

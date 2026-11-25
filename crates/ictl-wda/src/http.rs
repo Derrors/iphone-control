@@ -157,8 +157,8 @@ pub(crate) async fn read_response<R: tokio::io::AsyncRead + Unpin>(
         if head.is_none() {
             head = parse_head(&buf);
             // no end of the head in its first 64 KB: it isn't coming (and looking again after every read would scan
-            // those 64 KB over and over up to the limit)
-            if head.is_none() && buf.len() > MAX_HEAD {
+            // those 64 KB over and over up to the limit). [`parse_head`] looks no further, so 64 KB read is enough
+            if head.is_none() && buf.len() >= MAX_HEAD {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
                     ictl_l10n::tr!("WDA 的响应头超过 64 KB", "WDA's response head is over 64 KB"),

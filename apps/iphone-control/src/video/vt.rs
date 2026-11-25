@@ -317,9 +317,8 @@ struct Sink {
     /// H.264: the `avcC` sent last, so a new one goes out before the frame that needs it. JPEG: unused
     avcc: Mutex<Vec<u8>>,
     h264: bool,
-    /// H.264 frames sent and not yet taken ([`Session::next`]); the encoding thread waits while there are
-    /// [`MAX_AHEAD`]. Counted as sent, not as given to the encoder: a frame the encoder drops sends nothing
-    queued: Option<Arc<std::sync::atomic::AtomicUsize>>,
+    /// The session counting H.264 frames sent and not yet taken ([`Shared::queued`]); none for a JPEG
+    queued: Option<Arc<Shared>>,
 }
 
 /// H.264 frames the encoding thread may have sent ahead of the caller: a caller that falls behind (a slow page) no
@@ -356,10 +355,14 @@ extern "C" fn on_encoded(refcon: *mut c_void, _frame: *mut c_void, status: OSSta
             let _ = sink.tx.send(Ok(Packet::Config(avcc)));
         }
     }
-    if sink.tx.send(Ok(Packet::Frame { key, data })).is_ok()
-        && let Some(q) = &sink.queued
+    // counted before it is sent: the caller may take it at once, and its count must not go below zero
+    if let Some(s) = &sink.queued {
+        s.queued.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
+    if sink.tx.send(Ok(Packet::Frame { key, data })).is_err()
+        && let Some(s) = &sink.queued
     {
-        q.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        s.queued.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
     }
 }
 
@@ -751,6 +754,9 @@ impl Drop for Decoder {
 struct Shared {
     state: Mutex<State>,
     wake: Condvar,
+    /// H.264 frames sent and not yet taken ([`Session::next`]); the encoding thread waits while there are
+    /// [`MAX_AHEAD`]. Counted as sent, not as given to the encoder: a frame the encoder drops sends nothing
+    queued: std::sync::atomic::AtomicUsize,
 }
 
 #[derive(Default)]
@@ -769,8 +775,6 @@ struct State {
 pub struct Session {
     shared: Arc<Shared>,
     out: mpsc::UnboundedReceiver<Result<Packet, String>>,
-    /// [`Sink::queued`]
-    queued: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 impl Drop for Session {
@@ -792,12 +796,15 @@ impl Session {
     /// Starts the thread; `kicks`: copies after each frame (0 unless measured otherwise). `info` is told once the
     /// encoder is set up
     pub fn start(w: u32, h: u32, qp: u8, kicks: usize, info: Option<tokio::sync::oneshot::Sender<Info>>) -> Self {
-        let shared = Arc::new(Shared { state: Mutex::default(), wake: Condvar::new() });
+        let shared = Arc::new(Shared {
+            state: Mutex::default(),
+            wake: Condvar::new(),
+            queued: std::sync::atomic::AtomicUsize::new(0),
+        });
         let (tx, out) = mpsc::unbounded_channel();
-        let queued = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let (sh, q) = (shared.clone(), queued.clone());
+        let sh = shared.clone();
         let spawned = std::thread::Builder::new().name("ictl-videotoolbox".into()).spawn(move || {
-            if let Err(e) = run(&sh, w, h, qp, kicks, tx.clone(), q, info) {
+            if let Err(e) = run(&sh, w, h, qp, kicks, tx.clone(), info) {
                 note(&sh, &e);
                 let _ = tx.send(Err(e));
             }
@@ -805,7 +812,7 @@ impl Session {
         if let Err(e) = spawned {
             note(&shared, &e.to_string());
         }
-        Self { shared, out, queued }
+        Self { shared, out }
     }
 
     pub fn push(&self, jpeg: Arc<Vec<u8>>) {
@@ -817,11 +824,8 @@ impl Session {
     pub async fn next(&mut self) -> Option<Result<Packet, String>> {
         let p = self.out.recv().await;
         if let Some(Ok(Packet::Frame { .. })) = &p {
-            let _ = self.queued.fetch_update(
-                std::sync::atomic::Ordering::SeqCst,
-                std::sync::atomic::Ordering::SeqCst,
-                |n| n.checked_sub(1),
-            );
+            // counted before it was sent ([`on_encoded`]): at least one
+            self.shared.queued.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
             // under the lock: the thread checks the count with it held, so this wake-up can't come in between
             let _held = self.shared.state.lock().unwrap_or_else(|p| p.into_inner());
             self.shared.wake.notify_all();
@@ -852,17 +856,16 @@ fn note(sh: &Shared, e: &str) {
 }
 
 fn run(
-    sh: &Shared,
+    sh: &Arc<Shared>,
     w: u32,
     h: u32,
     qp: u8,
     kicks: usize,
     tx: mpsc::UnboundedSender<Result<Packet, String>>,
-    queued: Arc<std::sync::atomic::AtomicUsize>,
     info: Option<tokio::sync::oneshot::Sender<Info>>,
 ) -> Result<(), String> {
     let (ew, eh) = even((w, h));
-    let sink = Sink { tx, avcc: Mutex::default(), h264: true, queued: Some(queued.clone()) };
+    let sink = Sink { tx, avcc: Mutex::default(), h264: true, queued: Some(sh.clone()) };
     let (mut enc, pinned_qp) = h264(ew, eh, qp, sink)?;
     let mut dec = Decoder::new(w, h)?;
     if let Some(i) = info {
@@ -876,7 +879,7 @@ fn run(
                     return Ok(());
                 }
                 // the caller is behind: wait for it (the frame waiting meanwhile is replaced by newer ones)
-                if queued.load(std::sync::atomic::Ordering::SeqCst) < MAX_AHEAD
+                if sh.queued.load(std::sync::atomic::Ordering::SeqCst) < MAX_AHEAD
                     && let Some(j) = s.next.take()
                 {
                     break j;

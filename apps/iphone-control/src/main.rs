@@ -68,6 +68,10 @@ enum Command {
         url: Option<String>,
         #[arg(long, value_name = "PEM", env = ictl_daemon::protocol::env::CA, help = ictl_l10n::tr!("--url 是本机生成的自签证书时，信任这张证书", "With --url and a self-signed certificate: trust it"))]
         ca: Option<PathBuf>,
+        /// The task's token, from this file instead of IPHONE_CONTROL_TASK_TOKEN: the control page starts its agent's
+        /// MCP server this way, so the token isn't on a command line every user can read
+        #[arg(long, value_name = "FILE", hide = true)]
+        task_token_file: Option<PathBuf>,
     },
     #[command(about = ictl_l10n::tr!("打印把 MCP 注册到 Claude Code 的命令", "Print the command that registers the MCP server with Claude Code"))]
     McpConfig,
@@ -347,9 +351,16 @@ async fn run() -> anyhow::Result<()> {
             cfg.socket = cli.socket;
             ictl_daemon::run(cfg).await
         }
-        Command::Mcp { url: Some(url), ca } => mcp_bridge::run(&url, ca.as_deref()).await,
-        Command::Mcp { url: None, .. } => {
-            ictl_mcp::serve_stdio(cli.socket, Some(ictl_daemon::maintenance::shared)).await
+        Command::Mcp { url: Some(url), ca, .. } => mcp_bridge::run(&url, ca.as_deref()).await,
+        Command::Mcp { url: None, task_token_file, .. } => {
+            let token = match task_token_file {
+                Some(f) => {
+                    let t = std::fs::read_to_string(&f).map_err(|e| anyhow::anyhow!("{}: {e}", f.display()))?;
+                    Some(t.trim().to_owned()).filter(|t| !t.is_empty())
+                }
+                None => None,
+            };
+            ictl_mcp::serve_stdio(cli.socket, Some(ictl_daemon::maintenance::shared), token).await
         }
         Command::McpConfig => {
             println!("{}", mcp_config(&cli.socket)?);

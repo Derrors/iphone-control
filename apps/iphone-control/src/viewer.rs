@@ -496,19 +496,16 @@ async fn serve(
             }
         }
         first = false;
-        let (head, mut body) = crate::read_head_from(c, std::mem::take(&mut carry)).await?;
-        drop(early.take());
+        let (head, body) = crate::read_head_from(c, std::mem::take(&mut carry)).await?;
         let Some(req) = Head::parse(&head) else {
             return reply(c, 400, "text/plain", b"bad request").await;
         };
         let keep = keepable(&req) && slots.is_none_or(|s| s.available_permits() >= KEEP_ROOM);
-        if keep {
-            // the whole body now, so the next request starts where it ends
-            carry = read_body(c, &mut body, req.content_length.unwrap_or(0)).await?;
-        }
         let lang = req.lang;
+        let next = &mut carry;
+        let early = &mut early;
         let run = KEEP_ALIVE.scope(std::cell::Cell::new(if keep { Keep::Allowed } else { Keep::No }), async {
-            handle(&mut slot, ctx, head, req, body).await?;
+            handle(&mut slot, ctx, head, req, body, early, next).await?;
             anyhow::Ok(KEEP_ALIVE.with(std::cell::Cell::get))
         });
         let kept = match lang {
@@ -548,10 +545,26 @@ fn keepable(req: &Head) -> bool {
     short && !req.close && !req.chunked && req.content_length.unwrap_or(0) <= MAX_BODY
 }
 
-async fn handle(slot: &mut Option<Conn>, ctx: &Ctx, head: Vec<u8>, req: Head, mut body: Vec<u8>) -> anyhow::Result<()> {
+/// One request. Until it has passed the login, its connection still counts against its machine's limit (`early`,
+/// [`ARRIVING_PER_PEER`]) and nothing of its body is read beyond what came with the head: someone without a token
+/// can't hold places with bodies that trickle in. A request that may keep its connection open reads its whole body
+/// once logged in, and leaves what follows in `next` (the start of the next request)
+async fn handle(
+    slot: &mut Option<Conn>,
+    ctx: &Ctx,
+    head: Vec<u8>,
+    req: Head,
+    mut body: Vec<u8>,
+    early: &mut Option<Early>,
+    next: &mut Vec<u8>,
+) -> anyhow::Result<()> {
     let Some(client) = slot.as_mut() else { return Ok(()) };
     if !ctx.access.host_allowed(&head) || (req.path != "/" && !fetch_site_ok(&req)) {
         return reply(client, 403, "text/plain", b"forbidden").await;
+    }
+    // a chunked body is read for `/mcp` only ([`read_chunked`]); elsewhere it would be taken for an empty one
+    if req.chunked && req.path != "/mcp" {
+        return reply(client, 411, "text/plain", b"length required").await;
     }
     // HTTPS is on: from the network only HTTPS (plain HTTP stays for this machine)
     let local = client.tcp().peer_addr().is_ok_and(|a| a.ip().to_canonical().is_loopback());
@@ -564,11 +577,18 @@ async fn handle(slot: &mut Option<Conn>, ctx: &Ctx, head: Vec<u8>, req: Head, mu
     let Some(pass) = login_gate(client, ctx, &head, &req, &mut body).await? else {
         return Ok(());
     };
-    let _ = KEEP_ALIVE.try_with(|k| {
-        if k.get() == Keep::Allowed {
+    drop(early.take());
+    let keep = KEEP_ALIVE.try_with(|k| {
+        let allowed = k.get() == Keep::Allowed;
+        if allowed {
             k.set(Keep::May);
         }
+        allowed
     });
+    if keep == Ok(true) {
+        // the whole body now, so the next request starts where it ends
+        *next = read_body(client, &mut body, req.content_length.unwrap_or(0)).await?;
+    }
     if !pass.may(&req) {
         let m = ictl_l10n::tr!(
             "这是只读令牌：只能看画面、设备状态和任务，不能操作",
@@ -1374,13 +1394,32 @@ struct Head {
 }
 
 impl Head {
+    /// `None` (answered 400) for what isn't a plain HTTP/1.x request: a target that isn't a path (it is put into the
+    /// HTTPS redirect's `Location`, [`https_location`]), control characters or a lone CR or LF anywhere (they would
+    /// end a header line we write), a second `Host` or `Content-Length`, or a body framed both ways (a request read
+    /// two ways is how requests are smuggled past proxies)
     fn parse(head: &[u8]) -> Option<Self> {
+        if !clean_head(head) {
+            return None;
+        }
         let text = std::str::from_utf8(head).ok()?;
         let mut lines = text.split("\r\n");
         let mut first = lines.next()?.split(' ');
         let method = first.next()?.to_owned();
         let target = first.next()?;
-        let close = first.next() == Some("HTTP/1.0");
+        let close = match first.next()? {
+            "HTTP/1.1" => false,
+            "HTTP/1.0" => true,
+            _ => return None,
+        };
+        if first.next().is_some()
+            || method.is_empty()
+            || !method.bytes().all(|b| b.is_ascii_uppercase())
+            || !target.starts_with('/')
+            || target.starts_with("//")
+        {
+            return None;
+        }
         let (path, query) = target.split_once('?').unwrap_or((target, ""));
         let (path, query) = (path.to_owned(), query.to_owned());
         let mut h = Self {
@@ -1398,12 +1437,17 @@ impl Head {
             chunked: false,
             transfer_chunked_only: false,
         };
+        let mut hosts = 0;
         for l in lines {
             let Some((k, v)) = l.split_once(':') else { continue };
             let v = v.trim();
             match k.trim().to_ascii_lowercase().as_str() {
+                "host" => hosts += 1,
                 "origin" => h.origin = Some(v.to_owned()),
                 "content-type" => h.content_type = Some(v.to_ascii_lowercase()),
+                // a second length is refused even when it is the same: proxies differ in which one they take
+                "content-length" if h.content_length.is_some() => return None,
+                "content-length" if v.is_empty() || !v.bytes().all(|b| b.is_ascii_digit()) => return None,
                 "content-length" => h.content_length = Some(v.parse().ok()?),
                 "sec-fetch-site" => h.fetch_site = Some(v.to_ascii_lowercase()),
                 "x-ictl-lang" => h.lang = ictl_l10n::parse(v),
@@ -1418,6 +1462,9 @@ impl Head {
                 _ => {}
             }
         }
+        if hosts > 1 || (h.chunked && h.content_length.is_some()) {
+            return None;
+        }
         Some(h)
     }
 
@@ -1428,6 +1475,21 @@ impl Head {
             (k == key).then(|| percent_decode(v))
         })
     }
+}
+
+/// A request head with nothing but printable text, tabs and CRLF line ends: no other control character, no CR or LF
+/// on its own
+fn clean_head(head: &[u8]) -> bool {
+    let mut i = 0;
+    while i < head.len() {
+        match head[i] {
+            b'\r' if head.get(i + 1) == Some(&b'\n') => i += 2,
+            b'\t' => i += 1,
+            b if b < 0x20 || b == 0x7f => return false,
+            _ => i += 1,
+        }
+    }
+    true
 }
 
 fn percent_decode(s: &str) -> String {
@@ -2012,6 +2074,58 @@ mod tests {
         assert_eq!(at(b"GET / HTTP/1.1\r\n\r\n"), None);
     }
 
+    /// The redirect's `Location` is built from the request target: only a path is a target, so it can't send a
+    /// browser to another host (`@evil.example/` would make `https://host:port@evil.example/`) nor add a header line
+    #[test]
+    fn only_a_plain_request_head_is_taken() {
+        let ok = |s: &str| Head::parse(s.as_bytes()).is_some();
+        assert!(ok("GET /stream?x=1 HTTP/1.1\r\nHost: a\r\n"));
+        assert!(ok("POST /api/tap HTTP/1.0\r\nHost: a\r\nContent-Length: 2\r\nX-Pad:\tx\r\n"));
+        for bad in [
+            "GET @evil.example/ HTTP/1.1\r\nHost: a\r\n",
+            "GET //evil.example/ HTTP/1.1\r\nHost: a\r\n",
+            "GET http://evil.example/ HTTP/1.1\r\nHost: a\r\n",
+            "GET /a\nLocation: x HTTP/1.1\r\nHost: a\r\n",
+            "GET /a HTTP/1.1\r\nHost: a\nSet-Cookie: x\r\n",
+            "GET /a HTTP/1.1\r\nHost: a\rX: y\r\n",
+            "GET /a HTTP/1.1\r\nHost: a\x00\r\n",
+            "GET /a HTTP/2\r\nHost: a\r\n",
+            "GET /a HTTP/1.1 extra\r\nHost: a\r\n",
+            "get /a HTTP/1.1\r\nHost: a\r\n",
+            "GET /a HTTP/1.1\r\nHost: a\r\nHost: b\r\n",
+            "POST /a HTTP/1.1\r\nContent-Length: 2\r\nContent-Length: 2\r\n",
+            "POST /a HTTP/1.1\r\nContent-Length: +2\r\n",
+            "POST /mcp HTTP/1.1\r\nTransfer-Encoding: chunked\r\nContent-Length: 2\r\n",
+        ] {
+            assert!(!ok(bad), "{bad:?}");
+        }
+    }
+
+    /// Without a login nothing of a body is waited for: a request that may keep its connection open used to read
+    /// its whole body before the login, so a body that never came held one of the places for the read timeout
+    #[tokio::test]
+    async fn a_body_is_not_waited_for_before_the_login() {
+        let temp = tempfile::tempdir_in("/tmp").unwrap();
+        let mut ctx = test_ctx(temp.path(), &temp.path().join("none.sock"));
+        let entry = auth::Entry { name: "owner".into(), role: auth::Role::Operate, token: "t".repeat(64), created: 0 };
+        ctx.auth = Some(auth::Auth::fixed(vec![entry], 8202));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = async {
+            let (tcp, _) = listener.accept().await.unwrap();
+            let _ = serve(Conn::Plain(tcp), &ctx, None, None).await;
+        };
+        let client = async {
+            let mut s = tokio::net::TcpStream::connect(addr).await.unwrap();
+            let req = "POST /api/tap HTTP/1.1\r\nHost: 127.0.0.1:8202\r\nConnection: keep-alive\r\n\
+                       Content-Type: application/json\r\nContent-Length: 4000\r\n\r\n{";
+            s.write_all(req.as_bytes()).await.unwrap();
+            let (h, _) = tokio::time::timeout(Duration::from_secs(2), answer(&mut s)).await.expect("answered at once");
+            assert!(h.starts_with("HTTP/1.1 401"), "{h}");
+        };
+        tokio::join!(server, client);
+    }
+
     #[tokio::test]
     async fn cancelled_picture_unregisters_its_feed() {
         let temp = tempfile::tempdir_in("/tmp").unwrap();
@@ -2025,7 +2139,9 @@ mod tests {
         let raw = b"GET /video?src=device&udid=TEST&feed=tab HTTP/1.1\r\nHost: localhost\r\n\r\n";
         let (client, _) = accepted.unwrap();
         let mut slot = Some(Conn::Plain(client));
-        let mut request = Box::pin(handle(&mut slot, &ctx, raw.to_vec(), Head::parse(raw).unwrap(), vec![]));
+        let (mut early, mut next) = (None, Vec::new());
+        let mut request =
+            Box::pin(handle(&mut slot, &ctx, raw.to_vec(), Head::parse(raw).unwrap(), vec![], &mut early, &mut next));
         // The simulated daemon has accepted the request but has not supplied a stream.
         tokio::select! {
             result = &mut request => panic!("picture ended before cancellation: {result:?}"),

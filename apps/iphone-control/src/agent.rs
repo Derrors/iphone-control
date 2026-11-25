@@ -80,16 +80,56 @@ pub struct Agents {
     running: std::sync::Mutex<std::collections::HashSet<u32>>,
 }
 
-/// Takes an agent's process group off [`Agents::running`] when its run ends
-struct Running<'a>(&'a Agents, Option<u32>);
+/// Takes an agent's process group off [`Agents::running`] when its run ends. A run that ends before the agent was
+/// waited for (an error reading its output) stops the group first, so nothing of it is left running; once it was
+/// waited for (`waited`), the group isn't signalled any more: its id may be another process's by then
+struct Running<'a> {
+    agents: &'a Agents,
+    pid: Option<u32>,
+    waited: bool,
+}
 
 impl Drop for Running<'_> {
     fn drop(&mut self) {
-        if let Some(pid) = self.1 {
-            self.0.running.lock().unwrap_or_else(|p| p.into_inner()).remove(&pid);
+        if let Some(pid) = self.pid {
+            if !self.waited {
+                crate::procgroup::stop(pid);
+            }
+            self.agents.running.lock().unwrap_or_else(|p| p.into_inner()).remove(&pid);
         }
     }
 }
+
+/// The task's token for the agent's MCP server, in a file of its own (0600, in the agent's private directory) instead
+/// of the command line, which every user on the machine can read (`ps`). Removed when the run ends
+struct TokenFile(PathBuf);
+
+impl TokenFile {
+    fn new(dir: &Path, token: &str) -> std::io::Result<Self> {
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos());
+        let path = dir.join(format!("task-{}-{nanos:x}.token", std::process::id()));
+        let mut f = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&path)?;
+        f.write_all(token.as_bytes())?;
+        Ok(Self(path))
+    }
+}
+
+impl Drop for TokenFile {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
+/// Variables of this program's settings that the agent has no use for and shouldn't see: notification keys, the
+/// viewer's login (the agent's MCP server reads the settings file itself, so nothing it needs is lost)
+const HIDDEN_FROM_AGENT: [&str; 4] = [
+    ictl_daemon::protocol::env::TG_BOT_TOKEN,
+    ictl_daemon::protocol::env::BARK_KEY,
+    ictl_daemon::protocol::env::VIEWER_TOKEN,
+    ictl_daemon::protocol::env::TASK_TOKEN,
+];
 
 /// The agent's working directory under `base`: this user's own (0700, not a link). The agent reads what is there
 /// (`CLAUDE.md`, `AGENTS.md`, `.claude/`), so in a shared directory such as `/tmp` a name made by someone else first
@@ -239,9 +279,13 @@ impl Agents {
         prompt: &str,
         apps: &[String],
     ) -> anyhow::Result<()> {
+        let token_file = TokenFile::new(&self.workdir, token)?;
         let mut cmd = tokio::process::Command::new(program);
-        cmd.args(self.agent_args(backend, token, prompt, apps))
-            .current_dir(&self.workdir)
+        cmd.args(self.agent_args(backend, &token_file.0, prompt, apps));
+        for k in HIDDEN_FROM_AGENT {
+            cmd.env_remove(k);
+        }
+        cmd.current_dir(&self.workdir)
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
@@ -257,7 +301,7 @@ impl Agents {
         if let Some(pid) = pid {
             self.running.lock().unwrap_or_else(|p| p.into_inner()).insert(pid);
         }
-        let _running = Running(self, pid);
+        let mut running = Running { agents: self, pid, waited: false };
         let stdout = child.stdout.take().ok_or_else(|| anyhow::anyhow!("no stdout"))?;
         let stderr = child.stderr.take().ok_or_else(|| anyhow::anyhow!("no stderr"))?;
         let errs = tokio::spawn(async move {
@@ -273,12 +317,13 @@ impl Agents {
         });
         let (mut summary, mut failure, mut last_text) = (None, None, None);
         let mut ended = false;
-        let mut lines = BufReader::new(stdout).lines();
+        // by bytes: a line that isn't UTF-8 (an agent printing raw output) is skipped, not the end of reading
+        let mut lines = BufReader::new(stdout).split(b'\n');
         loop {
             tokio::select! {
-                line = lines.next_line() => {
+                line = lines.next_segment() => {
                     let Some(line) = line? else { break };
-                    let Ok(v) = serde_json::from_str::<Value>(&line) else { continue };
+                    let Ok(v) = serde_json::from_slice::<Value>(&line) else { continue };
                     match parse_line(backend, &v) {
                         Some(Out::Thought(t)) => {
                             last_text = Some(t.clone());
@@ -301,6 +346,7 @@ impl Agents {
             }
         }
         let status = child.wait().await?;
+        running.waited = true;
         let tail = errs.await.unwrap_or_default();
         if ended {
             return Ok(());
@@ -323,21 +369,24 @@ impl Agents {
         Ok(())
     }
 
-    fn agent_args(&self, backend: Backend, token: &str, prompt: &str, apps: &[String]) -> Vec<String> {
+    /// The agent's command line. The task's token isn't on it (every user can read a command line): the MCP server
+    /// reads it from `token_file`. The prompt comes last, after `--`, so whatever it starts with is never taken for
+    /// an option (a prompt of `--permission-mode=bypassPermissions` would otherwise lift the agent's limits)
+    fn agent_args(&self, backend: Backend, token_file: &Path, prompt: &str, apps: &[String]) -> Vec<String> {
         let guide = guidance(apps);
         let exe = self.exe.to_string_lossy().into_owned();
         let socket = self.socket.to_string_lossy().into_owned();
+        let token_file = token_file.to_string_lossy().into_owned();
         let mut env = Map::new();
-        env.insert(protocol::TASK_TOKEN_ENV.into(), token.into());
         // the agent's tools answer in the task's language (this runs in its scope, see `start`)
         env.insert(ictl_daemon::protocol::env::LANG.into(), ictl_l10n::lang().code().into());
         let s = |v: &str| v.to_owned();
         match backend {
             Backend::Claude => {
-                let mcp = json!({"mcpServers": {"iphone": {"command": exe, "args": ["--socket", socket, "mcp"], "env": env}}});
+                let args = ["--socket", &socket, "mcp", "--task-token-file", &token_file];
+                let mcp = json!({"mcpServers": {"iphone": {"command": exe, "args": args, "env": env}}});
                 vec![
                     s("-p"),
-                    s(prompt),
                     s("--output-format"),
                     s("stream-json"),
                     s("--verbose"),
@@ -354,6 +403,8 @@ impl Agents {
                     s("--no-session-persistence"),
                     s("--append-system-prompt"),
                     guide.clone(),
+                    s("--"),
+                    s(prompt),
                 ]
             }
             Backend::Codex => {
@@ -373,7 +424,14 @@ impl Agents {
                     s("-c"),
                     format!("mcp_servers.iphone.command={}", q(&exe)),
                     s("-c"),
-                    format!("mcp_servers.iphone.args=[{},{},{}]", q("--socket"), q(&socket), q("mcp")),
+                    format!(
+                        "mcp_servers.iphone.args=[{},{},{},{},{}]",
+                        q("--socket"),
+                        q(&socket),
+                        q("mcp"),
+                        q("--task-token-file"),
+                        q(&token_file)
+                    ),
                     s("-c"),
                     format!("mcp_servers.iphone.env={{{env_toml}}}"),
                     s("-c"),
@@ -384,6 +442,7 @@ impl Agents {
                     s("mcp_servers.iphone.default_tools_approval_mode=\"approve\""),
                     s("-c"),
                     s("suppress_unstable_features_warning=true"),
+                    s("--"),
                     format!("{guide}\n\n{}{prompt}", ictl_l10n::tr!("任务：", "Task: ")),
                 ]
             }
@@ -510,11 +569,39 @@ mod tests {
         let agents = Agents::new(Path::new("/nonexistent/ctl.sock")).unwrap();
         let scoped = v(&["com.apple.Preferences", "com.apple.mobiletimer"]);
         for backend in Backend::ALL {
-            let plain = agents.agent_args(backend, "t", "看看设置", &[]).join("\n");
-            let limited = agents.agent_args(backend, "t", "看看设置", &scoped).join("\n");
+            let plain = agents.agent_args(backend, Path::new("/x/t.token"), "看看设置", &[]).join("\n");
+            let limited = agents.agent_args(backend, Path::new("/x/t.token"), "看看设置", &scoped).join("\n");
             assert!(!plain.contains("com.apple.Preferences"), "{backend:?}: no scope, nothing about one");
             assert!(limited.contains("com.apple.Preferences、com.apple.mobiletimer"), "{backend:?}");
         }
+    }
+
+    /// Whatever a prompt starts with, it is the prompt: it comes last, after `--`. The task's token isn't on the
+    /// command line (every user on the machine can read it), only the file it is in
+    #[test]
+    fn a_prompt_is_never_an_option_and_the_token_never_on_the_command_line() {
+        let agents = Agents::new(Path::new("/nonexistent/ctl.sock")).unwrap();
+        let hostile = "--permission-mode=bypassPermissions";
+        for backend in Backend::ALL {
+            let args = agents.agent_args(backend, Path::new("/x/t.token"), hostile, &[]);
+            let dashes = args.iter().position(|a| a == "--").expect("an end of options");
+            assert_eq!(dashes, args.len() - 2, "{backend:?}: the prompt alone follows it");
+            assert!(args.last().unwrap().contains(hostile), "{backend:?}");
+            assert!(!args[..dashes].iter().any(|a| a.contains(hostile)), "{backend:?}: not before it");
+            let all = args.join(" ");
+            assert!(all.contains("--task-token-file") && all.contains("/x/t.token"), "{backend:?}");
+            assert!(!all.contains(protocol::TASK_TOKEN_ENV), "{backend:?}: no token variable on the command line");
+        }
+        let dir = std::env::temp_dir().join(format!("ictl-agent-token-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = TokenFile::new(&dir, "secret").unwrap();
+        let path = f.0.clone();
+        use std::os::unix::fs::MetadataExt;
+        assert_eq!(std::fs::metadata(&path).unwrap().mode() & 0o777, 0o600);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "secret");
+        drop(f);
+        assert!(!path.exists(), "removed with the run");
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

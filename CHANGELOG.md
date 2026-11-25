@@ -21,6 +21,9 @@ What changed in each release, one line per change. Versions follow [Semantic Ver
 - Switching back to a phone made ready in the background takes effect at once even when the daemon was busy at that moment; it could wait 10 seconds. The daemon serves at most 256 clients at once; more wait their turn (#197).
 - AI tasks limited to some apps: an action is checked again once it has the phone, in case another app came to the front meanwhile, and `iphone_web_eval` is checked against the app that shows the page (#197).
 - `iphone_tap_element`'s scroll search and `iphone_wait_for` stop as soon as the task is paused or taken over or the caller goes away, instead of holding the phone until they time out; the daemon also limits a scroll search to 15 swipes (#197).
+- The control page's server refuses malformed requests, so a crafted link can no longer send a browser from it to another site, and it no longer waits for request bodies from someone who isn't logged in (#196).
+- AI tasks from the control page: a task whose text starts with `--` is no longer taken as an option by the agent, and the agent no longer gets the task's token on its command line or notification keys in its environment (#196).
+- A malformed video report from a page no longer freezes its picture (#196).
 - iOS 17–18: the developer disk image is mounted the way these versions need, so WebDriverAgent starts on them again (#186).
 - Times in `status`, `doctor` and the event log are shown in local time with the time zone; they were UTC without saying so (#184).
 - Errors from `iphone-control update`, `service` and the update panel on the control page follow the chosen language; they were always in English (#184).

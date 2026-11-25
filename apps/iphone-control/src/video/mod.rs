@@ -133,6 +133,8 @@ impl Flow {
     }
 
     fn ack(&mut self, bytes: u64, now: Instant) {
+        // the page can't have read what wasn't sent; anything past it is a broken or hostile report
+        let bytes = bytes.min(self.sent);
         self.reports = true;
         self.heard = Some(now);
         if bytes > self.acked {
@@ -188,7 +190,7 @@ impl Flow {
             return true;
         }
         let rate = self.rates.iter().map(|(_, r)| *r).fold(0.0, f64::max);
-        rate > 0.0 && (self.sent - self.acked) as f64 > rate * allowed.as_secs_f64()
+        rate > 0.0 && self.sent.saturating_sub(self.acked) as f64 > rate * allowed.as_secs_f64()
     }
 }
 
@@ -503,6 +505,19 @@ mod tests {
 
     /// A page that confirms in time is never behind; one whose confirmations stop coming is, once the oldest
     /// unconfirmed message is older than the usual round trip plus the slack
+    /// A report of more than was sent (a broken or hostile page) counts as all of it, instead of wrapping the
+    /// bytes on the way around (a panic in a debug build, a frozen picture in a release one)
+    #[test]
+    fn a_report_beyond_what_was_sent_is_taken_as_all_of_it() {
+        let t0 = Instant::now();
+        let mut f = Flow::default();
+        f.sent(100, t0);
+        f.ack(u64::MAX, t0 + Duration::from_millis(10));
+        assert_eq!(f.acked, 100);
+        f.sent(100, t0 + Duration::from_millis(20));
+        assert!(!f.behind(t0 + Duration::from_millis(30)));
+    }
+
     #[test]
     fn behind_means_late_beyond_the_usual_round_trip() {
         let t0 = Instant::now();

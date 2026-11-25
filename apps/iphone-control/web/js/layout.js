@@ -18,8 +18,8 @@ function keepFocus(fn) {
 }
 setInterval(() => {
   const t = activeTask(); if (!t) return;
-  const el = $(`[data-runtime="${t.id}"]`); if (el) el.textContent = mmss(Date.now() - t.startedAt);
-  const m = $(`[data-elapsed="${t.id}"]`); if (m) m.textContent = `${t.steps.length} ${tr('步')} · ${mmss(Date.now() - t.startedAt)}`;
+  const el = $(`[data-runtime="${CSS.escape(t.id)}"]`); if (el) el.textContent = mmss(Date.now() - t.startedAt);
+  const m = $(`[data-elapsed="${CSS.escape(t.id)}"]`); if (m) m.textContent = `${t.steps.length} ${tr('步')} · ${mmss(Date.now() - t.startedAt)}`;
 }, 1000);
 
 /* ---------- 视图：≥1280 三栏；1024–1279 右栏抽屉；<1024 三个标签页 ---------- */

@@ -103,6 +103,11 @@ const BUDGET_FLOOR: usize = 10_000;
 
 /// Decodes one archive
 pub fn decode(bytes: &[u8]) -> Result<Obj> {
+    decode_within(bytes, bytes.len().saturating_mul(BUDGET_PER_BYTE).saturating_add(BUDGET_FLOOR)).map(|(o, _)| o)
+}
+
+/// [`decode`] with at most `budget` values; also how many it took
+fn decode_within(bytes: &[u8], budget: usize) -> Result<(Obj, usize)> {
     let top = Value::from_reader(Cursor::new(bytes)).map_err(|e| AxError::Archive(e.to_string()))?;
     let dict = top.as_dictionary().ok_or_else(|| AxError::Archive("not a dictionary".into()))?;
     let objects =
@@ -115,13 +120,14 @@ pub fn decode(bytes: &[u8]) -> Result<Obj> {
     let reader = Reader {
         objects,
         visiting: Default::default(),
-        budget: std::cell::Cell::new(bytes.len().saturating_mul(BUDGET_PER_BYTE).saturating_add(BUDGET_FLOOR)),
+        exhausted: std::cell::Cell::new(false),
+        budget: std::cell::Cell::new(budget),
     };
     let obj = reader.resolve(root, 0);
-    if reader.budget.get() == 0 {
+    if reader.exhausted.get() {
         return Err(AxError::Archive("too many values for its size".into()));
     }
-    Ok(obj)
+    Ok((obj, budget - reader.budget.get()))
 }
 
 struct Reader<'a> {
@@ -132,16 +138,23 @@ struct Reader<'a> {
     /// Values still to be decoded ([`BUDGET_PER_BYTE`]); at 0 everything reads as [`Obj::Null`] and the archive is
     /// refused
     budget: std::cell::Cell<usize>,
+    /// A value was left out for want of [`Self::budget`] (one that used the last of it exactly is fine)
+    exhausted: std::cell::Cell<bool>,
 }
 
 impl Reader<'_> {
     fn resolve(&self, v: &Value, depth: usize) -> Obj {
-        if depth > MAX_DEPTH || self.budget.get() == 0 {
+        if depth > MAX_DEPTH {
+            return Obj::Null;
+        }
+        if self.budget.get() == 0 {
+            self.exhausted.set(true);
             return Obj::Null;
         }
         self.budget.set(self.budget.get() - 1);
         match v {
-            Value::Uid(u) => match self.objects.get(u.get() as usize) {
+            // (on a 32-bit target a UID past usize isn't truncated to another object)
+            Value::Uid(u) => match usize::try_from(u.get()).ok().and_then(|i| self.objects.get(i)) {
                 Some(Value::String(s)) if s == "$null" => Obj::Null,
                 Some(o) => {
                     if !self.visiting.borrow_mut().insert(u.get()) {
@@ -444,8 +457,13 @@ mod tests {
         let mut objects: Vec<Value> = (1..=4).map(|i| ns_array(&[i + 1, i + 1], 6)).collect();
         objects.push(Value::String("leaf".into()));
         objects.push(class("NSArray"));
-        let Obj::Array(top) = decode(&archive(objects)).unwrap() else { panic!("not an array") };
+        let bytes = archive(objects);
+        let Obj::Array(top) = decode(&bytes).unwrap() else { panic!("not an array") };
         assert_eq!(top.len(), 2);
+        // a budget used up exactly is enough; one value short isn't
+        let (_, took) = decode_within(&bytes, usize::MAX).unwrap();
+        assert!(decode_within(&bytes, took).is_ok());
+        assert!(decode_within(&bytes, took - 1).is_err());
     }
 
     #[test]

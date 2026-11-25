@@ -146,7 +146,7 @@ impl Daemon {
         overlays: bool,
     ) -> crate::error::Result<ictl_device::ax::AxScreen> {
         let device = g.device.clone().ok_or(ictl_l10n::tr!("手机未连接", "Phone not connected"))?;
-        let mut restarted = false;
+        let (mut restarted, mut rebuilt) = (false, false);
         loop {
             let t = self
                 .ensure_tunnel(g, &device)
@@ -157,6 +157,12 @@ impl Daemon {
                 t.close_ax().await;
             }
             g.ax_used = Some(Instant::now());
+            if tunnel_timed_out(&r) {
+                drop_tunnel(g).await;
+                if !std::mem::replace(&mut rebuilt, true) {
+                    continue;
+                }
+            }
             if let Err(ictl_device::DeviceError::AxUnanswered(e)) = &r
                 && !restarted
                 && Box::pin(self.restart_stuck_ax(g, &device, e)).await
@@ -266,7 +272,7 @@ impl Daemon {
     /// The frontmost app's bundle ID (one request, no walk)
     pub(crate) async fn native_foreground(&self, g: &mut Inner) -> crate::error::Result<String> {
         let device = g.device.clone().ok_or(ictl_l10n::tr!("手机未连接", "Phone not connected"))?;
-        let mut restarted = false;
+        let (mut restarted, mut rebuilt) = (false, false);
         let r = loop {
             let t = self.ensure_tunnel(g, &device).await?;
             let r = t.ax_frontmost_pid(AX_WAIT).await;
@@ -274,6 +280,12 @@ impl Daemon {
                 t.close_ax().await;
             }
             g.ax_used = Some(Instant::now());
+            if tunnel_timed_out(&r) {
+                drop_tunnel(g).await;
+                if !std::mem::replace(&mut rebuilt, true) {
+                    continue;
+                }
+            }
             if let Err(ictl_device::DeviceError::AxUnanswered(e)) = &r
                 && !restarted
                 && Box::pin(self.restart_stuck_ax(g, &device, e)).await
@@ -1123,9 +1135,26 @@ impl Screen for NativeScreen<'_> {
     }
 }
 
+/// A read that timed out in the tunnel itself (connecting to the service's port, a query through it): the tunnel
+/// is stuck, and keeping it would time out every read after it. It is dropped (and the read tried once more on a new
+/// one). Not [`ictl_device::DeviceError::AxUnanswered`]: that is the accessibility daemon, restarted instead
+fn tunnel_timed_out<T>(r: &ictl_device::Result<T>) -> bool {
+    matches!(r, Err(ictl_device::DeviceError::Timeout(_)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Only a time-out in the tunnel itself drops it; the accessibility daemon's is restarted instead
+    #[test]
+    fn a_stuck_tunnel_is_dropped_not_the_accessibility_daemon() {
+        use ictl_device::DeviceError;
+        assert!(tunnel_timed_out::<()>(&Err(DeviceError::Timeout("connect".into()))));
+        assert!(!tunnel_timed_out::<()>(&Err(DeviceError::AxUnanswered("request".into()))));
+        assert!(!tunnel_timed_out::<()>(&Err(DeviceError::InvalidInput("x".into()))));
+        assert!(!tunnel_timed_out(&Ok(())));
+    }
 
     #[test]
     fn only_a_recognisable_unlocked_springboard_can_confirm_absence() {

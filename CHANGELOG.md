@@ -6,30 +6,30 @@ What changed in each release, one line per change. Versions follow [Semantic Ver
 
 ## [Unreleased]
 
-### Fixes
-
-- Times in `status`, `doctor` and the event log are shown in local time with the time zone; they were UTC without saying so.
-- Errors from `iphone-control update`, `service` and the update panel on the control page follow the chosen language; they were always in English.
-- Phones driven natively (iOS 27+) no longer trigger WebDriverAgent re-signing or the daily Apple ID session check (and its "session expired" warning) when another device once used WebDriverAgent.
-- After re-signing, the new WebDriverAgent starts right away instead of at the next check up to 10 seconds later.
-- A dragged finger held down (`iphone_swipe` with `hold`) is lifted if the drag fails or times out halfway.
-- Responses from WebDriverAgent, accessibility messages and screen video frames have size limits, so a broken stream can't make the program use unbounded memory.
-- Screenshots of a phone driven natively say "via CoreDevice" instead of "via HID".
-- With nobody watching the control page, the phone's screen video is no longer assembled into frames, which saves CPU while an agent works.
-- Several control pages on one phone running WebDriverAgent share one picture stream from the phone instead of opening one each, which could push WebDriverAgent over the CPU limit at which iOS stops it.
-- Pages watching the phone's own video share one rotation check a second instead of one per page.
-- At most 4 control pages at once get the phone's own video transcoded to H.264 (browsers without HEVC, one ffmpeg each); more retry until one closes, instead of starting another ffmpeg each.
-- The control page polls less: the task list comes with the device-info poll instead of a poll of its own, the device panel asks two requests a round instead of three, and a page in a background tab stops polling until it is shown again.
-- A daemon that ended with the screen media stream open (stuck and restarted by its watchdog, crashed or killed) no longer leaves the phone showing "viewed remotely" and never auto-locking: the next daemon clears it once the phone is ready.
-- MCP over HTTP (`/mcp`) accepts request bodies sent chunked, which some clients and reverse proxies do; they got 411 Length Required. Streamed answers are sent chunked, so a proxy can tell their end from a dropped connection.
-- The control page's server allows 64 connections instead of 32, and answers 503 (and logs it) when they are all taken instead of dropping the connection silently.
-- Stopping the viewer (`systemctl stop`, an update, Ctrl-C) also stops the agents of AI tasks started from the page; they kept running on their own.
-- An idle `iphone-control mcp` (kept running by Claude Desktop, Cursor, Claude Code…) no longer keeps updates from installing: it holds the maintenance lock only during a tool call, and its next call reaches the new daemon.
-- The phone's own video on the control page pauses while the phone unlocks itself or the bitrate changes, instead of dropping and reconnecting.
-
 ### Improvements
 
-- On iOS 17–26 the control page's picture comes through the daemon instead of the viewer opening WebDriverAgent's picture port on the phone itself; apart from `wda-bridge`, only the daemon talks to the phone now.
+- Several control pages on one phone running WebDriverAgent share one picture stream from the phone instead of opening one each, which could push WebDriverAgent over the CPU limit at which iOS stops it (#188).
+- On iOS 17–26 the control page's picture comes through the daemon; apart from `wda-bridge`, only the daemon talks to the phone now (#192).
+- The phone's own video on the control page pauses while the phone unlocks itself or the bitrate changes, instead of dropping and reconnecting (#190).
+- While nobody watches the control page, the phone's screen video costs less CPU (#187).
+- The control page polls less, and not at all from a background tab (#193).
+
+### Fixes
+
+- iOS 17–18: the developer disk image is mounted the way these versions need, so WebDriverAgent starts on them again (#186).
+- Times in `status`, `doctor` and the event log are shown in local time with the time zone; they were UTC without saying so (#184).
+- Errors from `iphone-control update`, `service` and the update panel on the control page follow the chosen language; they were always in English (#184).
+- An idle `iphone-control mcp` (kept running by Claude Desktop, Cursor, Claude Code…) no longer keeps updates from installing; its next call reaches the new daemon (#190).
+- Phones driven natively (iOS 27+) no longer trigger WebDriverAgent re-signing or the daily Apple ID session check (and its "session expired" warning) when another device once used WebDriverAgent (#187).
+- After re-signing, the new WebDriverAgent starts right away (#187).
+- A dragged finger held down (`iphone_swipe` with `hold`) is lifted if the drag fails or times out halfway (#187).
+- A broken stream from the phone can no longer make the program use unbounded memory (#187).
+- Screenshots of a phone driven natively say "via CoreDevice" instead of "via HID" (#187).
+- A daemon that ended with the screen media stream open (stuck and restarted, crashed or killed) no longer leaves the phone showing "viewed remotely" and never auto-locking (#193).
+- MCP over HTTP (`/mcp`) accepts request bodies sent chunked, as some clients and reverse proxies send them, and ends streamed answers so a proxy can tell their end from a dropped connection (#189).
+- The control page's server takes more connections and answers 503 when they are all taken instead of dropping new ones silently (#189).
+- At most 4 control pages at once get the phone's own video transcoded to H.264 (browsers without HEVC); more retry until one closes (#193).
+- Stopping the viewer (`systemctl stop`, an update, Ctrl-C) also stops the agents of AI tasks started from the page; they kept running on their own (#189).
 
 ## [0.2.14] - 2026-11-24
 

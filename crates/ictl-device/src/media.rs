@@ -125,7 +125,7 @@ fn receive(
                     media_ssrc = p.ssrc;
                     first_seq.get_or_insert(p.sequence_number);
                     last_seq = p.sequence_number;
-                    // 没人订阅时只记参数集，不拼帧（新订阅者会要关键帧，参数集补在它前面）
+                    // 没人订阅时照样解包、扫一遍 NAL（要记参数集、数帧回确认），但不复制成帧、不进广播队列（新订阅者会要关键帧，参数集补在它前面）
                     let watched = frames.receiver_count() > 0;
                     // 新的时间戳开始了新的一帧：上一帧要是还没随 marker 结束，先把它发出去
                     if let Some(Some(f)) = asm.new_timestamp(p.timestamp, watched) {

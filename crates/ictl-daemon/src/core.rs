@@ -1085,13 +1085,14 @@ impl Daemon {
                     ))
                 };
                 // the lock is let go before the user is asked (below)
-                let app = if self.wda(&mut g).is_none() && self.native(&g) {
-                    Box::pin(self.native_foreground(&mut g)).await.map_err(|e| unknown(e.to_string()))?
-                } else {
-                    let Some(w) = self.wda(&mut g) else {
+                let app = match self.route(&mut g) {
+                    Route::Wda(w) => w.active_app().await.map_err(|e| unknown(e.to_string()))?,
+                    Route::Native => {
+                        Box::pin(self.native_foreground(&mut g)).await.map_err(|e| unknown(e.to_string()))?
+                    }
+                    Route::Hid | Route::Unavailable => {
                         return Err(unknown(ictl_l10n::tr!("WDA 不可用", "WDA unavailable").into()));
-                    };
-                    w.active_app().await.map_err(|e| unknown(e.to_string()))?
+                    }
                 };
                 Target::Foreground(app)
             }

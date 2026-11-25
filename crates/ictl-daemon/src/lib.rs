@@ -175,9 +175,9 @@ async fn serve_conn(daemon: Arc<Daemon>, stream: tokio::net::UnixStream) {
                     return;
                 }
                 // the same for WDA's MJPEG picture (iOS 17-26)
-                (Ok((protocol::Request::MjpegStream, _, ctx, _lang)), Ok(lease)) => {
+                (Ok((protocol::Request::MjpegStream, _, ctx, lang)), Ok(lease)) => {
                     drop(lease);
-                    mjpeg::stream(&daemon, reader, w, ctx.expect_udid).await;
+                    ictl_l10n::scope(lang, mjpeg::stream(&daemon, reader, w, ctx.expect_udid)).await;
                     return;
                 }
                 // also streams; an opened task's connection is its lease, so it isn't held against updates either

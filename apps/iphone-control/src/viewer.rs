@@ -367,6 +367,8 @@ pub async fn run(
     // here are stopped (they run in process groups of their own, which nothing else would end); open pictures and
     // event streams end with the process, and the pages reconnect to the next viewer
     tracing::info!("viewer: stopping");
+    // the port is let go first: nothing waits in the backlog while the agents are stopped
+    drop(listener);
     ctx.agents.stop_all().await;
     Ok(())
 }
@@ -709,8 +711,9 @@ async fn route(
             }
             let body = if req.chunked {
                 match read_chunked(client, body, mcp::MAX_BODY).await? {
-                    Some(b) => b,
-                    None => return reply(client, 413, "text/plain", b"too large").await,
+                    Ok(b) => b,
+                    Err(mcp::Chunked::TooLarge) => return reply(client, 413, "text/plain", b"too large").await,
+                    Err(_) => return reply(client, 400, "text/plain", b"bad chunked body").await,
                 }
             } else {
                 let len = req.content_length.unwrap_or(0);
@@ -1111,18 +1114,28 @@ async fn read_body(client: &mut Conn, body: &mut Vec<u8>, len: usize) -> anyhow:
 
 const BODY_TIMEOUT: Duration = Duration::from_secs(60);
 
-/// A chunked body (`/mcp` only): read until its last chunk, decoded. `None` when it is bigger than `max`. What
-/// follows it is left unread: the connection closes after the answer
-async fn read_chunked(client: &mut Conn, mut raw: Vec<u8>, max: usize) -> anyhow::Result<Option<Vec<u8>>> {
+/// Framing a chunked body may add to what it carries (sizes, extensions, trailers): past this much more than the
+/// decoded limit, on the wire, it is refused as too large
+const CHUNKED_OVERHEAD: usize = 64 * 1024;
+
+/// A chunked body (`/mcp` only): read until its last chunk, decoded. `Err` with [`mcp::Chunked::TooLarge`] when it,
+/// or its framing ([`CHUNKED_OVERHEAD`]), is bigger than allowed, [`mcp::Chunked::Invalid`] when it isn't chunked
+/// properly; the caller answers 413 or 400. What follows it is left unread: the connection closes after the answer.
+/// It is decoded again from the start as more comes, so it is read in large pieces: a 1 MB body takes about 16 passes
+async fn read_chunked(
+    client: &mut Conn,
+    mut raw: Vec<u8>,
+    max: usize,
+) -> anyhow::Result<Result<Vec<u8>, mcp::Chunked>> {
     let read = async {
+        let mut buf = vec![0u8; 64 * 1024];
         loop {
             match mcp::dechunk(&raw, max) {
-                mcp::Chunked::Done(body, _) => return anyhow::Ok(Some(body)),
-                mcp::Chunked::TooLarge => return Ok(None),
-                mcp::Chunked::Invalid => bail!("bad chunked body"),
+                mcp::Chunked::Done(body, _) => return anyhow::Ok(Ok(body)),
+                mcp::Chunked::Partial if raw.len() > max + CHUNKED_OVERHEAD => return Ok(Err(mcp::Chunked::TooLarge)),
                 mcp::Chunked::Partial => {}
+                other => return Ok(Err(other)),
             }
-            let mut buf = [0u8; 4096];
             let n = tokio::time::timeout(crate::READ_TIMEOUT, client.read(&mut buf)).await??;
             if n == 0 {
                 bail!("body cut off");
@@ -1673,6 +1686,15 @@ mod tests {
         assert!(exchange(&ctx, both).await.starts_with("HTTP/1.1 400"));
         let gzip = format!("{}0\r\n\r\n", head("Transfer-Encoding: gzip, chunked\r\n"));
         assert!(exchange(&ctx, gzip).await.starts_with("HTTP/1.1 400"));
+        // a broken chunk is told so, not just cut off
+        let broken = format!("{}zz\r\n{{}}\r\n0\r\n\r\n", head("Transfer-Encoding: chunked\r\n"));
+        let r = exchange(&ctx, broken).await;
+        assert!(r.starts_with("HTTP/1.1 400"), "{r}");
+        // framing that never ends (trailer lines, each short) stops at the limit instead of growing without bound
+        let trailers = "X-A: 1\r\n".repeat((mcp::MAX_BODY + CHUNKED_OVERHEAD) / 8 + 1);
+        let endless = format!("{}0\r\n{trailers}", head("Transfer-Encoding: chunked\r\n"));
+        let r = exchange(&ctx, endless).await;
+        assert!(r.starts_with("HTTP/1.1 413"), "{r}");
     }
 
     /// Before the login nothing is kept open: without a token a machine on the network can't hold the places

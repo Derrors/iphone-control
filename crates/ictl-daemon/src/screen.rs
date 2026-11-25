@@ -171,13 +171,10 @@ impl Daemon {
                         if reopened > REOPEN_TRIES {
                             return;
                         }
-                        // the page may close meanwhile (an unlock holds the device for seconds): then don't open the
-                        // stream again only to leave the phone "viewed" for nobody until the HID session idles out
-                        let reopened_feed = tokio::select! {
-                            r = self.reopen_feed(expect_udid.as_deref(), low_bandwidth) => r,
-                            () = page_gone(&mut reader) => return,
+                        let Some((f, sub)) = self.reopen_feed(&mut reader, expect_udid.as_deref(), low_bandwidth).await
+                        else {
+                            return;
                         };
-                        let Some((f, sub)) = reopened_feed else { return };
                         (feed, frames) = (f, sub);
                         need_key = true;
                         feed.request_keyframe();
@@ -261,15 +258,25 @@ impl Daemon {
 
     /// The next media stream after the last one closed under a watching page (see the module docs): taken once the
     /// device is free (unlocking holds it until done), for the same device and rate. `None` when there is none to be
-    /// had: the device changed or went, the HID session can't be opened
+    /// had: the page went meanwhile, the device changed or went, the HID session can't be opened.
+    ///
+    /// Only the wait races the page going away (`reader` at its end): a page that closes during an unlock doesn't get
+    /// the stream opened again for nobody. Once the device lock is taken nothing is cancelled: opening the HID session
+    /// must not stop halfway (a media stream started and never stopped, see `Tunnel::hid`)
     async fn reopen_feed(
         self: &Arc<Self>,
+        reader: &mut tokio::io::BufReader<OwnedReadHalf>,
         expect_udid: Option<&str>,
         low_bandwidth: bool,
     ) -> Option<(ictl_device::ScreenFeed, tokio::sync::broadcast::Receiver<ictl_device::ScreenFrame>)> {
         // whoever closed it may go on with the device for a moment (the next digit of the passcode)
-        tokio::time::sleep(REOPEN_AFTER).await;
-        let mut g = self.inner.lock().await;
+        let mut g = tokio::select! {
+            g = async {
+                tokio::time::sleep(REOPEN_AFTER).await;
+                self.inner.lock().await
+            } => g,
+            () = page_gone(reader) => return None,
+        };
         let feed = self.open_feed(&mut g, expect_udid, low_bandwidth).await.ok()?;
         g.hid_used = Some(Instant::now());
         let frames = feed.subscribe()?;
@@ -376,6 +383,22 @@ mod tests {
                 assert!(d.rotation_sampling.load(SeqCst));
             })
             .await;
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// While the device is held (an unlock), a page that goes away ends the wait for the next media stream at once,
+    /// without taking the lock: nothing is opened for it, and the holder isn't waited for
+    #[tokio::test]
+    async fn a_page_that_goes_away_stops_waiting_for_the_next_stream() {
+        let (d, dir) = test_daemon("stream-reopen-gone");
+        let held = d.inner.lock().await;
+        let (ours, page) = tokio::net::UnixStream::pair().unwrap();
+        let (r, _w) = ours.into_split();
+        let mut reader = tokio::io::BufReader::new(r);
+        drop(page);
+        let reopened = tokio::time::timeout(Duration::from_secs(2), d.reopen_feed(&mut reader, None, false)).await;
+        assert!(matches!(reopened, Ok(None)), "ended without the lock");
+        drop(held);
         std::fs::remove_dir_all(dir).unwrap();
     }
 

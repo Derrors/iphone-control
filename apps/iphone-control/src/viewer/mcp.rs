@@ -31,7 +31,7 @@ pub async fn serve(svc: &ictl_mcp::HttpService, client: &mut Conn, head: &[u8], 
         return Ok(());
     };
     let (parts, mut body) = svc.handle(req).await.into_parts();
-    let chunked = !parts.headers.contains_key(http::header::CONTENT_LENGTH);
+    let chunked = sent_chunked(&parts);
     client.write_all(response_head(&parts, chunked).as_bytes()).await?;
     client.flush().await?;
     while let Some(frame) = body.frame().await {
@@ -134,6 +134,12 @@ fn request(head: &[u8], body: Vec<u8>) -> Option<http::Request<Full<Bytes>>> {
         b = b.header(k.trim(), v.trim());
     }
     b.body(Full::new(Bytes::from(body))).ok()
+}
+
+/// An answer goes out chunked when it has a body of unknown length (a stream). 1xx, 204 and 304 have no body at all
+/// (RFC 9112 6.3): nothing to frame
+fn sent_chunked(parts: &http::response::Parts) -> bool {
+    !matches!(parts.status.as_u16(), 100..=199 | 204 | 304) && !parts.headers.contains_key(http::header::CONTENT_LENGTH)
 }
 
 /// Status line and headers: `chunked` when the answer has no length (a stream). The connection closes after it
@@ -256,6 +262,15 @@ mod tests {
         let (json, _) = http::Response::builder().header("content-length", "2").body(()).unwrap().into_parts();
         let head = response_head(&json, false);
         assert!(head.contains("content-length: 2\r\n") && !head.contains("Transfer-Encoding"));
+        assert!(sent_chunked(&stream) && !sent_chunked(&json));
+        for status in [202, 204, 304] {
+            let (p, _) = http::Response::builder().status(status).body(()).unwrap().into_parts();
+            assert_eq!(
+                sent_chunked(&p),
+                status == 202,
+                "{status}: a body without a length only where there may be one"
+            );
+        }
         // the request's own framing isn't passed to rmcp
         let r = request(b"POST /mcp HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked", b"{}".to_vec()).unwrap();
         assert!(!r.headers().contains_key(http::header::TRANSFER_ENCODING));

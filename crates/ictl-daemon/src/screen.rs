@@ -64,7 +64,8 @@ impl Drop for Viewer {
             g.screen_viewers = g.screen_viewers.saturating_sub(1);
             if low {
                 g.low_bandwidth_viewers = g.low_bandwidth_viewers.saturating_sub(1);
-                // the last page in low-bandwidth mode is gone: the others get the full rate (they reconnect)
+                // the last page in low-bandwidth mode is gone: the others get the full rate (their connections wait
+                // for the new stream, see the module docs)
                 let full = video_bitrate(&g);
                 if g.low_bandwidth_viewers == 0
                     && g.screen_viewers > 0
@@ -84,6 +85,13 @@ impl Drop for Viewer {
             g.hid_used = Some(Instant::now());
         });
     }
+}
+
+/// Returns once the page's side of the connection closes. What it sends meanwhile (keyframe requests) is dropped: a
+/// reopened stream asks for a keyframe anyway
+async fn page_gone(reader: &mut tokio::io::BufReader<OwnedReadHalf>) {
+    let mut b = [0u8; 64];
+    while matches!(reader.read(&mut b).await, Ok(n) if n > 0) {}
 }
 
 impl Daemon {
@@ -163,7 +171,13 @@ impl Daemon {
                         if reopened > REOPEN_TRIES {
                             return;
                         }
-                        let Some((f, sub)) = self.reopen_feed(expect_udid.as_deref(), low_bandwidth).await else { return };
+                        // the page may close meanwhile (an unlock holds the device for seconds): then don't open the
+                        // stream again only to leave the phone "viewed" for nobody until the HID session idles out
+                        let reopened_feed = tokio::select! {
+                            r = self.reopen_feed(expect_udid.as_deref(), low_bandwidth) => r,
+                            () = page_gone(&mut reader) => return,
+                        };
+                        let Some((f, sub)) = reopened_feed else { return };
                         (feed, frames) = (f, sub);
                         need_key = true;
                         feed.request_keyframe();

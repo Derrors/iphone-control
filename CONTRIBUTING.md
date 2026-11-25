@@ -24,7 +24,7 @@ cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 # the control page's tests (Node 22, no packages): the page is apps/iphone-control/web/, put together by build.rs
 node --test tests/viewer/*.test.mjs
 # vendor/ is upstream code and isn't formatted; check only this repository's packages:
-for p in ictl-l10n ictl-webinspector ictl-device ictl-wda ictl-sign ictl-unlock ictl-daemon ictl-mcp ictl-protocol iphone-control; do cargo fmt -p $p -- --check; done
+for p in ictl-ax ictl-l10n ictl-webinspector ictl-device ictl-wda ictl-sign ictl-unlock ictl-daemon ictl-mcp ictl-protocol iphone-control; do cargo fmt -p $p -- --check; done
 ```
 
 Or, without Rust installed:

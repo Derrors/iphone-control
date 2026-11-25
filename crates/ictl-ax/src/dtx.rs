@@ -52,9 +52,19 @@ pub async fn read_frame<R: AsyncRead + Unpin>(reader: &mut R) -> std::io::Result
     read_frame_within(reader, MAX_MESSAGE_BYTES).await
 }
 
+/// Fragments one message may come in, at most: the phone's take a handful
+const MAX_FRAGMENTS: usize = 4096;
+
 async fn read_frame_within<R: AsyncRead + Unpin>(reader: &mut R, limit: usize) -> std::io::Result<Frame> {
     let mut payload = Vec::new();
+    // headers read for this message: ones that carry nothing (a first fragment, an empty one) don't grow `payload`,
+    // so the size limit alone never ends a stream of them
+    let mut headers = 0usize;
     loop {
+        headers += 1;
+        if headers > MAX_FRAGMENTS {
+            return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "DTX message in too many fragments"));
+        }
         let mut h = [0u8; 32];
         reader.read_exact(&mut h).await?;
         let word = |i: usize| u32::from_le_bytes([h[i], h[i + 1], h[i + 2], h[i + 3]]);
@@ -77,7 +87,8 @@ async fn read_frame_within<R: AsyncRead + Unpin>(reader: &mut R, limit: usize) -
         if read < len {
             return Err(std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "DTX message cut short"));
         }
-        if fragment + 1 >= fragments {
+        // in u32: the last fragment of 65535 would overflow a u16
+        if u32::from(fragment) + 1 >= u32::from(fragments) {
             return Ok(parse(word(16), word(20), word(24) as i32, word(28) == 1, &payload));
         }
     }
@@ -125,7 +136,7 @@ pub fn invocation(identifier: u32, selector: &str, args: Vec<Vec<u8>>, expects_r
 pub fn reply(to: &Frame, value: Option<Value>) -> Vec<u8> {
     let with_value = value.is_some();
     let mut b = Message::new(
-        MessageHeader::new(0, 1, to.identifier, to.conversation + 1, to.channel, false),
+        MessageHeader::new(0, 1, to.identifier, to.conversation.wrapping_add(1), to.channel, false),
         PayloadHeader::new(),
         None,
         value,
@@ -178,6 +189,22 @@ mod tests {
         cut[12..16].copy_from_slice(&50u32.to_le_bytes());
         let e = read_frame_within(&mut &cut[..], 100).await.unwrap_err();
         assert_eq!(e.kind(), std::io::ErrorKind::UnexpectedEof);
+    }
+
+    /// Fragments that carry nothing, without end, are refused instead of read for ever; the last of 65535 fragments
+    /// ends its message (its index plus one overflowed a u16); a conversation at u32::MAX is answered
+    #[tokio::test]
+    async fn odd_fragment_counts_end_and_counters_dont_overflow() {
+        let empty: Vec<u8> =
+            (0..MAX_FRAGMENTS + 1).flat_map(|i| fragment((i % 100) as u16 + 1, u16::MAX, &[])).collect();
+        let e = read_frame_within(&mut &empty[..], 1 << 20).await.unwrap_err();
+        assert_eq!(e.kind(), std::io::ErrorKind::InvalidData);
+        let last = fragment(u16::MAX, u16::MAX, &[]);
+        assert!(read_frame_within(&mut &last[..], 100).await.is_ok(), "the last one ends it");
+        let mut asked = read_frame(&mut &invocation(4, "x", vec![], true)[..]).await.unwrap();
+        asked.conversation = u32::MAX;
+        let ack = read_frame(&mut &reply(&asked, None)[..]).await.unwrap();
+        assert_eq!(ack.conversation, 0, "wraps");
     }
 
     #[tokio::test]

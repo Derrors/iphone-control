@@ -156,6 +156,14 @@ pub(crate) async fn read_response<R: tokio::io::AsyncRead + Unpin>(
     loop {
         if head.is_none() {
             head = parse_head(&buf);
+            // no end of the head in its first 64 KB: it isn't coming (and looking again after every read would scan
+            // those 64 KB over and over up to the limit)
+            if head.is_none() && buf.len() > MAX_HEAD {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    ictl_l10n::tr!("WDA 的响应头超过 64 KB", "WDA's response head is over 64 KB"),
+                ));
+            }
             if let Some((split, Framing::Length(n))) = head {
                 if split.saturating_add(n) > limit {
                     return Err(too_large());
@@ -206,16 +214,19 @@ impl Framing {
     fn complete(self, body: &[u8]) -> bool {
         match self {
             Self::Length(n) => body.len() >= n,
-            // 先看结尾是不是结束块，是了才完整解一遍（避免每读 64KB 就把整个正文解一遍）
-            Self::Chunked => body.ends_with(b"0\r\n\r\n") && dechunk(body).is_some(),
+            // 先看结尾是不是空行（结束块或 trailer 之后），是了才完整解一遍（避免每读 64KB 就把整个正文解一遍）
+            Self::Chunked => body.ends_with(b"\r\n\r\n") && dechunk(body).is_some(),
             Self::UntilEof => false,
         }
     }
 }
 
+/// 响应头最长这么多（WDA 的头不到 1 KB）
+const MAX_HEAD: usize = 64 * 1024;
+
 /// 头部收齐了就返回 (正文起点, 定长方式)。头部很短，只在前 64KB 里找结束标记
 fn parse_head(raw: &[u8]) -> Option<(usize, Framing)> {
-    let window = &raw[..raw.len().min(64 * 1024)];
+    let window = &raw[..raw.len().min(MAX_HEAD)];
     let split = window.windows(4).position(|w| w == b"\r\n\r\n")?;
     let head = String::from_utf8_lossy(&raw[..split]).to_ascii_lowercase();
     let mut framing = Framing::UntilEof;
@@ -277,18 +288,31 @@ pub(crate) fn parse_response(raw: impl Into<Vec<u8>>) -> std::io::Result<(u16, V
     }
 }
 
+/// The chunked body's data; `None` until it is whole: each chunk followed by its CRLF, the last one (size 0) by any
+/// trailers and the empty line that ends them. A size too large for memory (`size + 2` overflowed) isn't one
 fn dechunk(mut body: &[u8]) -> Option<Vec<u8>> {
     let mut out = Vec::new();
     loop {
         let line_end = body.windows(2).position(|w| w == b"\r\n")?;
         let size_str = std::str::from_utf8(&body[..line_end]).ok()?;
+        // `size;extension=value`
         let size = usize::from_str_radix(size_str.split(';').next()?.trim(), 16).ok()?;
         body = &body[line_end + 2..];
         if size == 0 {
-            return Some(out);
+            // trailers, each a line, until an empty one
+            loop {
+                let end = body.windows(2).position(|w| w == b"\r\n")?;
+                if end == 0 {
+                    return Some(out);
+                }
+                body = &body[end + 2..];
+            }
         }
         out.extend_from_slice(body.get(..size)?);
-        body = body.get(size + 2..)?;
+        if body.get(size..size.checked_add(2)?)? != b"\r\n" {
+            return None;
+        }
+        body = &body[size + 2..];
     }
 }
 
@@ -348,6 +372,29 @@ mod tests {
     fn parses_content_length_body() {
         let raw = b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\nServer: x\r\n\r\nhelloEXTRA";
         assert_eq!(parse_response(raw).unwrap(), (200, b"hello".to_vec()));
+    }
+
+    /// Chunk extensions and trailers are read through; a size that would overflow, or a chunk not followed by its
+    /// CRLF, isn't a body; the end is only taken once the trailers' empty line came
+    #[test]
+    fn chunked_edges() {
+        assert_eq!(dechunk(b"4;ext=1\r\nWiki\r\n0\r\nX-Checksum: 1\r\n\r\n").unwrap(), b"Wiki");
+        assert_eq!(dechunk(b"0\r\n\r\n").unwrap(), b"");
+        assert!(dechunk(b"0\r\nX-Checksum: 1\r\n").is_none(), "the trailers' end not there yet");
+        assert!(dechunk(b"ffffffffffffffff\r\nabc").is_none(), "no overflow, no panic");
+        assert!(dechunk(b"4\r\nWikiXX0\r\n\r\n").is_none(), "a chunk runs on past its size");
+        let raw = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n2\r\nok\r\n0\r\nX-T: 1\r\n\r\n";
+        assert!(response_complete(raw), "complete with a trailer");
+        assert_eq!(parse_response(raw.to_vec()).unwrap(), (200, b"ok".to_vec()));
+    }
+
+    /// A head that doesn't end within 64 KB is refused at once instead of scanned again after every read
+    #[tokio::test]
+    async fn an_endless_head_is_refused() {
+        let mut endless = b"HTTP/1.1 200 OK\r\n".to_vec();
+        endless.extend(std::iter::repeat_n(b'x', 200 * 1024));
+        let e = read_response(&mut &endless[..], MAX_RESPONSE_BYTES).await.unwrap_err();
+        assert_eq!(e.kind(), std::io::ErrorKind::InvalidData);
     }
 
     #[test]

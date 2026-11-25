@@ -142,10 +142,11 @@ fn typed_kind(e: &Element) -> &'static str {
 /// The lock screen's passcode field. Its value holds two numbers, how many digits were entered and how many there are,
 /// in either order: 「共6位数，已输入2位」, "0 of 6 values entered", "0 valeur saisie sur 6", "0 von 6 Werten eingegeben".
 /// Known words in the label or the value say so; with none (a language not listed), a 4- or 6-digit total still does
+/// when words stand between the numbers: a field showing a time, a fraction or a decimal ("6:00", "2/4", "1.6") is
+/// no passcode field, and taking it for one made the screen read as locked
 fn is_passcode_field(e: &Element) -> bool {
-    let numbers: Vec<u32> =
-        e.value.split(|c: char| !c.is_ascii_digit()).filter(|n| !n.is_empty()).filter_map(|n| n.parse().ok()).collect();
-    let [a, b] = numbers[..] else { return false };
+    let runs = digit_runs(&e.value);
+    let [(a, _), (b, sep)] = runs[..] else { return false };
     let total = a.max(b);
     if total == 0 {
         return false;
@@ -154,7 +155,27 @@ fn is_passcode_field(e: &Element) -> bool {
     let value = e.value.to_lowercase();
     PASSCODE_LABEL_WORDS.iter().any(|w| label.contains(w))
         || PASSCODE_VALUE_WORDS.iter().any(|w| value.contains(w))
-        || matches!(total, 4 | 6)
+        || (matches!(total, 4 | 6) && sep.chars().any(char::is_alphabetic))
+}
+
+/// The numbers in `s`, each with the text before it (since the previous number)
+fn digit_runs(s: &str) -> Vec<(u32, &str)> {
+    let mut out = Vec::new();
+    let (mut after, mut i) = (0, 0);
+    let b = s.as_bytes();
+    while i < b.len() {
+        if b[i].is_ascii_digit() {
+            let start = i;
+            while i < b.len() && b[i].is_ascii_digit() {
+                i += 1;
+            }
+            out.push((s[start..i].parse().unwrap_or(u32::MAX), &s[after..start]));
+            after = i;
+        } else {
+            i += 1;
+        }
+    }
+    out
 }
 
 /// Words in the passcode field's label (lowercase): 「密码栏」, "Passcode field", "Champ de code"
@@ -519,6 +540,10 @@ mod tests {
         assert_eq!(kind(&field("0 0")), "TextField");
         assert_eq!(kind(&field("1 2 3")), "TextField");
         assert_eq!(kind(&field("hello")), "TextField");
+        // a time, a fraction, a decimal: punctuation between the numbers, no words
+        for v in ["6:00", "2/4", "1.6", "4-6", "06:04"] {
+            assert_eq!(kind(&field(v)), "TextField", "{v}");
+        }
         // untyped, a text field by its traits
         let untyped =
             Element { traits: trait_bit::TEXT_FIELD, value: "共6位数，已输入1位".into(), ..Default::default() };

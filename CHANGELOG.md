@@ -32,6 +32,11 @@ What changed in each release, one line per change. Versions follow [Semantic Ver
 - Services install from a program path with spaces, and refuse one with characters systemd or the shell would read as their own; an update that paused the viewer's service starts it again without turning on its start at login; setting up the automatic update job and failing leaves none of its files behind, even when the service manager can't be reached (#202).
 - An AI task from the control page works when `IPHONE_CONTROL_URL` is set in the settings file (#202).
 - A read-only login no longer sends touches from the picture (each answered with an error) and shows no pointer on it (#202).
+- iOS 27+: an ordinary text field showing a time or a fraction ("6:00", "2/4") is no longer taken for the lock screen's passcode field, which made the phone read as locked (#203).
+- iOS 27+: an element the phone lists under another flag than its own is no longer left out of the screen with everything under it (#203).
+- Malformed answers from the phone (endless or oversized message fragments from the accessibility service, a Web Inspector message split past its limit, a WebDriverAgent answer with an endless head or odd chunks) are refused instead of read for ever or crashing; a WebDriverAgent answer with trailers no longer waits for the timeout (#203).
+- `iphone_web_eval`: a page that went away is reported at once instead of after the timeout, and a connection left out of step is opened again for the next call (#203).
+- macOS: the built-in video encoder no longer piles up frames for a page that is slow to take them (#203).
 - When pressing Home finds a system alert in the way, the daemon's answer now also marks it in its structured result (`alert_reported`), as launching an app or opening a link does; programs reading the result rather than its text missed it (#200).
 - A long press falls back to HID like a tap when WebDriverAgent can't be reached (#200).
 - Requests that can't run (a tap count of 0, an empty tap sequence, an unknown button, a point that isn't a number) are refused at once, before waiting for the phone and without dropping the cached screen (#200).

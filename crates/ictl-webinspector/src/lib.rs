@@ -98,16 +98,13 @@ pub struct WebInspector {
     /// Pieces of a message the phone split up (`WIRPartialMessageKey`)
     partial: Vec<u8>,
     reported: bool,
+    /// A write stopped half-way (timed out or failed): the stream is out of step, nothing more is sent on it
+    broken: bool,
 }
 
-impl IdeviceService for WebInspector {
-    fn service_name() -> std::borrow::Cow<'static, str> {
-        "com.apple.webinspector".into()
-    }
-
-    async fn from_stream(idevice: Idevice) -> std::result::Result<Self, IdeviceError> {
-        let socket = idevice.get_socket().ok_or(IdeviceError::NoEstablishedConnection)?;
-        Ok(Self {
+impl WebInspector {
+    fn with_socket(socket: Box<dyn ReadWrite>) -> Self {
+        Self {
             socket,
             connection: uuid::Uuid::new_v4().to_string().to_uppercase(),
             apps: BTreeMap::new(),
@@ -117,7 +114,19 @@ impl IdeviceService for WebInspector {
             rbuf: Vec::new(),
             partial: Vec::new(),
             reported: false,
-        })
+            broken: false,
+        }
+    }
+}
+
+impl IdeviceService for WebInspector {
+    fn service_name() -> std::borrow::Cow<'static, str> {
+        "com.apple.webinspector".into()
+    }
+
+    async fn from_stream(idevice: Idevice) -> std::result::Result<Self, IdeviceError> {
+        let socket = idevice.get_socket().ok_or(IdeviceError::NoEstablishedConnection)?;
+        Ok(Self::with_socket(socket))
     }
 
     fn get_socket(&mut self) -> Option<&mut Box<dyn ReadWrite>> {
@@ -168,18 +177,36 @@ impl WebInspector {
         Ok((self.apps.values().cloned().collect(), pages))
     }
 
+    /// Whether a write stopped half-way: the stream is out of step, and the connection should be opened again (a
+    /// value may still have come back from the call that found it so)
+    pub fn is_broken(&self) -> bool {
+        self.broken
+    }
+
     /// Evaluates `expression` in a page and returns its value. A promise is awaited
     pub async fn evaluate(&mut self, page: &Page, expression: &str, timeout: Duration) -> Result<Eval> {
         let deadline = Instant::now() + timeout;
         let sender = uuid::Uuid::new_v4().to_string().to_uppercase();
         self.open_sessions.insert(sender.clone());
+        let result = self.evaluate_in(page, &sender, expression, deadline).await;
+        // closed and forgotten whichever way it went (a setup that failed left both behind, the session's messages
+        // kept piling up); a close that can't be written marks the connection broken ([`Self::is_broken`])
+        let mut close = self.page_args(page);
+        close.insert("WIRSenderKey".into(), sender.clone().into());
+        let _ = self.send("_rpc_forwardDidClose:", close).await;
+        self.data.remove(&sender);
+        self.open_sessions.remove(&sender);
+        result
+    }
+
+    async fn evaluate_in(&mut self, page: &Page, sender: &str, expression: &str, deadline: Instant) -> Result<Eval> {
         let mut setup = self.page_args(page);
-        setup.insert("WIRSenderKey".into(), sender.clone().into());
+        setup.insert("WIRSenderKey".into(), sender.to_owned().into());
         setup.insert("WIRMessageDataTypeChunkSupportedKey".into(), 0.into());
         setup.insert("WIRAutomaticallyPause".into(), false.into());
         self.send("_rpc_forwardSocketSetup:", setup).await?;
 
-        let mut session = Session { sender, target: None, next_id: 1 };
+        let mut session = Session { sender: sender.to_owned(), target: None, next_id: 1 };
         // current WebKit announces the page target first; older versions take commands directly
         let probe = (Instant::now() + Duration::from_millis(1500)).min(deadline);
         while session.target.is_none() {
@@ -194,13 +221,7 @@ impl WebInspector {
             }
         }
 
-        let result = self.run_eval(page, &mut session, expression, deadline).await;
-        let mut close = self.page_args(page);
-        close.insert("WIRSenderKey".into(), session.sender.clone().into());
-        let _ = self.send("_rpc_forwardDidClose:", close).await;
-        self.data.remove(&session.sender);
-        self.open_sessions.remove(&session.sender);
-        result
+        self.run_eval(page, &mut session, expression, deadline).await
     }
 
     async fn run_eval(&mut self, page: &Page, s: &mut Session, expression: &str, deadline: Instant) -> Result<Eval> {
@@ -248,9 +269,10 @@ impl WebInspector {
         a.insert("WIRSenderKey".into(), s.sender.clone().into());
         a.insert("WIRSocketDataKey".into(), Value::Data(msg.to_string().into_bytes()));
         self.send("_rpc_forwardSocketData:", a).await?;
+        let outer = s.target.as_ref().map(|_| id + 1_000_000);
         loop {
             for m in self.take_data(&s.sender) {
-                if let Some(r) = response_for(&m, id) {
+                if let Some(r) = answer_to(&m, id, outer) {
                     return r;
                 }
             }
@@ -272,6 +294,13 @@ impl WebInspector {
     }
 
     async fn send(&mut self, selector: &str, mut args: Dictionary) -> Result<()> {
+        if self.broken {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::BrokenPipe,
+                "the Web Inspector connection is out of step",
+            )
+            .into());
+        }
         args.insert("WIRConnectionIdentifierKey".into(), self.connection.clone().into());
         let mut msg = Dictionary::new();
         msg.insert("__selector".into(), selector.into());
@@ -284,10 +313,15 @@ impl WebInspector {
             self.socket.write_all(&framed).await?;
             self.socket.flush().await
         };
-        // a write cut off half-way leaves the stream out of step: report it as a broken connection (Io)
-        tokio::time::timeout(SEND_TIMEOUT, write).await.map_err(|_| {
+        // a write cut off half-way leaves the stream out of step: report it as a broken connection (Io), and send
+        // nothing more on it
+        let r = tokio::time::timeout(SEND_TIMEOUT, write).await.map_err(|_| {
             std::io::Error::new(std::io::ErrorKind::TimedOut, "the phone stopped reading Web Inspector messages")
-        })??;
+        });
+        if !matches!(r, Ok(Ok(()))) {
+            self.broken = true;
+        }
+        r??;
         Ok(())
     }
 
@@ -398,6 +432,11 @@ fn unchunk_into(partial: &mut Vec<u8>, msg: Dictionary) -> Result<Option<Diction
         return Ok(None);
     }
     if let Some(last) = arg.and_then(|a| a.get("WIRFinalMessageKey")).and_then(Value::as_data) {
+        // the last piece counts too: the pieces before it under the limit, then a huge last one
+        if partial.len() + last.len() > MAX_MESSAGE {
+            partial.clear();
+            return Err(Error::Protocol(format!("split message over {MAX_MESSAGE} bytes")));
+        }
         partial.extend_from_slice(last);
         let whole = std::mem::take(partial);
         return Ok(Some(plist::from_bytes(&whole)?));
@@ -452,6 +491,19 @@ fn parse_listing(app_id: &str, arg: &Dictionary) -> Vec<Page> {
 }
 
 /// The result of command `id` in an inspector message, unwrapping `Target.dispatchMessageFromTarget`
+/// The answer to command `id` in `m`, if it is one; or the error of `outer`, the `Target.sendMessageToTarget` that
+/// carried it: when that is refused (the target went away), no answer to the command comes, and waiting for one ran
+/// to the timeout
+fn answer_to(m: &serde_json::Value, id: u64, outer: Option<u64>) -> Option<Result<serde_json::Value>> {
+    if let Some(r) = response_for(m, id) {
+        return Some(r);
+    }
+    match outer.and_then(|o| response_for(m, o)) {
+        Some(Err(e)) => Some(Err(e)),
+        _ => None,
+    }
+}
+
 fn response_for(m: &serde_json::Value, id: u64) -> Option<Result<serde_json::Value>> {
     let inner;
     let m = if m["method"] == "Target.dispatchMessageFromTarget" {
@@ -518,6 +570,61 @@ mod tests {
         assert!(unchunk_into(&mut partial, part(20)).is_err());
         assert!(partial.is_empty(), "the pieces are dropped");
         assert!(unchunk_into(&mut partial, part(20)).unwrap().is_none(), "a new message can start");
+    }
+
+    /// The last piece counts toward the limit too
+    #[test]
+    fn a_huge_last_piece_is_refused() {
+        let last = |n: usize| {
+            let mut a = Dictionary::new();
+            a.insert("WIRFinalMessageKey".into(), Value::Data(vec![0u8; n]));
+            let mut d = Dictionary::new();
+            d.insert("__argument".into(), Value::Dictionary(a));
+            d
+        };
+        let mut partial = vec![0u8; MAX_MESSAGE - 10];
+        assert!(unchunk_into(&mut partial, last(20)).is_err());
+        assert!(partial.is_empty());
+    }
+
+    /// A refused wrapper ends the wait at once; its plain acknowledgement doesn't; the command's own answer is taken
+    #[test]
+    fn a_refused_wrapper_ends_the_wait() {
+        let inner = |id: u64| {
+            json!({"method": "Target.dispatchMessageFromTarget",
+            "params": {"message": json!({"id": id, "result": {"v": 1}}).to_string()}})
+        };
+        assert!(matches!(answer_to(&inner(3), 3, Some(1_000_003)), Some(Ok(_))));
+        let refused = json!({"id": 1_000_003, "error": {"message": "Missing target"}});
+        assert!(
+            matches!(answer_to(&refused, 3, Some(1_000_003)), Some(Err(Error::Command(m))) if m == "Missing target")
+        );
+        let acked = json!({"id": 1_000_003, "result": {}});
+        assert!(answer_to(&acked, 3, Some(1_000_003)).is_none(), "the wrapper went through: wait for the answer");
+        assert!(answer_to(&refused, 3, None).is_none(), "no wrapper: not ours");
+    }
+
+    /// A failed write ends the evaluation, leaves no session behind and marks the connection broken: nothing more is
+    /// written on it
+    #[tokio::test]
+    async fn a_failed_write_leaves_nothing_behind() {
+        let (ours, theirs) = tokio::io::duplex(64);
+        drop(theirs);
+        let mut w = WebInspector::with_socket(Box::new(ours));
+        let page = Page {
+            app_id: "PID:1".into(),
+            id: 1,
+            kind: "WebPage".into(),
+            title: String::new(),
+            url: String::new(),
+            in_use: false,
+        };
+        assert!(w.evaluate(&page, "1", Duration::from_secs(1)).await.is_err());
+        assert!(w.is_broken());
+        assert!(w.open_sessions.is_empty() && w.data.is_empty());
+        let t0 = Instant::now();
+        assert!(w.evaluate(&page, "1", Duration::from_secs(1)).await.is_err());
+        assert!(t0.elapsed() < Duration::from_millis(100), "refused at once");
     }
 
     trait TapPart {

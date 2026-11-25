@@ -360,11 +360,13 @@ impl Daemon {
                 if !hid_supported(g.info.as_ref()) {
                     return Err(wda_down(&g.state, g.info.as_ref()).into());
                 }
+                // the picture comes from CoreDevice's screencaptureservice either way; driven natively that is the
+                // normal path, without it WDA is down and «HID» tells the agent so (taps say «via HID» too)
                 (
                     self.hid_screenshot(g)
                         .await
                         .map_err(|e| ictl_l10n::trf!("HID 命令失败: {e}", "HID command failed: {e}"))?,
-                    "HID",
+                    if self.native(g) { "CoreDevice" } else { "HID" },
                 )
             }
         };

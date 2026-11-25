@@ -10,6 +10,12 @@
 
 - `status`、`doctor` 和事件日志里的时间改为本地时间并标明时区，之前显示的是 UTC 却没有说明。
 - `iphone-control update`、`service` 和控制台更新面板里的报错跟随界面语言，之前总是英文。
+- 原生控制的手机（iOS 27 起）不再因为别的设备用过 WebDriverAgent 而触发 WebDriverAgent 重签和每天一次的 Apple ID 会话检查（以及「会话失效」提醒）。
+- 重签完成后马上启动新的 WebDriverAgent，不用再等最多 10 秒的下一轮巡检。
+- 按住再拖（`iphone_swipe` 带 `hold`）中途失败或超时时会抬起手指，不再留着按下的状态。
+- WebDriverAgent 的响应、无障碍消息和屏幕视频帧都有了大小上限，数据流出错时不会无限占用内存。
+- 原生控制时截图说明写「经 CoreDevice」，不再写「经 HID」。
+- 控制台没人观看时不再把手机的屏幕视频拼成帧，Agent 操作期间更省 CPU。
 
 ## [0.2.14] - 2026-11-24
 

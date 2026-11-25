@@ -84,7 +84,7 @@ impl Daemon {
         // an app's name or bundle ID → the process it runs as; anything else is taken as a process name
         let wanted = if process.is_empty() { None } else { Some(self.process_name(g, process).await) };
         let c = g.dev.log_capture.as_ref().expect("set above");
-        let filter = LogFilter { process: wanted.as_deref(), grep, errors_only };
+        let filter = LogFilter::new(wanted.as_deref(), grep, errors_only);
         let from = Instant::now().checked_sub(since);
         let (lines, oldest) = {
             let b = c.buf.lock().unwrap_or_else(|p| p.into_inner());
@@ -325,11 +325,16 @@ fn is_wda_runner(bid: &str, signed: Option<&str>) -> bool {
 struct LogFilter<'a> {
     /// executable name, matched against the last path component, ignoring case
     process: Option<&'a str>,
-    grep: &'a str,
+    /// already lowercased ([`LogFilter::new`]): it is matched against up to 20,000 entries
+    grep: String,
     errors_only: bool,
 }
 
-impl LogFilter<'_> {
+impl<'a> LogFilter<'a> {
+    fn new(process: Option<&'a str>, grep: &str, errors_only: bool) -> Self {
+        Self { process, grep: grep.to_lowercase(), errors_only }
+    }
+
     fn matches(&self, e: &LogEntry) -> bool {
         if self.errors_only && !matches!(e.level, LogLevel::Error | LogLevel::Fault) {
             return false;
@@ -341,9 +346,9 @@ impl LogFilter<'_> {
             }
         }
         if !self.grep.is_empty() {
-            let g = self.grep.to_lowercase();
+            let g = &self.grep;
             let sub = e.subsystem.as_deref().unwrap_or_default();
-            if !e.message.to_lowercase().contains(&g) && !sub.to_lowercase().contains(&g) {
+            if !e.message.to_lowercase().contains(g) && !sub.to_lowercase().contains(g) {
                 return false;
             }
         }
@@ -454,7 +459,7 @@ mod tests {
     fn log_filter() {
         let app = "/private/var/containers/Bundle/Application/X/My App.app/MyApp";
         let e = entry(app, LogLevel::Error, "Request failed: timeout");
-        let f = |process, grep, errors_only| LogFilter { process, grep, errors_only };
+        let f = |process, grep, errors_only| LogFilter::new(process, grep, errors_only);
         assert!(f(Some("myapp"), "", false).matches(&e));
         assert!(!f(Some("App"), "", false).matches(&e));
         assert!(f(None, "TIMEOUT", true).matches(&e));

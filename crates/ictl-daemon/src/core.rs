@@ -1129,11 +1129,8 @@ impl Daemon {
                     return Response::error(ictl_l10n::tr!("手机未连接", "Phone not connected"));
                 };
                 let Request::InstallApp { path } = req else { unreachable!("lane") };
-                let r = self.install_app(&device, &path).await;
-                if r.is_ok() {
-                    self.inner.lock().await.dev.apps.clear();
-                }
-                return text(r);
+                // install_app clears the app lists itself once installed
+                return text(self.install_app(&device, &path).await);
             }
             Lane::Device => {}
         }

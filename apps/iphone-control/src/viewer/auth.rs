@@ -196,12 +196,19 @@ fn write_private(file: &Path, data: &[u8]) -> io::Result<()> {
     if let Some(dir) = file.parent() {
         std::fs::create_dir_all(dir)?;
     }
-    let tmp = file.with_extension("tmp");
-    let mut f = std::fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(&tmp)?;
-    f.set_permissions(std::fs::Permissions::from_mode(0o600))?;
-    f.write_all(data)?;
-    f.sync_all()?;
-    std::fs::rename(&tmp, file)
+    // a name of its own: two commands changing tokens at once must not write into the same temporary file
+    let tmp = file.with_extension(format!("{}.{}.tmp", std::process::id(), &new_token()?[..8]));
+    let written = (|| {
+        let mut f = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&tmp)?;
+        f.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+        f.write_all(data)?;
+        f.sync_all()?;
+        std::fs::rename(&tmp, file)
+    })();
+    if written.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    written
 }
 
 /// Who a request is logged in as
@@ -351,26 +358,18 @@ impl Auth {
         }
     }
 
-    /// Too many wrong tokens just now
-    pub fn limited(&self) -> bool {
+    /// A wrong token (or task token, see `viewer::login_gate`) was sent: [`Verdict::Wrong`], or
+    /// [`Verdict::Limited`] once there were too many. Checked and counted under one lock: two wrong tokens at the
+    /// same moment can't both slip under the limit
+    pub fn failed(&self) -> Verdict {
         let mut f = self.failures.lock().unwrap_or_else(|p| p.into_inner());
         let now = Instant::now();
-        while f.front().is_some_and(|t| now.duration_since(*t) > WINDOW) {
-            f.pop_front();
+        if recent_failures(&mut f, now) >= MAX_FAILURES {
+            return Verdict::Limited;
         }
-        f.len() >= MAX_FAILURES
-    }
-
-    /// A wrong token (or task token, see `viewer::login_gate`) was sent: [`Verdict::Wrong`], or
-    /// [`Verdict::Limited`] once there were too many
-    pub fn failed(&self) -> Verdict {
-        let limited = self.limited();
-        let mut f = self.failures.lock().unwrap_or_else(|p| p.into_inner());
         // counted up to the limit only: a flood doesn't keep it going after the minute
-        if !limited {
-            f.push_back(Instant::now());
-        }
-        if limited { Verdict::Limited } else { Verdict::Wrong }
+        f.push_back(now);
+        Verdict::Wrong
     }
 
     /// `Set-Cookie` for a browser that logged in with the token named `name`; `secure` over HTTPS (the browser then
@@ -388,7 +387,16 @@ impl Auth {
     }
 }
 
-/// Equal, in a time that doesn't depend on where they differ
+/// Drops the failures older than [`WINDOW`] and counts the rest
+fn recent_failures(f: &mut std::collections::VecDeque<Instant>, now: Instant) -> usize {
+    while f.front().is_some_and(|t| now.duration_since(*t) > WINDOW) {
+        f.pop_front();
+    }
+    f.len()
+}
+
+/// Equal, in a time that doesn't depend on where they differ (ring's `verify_slices_are_equal` is deprecated in
+/// 0.17 and promises nothing about side channels)
 fn same(a: &str, b: &str) -> bool {
     let (a, b) = (a.as_bytes(), b.as_bytes());
     a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0

@@ -121,29 +121,7 @@ impl DeviceTransport {
             sock.write_all(&req).await.map_err(write_failed)?;
             sock.flush().await.map_err(write_failed)?;
             written = true;
-            // WDA 收到 `Connection: close` 也不关连接，不能读到 EOF：读够一个完整响应就停。
-            // 头部只解析一次；正文按 Content-Length 判断，chunked 只在收到结束块后才完整解一次
-            let mut buf = Vec::new();
-            let mut chunk = vec![0u8; 64 * 1024];
-            let mut head: Option<(usize, Framing)> = None;
-            loop {
-                if head.is_none() {
-                    head = parse_head(&buf);
-                    if let Some((split, Framing::Length(n))) = head {
-                        buf.reserve((split + n).saturating_sub(buf.len()));
-                    }
-                }
-                if let Some((split, framing)) = head
-                    && framing.complete(&buf[split..])
-                {
-                    break;
-                }
-                let n = sock.read(&mut chunk).await.map_err(after_sent)?;
-                if n == 0 {
-                    break;
-                }
-                buf.extend_from_slice(&chunk[..n]);
-            }
+            let buf = read_response(&mut sock, MAX_RESPONSE_BYTES).await.map_err(after_sent)?;
             parse_response(buf).map_err(after_sent)
         };
         tokio::time::timeout(timeout, fut).await.map_err(|_| {
@@ -153,6 +131,53 @@ impl DeviceTransport {
             )
         })?
     }
+}
+
+/// 一个 WDA 响应最多这么大（头部加正文）。最大的是 iPad 的截图（base64 的 PNG，十几 MB）和大界面的 `/source`；
+/// 超过就当坏了，不跟着对方给的 Content-Length 无限分配
+pub(crate) const MAX_RESPONSE_BYTES: usize = 64 * 1024 * 1024;
+
+/// 读够一个完整响应就停：WDA 收到 `Connection: close` 也不关连接，不能读到 EOF。
+/// 头部只解析一次；正文按 Content-Length 判断，chunked 只在收到结束块后才完整解一次。
+/// 超过 `limit`（含 Content-Length 声明的长度）返回 `InvalidData`
+pub(crate) async fn read_response<R: tokio::io::AsyncRead + Unpin>(
+    sock: &mut R,
+    limit: usize,
+) -> std::io::Result<Vec<u8>> {
+    let too_large = || {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            ictl_l10n::trf!("WDA 的响应超过 {} MB", "WDA's response is over {} MB", limit >> 20),
+        )
+    };
+    let mut buf = Vec::new();
+    let mut chunk = vec![0u8; 64 * 1024];
+    let mut head: Option<(usize, Framing)> = None;
+    loop {
+        if head.is_none() {
+            head = parse_head(&buf);
+            if let Some((split, Framing::Length(n))) = head {
+                if split.saturating_add(n) > limit {
+                    return Err(too_large());
+                }
+                buf.reserve((split + n).saturating_sub(buf.len()));
+            }
+        }
+        if let Some((split, framing)) = head
+            && framing.complete(&buf[split..])
+        {
+            break;
+        }
+        let n = sock.read(&mut chunk).await?;
+        if n == 0 {
+            break;
+        }
+        if buf.len() + n > limit {
+            return Err(too_large());
+        }
+        buf.extend_from_slice(&chunk[..n]);
+    }
+    Ok(buf)
 }
 
 pub(crate) fn build_request(method: &str, path: &str, body: Option<&[u8]>) -> Vec<u8> {
@@ -301,6 +326,22 @@ mod tests {
         assert!(!get.contains("Content-Length"));
         let post = String::from_utf8(build_request("POST", "/session", Some(b"{}"))).unwrap();
         assert!(post.contains("Content-Length: 2\r\n") && post.ends_with("\r\n\r\n{}"));
+    }
+
+    #[tokio::test]
+    async fn oversized_responses_are_refused() {
+        // declared too large: refused before reading the body
+        let mut declared: &[u8] = b"HTTP/1.1 200 OK\r\nContent-Length: 1000\r\n\r\nabc";
+        let e = read_response(&mut declared, 100).await.unwrap_err();
+        assert_eq!(e.kind(), std::io::ErrorKind::InvalidData);
+        // no length (read until EOF) and more than the limit arrives
+        let big = [b"HTTP/1.1 200 OK\r\n\r\n".as_slice(), &[b'x'; 200]].concat();
+        let e = read_response(&mut big.as_slice(), 100).await.unwrap_err();
+        assert_eq!(e.kind(), std::io::ErrorKind::InvalidData);
+        // within the limit: read whole, the rest of the stream left alone
+        let mut ok: &[u8] = b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}";
+        let raw = read_response(&mut ok, 100).await.unwrap();
+        assert_eq!(parse_response(raw).unwrap(), (200, b"{}".to_vec()));
     }
 
     #[test]

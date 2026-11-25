@@ -44,8 +44,15 @@ impl Frame {
     }
 }
 
+/// The largest message accepted, its fragments joined (a big accessibility reply is a few MB)
+pub const MAX_MESSAGE_BYTES: usize = 64 << 20;
+
 /// Reads the next whole message
 pub async fn read_frame<R: AsyncRead + Unpin>(reader: &mut R) -> std::io::Result<Frame> {
+    read_frame_within(reader, MAX_MESSAGE_BYTES).await
+}
+
+async fn read_frame_within<R: AsyncRead + Unpin>(reader: &mut R, limit: usize) -> std::io::Result<Frame> {
     let mut payload = Vec::new();
     loop {
         let mut h = [0u8; 32];
@@ -61,12 +68,15 @@ pub async fn read_frame<R: AsyncRead + Unpin>(reader: &mut R) -> std::io::Result
             continue;
         }
         let len = word(12) as usize;
-        if len > 64 << 20 {
+        // the whole message, all its fragments together, not each one: a header can claim anything
+        if payload.len().saturating_add(len) > limit {
             return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "DTX message too large"));
         }
-        let mut part = vec![0u8; len];
-        reader.read_exact(&mut part).await?;
-        payload.extend(part);
+        // read as it comes instead of allocating what the header claims up front
+        let read = (&mut *reader).take(len as u64).read_to_end(&mut payload).await?;
+        if read < len {
+            return Err(std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "DTX message cut short"));
+        }
         if fragment + 1 >= fragments {
             return Ok(parse(word(16), word(20), word(24) as i32, word(28) == 1, &payload));
         }
@@ -141,6 +151,33 @@ mod tests {
         assert_eq!((f.identifier, f.conversation, f.expects_reply, f.msg_type), (9, 0, true, MSG_INVOCATION));
         assert_eq!(f.selector().as_deref(), Some("clientNeedsAccessibility:"));
         assert_eq!(f.first_arg(), Some(Obj::Bool(true)));
+    }
+
+    /// A fragment's 32-byte header and its bytes
+    fn fragment(index: u16, count: u16, data: &[u8]) -> Vec<u8> {
+        let mut h = Vec::new();
+        h.extend(0x1F3D_5B79u32.to_le_bytes());
+        h.extend(32u32.to_le_bytes());
+        h.extend(index.to_le_bytes());
+        h.extend(count.to_le_bytes());
+        h.extend((data.len() as u32).to_le_bytes());
+        h.extend([5u32, 0, 0, 0].iter().flat_map(|w| w.to_le_bytes()));
+        h.extend(data);
+        h
+    }
+
+    #[tokio::test]
+    async fn the_whole_message_is_limited_not_each_fragment() {
+        // the first of several fragments is the header alone
+        let parts = |n: usize| [fragment(0, 3, &[]), fragment(1, 3, &vec![1; n]), fragment(2, 3, &vec![2; n])].concat();
+        assert!(read_frame_within(&mut &parts(40)[..], 100).await.is_ok());
+        let e = read_frame_within(&mut &parts(60)[..], 100).await.unwrap_err();
+        assert_eq!(e.kind(), std::io::ErrorKind::InvalidData);
+        // a header claiming more than arrives is an error, not a huge allocation
+        let mut cut = fragment(0, 1, &[0; 10]);
+        cut[12..16].copy_from_slice(&50u32.to_le_bytes());
+        let e = read_frame_within(&mut &cut[..], 100).await.unwrap_err();
+        assert_eq!(e.kind(), std::io::ErrorKind::UnexpectedEof);
     }
 
     #[tokio::test]

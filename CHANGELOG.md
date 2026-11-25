@@ -10,6 +10,12 @@ What changed in each release, one line per change. Versions follow [Semantic Ver
 
 - Times in `status`, `doctor` and the event log are shown in local time with the time zone; they were UTC without saying so.
 - Errors from `iphone-control update`, `service` and the update panel on the control page follow the chosen language; they were always in English.
+- Phones driven natively (iOS 27+) no longer trigger WebDriverAgent re-signing or the daily Apple ID session check (and its "session expired" warning) when another device once used WebDriverAgent.
+- After re-signing, the new WebDriverAgent starts right away instead of at the next check up to 10 seconds later.
+- A dragged finger held down (`iphone_swipe` with `hold`) is lifted if the drag fails or times out halfway.
+- Responses from WebDriverAgent, accessibility messages and screen video frames have size limits, so a broken stream can't make the program use unbounded memory.
+- Screenshots of a phone driven natively say "via CoreDevice" instead of "via HID".
+- With nobody watching the control page, the phone's screen video is no longer assembled into frames, which saves CPU while an agent works.
 
 ## [0.2.14] - 2026-11-24
 

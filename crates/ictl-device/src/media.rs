@@ -125,16 +125,23 @@ fn receive(
                     media_ssrc = p.ssrc;
                     first_seq.get_or_insert(p.sequence_number);
                     last_seq = p.sequence_number;
+                    // 没人订阅时只记参数集，不拼帧（新订阅者会要关键帧，参数集补在它前面）
+                    let watched = frames.receiver_count() > 0;
                     // 新的时间戳开始了新的一帧：上一帧要是还没随 marker 结束，先把它发出去
-                    if let Some(f) = asm.new_timestamp(p.timestamp) {
+                    if let Some(Some(f)) = asm.new_timestamp(p.timestamp, watched) {
                         let _ = frames.send(f);
                     }
                     depack.push(p.sequence_number, p.timestamp, p.payload);
                     asm.push(&depack.take_output());
-                    if p.marker && let Some(f) = asm.finish() {
+                    if p.marker && let Some(f) = asm.complete(watched) {
                         received = received.wrapping_add(1);
                         let _ = video.send_to(device_port, build_frame_ack(our_ssrc, p.timestamp)).await;
-                        let _ = frames.send(f);
+                        if let Some(f) = f {
+                            let _ = frames.send(f);
+                        }
+                    }
+                    if asm.take_dropped() {
+                        keyframe_wanted = true;
                     }
                 }
                 r = keyframe.recv() => {
@@ -167,6 +174,9 @@ fn receive(
     })
 }
 
+/// 一帧最多这么大。手机的关键帧几十 KB 到一两 MB；超过就是丢了 marker 又一直是同一个时间戳之类的坏数据
+const MAX_FRAME_BYTES: usize = 8 * 1024 * 1024;
+
 /// 把解包器吐出的 Annex-B 攒成一帧：帧以 RTP marker 结束（或下一帧的时间戳开始）。记下最近的参数集，补到没带它们
 /// 的关键帧前面
 #[derive(Default)]
@@ -175,31 +185,63 @@ struct Assembler {
     timestamp: Option<u32>,
     /// 最近一次见到的 VPS、SPS、PPS（各自带起始码）
     params: [Option<Vec<u8>>; 3],
+    /// 这一帧超过了 [`MAX_FRAME_BYTES`]：丢掉，到下一帧再收
+    overflow: bool,
+    /// 丢过超大的帧，还没告诉调用方（它要请手机补一个关键帧）
+    dropped: bool,
 }
 
 impl Assembler {
-    fn new_timestamp(&mut self, ts: u32) -> Option<ScreenFrame> {
-        let done = if self.timestamp.is_some_and(|t| t != ts) { self.finish() } else { None };
+    /// 新的时间戳开始了新的一帧：上一帧要是还没随 marker 结束，就在这里结束（返回值同 [`Self::complete`]）
+    fn new_timestamp(&mut self, ts: u32, watched: bool) -> Option<Option<ScreenFrame>> {
+        let done = if self.timestamp.is_some_and(|t| t != ts) { self.complete(watched) } else { None };
         self.timestamp = Some(ts);
         done
     }
 
     fn push(&mut self, annexb: &[u8]) {
+        if self.overflow {
+            return;
+        }
+        if self.current.len() + annexb.len() > MAX_FRAME_BYTES {
+            self.current.clear();
+            self.overflow = true;
+            self.dropped = true;
+            return;
+        }
         self.current.extend_from_slice(annexb);
     }
 
-    /// 攒好的一帧；没有画面数据（只有参数集、AUD）时不算一帧，参数集留下
+    /// 丢过超大的帧吗（问一次就清掉）
+    fn take_dropped(&mut self) -> bool {
+        std::mem::take(&mut self.dropped)
+    }
+
+    /// 攒好的一帧（[`Self::complete`]，有人在看）
+    #[cfg(test)]
     fn finish(&mut self) -> Option<ScreenFrame> {
-        let data = std::mem::take(&mut self.current);
-        let nals = nal_units(&data);
+        self.complete(true).flatten()
+    }
+
+    /// 结束攒着的一帧。`None`：没有画面数据（只有参数集、AUD，或超大被丢了），参数集留下；`Some(None)`：是一帧，
+    /// 但没人看（`watched` 为 false），只记下参数集、不复制不分配（Agent 操作时媒体流开着，常常没人看）；
+    /// `Some(Some(帧))`：要发给订阅者的一帧
+    fn complete(&mut self, watched: bool) -> Option<Option<ScreenFrame>> {
+        if std::mem::take(&mut self.overflow) {
+            self.current.clear();
+            return None;
+        }
         let mut key = false;
         let mut has = [false; 3];
         let mut vcl = false;
-        for n in &nals {
+        for n in nal_units(&self.current) {
             match nal_type(n) {
                 Some(t @ 32..=34) => {
                     has[usize::from(t - 32)] = true;
-                    self.params[usize::from(t - 32)] = Some(n.to_vec());
+                    let slot = &mut self.params[usize::from(t - 32)];
+                    if slot.as_deref() != Some(n) {
+                        *slot = Some(n.to_vec());
+                    }
                 }
                 Some(t) if t <= 31 => {
                     vcl = true;
@@ -208,17 +250,25 @@ impl Assembler {
                 _ => {}
             }
         }
-        if !vcl {
-            return None;
+        if !vcl || !watched {
+            // 留着缓冲区的容量，下一帧接着用
+            self.current.clear();
+            return vcl.then_some(None);
         }
+        let data = std::mem::take(&mut self.current);
         let data = if key && has != [true; 3] && self.params.iter().all(Option::is_some) {
             let mut v: Vec<u8> = self.params.iter().flatten().flatten().copied().collect();
-            v.extend(nals.iter().filter(|n| !matches!(nal_type(n), Some(32..=34))).flat_map(|n| n.iter().copied()));
+            v.extend(
+                nal_units(&data)
+                    .into_iter()
+                    .filter(|n| !matches!(nal_type(n), Some(32..=34)))
+                    .flat_map(|n| n.iter().copied()),
+            );
             v
         } else {
             data
         };
-        Some(ScreenFrame { key, data: Arc::new(data) })
+        Some(Some(ScreenFrame { key, data: Arc::new(data) }))
     }
 }
 
@@ -501,9 +551,42 @@ mod tests {
         a.push(&[0, 0, 0, 1, 0x46, 1, 0x50]);
         assert!(a.finish().is_none(), "an access unit delimiter alone isn't a frame");
         // a frame without a marker ends when the next timestamp starts
-        assert!(a.new_timestamp(1).is_none());
+        assert!(a.new_timestamp(1, true).is_none());
         a.push(&trail);
-        assert!(a.new_timestamp(2).is_some());
+        assert!(a.new_timestamp(2, true).is_some_and(|f| f.is_some()));
+    }
+
+    /// Nobody watching: frames are counted (and acknowledged) but not copied; the parameter sets are still kept, so
+    /// the first keyframe a new subscriber gets is decodable
+    #[test]
+    fn unwatched_frames_keep_only_the_parameter_sets() {
+        let (vps, sps, pps) = ([0u8, 0, 0, 1, 0x40, 1, 9], [0u8, 0, 0, 1, 0x42, 1, 8], [0u8, 0, 0, 1, 0x44, 1, 7]);
+        let idr = [0u8, 0, 0, 1, 0x28, 1, 0xAA];
+        let mut a = Assembler::default();
+        a.push(&[vps.as_slice(), &sps, &pps, &idr].concat());
+        assert!(matches!(a.complete(false), Some(None)), "a frame, not delivered");
+        a.push(&[0, 0, 0, 1, 0x46, 1, 0x50]);
+        assert!(a.complete(false).is_none(), "no picture data: not a frame either way");
+        a.push(&idr);
+        let f = a.complete(true).flatten().unwrap();
+        assert_eq!(*f.data, [vps.as_slice(), &sps, &pps, &idr].concat());
+    }
+
+    /// A frame over the limit is dropped whole (once), the next one comes through
+    #[test]
+    fn oversized_frames_are_dropped() {
+        let idr = [0u8, 0, 0, 1, 0x28, 1, 0xAA];
+        let mut a = Assembler::default();
+        let big = vec![0xAB; MAX_FRAME_BYTES / 2 + 1];
+        a.push(&idr);
+        a.push(&big);
+        a.push(&big);
+        a.push(&idr);
+        assert!(a.take_dropped());
+        assert!(!a.take_dropped(), "told once");
+        assert!(a.finish().is_none());
+        a.push(&idr);
+        assert_eq!(*a.finish().unwrap().data, idr);
     }
 
     /// The SPS the iPhone 18 Pro Max (iOS 27.2.1) sends: Main profile, level 5.0

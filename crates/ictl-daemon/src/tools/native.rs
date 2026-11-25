@@ -887,6 +887,8 @@ impl Daemon {
             .collect();
         for pid in &pids {
             self.ensure_tunnel(g, &device).await?.signal(*pid, 9).await?;
+            // the frontmost-app cache must not name a pid that may be reused
+            g.dev.bundles.remove(&(*pid as i64));
         }
         // gone before this says so: a launch right after one killed failed with «The process identifier of the
         // launched application could not be determined. It may have already terminated.»

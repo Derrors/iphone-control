@@ -818,6 +818,21 @@ async fn cancelled_picture_unregisters_its_feed() {
     let _ = tokio::time::timeout(Duration::from_secs(5), server).await;
 }
 
+/// No ffmpeg to turn the phone's HEVC into H.264 (a Mac encodes WDA's JPEG without it, not HEVC): `/video` is
+/// refused with 404 before the phone's video is opened, so the page gives the route up. It used to open the
+/// phone's video and answer 200 with nothing in it, and the page kept retrying
+#[tokio::test]
+async fn no_h264_of_the_phone_s_video_without_ffmpeg_is_refused() {
+    let temp = tempfile::tempdir_in("/tmp").unwrap();
+    // no daemon: no WDA picture, and opening the phone's video would fail (502) if it were tried
+    let mut ctx = test_ctx(temp.path(), &temp.path().join("daemon.sock"));
+    ctx.video = Some(crate::video::Encoders::native_only());
+    let ctx = Arc::new(ctx);
+    let r = exchange(&ctx, "GET /video?udid=TEST HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n".into()).await;
+    assert!(r.starts_with("HTTP/1.1 404"), "{r}");
+    assert!(r.contains("ffmpeg"), "{r}");
+}
+
 #[tokio::test]
 async fn update_poll_keeps_polling_if_refresh_finishes_after_cache_read() {
     let temp = tempfile::tempdir_in("/tmp").unwrap();

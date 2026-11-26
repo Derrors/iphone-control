@@ -64,6 +64,16 @@ pub(super) async fn picture(ctx: Arc<Ctx>, head: &Head, feed: Option<FeedGuard>)
         // that can't decode HEVC
         _ if ctx.device_video_allowed && video.is_some() => {
             let Some(enc) = video else { unreachable!("checked") };
+            // the screen in points, to cut the video's padding off by
+            let points =
+                crate::client::snapshot(&ctx.socket).await.ok().and_then(|s| s.display).map(|d| (d.width, d.height));
+            let qp = if low { enc.qp().max(crate::video::LOW_BANDWIDTH_QP) } else { enc.qp() };
+            // no ffmpeg to transcode with (macOS encodes WDA's JPEG without it, not HEVC): refused, so the page gives
+            // this route up instead of retrying a 200 with nothing in it; before the phone's video is opened
+            let cmd = match enc.hevc_command(points, qp) {
+                Ok(c) => c,
+                Err(e) => return reply(404, "text/plain; charset=utf-8", e),
+            };
             // one ffmpeg per page: past the limit the page retries shortly (it shows "retrying")
             let Some(slot) = ctx.transcoders.take() else {
                 return reply_with(
@@ -77,14 +87,10 @@ pub(super) async fn picture(ctx: Arc<Ctx>, head: &Head, feed: Option<FeedGuard>)
                 Ok(s) => s,
                 Err(e) => return reply(502, "text/plain; charset=utf-8", e),
             };
-            // the screen in points, to cut the video's padding off by
-            let points =
-                crate::client::snapshot(&ctx.socket).await.ok().and_then(|s| s.display).map(|d| (d.width, d.height));
-            let qp = if low { enc.qp().max(crate::video::LOW_BANDWIDTH_QP) } else { enc.qp() };
             let acks = ctx.acks.clone();
             return octet_stream(lang, move |pipe| async move {
                 let (_feed, _slot) = (feed, slot);
-                crate::video::transcode::serve(enc, qp, points, acks, src, w, pipe).await;
+                crate::video::transcode::serve(enc, cmd, acks, src, w, pipe).await;
             });
         }
         _ => return reply(502, "text/plain", "device feed unavailable"),

@@ -175,18 +175,12 @@ async fn next_packet(t: &mut Option<Transcoder>) -> Option<Result<Packet, String
 /// The encoder failed [`TRIES`] times in a row without a frame: the next one, as the MJPEG pictures do
 /// ([`Encoders::give_up`]), and the command for it. False when there is none, or when ffmpeg only stood in for the
 /// encoder in use (the built-in one), whose failure here isn't that encoder's: the page gets the error and may retry
-async fn next_encoder(
-    enc: &Encoders,
-    cmd: &mut super::ffmpeg::HevcCommand,
-    points: Option<(f64, f64)>,
-    qp: u8,
-    failures: &mut usize,
-) -> bool {
+async fn next_encoder(enc: &Encoders, cmd: &mut super::ffmpeg::HevcCommand, failures: &mut usize) -> bool {
     let Some(index) = cmd.encoder else { return false };
     if !enc.give_up(index).await {
         return false;
     }
-    match enc.hevc_command(points, qp) {
+    match enc.hevc_command(cmd.points, cmd.qp) {
         Ok(c) => {
             *cmd = c;
             *failures = 0;
@@ -197,24 +191,17 @@ async fn next_encoder(
 }
 
 /// Sends the phone's video from the daemon's screen stream (`src`, `daemon_w` to ask for keyframes) to `client` as
-/// H.264, until either ends. `points`: the screen in points (its padding is cut off by it). The HTTP head is already
-/// sent
+/// H.264 with `cmd` ([`Encoders::hevc_command`], made before the answer's head: without one the page is told 404 and
+/// doesn't keep retrying an empty stream; its `points`, the screen in points, cut the video's padding off), until
+/// either ends. The HTTP head is already sent
 pub async fn serve(
     enc: Arc<Encoders>,
-    qp: u8,
-    points: Option<(f64, f64)>,
+    mut cmd: super::ffmpeg::HevcCommand,
     acks: Arc<Acks>,
     mut src: tokio::io::BufReader<tokio::net::unix::OwnedReadHalf>,
     mut daemon_w: tokio::net::unix::OwnedWriteHalf,
     client: impl tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
 ) {
-    let mut cmd = match enc.hevc_command(points, qp) {
-        Ok(c) => c,
-        Err(e) => {
-            tracing::debug!("no H.264 of the phone's video: {e}");
-            return;
-        }
-    };
     let (ack_guard, mut acked) = acks.register();
     let mut flow = Flow::default();
 
@@ -298,7 +285,7 @@ pub async fn serve(
                         let why = session.take().as_ref().map(Transcoder::error).unwrap_or_default();
                         tracing::debug!("HEVC to H.264 ended: {why}");
                         failures += 1;
-                        if !produced && failures >= TRIES && !next_encoder(&enc, &mut cmd, points, qp, &mut failures).await {
+                        if !produced && failures >= TRIES && !next_encoder(&enc, &mut cmd, &mut failures).await {
                             return;
                         }
                         if !ask(&mut daemon_w, &mut asked).await {
@@ -309,7 +296,7 @@ pub async fn serve(
             }
             p = next_packet(&mut session) => match p {
                 Some(Ok(Packet::Config(avcc))) => {
-                    let size = points.map_or((0, 0), |(w, h)| (w.min(h) as u32, w.max(h) as u32));
+                    let size = cmd.points.map_or((0, 0), |(w, h)| (w.min(h) as u32, w.max(h) as u32));
                     let Some(m) = config_message(&avcc, size, cmd.label, &ack_guard.id) else { continue };
                     flow.sent(m.len(), Instant::now());
                     if out_tx.send(m).await.is_err() {
@@ -339,7 +326,7 @@ pub async fn serve(
                     tracing::debug!("HEVC to H.264 ended: {why}");
                     session = None;
                     failures += 1;
-                    if !produced && failures >= TRIES && !next_encoder(&enc, &mut cmd, points, qp, &mut failures).await {
+                    if !produced && failures >= TRIES && !next_encoder(&enc, &mut cmd, &mut failures).await {
                         return;
                     }
                     if !ask(&mut daemon_w, &mut asked).await {

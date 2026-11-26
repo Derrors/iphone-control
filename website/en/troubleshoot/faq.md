@@ -72,7 +72,7 @@ For devices on WDA only: iOS 26 and earlier, or with `ICTL_IOS_BACKEND=wda`.
 
 ## The control page asks for a login, or says the token is wrong
 
-Every HTTP visit needs a login, on this machine too. On the machine with the phone run `iphone-control viewer token` and open the link it prints (or paste the token on the login page). Back at the login page after being logged in: the token was replaced or removed (`viewer token show <name> --new`, `remove`). After 20 wrong tokens in a minute none are checked for the rest of it (you are asked to try again later). A read-only token can watch but not act; the page says "Read-only". See [Viewer and Remote Use](../guide/remote).
+Every HTTP visit needs a login, on this machine too. On the machine with the phone run `iphone-control viewer token` and open the link it prints (or paste the token on the login page). Back at the login page after being logged in: the token was replaced or removed (`viewer token show <name> --new`, `remove`). After 20 wrong tokens in a minute, wrong ones are refused for the rest of it (you are asked to try again later); the right token still gets in, so someone trying tokens can't lock you out. A read-only token can watch but not act; the page says "Read-only". See [Viewer and Remote Use](../guide/remote).
 
 ## The browser warns about the certificate on the local network
 
@@ -102,6 +102,7 @@ If it still happens on a newer version, look on the phone under Settings → Pri
 ## "Paired computer" icon stays and the phone won't auto-lock
 
 The HID fallback, taps, swipes and buttons under native control on iOS 27 and later (they go through HID too), and the control page while it shows the phone's own video (iOS 27 and later) open a screen mirroring session; it closes 30 seconds after it was last used (after the page closes). If the icon doesn't go away, restart the daemon (`iphone-control service restart`).
+
 ## Reporting a problem
 
 [Open an issue](https://github.com/Derrors/iphone-control/issues/new/choose) with the phone model, iOS version, how you installed it (one command, Homebrew, .deb or source), and the `doctor` output — with UDID, Apple ID and notification keys removed.

@@ -148,7 +148,8 @@ iphone-control
 | `iphone_press_button` | `home`、`volume_up`、`volume_down`、`lock` |
 | `iphone_list_apps` / `iphone_launch_app` / `iphone_terminate_app` | 按名字或 Bundle ID 管理 App |
 | `iphone_open_url` | 打开链接或 URL Scheme |
-| `iphone_wait_for` | 等某段文字出现，代替反复截图 |
+| `iphone_wait_for` | 等某段文字出现（或用 `state: "disappeared"` 等它消失），代替反复截图 |
+| `iphone_scroll_collect` | 一次调用里滑过一个列表、收集各行文字，或滑到某段文字出现为止 |
 | `iphone_batch` | 一次执行最多 20 步，出错就停 |
 | `iphone_list_devices` | 列出 USB 上接着的 iPhone/iPad，标出正在控制哪台 |
 | `iphone_select_device` | 改为控制另一台，或改回自动选 |
@@ -183,7 +184,7 @@ iphone-control
 | `task run [--url <控制台>] -- <命令>` | 给别的 agent 平台用的 AI 任务；`--url` 时手机在另一台机器上。`task list`、`pause`、`approve` 等查看和控制任务 |
 | `viewer token [add <名字> [--read-only]\|list\|show <名字>\|remove <名字>]` | 控制台的登录令牌：显示 owner 的令牌，或者加有名字的、只读的令牌 |
 | `service viewer install\|uninstall\|start\|stop\|restart` | 把控制台装成单独的后台服务 |
-| `update check\|apply\|policy` | 检查、安装更新，或设置更新策略 |
+| `update [check\|apply\|policy\|unpin\|recover]` | 不带子命令：检查并安装更新；也可以分步做；`unpin` 解除安装时固定的版本（不会因此打开自动更新），`recover` 把中断的替换做完或退回 |
 | `completions <shell>` | 生成 Bash、Zsh 或 Fish 的补全脚本 |
 
 全部命令和参数见[命令行](https://derrors.github.io/iphone-control/guide/cli)。
@@ -199,10 +200,10 @@ iphone-control
 | | |
 | --- | --- |
 | 入门 | [什么是 iphone-control](https://derrors.github.io/iphone-control/guide/what-is-iphone-control) · [限制](https://derrors.github.io/iphone-control/guide/what-is-iphone-control#限制) · [快速开始](https://derrors.github.io/iphone-control/guide/getting-started) · [接入 AI 客户端](https://derrors.github.io/iphone-control/guide/mcp-clients) · [工具一览](https://derrors.github.io/iphone-control/guide/tools) |
-| 使用 | [配置](https://derrors.github.io/iphone-control/guide/configuration) · [命令行](https://derrors.github.io/iphone-control/guide/cli) · [多台设备](https://derrors.github.io/iphone-control/guide/multi-device) · [通知](https://derrors.github.io/iphone-control/guide/notifications) · [自动解锁](https://derrors.github.io/iphone-control/guide/auto-unlock) |
+| 使用 | [配置](https://derrors.github.io/iphone-control/guide/configuration) · [命令行](https://derrors.github.io/iphone-control/guide/cli) · [多台设备](https://derrors.github.io/iphone-control/guide/multi-device) · [通知](https://derrors.github.io/iphone-control/guide/notifications) · [自动解锁](https://derrors.github.io/iphone-control/guide/auto-unlock) · [控制台与远程使用](https://derrors.github.io/iphone-control/guide/remote) |
 | 安装 | [安装](https://derrors.github.io/iphone-control/guide/getting-started#install) · [从源码编译](https://derrors.github.io/iphone-control/deploy/source) · [macOS](https://derrors.github.io/iphone-control/deploy/macos) · [数据与备份](https://derrors.github.io/iphone-control/deploy/backup) |
 | 问题 | [常见问题](https://derrors.github.io/iphone-control/troubleshoot/faq) · [排错（英文）](docs/troubleshooting.md) · [Issues](https://github.com/Derrors/iphone-control/issues) |
-| 安全 | [SECURITY.md](SECURITY.md)：存了什么、谁能访问、怎么报告漏洞 |
+| 安全 | [安全与隐私](https://derrors.github.io/iphone-control/guide/security) · [SECURITY.md](SECURITY.md)：存了什么、谁能访问、怎么报告漏洞 |
 | 开发 | [贡献指南](CONTRIBUTING.md) · [架构](docs/architecture.md) · [关键取舍](docs/decisions.md) · [更新日志](CHANGELOG.zh-CN.md) |
 | 许可证 | [THIRD_PARTY.md](THIRD_PARTY.md)：vendor 组件、版本和许可证 |
 

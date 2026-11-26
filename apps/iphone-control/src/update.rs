@@ -331,13 +331,13 @@ fn guidance(status: Availability, method: InstallMethod, pinned: Option<bool>) -
         }
         Availability::Available => match method {
             InstallMethod::Managed if pinned == Some(true) => tr!(
-                "安装已固定到指定版本。此命令会解除固定并升级。先退出 Viewer 和 MCP 客户端，等待任务完成，再在主机终端运行。安装前会验证发布者签名；新版本起不来时自动恢复旧版本。",
-                "This command unpins and upgrades the installation. Close Viewer and MCP clients and let tasks finish before running it in a host terminal. It verifies the publisher's signature before installing and restores the old version if the new one doesn't start."
+                "安装已固定到指定版本。此命令会解除固定并升级。等 AI 任务做完，关掉手动开着的 viewer、wda-bridge，再在主机终端运行（后台的 Viewer 服务会自动停下再启动，空闲的 MCP 客户端不用关）。安装前会验证发布者签名；新版本起不来时自动恢复旧版本。",
+                "This command unpins and upgrades the installation. Let AI tasks finish and close a viewer or wda-bridge you started by hand, then run it in a host terminal (a Viewer service is stopped and started again for you, and idle MCP clients can stay open). It verifies the publisher's signature before installing and restores the old version if the new one doesn't start."
             )
             .into(),
             InstallMethod::Managed => tr!(
-                "先退出 Viewer 和 MCP 客户端，等待任务完成，再在主机终端运行升级命令。安装前会验证发布者签名；新版本起不来时自动恢复旧版本。",
-                "Close Viewer and MCP clients and let tasks finish before running the upgrade command in a host terminal. It verifies the publisher's signature before installing and restores the old version if the new one doesn't start."
+                "等 AI 任务做完，关掉手动开着的 viewer、wda-bridge，再在主机终端运行升级命令（后台的 Viewer 服务会自动停下再启动，空闲的 MCP 客户端不用关）。安装前会验证发布者签名；新版本起不来时自动恢复旧版本。",
+                "Let AI tasks finish and close a viewer or wda-bridge you started by hand, then run the upgrade command in a host terminal (a Viewer service is stopped and started again for you, and idle MCP clients can stay open). It verifies the publisher's signature before installing and restores the old version if the new one doesn't start."
             )
             .into(),
             InstallMethod::Debian if pinned == Some(true) => tr!(

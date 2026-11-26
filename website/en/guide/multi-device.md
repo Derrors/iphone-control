@@ -73,7 +73,7 @@ The stop marker is global: if auto-unlock fails on one device, it stops on all o
 
 ## Notifications
 
-Notifications don't name the device. Use `status` or `devices` to see which one it is.
+A notification's title names the device (the name set on the phone), so the title tells you which one it is; `status` and `devices` show the same name.
 
 ## iPad differences
 

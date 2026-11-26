@@ -15,7 +15,7 @@ Open a new session afterwards and the tools are there. `-s user` makes it availa
 
 If you install Claude Code or Codex later, or want to register again, run `iphone-control setup --reconfigure` and pick MCP registration. You can also run the command that `iphone-control mcp-config` prints.
 
-Restarting the daemon drops the MCP connection; run `/mcp` in Claude Code to reconnect.
+The MCP server connects to the daemon anew for every call, so restarting the daemon (`service restart`) doesn't drop it: a call made during those seconds waits for it to come back. After an upgrade, an MCP process already running is still the old version with the old tools; to get the new ones, run `/mcp` in Claude Code to reconnect (or start a new session).
 
 ## Claude Desktop, Cursor and others
 

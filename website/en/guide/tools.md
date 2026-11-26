@@ -59,7 +59,7 @@ None of these tools unlock the phone. Read [Security](./security) before turning
 
 ## See the screen after an action: `then`
 
-The tools under *Acting* accept `then`: it waits for the screen to settle and returns it, saving a round trip.
+The tools under *Acting* (except `iphone_scroll_collect`, which returns its collected rows and final screen anyway) accept `then`: it waits for the screen to settle and returns it, saving a round trip.
 
 | Parameter | Meaning |
 |---|---|
@@ -76,7 +76,7 @@ iOS 27 and later are controlled natively by default. The tools and their results
 
 - **Rows off the screen aren't listed:** scroll a long list to a row before finding or tapping it by text (WDA lists such rows but can't tap them).
 - **Text is always pasted:** `iphone_type_text` puts the text on the phone's pasteboard and pastes it; the daemon taps *Allow Paste*, reads the field back and restores the pasteboard at once.
-- **Coarser elements:** the accessibility service often makes one element of a whole row ("Wi-Fi, Derrors-5G"), so `iphone_list_elements` is shorter than with WDA; finding by contained text still works.
+- **Coarser elements:** the accessibility service often makes one element of a whole row ("Wi-Fi, Home-WiFi"), so `iphone_list_elements` is shorter than with WDA; finding by contained text still works.
 
 ## When WDA is down: the HID fallback
 

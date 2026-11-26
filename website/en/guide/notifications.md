@@ -24,7 +24,7 @@ How repeats are limited:
 - Signing certificate replaced: sent every time.
 - This record is kept in memory only. Restarting the daemon clears it, so a problem that isn't solved yet is sent again.
 
-Notifications don't name the device; with several connected, use `status` to see which one. See [Several devices](./multi-device).
+A notification's title names the device (its name from Settings › General › About on the phone, as in "My iPhone offline for 10 minutes"), so with several connected you can tell which one. See [Several devices](./multi-device).
 
 ## Setting up
 

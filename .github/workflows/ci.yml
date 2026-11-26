@@ -39,6 +39,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
       - name: Viewer interaction tests
         run: node --test tests/viewer/*.test.mjs
       # 回归清单里点名的测试都还在（改名、删掉后清单会指向不存在的测试）
@@ -70,6 +73,9 @@ jobs:
       - run: cargo test --workspace --all-features --locked
       - name: Terminal menus (PTY)
         run: python3 tests/terminal.py --binary target/debug/iphone-control --test-dir target/debug/deps
+      # 零依赖无头 Chrome CDP 端到端烟雾测试（复用刚编好的二进制，不依赖 npm 包、不触碰真机）
+      - name: Viewer headless Chrome smoke test
+        run: node tests/viewer/smoke.mjs --binary target/debug/iphone-control
 
   # macOS（Apple Silicon）上能编译、测试通过；格式和平台无关，上面已经查过。Intel Mac 的发布包在同一台机器上交叉编译，
   # 这里也查一遍 x86_64 能编译（只 check，不链接、不跑测试）

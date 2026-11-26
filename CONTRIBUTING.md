@@ -23,6 +23,8 @@ python3 tests/terminal.py --binary target/debug/iphone-control --test-dir target
 cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 # the control page's tests (Node 22, no packages): the page is apps/iphone-control/web/, put together by build.rs
 node --test tests/viewer/*.test.mjs
+# headless Chrome / Chromium CDP smoke test (Node 22, no packages; isolated temp dir & mock daemon, no device touched)
+node tests/viewer/smoke.mjs --binary target/debug/iphone-control
 # vendor/ is upstream code and isn't formatted; check only this repository's packages:
 for p in ictl-ax ictl-ui ictl-l10n ictl-webinspector ictl-device ictl-wda ictl-sign ictl-unlock ictl-daemon ictl-mcp ictl-protocol iphone-control; do cargo fmt -p $p -- --check; done
 ```

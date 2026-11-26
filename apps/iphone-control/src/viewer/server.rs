@@ -1,10 +1,10 @@
 //! The viewer's HTTP/1.1 under hyper: a connection, and what every request passes before its route.
 //!
 //! hyper reads requests (heads, bodies, chunked or not), writes answers and keeps connections open. What it doesn't
-//! do is here: the checks on the head ([`Head::parse`], stricter than HTTP asks, see there), the `Host`, HTTPS for
-//! the network, the login before anything (no body read before it), which connections stay open, the language of
-//! each request, and ending a stream whose token goes. The connection itself has a time limit on writing and lingers
-//! on close ([`super::io`]).
+//! do is here: the checks on the head ([`Head::parse`], stricter than HTTP asks, see there; on the head as it came,
+//! [`super::io::HeadTap`]), the `Host`, HTTPS for the network, the login before anything (no body read before it),
+//! which connections stay open, the language of each request, and ending an answer (a stream, `/mcp`) whose token
+//! goes. The connection itself has a time limit on writing and lingers on close ([`super::io`]).
 
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
@@ -31,6 +31,10 @@ pub(super) struct ConnState {
     early: Mutex<Option<Early>>,
     /// The viewer's connection places: one is kept open only while enough are free ([`super::KEEP_ROOM`])
     room: Option<Arc<tokio::sync::Semaphore>>,
+    /// The heads as they came ([`super::io::HeadTap`])
+    heads: Arc<Mutex<super::io::HeadTap>>,
+    /// A request came: the first one's time limit is over
+    came: std::sync::atomic::AtomicBool,
 }
 
 /// An answer with the headers every answer carries
@@ -83,33 +87,60 @@ pub(super) async fn serve_conn(
     room: Option<Arc<tokio::sync::Semaphore>>,
 ) -> anyhow::Result<()> {
     let (Ok(peer), Ok(local)) = (conn.tcp().peer_addr(), conn.tcp().local_addr()) else { return Ok(()) };
-    let state = Arc::new(ConnState { peer, local, tls: conn.is_tls(), early: Mutex::new(early), room });
-    let io = hyper_util::rt::TokioIo::new(super::io::Timed::new(conn, super::WRITE_TIMEOUT));
-    let service = hyper::service::service_fn(move |req| {
-        let (ctx, state) = (ctx.clone(), state.clone());
-        async move { Ok::<_, std::convert::Infallible>(request(ctx, state, req).await) }
+    let heads = Arc::new(Mutex::new(super::io::HeadTap::default()));
+    let state = Arc::new(ConnState {
+        peer,
+        local,
+        tls: conn.is_tls(),
+        early: Mutex::new(early),
+        room,
+        heads: heads.clone(),
+        came: Default::default(),
     });
-    hyper::server::conn::http1::Builder::new()
+    let io = super::io::Timed::new(super::io::Tapped::new(conn, heads), super::WRITE_TIMEOUT);
+    let service = {
+        let state = state.clone();
+        hyper::service::service_fn(move |req| {
+            let (ctx, state) = (ctx.clone(), state.clone());
+            async move { Ok::<_, std::convert::Infallible>(request(ctx, state, req).await) }
+        })
+    };
+    let served = hyper::server::conn::http1::Builder::new()
         .timer(hyper_util::rt::TokioTimer::new())
-        // a head (the first, or the next on a connection kept open) in this time, or the connection closes: a
-        // connection that sends nothing doesn't keep its place
-        .header_read_timeout(super::KEEP_IDLE.min(crate::HEAD_TIMEOUT))
+        // the next head on a connection kept open, waiting included, in this time, or the connection closes: an idle
+        // connection doesn't keep its place. hyper starts it each time it reads a head, the first one too, which has
+        // a shorter limit below
+        .header_read_timeout(super::KEEP_IDLE)
+        // about a head (hyper reads no further ahead): the most a connection that sends nothing but a head holds
         .max_buf_size(crate::MAX_HEAD.max(8192))
         // the same names as before (clients and tests read `Connection: close`)
         .title_case_headers(true)
-        .serve_connection(io, service)
-        .await
-        // a connection that sent nothing more in time is closed: that is how idle ones end
-        .or_else(|e| if e.is_timeout() { Ok(()) } else { Err(e) })?;
+        .serve_connection(hyper_util::rt::TokioIo::new(io), service);
+    tokio::pin!(served);
+    // the first head in [`crate::HEAD_TIMEOUT`] (as the TLS handshake): a connection that sends nothing, or a byte now
+    // and then, doesn't keep its place
+    let done = match tokio::time::timeout(crate::HEAD_TIMEOUT, &mut served).await {
+        Ok(r) => r,
+        Err(_) if !state.came.load(std::sync::atomic::Ordering::Relaxed) => return Ok(()),
+        Err(_) => served.await,
+    };
+    // a connection that sent nothing more in time is closed: that is how idle ones end
+    done.or_else(|e| if e.is_timeout() { Ok(()) } else { Err(e) })?;
     Ok(())
 }
 
 /// One request: the checks, the login, its route; in the page's language (`X-Ictl-Lang`), so the daemon's messages
 /// match the page
 async fn request(ctx: Arc<Ctx>, conn: Arc<ConnState>, req: hyper::Request<Incoming>) -> Reply {
+    conn.came.store(true, std::sync::atomic::Ordering::Relaxed);
     let (parts, body) = req.into_parts();
-    let raw = raw_head(&parts);
-    let Some(head) = Head::parse(&raw) else { return closing(reply(400, "text/plain", "bad request")) };
+    let body = RequestBody::new(body);
+    // its head as it came, the same request as hyper read (see [`super::io::HeadTap`])
+    let raw = conn.heads.lock().unwrap_or_else(|p| p.into_inner()).take(body_length(&parts));
+    let Some((raw, head)) = raw.filter(|r| same_request(r, &parts)).and_then(|r| Head::parse(&r).map(|h| (r, h)))
+    else {
+        return closing(reply(400, "text/plain", "bad request"));
+    };
     let lang = head.lang;
     let run = checked(ctx, conn, raw, head, parts, body);
     match lang {
@@ -128,7 +159,7 @@ async fn checked(
     raw: Vec<u8>,
     head: Head,
     parts: http::request::Parts,
-    body: Incoming,
+    body: RequestBody,
 ) -> Reply {
     if !ctx.access.host_allowed(&raw) || (head.path != "/" && !fetch_site_ok(&head)) {
         return closing(reply(403, "text/plain", "forbidden"));
@@ -161,8 +192,65 @@ async fn checked(
     }
     let keep = keepable(&head) && conn.room.as_ref().is_none_or(|r| r.available_permits() >= super::KEEP_ROOM);
     let body = body.take().expect("taken only by the login form, which answers");
-    let r = super::routes::route(ctx, conn, head, parts, body, pass).await;
-    if keep { keeping(r) } else { closing(r) }
+    // an answer before the body was read (refused, too large) ends the connection: hyper wouldn't read on past it
+    let read = body.read();
+    let who = pass.who.clone().filter(|_| ctx.auth.is_some());
+    let route = super::routes::route(ctx.clone(), conn, head, parts, body, pass);
+    // the answer ends when the token it logged in with goes (removed or replaced): a stream, `/mcp` too, as it goes
+    let r = match who {
+        Some(w) => {
+            let mut gone = token_gone(ctx, w);
+            tokio::select! {
+                r = route => until(r, gone),
+                () = &mut gone => return closing(reply(401, "text/plain", "log in first")),
+            }
+        }
+        None => route.await,
+    };
+    if keep && read.load(std::sync::atomic::Ordering::Relaxed) { keeping(r) } else { closing(r) }
+}
+
+/// Returns once `who`'s token is gone ([`revoked`]), and says so
+fn token_gone(ctx: Arc<Ctx>, who: auth::Who) -> std::pin::Pin<Box<dyn Future<Output = ()> + Send>> {
+    Box::pin(async move {
+        if let Some(a) = &ctx.auth {
+            revoked(a, &who).await;
+            tracing::info!("viewer: the token “{}” is gone, so its connection was closed", who.name);
+        }
+    })
+}
+
+/// `r`, its body cut off once `stop` returns: the connection ends there (a chunked body without its last chunk)
+fn until(r: Reply, stop: std::pin::Pin<Box<dyn Future<Output = ()> + Send>>) -> Reply {
+    r.map(|inner| Until { inner, stop }.boxed_unsync())
+}
+
+struct Until {
+    inner: Body,
+    stop: std::pin::Pin<Box<dyn Future<Output = ()> + Send>>,
+}
+
+impl http_body::Body for Until {
+    type Data = Bytes;
+    type Error = std::io::Error;
+
+    fn poll_frame(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Result<http_body::Frame<Bytes>, std::io::Error>>> {
+        if self.stop.as_mut().poll(cx).is_ready() {
+            return std::task::Poll::Ready(Some(Err(std::io::Error::other("the token is gone"))));
+        }
+        std::pin::Pin::new(&mut self.inner).poll_frame(cx)
+    }
+
+    fn is_end_stream(&self) -> bool {
+        self.inner.is_end_stream()
+    }
+
+    fn size_hint(&self) -> http_body::SizeHint {
+        self.inner.size_hint()
+    }
 }
 
 fn closing(mut r: Reply) -> Reply {
@@ -178,21 +266,64 @@ fn keeping(mut r: Reply) -> Reply {
     r
 }
 
-/// A head as it came, for the checks that read one ([`Head::parse`], [`auth::Auth::check`],
-/// [`super::lan::Access::host_allowed`]): what hyper parsed, written out again
-fn raw_head(parts: &http::request::Parts) -> Vec<u8> {
-    let version = match parts.version {
-        http::Version::HTTP_10 => "HTTP/1.0",
-        _ => "HTTP/1.1",
-    };
-    let mut out = format!("{} {} {version}\r\n", parts.method, parts.uri).into_bytes();
-    for (k, v) in &parts.headers {
-        out.extend_from_slice(k.as_str().as_bytes());
-        out.extend_from_slice(b": ");
-        out.extend_from_slice(v.as_bytes());
-        out.extend_from_slice(b"\r\n");
+/// How much body hyper reads after this head, for the next one's place ([`super::io::HeadTap::take`]); `None`:
+/// chunked
+fn body_length(parts: &http::request::Parts) -> Option<u64> {
+    if parts.headers.contains_key(http::header::TRANSFER_ENCODING) {
+        return None;
     }
-    out
+    // hyper refused differing lengths already
+    let n = parts.headers.get(http::header::CONTENT_LENGTH).and_then(|v| v.to_str().ok()?.trim().parse().ok());
+    Some(n.unwrap_or(0))
+}
+
+/// The head that came is the request hyper read: its method and target
+fn same_request(raw: &[u8], parts: &http::request::Parts) -> bool {
+    let line = raw.split(|b| *b == b'\r').next().unwrap_or_default();
+    let mut words = line.split(|b| *b == b' ');
+    words.next() == Some(parts.method.as_str().as_bytes()) && words.next() == Some(parts.uri.to_string().as_bytes())
+}
+
+/// A request's body, which tells when it was read to its end ([`RequestBody::read`])
+pub(super) struct RequestBody {
+    inner: Incoming,
+    read: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl RequestBody {
+    fn new(inner: Incoming) -> Self {
+        let read = Arc::new(std::sync::atomic::AtomicBool::new(http_body::Body::is_end_stream(&inner)));
+        Self { inner, read }
+    }
+
+    /// Set once the body was read to its end (at once when there is none)
+    fn read(&self) -> Arc<std::sync::atomic::AtomicBool> {
+        self.read.clone()
+    }
+}
+
+impl http_body::Body for RequestBody {
+    type Data = Bytes;
+    type Error = hyper::Error;
+
+    fn poll_frame(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Result<http_body::Frame<Bytes>, hyper::Error>>> {
+        let r = std::pin::Pin::new(&mut self.inner).poll_frame(cx);
+        if matches!(r, std::task::Poll::Ready(None)) || self.inner.is_end_stream() {
+            self.read.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+        r
+    }
+
+    fn is_end_stream(&self) -> bool {
+        self.inner.is_end_stream()
+    }
+
+    fn size_hint(&self) -> http_body::SizeHint {
+        self.inner.size_hint()
+    }
 }
 
 /// Why a body wasn't read
@@ -203,7 +334,7 @@ pub(super) enum BodyError {
 }
 
 /// The whole body, at most `max` bytes, within `limit` however slowly it trickles in
-pub(super) async fn read_body(body: Incoming, max: usize, limit: Duration) -> Result<Bytes, BodyError> {
+pub(super) async fn read_body(body: RequestBody, max: usize, limit: Duration) -> Result<Bytes, BodyError> {
     match tokio::time::timeout(limit, Limited::new(body, max).collect()).await {
         Ok(Ok(b)) => Ok(b.to_bytes()),
         Ok(Err(e)) if e.downcast_ref::<http_body_util::LengthLimitError>().is_some() => Err(BodyError::TooLarge),
@@ -222,7 +353,7 @@ async fn login_gate(
     conn: &ConnState,
     raw: &[u8],
     head: &Head,
-    body: &mut Option<Incoming>,
+    body: &mut Option<RequestBody>,
 ) -> Result<Pass, Box<Reply>> {
     use auth::Verdict;
     let Some(a) = &ctx.auth else { return Ok(Pass::default()) };
@@ -307,27 +438,11 @@ fn login_page(v: auth::Verdict) -> Reply {
     reply_with(status, "text/html; charset=utf-8", page, &[("Content-Security-Policy", &csp)])
 }
 
-/// A stream's handler, in the request's language, ended when the token it logged in with goes (removed or replaced)
-pub(super) async fn guarded(
-    ctx: Arc<Ctx>,
-    who: Option<auth::Who>,
-    lang: Option<ictl_l10n::Lang>,
-    handler: impl std::future::Future<Output = ()>,
-) {
-    let run = async {
-        match (&ctx.auth, &who) {
-            (Some(a), Some(w)) => tokio::select! {
-                () = handler => {}
-                () = revoked(a, w) => {
-                    tracing::info!("viewer: the token “{}” is gone, so its connection was closed", w.name);
-                }
-            },
-            _ => handler.await,
-        }
-    };
+/// A stream's handler, in the request's language (its token going ends it with the answer, [`checked`])
+pub(super) async fn in_lang(lang: Option<ictl_l10n::Lang>, handler: impl std::future::Future<Output = ()>) {
     match lang {
-        Some(l) => ictl_l10n::scope(l, run).await,
-        None => run.await,
+        Some(l) => ictl_l10n::scope(l, handler).await,
+        None => handler.await,
     }
 }
 

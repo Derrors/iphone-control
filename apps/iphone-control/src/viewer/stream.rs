@@ -1,6 +1,7 @@
 //! The answers that go on: the phone's picture, a task's events, a task's lease. Each checks what it needs first
 //! (and answers an error as an ordinary answer), then streams from a handler on a [`Pipe`] ([`super::pipe`]), which
-//! ends with the connection and when the token it logged in with goes ([`super::server::guarded`]).
+//! ends with the connection, and when the token it logged in with goes (the answer is cut off, see
+//! [`super::server`]).
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -9,11 +10,11 @@ use serde_json::{Value, json};
 use tokio::io::AsyncWriteExt;
 
 use super::pipe::{Pipe, streamed};
-use super::server::{Reply, guarded, json_reply, reply, reply_with, stream};
-use super::{Ctx, FeedGuard, Head, Pass, protocol, sse};
+use super::server::{Reply, in_lang, json_reply, reply, reply_with, stream};
+use super::{Ctx, FeedGuard, Head, protocol, sse};
 
 /// `GET /stream` (MJPEG) or `/video` (H.264, or the phone's own HEVC with `src=device`) of the device the page shows
-pub(super) async fn picture(ctx: Arc<Ctx>, head: &Head, feed: Option<FeedGuard>, pass: &Pass) -> Reply {
+pub(super) async fn picture(ctx: Arc<Ctx>, head: &Head, feed: Option<FeedGuard>) -> Reply {
     // the device the page shows (`?udid=`), so a page that hasn't noticed a switch keeps its own picture instead of
     // silently showing another phone. Looked up again each time: after a replug usbmuxd gives the device a new id
     let udid = head.query("udid").filter(|u| !u.is_empty()).unwrap_or_else(|| ctx.udid());
@@ -23,7 +24,7 @@ pub(super) async fn picture(ctx: Arc<Ctx>, head: &Head, feed: Option<FeedGuard>,
     // the page's low-bandwidth mode (`?low=1`): the phone's own video at a lower bitrate (for every page on that
     // phone, see `ictl_daemon::protocol::LOW_BANDWIDTH`), the H.264 picture at a higher quantizer (this page's only)
     let low = head.query("low").as_deref() == Some("1");
-    let (who, lang) = (pass.who.clone(), head.lang);
+    let lang = head.lang;
     if head.path == "/video" && head.query("src").as_deref() == Some("device") {
         if !ctx.device_video_allowed {
             return reply(404, "text/plain", "turned off by IPHONE_CONTROL_VIEWER_CODEC");
@@ -33,7 +34,7 @@ pub(super) async fn picture(ctx: Arc<Ctx>, head: &Head, feed: Option<FeedGuard>,
             Err(e) => reply(404, "text/plain; charset=utf-8", e),
             Ok((src, w)) => {
                 let acks = ctx.acks.clone();
-                octet_stream(ctx, who, lang, move |pipe| async move {
+                octet_stream(lang, move |pipe| async move {
                     let _feed = feed;
                     crate::video::device::serve(src, w, acks, pipe).await;
                 })
@@ -81,7 +82,7 @@ pub(super) async fn picture(ctx: Arc<Ctx>, head: &Head, feed: Option<FeedGuard>,
                 crate::client::snapshot(&ctx.socket).await.ok().and_then(|s| s.display).map(|d| (d.width, d.height));
             let qp = if low { enc.qp().max(crate::video::LOW_BANDWIDTH_QP) } else { enc.qp() };
             let acks = ctx.acks.clone();
-            return octet_stream(ctx, who, lang, move |pipe| async move {
+            return octet_stream(lang, move |pipe| async move {
                 let (_feed, _slot) = (feed, slot);
                 crate::video::transcode::serve(enc, qp, points, acks, src, w, pipe).await;
             });
@@ -92,7 +93,7 @@ pub(super) async fn picture(ctx: Arc<Ctx>, head: &Head, feed: Option<FeedGuard>,
     match video {
         Some(enc) => {
             let qp = if low { enc.qp().max(crate::video::LOW_BANDWIDTH_QP) } else { enc.qp() };
-            octet_stream(ctx, who, lang, move |pipe| async move {
+            octet_stream(lang, move |pipe| async move {
                 let _feed = feed;
                 crate::video::serve(enc, qp, acks, remote, pipe).await;
             })
@@ -100,7 +101,7 @@ pub(super) async fn picture(ctx: Arc<Ctx>, head: &Head, feed: Option<FeedGuard>,
         None => stream(
             "multipart/x-mixed-replace; boundary=ictl",
             streamed(move |pipe| {
-                guarded(ctx, who, lang, async move {
+                in_lang(lang, async move {
                     let _feed = feed;
                     crate::video::serve_mjpeg(remote, pipe, crate::video::STREAM_IDLE).await;
                 })
@@ -110,26 +111,21 @@ pub(super) async fn picture(ctx: Arc<Ctx>, head: &Head, feed: Option<FeedGuard>,
 }
 
 /// A binary stream (H.264, or the phone's own video) written by `handler`
-fn octet_stream<F, Fut>(
-    ctx: Arc<Ctx>,
-    who: Option<super::auth::Who>,
-    lang: Option<ictl_l10n::Lang>,
-    handler: F,
-) -> Reply
+fn octet_stream<F, Fut>(lang: Option<ictl_l10n::Lang>, handler: F) -> Reply
 where
     F: FnOnce(Pipe) -> Fut + Send + 'static,
     Fut: Future<Output = ()> + Send + 'static,
 {
-    stream("application/octet-stream", streamed(move |pipe| guarded(ctx, who, lang, handler(pipe))))
+    stream("application/octet-stream", streamed(move |pipe| in_lang(lang, handler(pipe))))
 }
 
 /// The task's events so far, then new ones as they come (from the daemon), as server-sent events, until it is done
-pub(super) fn events(ctx: Arc<Ctx>, head: &Head, pass: &Pass, mut tasks: protocol::TaskStream) -> Reply {
-    let (who, lang) = (pass.who.clone(), head.lang);
+pub(super) fn events(head: &Head, mut tasks: protocol::TaskStream) -> Reply {
+    let lang = head.lang;
     stream(
         "text/event-stream",
         streamed(move |mut pipe| {
-            guarded(ctx, who, lang, async move {
+            in_lang(lang, async move {
                 loop {
                     tokio::select! {
                         e = tasks.next() => match e {
@@ -159,7 +155,7 @@ pub(super) fn events(ctx: Arc<Ctx>, head: &Head, pass: &Pass, mut tasks: protoco
 /// ends. The connection is the task's lease: when the client goes away before the task ended, it is abandoned (the
 /// handler, holding the lease, is dropped with the connection). `by`: the login token's name, the task's owner unless
 /// the request names one
-pub(super) async fn open_task(ctx: Arc<Ctx>, head: &Head, pass: &Pass, b: &Value, by: &str) -> Reply {
+pub(super) async fn open_task(ctx: &Ctx, head: &Head, b: &Value, by: &str) -> Reply {
     let title = b["title"].as_str().unwrap_or_default();
     let owner = b["owner"].as_str().map(str::trim).filter(|o| !o.is_empty()).unwrap_or(by);
     let apps: Vec<String> = match &b["apps"] {
@@ -174,11 +170,11 @@ pub(super) async fn open_task(ctx: Arc<Ctx>, head: &Head, pass: &Pass, b: &Value
         Err(m) => return json_reply(409, &json!({"ok": false, "message": m})),
     };
     let first = format!("event: opened\ndata: {}\n\n", json!({"id": opened.id, "token": opened.token}));
-    let (who, lang) = (pass.who.clone(), head.lang);
+    let lang = head.lang;
     stream(
         "text/event-stream",
         streamed(move |mut pipe| {
-            guarded(ctx, who, lang, async move {
+            in_lang(lang, async move {
                 if pipe.write_all(first.as_bytes()).await.is_err() {
                     return;
                 }

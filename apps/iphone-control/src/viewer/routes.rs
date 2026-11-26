@@ -2,10 +2,9 @@
 
 use std::sync::Arc;
 
-use hyper::body::Incoming;
 use serde_json::{Value, json};
 
-use super::server::{BodyError, ConnState, Reply, json_reply, read_body, reply, reply_with};
+use super::server::{BodyError, ConnState, Reply, RequestBody, json_reply, read_body, reply, reply_with};
 use super::{
     Ctx, Head, MAX_BODY, Pass, Request, Response, SHORT, action_allowed, agent, api::*, auth, peer, post, protocol,
     task_events_id, updates,
@@ -16,7 +15,7 @@ pub(super) async fn route(
     conn: Arc<ConnState>,
     head: Head,
     parts: http::request::Parts,
-    body: Incoming,
+    body: RequestBody,
     pass: Pass,
 ) -> Reply {
     let path = head.path.as_str();
@@ -39,12 +38,12 @@ pub(super) async fn route(
                 },
                 None => None,
             };
-            super::stream::picture(ctx, &head, feed, &pass).await
+            super::stream::picture(ctx, &head, feed).await
         }
         ("GET", p) if task_events_id(p).is_some() => {
             let id = task_events_id(p).unwrap_or_default();
             match protocol::task_events(&ctx.socket, id).await {
-                Ok(stream) => super::stream::events(ctx.clone(), &head, &pass, stream),
+                Ok(stream) => super::stream::events(&head, stream),
                 Err(m) => json_reply(404, &json!({"message": m})),
             }
         }
@@ -94,7 +93,7 @@ pub(super) async fn route(
             };
             if head.path == "/api/agent/tasks/open" {
                 let who = pass.who.as_ref().map_or("remote", |w| w.name.as_str()).to_owned();
-                return super::stream::open_task(ctx.clone(), &head, &pass, &b, &who).await;
+                return super::stream::open_task(&ctx, &head, &b, &who).await;
             }
             let Some(token) = &head.task_token else {
                 let m = ictl_l10n::tr!("结束任务要带任务口令", "Ending a task needs its token");
@@ -157,7 +156,7 @@ pub(super) async fn route(
 
 /// An action's JSON body (`POST /api/…`), once it may be sent from where it comes ([`action_allowed`]); otherwise
 /// the answer (refused, too large, not JSON)
-async fn action_body(ctx: &Ctx, head: &Head, pass: &Pass, body: Incoming) -> Result<Value, Box<Reply>> {
+async fn action_body(ctx: &Ctx, head: &Head, pass: &Pass, body: RequestBody) -> Result<Value, Box<Reply>> {
     if !action_allowed(head, &ctx.access, ctx.port, ctx.tls.is_some(), pass.program()) {
         return Err(Box::new(reply(403, "text/plain", "forbidden")));
     }

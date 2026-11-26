@@ -511,7 +511,7 @@ fn keepable(req: &Head) -> bool {
 }
 
 /// How often an open connection's token is looked for ([`revoked`])
-const TOKEN_RECHECK: Duration = Duration::from_secs(5);
+const TOKEN_RECHECK: Duration = if cfg!(test) { Duration::from_millis(200) } else { Duration::from_secs(5) };
 
 /// Returns once `who`'s token is no longer there
 async fn revoked(a: &auth::Auth, who: &auth::Who) {
@@ -1069,7 +1069,8 @@ mod tests {
     #[tokio::test]
     async fn requests_share_a_connection() {
         let temp = tempfile::tempdir_in("/tmp").unwrap();
-        let ctx = test_ctx(temp.path(), &temp.path().join("none.sock"));
+        let mut ctx = test_ctx(temp.path(), &temp.path().join("none.sock"));
+        ctx.port = 8202;
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let ctx = Arc::new(ctx);
@@ -1083,12 +1084,14 @@ mod tests {
             // a body, then the next request in the same write: each read where it belongs
             let two = format!(
                 "POST /api/video/ack HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\n\
-                 Content-Length: {}\r\n\r\n{ack}GET /api/agent/backends HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n",
+                 Origin: http://127.0.0.1:8202\r\nContent-Length: {}\r\n\r\n{ack}\
+                 GET /api/agent/backends HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n",
                 ack.len()
             );
             s.write_all(two.as_bytes()).await.unwrap();
             let (h1, _) = answer(&mut s).await;
-            assert!(h1.contains("Connection: keep-alive"), "{h1}");
+            // no such stream: its body read, then refused
+            assert!(h1.starts_with("HTTP/1.1 404") && h1.contains("Connection: keep-alive"), "{h1}");
             let (h2, b2) = answer(&mut s).await;
             assert!(h2.starts_with("HTTP/1.1 200") && h2.contains("keep-alive") && b2.contains("backends"), "{h2}{b2}");
             // a stream's path (task events) closes, like a request that asks to
@@ -1106,6 +1109,113 @@ mod tests {
             let out = exchange(&ctx, req.to_owned()).await;
             assert!(out.contains("Connection: close") && out.contains("backends"), "{why}: {out}");
         }
+    }
+
+    /// On a connection kept open each head is checked as it came, not only the first: a later request with its length
+    /// twice is refused. And an answer given before a body was read closes the connection
+    #[tokio::test]
+    async fn each_head_on_a_kept_connection_is_checked_as_it_came() {
+        let temp = tempfile::tempdir_in("/tmp").unwrap();
+        let mut ctx = test_ctx(temp.path(), &temp.path().join("none.sock"));
+        ctx.port = 8202;
+        let ctx = Arc::new(ctx);
+        let ack = r#"{"stream":"x","bytes":5}"#;
+        let post = |origin: &str, extra: &str| {
+            format!(
+                "POST /api/video/ack HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\n\
+                 Origin: {origin}\r\n{extra}Content-Length: {}\r\n\r\n{ack}",
+                ack.len()
+            )
+        };
+        let ours = "http://127.0.0.1:8202";
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = async {
+            let (tcp, _) = listener.accept().await.unwrap();
+            serve(Conn::Plain(tcp), &ctx, None, None).await.unwrap();
+        };
+        let client = async {
+            let mut s = tokio::net::TcpStream::connect(addr).await.unwrap();
+            // the second request in the same write, its length twice
+            let two = format!("{}{}", post(ours, ""), post(ours, &format!("Content-Length: {}\r\n", ack.len())));
+            s.write_all(two.as_bytes()).await.unwrap();
+            let (h1, _) = answer(&mut s).await;
+            assert!(h1.starts_with("HTTP/1.1 404") && h1.contains("keep-alive"), "{h1}");
+            let (h2, _) = answer(&mut s).await;
+            assert!(h2.starts_with("HTTP/1.1 400") && h2.contains("Connection: close"), "{h2}");
+        };
+        tokio::join!(server, client);
+        // refused before its body was read: not kept open
+        let r = exchange(&ctx, post("http://elsewhere.example", "Connection: keep-alive\r\n")).await;
+        assert!(r.starts_with("HTTP/1.1 403") && r.contains("Connection: close"), "{r}");
+    }
+
+    /// `/mcp` ends when the token it logged in with goes (replaced here), its stream too, as every stream
+    #[tokio::test]
+    async fn mcp_ends_when_its_token_goes() {
+        let temp = tempfile::tempdir_in("/tmp").unwrap();
+        let mut ctx = test_ctx(temp.path(), &temp.path().join("none.sock"));
+        ctx.auth = Some(auth::Auth::load(temp.path(), 8202).unwrap());
+        ctx.mcp = Some(ictl_mcp::http_service(temp.path().join("none.sock")));
+        let ctx = Arc::new(ctx);
+        let token = auth::get(temp.path(), "owner").unwrap().token;
+        let mcp = |body: &str, extra: &str| {
+            format!(
+                "POST /mcp HTTP/1.1\r\nHost: 127.0.0.1:8202\r\nAuthorization: Bearer {token}\r\n\
+                 Content-Type: application/json\r\nAccept: application/json, text/event-stream\r\n{extra}\
+                 Content-Length: {}\r\n\r\n{body}",
+                body.len()
+            )
+        };
+        let init = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"test","version":"1"}}}"#;
+        let r = exchange(&ctx, mcp(init, "")).await;
+        assert!(r.starts_with("HTTP/1.1 200"), "{r}");
+        let session = r
+            .lines()
+            .find_map(|l| l.to_ascii_lowercase().strip_prefix("mcp-session-id:").map(|v| v.trim().to_owned()))
+            .expect("a session");
+        let sid = format!("Mcp-Session-Id: {session}\r\nMcp-Protocol-Version: 2025-06-18\r\n");
+        let r = exchange(&ctx, mcp(r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#, &sid)).await;
+        assert!(r.starts_with("HTTP/1.1 202"), "{r}");
+        // the server's stream of the session: open until the token goes
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn({
+            let ctx = ctx.clone();
+            async move {
+                let (tcp, _) = listener.accept().await.unwrap();
+                let _ = serve(Conn::Plain(tcp), &ctx, None, None).await;
+            }
+        });
+        let mut s = tokio::net::TcpStream::connect(addr).await.unwrap();
+        let get = format!(
+            "GET /mcp HTTP/1.1\r\nHost: 127.0.0.1:8202\r\nAuthorization: Bearer {token}\r\n\
+             Accept: text/event-stream\r\n{sid}\r\n"
+        );
+        s.write_all(get.as_bytes()).await.unwrap();
+        let mut got = Vec::new();
+        let mut b = [0u8; 1024];
+        while !got.windows(4).any(|w| w == b"\r\n\r\n") {
+            let n = s.read(&mut b).await.unwrap();
+            assert!(n > 0, "closed: {}", String::from_utf8_lossy(&got));
+            got.extend_from_slice(&b[..n]);
+        }
+        assert!(got.starts_with(b"HTTP/1.1 200"), "{}", String::from_utf8_lossy(&got));
+        // still open a while later
+        assert!(tokio::time::timeout(Duration::from_millis(500), s.read(&mut b)).await.is_err());
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        auth::renew(temp.path(), "owner").unwrap();
+        let end = tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                match s.read(&mut b).await {
+                    Ok(0) | Err(_) => return,
+                    Ok(_) => {}
+                }
+            }
+        })
+        .await;
+        assert!(end.is_ok(), "the stream outlived its token");
+        server.await.unwrap();
     }
 
     /// `/mcp` takes a chunked body (an MCP client or a proxy that streams the request) and answers a stream chunked;
@@ -1137,9 +1247,19 @@ mod tests {
         assert!(r.starts_with("HTTP/1.1 200"), "{r}");
         assert!(r.contains("Transfer-Encoding: chunked\r\n") && r.ends_with("\r\n0\r\n\r\n"), "{r}");
         assert!(r.contains("iphone"), "{r}");
-        let both =
-            format!("{}{init}", head(&format!("Transfer-Encoding: chunked\r\nContent-Length: {}\r\n", init.len())));
-        assert!(exchange(&ctx, both).await.starts_with("HTTP/1.1 400"));
+        // chunked and with a length, in either order (hyper drops the length: the head as it came is checked), and the
+        // body really chunked; a length twice, even the same
+        let body = format!("{:x}\r\n{init}\r\n0\r\n\r\n", init.len());
+        for framing in [
+            format!("Transfer-Encoding: chunked\r\nContent-Length: {}\r\n", body.len()),
+            format!("Content-Length: {}\r\nTransfer-Encoding: chunked\r\n", body.len()),
+        ] {
+            let r = exchange(&ctx, format!("{}{body}", head(&framing))).await;
+            assert!(r.starts_with("HTTP/1.1 400"), "{framing}: {r}");
+        }
+        let twice = format!("Content-Length: {0}\r\nContent-Length: {0}\r\n", init.len());
+        let r = exchange(&ctx, format!("{}{init}", head(&twice))).await;
+        assert!(r.starts_with("HTTP/1.1 400"), "{r}");
         let gzip = format!("{}0\r\n\r\n", head("Transfer-Encoding: gzip, chunked\r\n"));
         assert!(exchange(&ctx, gzip).await.starts_with("HTTP/1.1 400"));
         // a broken chunk is told so, not just cut off

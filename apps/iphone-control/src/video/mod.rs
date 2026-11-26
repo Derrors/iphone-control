@@ -371,7 +371,7 @@ fn start(enc: &Encoders, size: (u32, u32), qp: u8) -> Option<ffmpeg::Session> {
 /// is followed right away by the next boundary and the next part's headers: Chrome shows a part only once it has
 /// those (seen on Chrome 14x), and on a still screen no next frame would come. So the parts carry no
 /// `Content-Length` (the next one isn't known yet); browsers cut at the boundary anyway. The HTTP response head is
-/// written here
+/// the server's (`multipart/x-mixed-replace; boundary=ictl`)
 pub async fn serve_mjpeg(src: hub::Subscription, client: impl AsyncRead + AsyncWrite + Unpin, idle: Duration) {
     let rx = src.frames.clone();
     let _src = src;
@@ -388,12 +388,9 @@ async fn write_mjpeg(
     idle: Duration,
 ) {
     const NEXT: &[u8] = b"\r\n--ictl\r\nContent-Type: image/jpeg\r\n\r\n";
-    let head =
-        b"HTTP/1.1 200 OK\r\nContent-Type: multipart/x-mixed-replace; boundary=ictl\r\nCache-Control: no-store\r\n\
-                 X-Content-Type-Options: nosniff\r\nReferrer-Policy: no-referrer\r\nConnection: close\r\n\r\n";
-    // the first part's boundary and headers, without the line break that ends a part
-    let header = [head.as_slice(), &NEXT[2..]].concat();
-    if !write_with_progress(&mut client, &header, idle).await {
+    // the first part's boundary and headers, without the line break that ends a part (the response head is the
+    // server's: `multipart/x-mixed-replace; boundary=ictl`)
+    if !write_with_progress(&mut client, &NEXT[2..], idle).await {
         return;
     }
     while rx.changed().await.is_ok() {

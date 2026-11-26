@@ -1421,7 +1421,7 @@ async fn bridge_conn(mut client: tokio::net::TcpStream, device: &ictl_device::De
 
 /// 本机端口（`wda-bridge`、`viewer`）同时接的连接数上限，满了新连接直接断开（比如开了太多标签页）
 const MAX_CONNECTIONS: usize = 32;
-const MAX_HEAD: usize = 16 * 1024;
+pub(crate) const MAX_HEAD: usize = 16 * 1024;
 /// 客户端发请求头、请求体时单次读的等待上限：连上不发的连接不能一直占着名额
 const READ_TIMEOUT: Duration = Duration::from_secs(10);
 /// 整个请求头（以及 TLS 握手）的时限：每隔几秒发一个字节的连接也不能一直占着名额

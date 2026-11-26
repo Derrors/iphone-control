@@ -92,7 +92,7 @@ iphone-control task run --url https://<那台机器>:8200 --ca cert.pem -- <启�
 
 命令拿到任务口令、`IPHONE_CONTROL_URL` 和 `IPHONE_CONTROL_MCP_URL`，**拿不到登录令牌**。里面的 agent 照常配置 `iphone-control mcp` 就行：它看到 `IPHONE_CONTROL_URL` 会自动转接到那台机器、只带任务口令；也可以直接用 `$IPHONE_CONTROL_MCP_URL` 加请求头 `Iphone-Control-Task-Token` 走 HTTP。
 
-**执行和控制分开**：agent 只拿任务口令，只能为这个任务操作手机，不能暂停、继续、接管或批准自己的确认；这些由人在控制台上、或由平台用登录令牌来做。同一台机器上，agent 的进程（以及它启动的进程）发来的控制请求也会被拒绝。经 Unix socket 时按 `SO_PEERCRED` 认调用方进程，Linux 和 macOS 都生效；经 HTTP 控制台接口时，本机进程的识别目前只在 Linux 上有效（macOS 上只靠上面这条「只拿任务口令」的限制）。
+**执行和控制分开**：agent 只拿任务口令，只能为这个任务操作手机，不能暂停、继续、接管或批准自己的确认；这些由人在控制台上、或由平台用登录令牌来做。同一台机器上，agent 的进程（以及它启动的进程）发来的控制请求也会被拒绝，经 Unix socket（`SO_PEERCRED`）和经本机 HTTP 控制台接口（Linux 读 `/proc`，macOS 经 `libproc`）在 Linux 和 macOS 上都生效。
 
 **不装 iphone-control 的平台**直接调控制台的接口（都要登录令牌，除了标明的两个）：
 
@@ -117,5 +117,5 @@ iphone-control task run --url https://<那台机器>:8200 --ca cert.pem -- <启�
 ## 安全须知
 
 - 有能操作的令牌，就能看屏幕、操作手机、用本机登录的 Claude Code / Codex 执行任务：只发给你信任的人，泄露了马上 `viewer token show <名字> --new` 或 `remove`。给只需要看的人发只读令牌。
-- 同一个系统用户下，进程能读到彼此的文件：本机上的 agent 能读到令牌文件，但它的控制请求会按进程关系被拒绝（经 Unix socket 时 Linux 和 macOS 都能认出进程；经 HTTP 控制台接口时目前只在 Linux 上有效）。这不是严格的安全边界，要真正隔离，让 agent 换一个系统用户运行或放进沙箱。
+- 同一个系统用户下，进程能读到彼此的文件：本机上的 agent 能读到令牌文件，但它的控制请求会按进程关系被拒绝（经 Unix socket 和本机 HTTP 控制台接口在 Linux 和 macOS 上都能认出进程）。这不是严格的安全边界，要真正隔离，让 agent 换一个系统用户运行或放进沙箱。
 - 更多见[安全与隐私](./security)。

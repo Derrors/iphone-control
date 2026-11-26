@@ -25,9 +25,9 @@ use crate::core::{Daemon, Inner, Route, drop_tunnel, hid_supported, wda_down, wd
 use crate::error::Error;
 use crate::imaging::{self, fmt_g};
 use crate::notify::Event;
-use crate::protocol::{ALERT_BLOCKING, Response, TAP_MISSED, TouchPhase};
 use crate::protocol::{Delivery, FailureStage};
 use crate::protocol::{ElementData, StatusData};
+use crate::protocol::{Response, TouchPhase};
 pub(crate) use native::AX_WAIT;
 use observe::*;
 pub(crate) use observe::{Repeats, Seen};

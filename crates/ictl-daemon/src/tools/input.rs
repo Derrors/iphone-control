@@ -431,9 +431,8 @@ impl Daemon {
             };
             return Ok((
                 ictl_l10n::trf!(
-                    "{}包含 \"{text}\" 的元素{searched},先用 iphone_list_elements 或截图看看屏幕{limited}{hint}",
-                    "{}: no element contains \"{text}\"{searched}; look at the screen with iphone_list_elements or a screenshot first{limited}{hint}",
-                    tap_missed_prefixes()[0]
+                    "没找到包含 \"{text}\" 的元素{searched},先用 iphone_list_elements 或截图看看屏幕{limited}{hint}",
+                    "Not found: no element contains \"{text}\"{searched}; look at the screen with iphone_list_elements or a screenshot first{limited}{hint}",
                 ),
                 true,
             ));
@@ -442,9 +441,8 @@ impl Daemon {
             let list: Vec<_> = matches.iter().map(|e| e.describe()).collect();
             return Ok((
                 ictl_l10n::trf!(
-                    "{} {} 个:\n{}",
-                    "{} {} (index out of range):\n{}",
-                    tap_missed_prefixes()[1],
+                    "只匹配到 {} 个:\n{}",
+                    "Only matched {} (index out of range):\n{}",
                     matches.len(),
                     list.join("\n")
                 ),
@@ -467,9 +465,8 @@ impl Daemon {
             TapPoint::Covered { by } => {
                 return Ok((
                     ictl_l10n::trf!(
-                        "{}:{} 整个被「{by}」盖住,没有点;先滑动让它露出来,或截图后按坐标点",
-                        "{}: {} is completely covered by “{by}”, not tapped; scroll to reveal it first, or tap by coordinates from a screenshot",
-                        tap_missed_prefixes()[2],
+                        "被挡住:{} 整个被「{by}」盖住,没有点;先滑动让它露出来,或截图后按坐标点",
+                        "Covered: {} is completely covered by “{by}”, not tapped; scroll to reveal it first, or tap by coordinates from a screenshot",
                         e.describe()
                     ),
                     true,
@@ -1015,13 +1012,6 @@ pub(super) fn replaced(text: &str, submit: bool, note: &str) -> String {
         ),
         (_, false) => ictl_l10n::trf!("已替换为 {n} 个字符{note}", "Replaced the field with {n} characters{note}"),
     }
-}
-
-/// How a missed `iphone_tap_element` result starts: the Chinese prefixes are fixed because MCP servers before 0.1.5
-/// recognise them; new ones read [`crate::protocol::Outcome`] instead. Goes in 0.3.0
-/// ([`crate::protocol::TEXT_FALLBACK_UNTIL`])
-pub(super) fn tap_missed_prefixes() -> [&'static str; 3] {
-    if ictl_l10n::is_en() { ["Not found", "Only matched", "Covered"] } else { TAP_MISSED }
 }
 
 /// 输入后核对的结果

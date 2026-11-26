@@ -27,9 +27,14 @@
 
 mod api;
 pub mod auth;
+mod io;
 mod lan;
 mod mcp;
 mod peer;
+mod pipe;
+mod routes;
+mod server;
+mod stream;
 pub mod tls;
 
 use std::collections::{HashMap, HashSet};
@@ -37,13 +42,10 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use anyhow::bail;
-use api::*;
 use ictl_daemon::machine::DeviceState;
 use ictl_daemon::protocol::{self, Request, Response, TouchPhase};
 use serde_json::{Value, json};
 use tls::Conn;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::agent::{self, Agents};
 
@@ -93,24 +95,25 @@ struct Ctx {
     auth: Option<auth::Auth>,
 }
 
-/// A picture handler can be cancelled at any await, including while opening its source.
-struct FeedGuard<'a> {
-    feeds: &'a Mutex<HashSet<String>>,
+/// A page's picture (`?feed=`) registered while its stream runs: the page asks whether it is still open. Dropped with
+/// the stream, at any point (it can be cancelled while opening its source too)
+struct FeedGuard {
+    ctx: Arc<Ctx>,
     id: String,
 }
 
-impl<'a> FeedGuard<'a> {
-    fn register(feeds: &'a Mutex<HashSet<String>>, id: String) -> Option<Self> {
-        if !feeds.lock().unwrap_or_else(|p| p.into_inner()).insert(id.clone()) {
+impl FeedGuard {
+    fn register(ctx: &Arc<Ctx>, id: String) -> Option<Self> {
+        if !ctx.feeds.lock().unwrap_or_else(|p| p.into_inner()).insert(id.clone()) {
             return None;
         }
-        Some(Self { feeds, id })
+        Some(Self { ctx: ctx.clone(), id })
     }
 }
 
-impl Drop for FeedGuard<'_> {
+impl Drop for FeedGuard {
     fn drop(&mut self) {
-        self.feeds.lock().unwrap_or_else(|p| p.into_inner()).remove(&self.id);
+        self.ctx.feeds.lock().unwrap_or_else(|p| p.into_inner()).remove(&self.id);
     }
 }
 
@@ -338,7 +341,7 @@ pub async fn run(
             if let Ok(permit) = busy.clone().try_acquire_owned() {
                 let tls = ctx.tls.clone();
                 tokio::spawn(async move {
-                    let _ = tokio::time::timeout(Duration::from_secs(3), answer_busy(client, tls)).await;
+                    let _ = tokio::time::timeout(Duration::from_secs(3), server::answer_busy(client, tls)).await;
                     drop(permit);
                 });
             }
@@ -364,7 +367,7 @@ pub async fn run(
                 },
                 None => Conn::Plain(client),
             };
-            if let Err(e) = serve(client, &ctx, Some(early), Some(&room)).await {
+            if let Err(e) = server::serve_conn(client, ctx, Some(early), Some(room)).await {
                 tracing::debug!("viewer connection: {e}");
             }
             drop(slot);
@@ -395,20 +398,6 @@ async fn shutdown_signal() {
         _ = term.recv() => {}
         _ = int.recv() => {}
     }
-}
-
-/// `503 Service Unavailable` to a connection over [`MAX_CONNECTIONS`] (after the TLS handshake on HTTPS), so the page
-/// says why instead of seeing a connection drop
-async fn answer_busy(client: tokio::net::TcpStream, tls: Option<Arc<tls::Tls>>) {
-    let mut conn = match tls {
-        Some(t) => match t.accept(client).await {
-            Ok(c) => c,
-            Err(_) => return,
-        },
-        None => Conn::Plain(client),
-    };
-    let _ =
-        reply_with(&mut conn, 503, "text/plain", b"too many connections, retry shortly", "Retry-After: 2\r\n").await;
 }
 
 /// Connections from a machine on the network that haven't sent their request yet (handshake and head), at most
@@ -510,73 +499,6 @@ const KEEP_IDLE: Duration = if cfg!(test) { Duration::from_millis(300) } else { 
 /// for a new tab or another machine, whose connections are dropped when they are all taken
 const KEEP_ROOM: usize = 8;
 
-/// Requests on a connection, each in the page's language (`X-Ictl-Lang`), so the daemon's messages match the page.
-/// Short requests of someone logged in (the page, its API) keep the connection open for the next one ([`keepable`]):
-/// over Wi-Fi a new connection and TLS handshake are two more round trips, for each of the ten reports a second
-/// on the picture, each tap and each poll. Streams (the picture, task events, `/mcp`) end it, and so does any
-/// answer before the login: without a token nobody holds places ([`KEEP_ROOM`]) for long. `slots`: the places
-async fn serve(
-    client: Conn,
-    ctx: &Ctx,
-    early: Option<Early>,
-    slots: Option<&tokio::sync::Semaphore>,
-) -> anyhow::Result<()> {
-    let mut slot = Some(client);
-    let mut early = early;
-    let mut first = true;
-    let mut carry = Vec::new();
-    loop {
-        let Some(c) = slot.as_mut() else { return Ok(()) };
-        if !first && carry.is_empty() {
-            // kept open: the next request, or close after a while
-            let mut b = [0u8; 4096];
-            match tokio::time::timeout(KEEP_IDLE, c.read(&mut b)).await {
-                Ok(Ok(n)) if n > 0 => carry.extend_from_slice(&b[..n]),
-                _ => {
-                    let _ = c.shutdown().await;
-                    return Ok(());
-                }
-            }
-        }
-        first = false;
-        let (head, body) = crate::read_head_from(c, std::mem::take(&mut carry)).await?;
-        let Some(req) = Head::parse(&head) else {
-            return reply(c, 400, "text/plain", b"bad request").await;
-        };
-        let keep = keepable(&req) && slots.is_none_or(|s| s.available_permits() >= KEEP_ROOM);
-        let lang = req.lang;
-        let next = &mut carry;
-        let early = &mut early;
-        let run = KEEP_ALIVE.scope(std::cell::Cell::new(if keep { Keep::Allowed } else { Keep::No }), async {
-            handle(&mut slot, ctx, head, req, body, early, next).await?;
-            anyhow::Ok(KEEP_ALIVE.with(std::cell::Cell::get))
-        });
-        let kept = match lang {
-            Some(l) => ictl_l10n::scope(l, run).await?,
-            None => run.await?,
-        };
-        if kept != Keep::Kept {
-            return Ok(());
-        }
-    }
-}
-
-/// Whether a connection stays open after the answer being written ([`serve`], [`reply_with`])
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Keep {
-    /// It closes
-    No,
-    /// The request allows it once it passed the login ([`handle`])
-    Allowed,
-    /// The request allows it; set to [`Keep::Kept`] once an answer said so
-    May,
-    Kept,
-}
-
-tokio::task_local! {
-    static KEEP_ALIVE: std::cell::Cell<Keep>;
-}
-
 /// A request whose answer is short, and leaves nothing unread: the page, and the page's API but for task events and
 /// opening a task (streams)
 fn keepable(req: &Head) -> bool {
@@ -588,73 +510,8 @@ fn keepable(req: &Head) -> bool {
     short && !req.close && !req.chunked && req.content_length.unwrap_or(0) <= MAX_BODY
 }
 
-/// One request. Until it has passed the login, its connection still counts against its machine's limit (`early`,
-/// [`ARRIVING_PER_PEER`]) and nothing of its body is read beyond what came with the head: someone without a token
-/// can't hold places with bodies that trickle in. A request that may keep its connection open reads its whole body
-/// once logged in, and leaves what follows in `next` (the start of the next request)
-async fn handle(
-    slot: &mut Option<Conn>,
-    ctx: &Ctx,
-    head: Vec<u8>,
-    req: Head,
-    mut body: Vec<u8>,
-    early: &mut Option<Early>,
-    next: &mut Vec<u8>,
-) -> anyhow::Result<()> {
-    let Some(client) = slot.as_mut() else { return Ok(()) };
-    if !ctx.access.host_allowed(&head) || (req.path != "/" && !fetch_site_ok(&req)) {
-        return reply(client, 403, "text/plain", b"forbidden").await;
-    }
-    // a chunked body is read for `/mcp` only ([`read_chunked`]); elsewhere it would be taken for an empty one
-    if req.chunked && req.path != "/mcp" {
-        return reply(client, 411, "text/plain", b"length required").await;
-    }
-    // HTTPS is on: from the network only HTTPS (plain HTTP stays for this machine)
-    let local = client.tcp().peer_addr().is_ok_and(|a| a.ip().to_canonical().is_loopback());
-    if ctx.tls.is_some() && !client.is_tls() && !local {
-        let Some(to) = https_location(&head, &req, ctx.port) else {
-            return reply(client, 400, "text/plain", b"bad request").await;
-        };
-        return redirect(client, &to).await;
-    }
-    let Some(pass) = login_gate(client, ctx, &head, &req, &mut body).await? else {
-        return Ok(());
-    };
-    drop(early.take());
-    let keep = KEEP_ALIVE.try_with(|k| {
-        let allowed = k.get() == Keep::Allowed;
-        if allowed {
-            k.set(Keep::May);
-        }
-        allowed
-    });
-    if keep == Ok(true) {
-        // the whole body now, so the next request starts where it ends
-        *next = read_body(client, &mut body, req.content_length.unwrap_or(0)).await?;
-    }
-    if !pass.may(&req) {
-        let m = ictl_l10n::tr!(
-            "这是只读令牌：只能看画面、设备状态和任务，不能操作",
-            "This token is read-only: it can watch the picture, the device's state and tasks, but not act"
-        );
-        return json_reply(client, 403, &json!({"ok": false, "message": m})).await;
-    }
-    let routed = route(slot, ctx, head, req, body, &pass);
-    match (&ctx.auth, &pass.who) {
-        // a stream (the picture, a task's events, `/mcp`, a task's lease) ends when its token is removed or replaced
-        (Some(a), Some(who)) => tokio::select! {
-            r = routed => r,
-            () = revoked(a, who) => {
-                tracing::info!("viewer: the token “{}” is gone, so its connection was closed", who.name);
-                Ok(())
-            }
-        },
-        _ => routed.await,
-    }
-}
-
 /// How often an open connection's token is looked for ([`revoked`])
-const TOKEN_RECHECK: Duration = Duration::from_secs(5);
+const TOKEN_RECHECK: Duration = if cfg!(test) { Duration::from_millis(200) } else { Duration::from_secs(5) };
 
 /// Returns once `who`'s token is no longer there
 async fn revoked(a: &auth::Auth, who: &auth::Who) {
@@ -664,243 +521,6 @@ async fn revoked(a: &auth::Auth, who: &auth::Who) {
             return;
         }
     }
-}
-
-/// A logged-in request, by its method and path
-async fn route(
-    slot: &mut Option<Conn>,
-    ctx: &Ctx,
-    head: Vec<u8>,
-    req: Head,
-    mut body: Vec<u8>,
-    pass: &Pass,
-) -> anyhow::Result<()> {
-    let Some(client) = slot.as_mut() else { return Ok(()) };
-    let path = req.path.as_str();
-    match (req.method.as_str(), path) {
-        ("GET", "/") => {
-            let csp = format!("Content-Security-Policy: {}\r\nVary: Accept-Encoding\r\n", ctx.page_csp);
-            // compressed once at start; a page loaded over a slow link (the LAN, a remote viewer) comes 3 times faster
-            if req.gzip && !ctx.page_gz.is_empty() {
-                let extra = format!("{csp}Content-Encoding: gzip\r\n");
-                return reply_with(client, 200, "text/html; charset=utf-8", &ctx.page_gz, &extra).await;
-            }
-            reply_with(client, 200, "text/html; charset=utf-8", ctx.page.as_bytes(), &csp).await
-        }
-        ("GET", "/stream" | "/video") => {
-            let _feed = if let Some(id) = req.query("feed").filter(|id| !id.is_empty() && id.len() <= 80) {
-                let Some(guard) = FeedGuard::register(&ctx.feeds, id) else {
-                    return reply(client, 409, "text/plain", b"duplicate stream").await;
-                };
-                Some(guard)
-            } else {
-                None
-            };
-            picture(slot.take().expect("open"), ctx, &req).await
-        }
-        ("GET", p) if task_events_id(p).is_some() => {
-            let id = task_events_id(p).unwrap_or_default();
-            match protocol::task_events(&ctx.socket, id).await {
-                Ok(stream) => events(client, stream).await,
-                Err(m) => json_reply(client, 404, &json!({"message": m})).await,
-            }
-        }
-        ("GET", p) if p.starts_with("/api/") => {
-            let v = match &p[5..] {
-                // always an answer: the page falls back to its offline demo when this one fails
-                "info" => {
-                    let mut v =
-                        info(ctx).await.unwrap_or_else(|m| json!({"width": null, "height": null, "warning": m}));
-                    if let Some(id) = req.query("feed") {
-                        v["feed_open"] = json!(ctx.feeds.lock().unwrap_or_else(|p| p.into_inner()).contains(&id));
-                    }
-                    // the task list, for a page that wants to pick up a task under way: with this poll instead of
-                    // one of its own (absent when it couldn't be read: the page asks again next time)
-                    if req.query("tasks").as_deref() == Some("1")
-                        && let Ok(t) = protocol::task_list(&ctx.socket).await
-                    {
-                        v["tasks"] = json!(t);
-                    }
-                    // who the page is logged in as: a read-only token hides what it can't do
-                    if let Some(w) = &pass.who {
-                        v["login"] = json!({"name": w.name, "role": w.role.name()});
-                    }
-                    Ok(v)
-                }
-                "updates" => updates(ctx).await,
-                "daemon" => daemon(ctx).await,
-                "status" => status(ctx).await,
-                "devices" => devices(ctx).await,
-                "apps" => apps(ctx, req.query("system").is_some_and(|v| v == "1")).await,
-                "elements" => elements(ctx, &req.query("filter").unwrap_or_default(), pass.watches()).await,
-                "alert" => alert(ctx, pass.watches()).await,
-                "agent/backends" => Ok(json!({"backends": agent::backends()})),
-                // every task the daemon knows, also those started elsewhere (`iphone-control task run`)
-                "agent/tasks" => protocol::task_list(&ctx.socket).await.map(|t| json!({"tasks": t})),
-                _ => return reply(client, 404, "text/plain", b"not found").await,
-            };
-            match v {
-                Ok(v) => json_reply(client, 200, &v).await,
-                Err(m) => json_reply(client, 502, &json!({"message": m})).await,
-            }
-        }
-        ("POST", "/api/agent/tasks/open" | "/api/agent/tasks/finish") => {
-            let Some(b) = action_body(client, ctx, &req, pass, &mut body).await? else { return Ok(()) };
-            if req.path == "/api/agent/tasks/open" {
-                let who = pass.who.as_ref().map_or("remote", |w| w.name.as_str());
-                return open_task(client, ctx, &b, who).await;
-            }
-            let Some(token) = &req.task_token else {
-                let m = ictl_l10n::tr!("结束任务要带任务口令", "Ending a task needs its token");
-                return json_reply(client, 400, &json!({"ok": false, "message": m})).await;
-            };
-            let req = Request::TaskFinish {
-                ok: b["ok"].as_bool().unwrap_or(true),
-                summary: b["summary"].as_str().unwrap_or_default().to_owned(),
-            };
-            let r = protocol::as_task(Some(token.clone()), None, protocol::call(&ctx.socket, &req, Some(SHORT))).await;
-            let (code, v) = match r {
-                Ok(Response::Text { .. }) => (200, json!({"ok": true})),
-                Ok(Response::Error { message, .. }) => (409, json!({"ok": false, "message": message})),
-                Ok(Response::Image { caption, .. }) => (409, json!({"ok": false, "message": caption})),
-                Err(e) => (502, json!({"ok": false, "message": e.to_string()})),
-            };
-            json_reply(client, code, &v).await
-        }
-        ("GET" | "POST" | "DELETE", "/mcp") if ctx.mcp.is_some() => {
-            // a browser says where it comes from: only the page itself. Other clients send no Origin
-            if req.origin.as_deref().is_some_and(|o| !ctx.access.origin_allowed(o, ctx.port, ctx.tls.is_some())) {
-                return reply(client, 403, "text/plain", b"forbidden").await;
-            }
-            // a length or chunked, not both (a request read two ways is how requests are smuggled past proxies),
-            // and no other transfer coding
-            if req.chunked && (req.content_length.is_some() || !req.transfer_chunked_only) {
-                return reply(client, 400, "text/plain", b"bad request").await;
-            }
-            if req.method == "POST" && req.content_length.is_none() && !req.chunked {
-                return reply(client, 411, "text/plain", b"length required").await;
-            }
-            let body = if req.chunked {
-                match read_chunked(client, body, mcp::MAX_BODY).await? {
-                    Ok(b) => b,
-                    Err(mcp::Chunked::TooLarge) => return reply(client, 413, "text/plain", b"too large").await,
-                    Err(_) => return reply(client, 400, "text/plain", b"bad chunked body").await,
-                }
-            } else {
-                let len = req.content_length.unwrap_or(0);
-                if len > mcp::MAX_BODY {
-                    return reply(client, 413, "text/plain", b"too large").await;
-                }
-                read_body(client, &mut body, len).await?;
-                body
-            };
-            let svc = ctx.mcp.as_ref().expect("checked above");
-            mcp::serve(svc, client, &head, body).await
-        }
-        ("POST", p) if p.starts_with("/api/") => {
-            let Some(b) = action_body(client, ctx, &req, pass, &mut body).await? else { return Ok(()) };
-            // controlling a task: who, for its log, and which local process (the daemon refuses the task's agent)
-            let caller = if p.starts_with("/api/agent/tasks/") {
-                Caller::of(client, pass.who.as_ref()).await
-            } else {
-                Caller::default()
-            };
-            let (code, v) = post(ctx, &p[5..], &b, req.device.as_deref(), caller).await;
-            json_reply(client, code, &v).await
-        }
-        _ => reply(client, 404, "text/plain", b"not found").await,
-    }
-}
-
-async fn video_head(client: &mut Conn) -> anyhow::Result<()> {
-    let head = b"HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nCache-Control: no-store\r\n\
-                 X-Content-Type-Options: nosniff\r\nReferrer-Policy: no-referrer\r\nConnection: close\r\n\r\n";
-    tokio::time::timeout(crate::video::STREAM_IDLE, client.write_all(head)).await??;
-    tokio::time::timeout(crate::video::STREAM_IDLE, client.flush()).await??;
-    Ok(())
-}
-
-async fn picture(mut client: Conn, ctx: &Ctx, req: &Head) -> anyhow::Result<()> {
-    // the device the page shows (`?udid=`), so a page that hasn't noticed a switch keeps its own picture
-    // instead of silently showing another phone. Looked up again each time: after a replug usbmuxd gives the
-    // device a new id
-    let udid = req.query("udid").filter(|u| !u.is_empty()).unwrap_or_else(|| ctx.udid());
-    if udid.is_empty() {
-        return reply(&mut client, 503, "text/plain", b"no device yet").await;
-    }
-    // the page's low-bandwidth mode (`?low=1`): the phone's own video at a lower bitrate (for every page on that
-    // phone, see `ictl_daemon::protocol::LOW_BANDWIDTH`), the H.264 picture at a higher quantizer (this page's only)
-    let low = req.query("low").as_deref() == Some("1");
-    if req.path == "/video" && req.query("src").as_deref() == Some("device") {
-        if !ctx.device_video_allowed {
-            return reply(&mut client, 404, "text/plain", b"turned off by IPHONE_CONTROL_VIEWER_CODEC").await;
-        }
-        return match crate::video::device::open(&ctx.socket, &udid, low).await {
-            // the page takes 404 as "not this way" and falls back to H.264 or MJPEG
-            Err(e) => reply(&mut client, 404, "text/plain; charset=utf-8", e.as_bytes()).await,
-            Ok((src, w)) => {
-                video_head(&mut client).await?;
-                crate::video::device::serve(src, w, ctx.acks.clone(), client).await;
-                Ok(())
-            }
-        };
-    }
-    let video = if req.path == "/video" {
-        match ctx.video.clone().filter(|e| e.label().is_some()) {
-            Some(e) => Some(e),
-            None => return reply(&mut client, 404, "text/plain", b"no H.264 encoder").await,
-        }
-    } else {
-        None
-    };
-    // shared with the other pages on this phone: WDA captures a picture for each connection to its MJPEG port. The
-    // daemon opens it (the viewer doesn't reach for the phone itself, D2) and passes WDA's answer on as it comes
-    let connect = || async {
-        match protocol::open_mjpeg_stream(&ctx.socket, Some(&udid)).await? {
-            Ok(stream) => anyhow::Ok(stream),
-            Err(why) => anyhow::bail!(why),
-        }
-    };
-    let remote = match tokio::time::timeout(crate::video::STREAM_IDLE, ctx.mjpeg.subscribe(&udid, connect)).await {
-        Ok(Ok(r)) => r,
-        // no WDA (iOS 27 driven natively, or WDA down): the phone's own HEVC video transcoded to H.264, for a page
-        // that can't decode HEVC
-        _ if ctx.device_video_allowed && video.is_some() => {
-            let Some(enc) = video else { unreachable!("checked") };
-            // one ffmpeg per page: past the limit the page retries shortly (it shows "retrying")
-            let Some(_slot) = ctx.transcoders.take() else {
-                return reply_with(
-                    &mut client,
-                    503,
-                    "text/plain",
-                    b"too many pages transcoding the phone's video",
-                    "Retry-After: 10\r\n",
-                )
-                .await;
-            };
-            let (src, w) = match crate::video::device::open(&ctx.socket, &udid, low).await {
-                Ok(s) => s,
-                Err(e) => return reply(&mut client, 502, "text/plain; charset=utf-8", e.as_bytes()).await,
-            };
-            // the screen in points, to cut the video's padding off by
-            let points =
-                crate::client::snapshot(&ctx.socket).await.ok().and_then(|s| s.display).map(|d| (d.width, d.height));
-            let qp = if low { enc.qp().max(crate::video::LOW_BANDWIDTH_QP) } else { enc.qp() };
-            video_head(&mut client).await?;
-            crate::video::transcode::serve(enc, qp, points, ctx.acks.clone(), src, w, client).await;
-            return Ok(());
-        }
-        _ => return reply(&mut client, 502, "text/plain", b"device feed unavailable").await,
-    };
-    match video {
-        Some(enc) => {
-            video_head(&mut client).await?;
-            let qp = if low { enc.qp().max(crate::video::LOW_BANDWIDTH_QP) } else { enc.qp() };
-            crate::video::serve(enc, qp, ctx.acks.clone(), remote, client).await;
-        }
-        None => crate::video::serve_mjpeg(remote, client, crate::video::STREAM_IDLE).await,
-    }
-    Ok(())
 }
 
 /// The release cache belongs to the host user; process versions belong to this Viewer and socket.
@@ -920,32 +540,7 @@ async fn updates(ctx: &Ctx) -> Result<Value, String> {
     Ok(v)
 }
 
-/// A POST under `/api/`: status code and JSON answer
-/// `device`: the one the page shows (`X-Ictl-Device`); actions only go to it
-/// Who called the page's API to control a task
-#[derive(Default)]
-struct Caller {
-    by: String,
-    pid: Option<u32>,
-}
-
-impl Caller {
-    /// `who`: the token it logged in with, by name in the task's log
-    async fn of(client: &Conn, who: Option<&auth::Who>) -> Self {
-        let (Ok(peer), Ok(local)) = (client.tcp().peer_addr(), client.tcp().local_addr()) else {
-            return Self::default();
-        };
-        // reads every process's open files: not on the runtime's threads
-        let pid = tokio::task::spawn_blocking(move || peer::local_client(peer, local)).await.ok().flatten();
-        let mut by = who.map_or_else(|| "viewer".to_owned(), |w| format!("viewer:{}", w.name));
-        if !peer.ip().to_canonical().is_loopback() {
-            by = format!("{by} {}", peer.ip());
-        }
-        Self { by, pid }
-    }
-}
-
-async fn post(ctx: &Ctx, name: &str, b: &Value, device: Option<&str>, caller: Caller) -> (u16, Value) {
+async fn post(ctx: &Ctx, name: &str, b: &Value, device: Option<&str>, caller: routes::Caller) -> (u16, Value) {
     let conflict = |m: String| (409, json!({"ok": false, "message": m}));
     if name == "updates/check" {
         if !b.as_object().is_some_and(serde_json::Map::is_empty) {
@@ -1041,219 +636,13 @@ async fn post(ctx: &Ctx, name: &str, b: &Value, device: Option<&str>, caller: Ca
     (200, run_action(&ctx.socket, &req, udid, SHORT).await)
 }
 
-/// The task's events so far, then new ones as they come (from the daemon), as server-sent events, until it is done
-async fn events(client: &mut Conn, mut stream: protocol::TaskStream) -> anyhow::Result<()> {
-    write_timed(
-        client,
-        b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-store\r\n\
-          X-Content-Type-Options: nosniff\r\nReferrer-Policy: no-referrer\r\nConnection: close\r\n\r\n",
-    )
-    .await?;
-    loop {
-        tokio::select! {
-            e = stream.next() => match e {
-                Some(e) => {
-                    write_timed(client, sse(&e).as_bytes()).await?;
-                    if e.event == "done" {
-                        return Ok(());
-                    }
-                }
-                // the daemon went away (restarting): the page reconnects
-                None => return Ok(()),
-            },
-            // a comment now and then finds a page that went away
-            _ = tokio::time::sleep(Duration::from_secs(15)) => {
-                write_timed(client, b": ping\n\n").await?;
-            }
-        }
-    }
-}
-
-/// `POST /api/agent/tasks/open` (docs/task-control.md 7.6): a task opened from another machine, as `task_open` on
-/// the socket. The answer is server-sent events: `opened` with `{id, token}` first, then the task's events until it
-/// ends. The connection is the task's lease: when the client goes away before the task ended, it is abandoned.
-/// `by`: the login token's name, the task's owner unless the request names one
-async fn open_task(client: &mut Conn, ctx: &Ctx, b: &Value, by: &str) -> anyhow::Result<()> {
-    let title = b["title"].as_str().unwrap_or_default();
-    let owner = b["owner"].as_str().map(str::trim).filter(|o| !o.is_empty()).unwrap_or(by);
-    let apps: Vec<String> = match &b["apps"] {
-        Value::Null => Vec::new(),
-        Value::Array(a) if a.iter().all(Value::is_string) => {
-            a.iter().filter_map(Value::as_str).map(str::to_owned).collect()
-        }
-        _ => return json_reply(client, 400, &json!({"ok": false, "message": "apps must be a list of strings"})).await,
-    };
-    let (opened, mut lease) = match protocol::open_task(&ctx.socket, title, owner, &apps).await {
-        Ok(o) => o,
-        Err(m) => return json_reply(client, 409, &json!({"ok": false, "message": m})).await,
-    };
-    let (mut rd, mut wr) = tokio::io::split(client);
-    let head = format!(
-        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-store\r\n\
-         X-Content-Type-Options: nosniff\r\nReferrer-Policy: no-referrer\r\nConnection: close\r\n\r\nevent: opened\ndata: {}\n\n",
-        json!({"id": opened.id, "token": opened.token})
-    );
-    write_timed(&mut wr, head.as_bytes()).await?;
-    let gone = async {
-        let mut buf = [0u8; 64];
-        while matches!(rd.read(&mut buf).await, Ok(n) if n > 0) {}
-    };
-    tokio::pin!(gone);
-    loop {
-        tokio::select! {
-            e = lease.next() => match e {
-                Some(e) => {
-                    write_timed(&mut wr, sse(&e).as_bytes()).await?;
-                    if e.event == "done" {
-                        return Ok(());
-                    }
-                }
-                // the daemon went away (restarting): the task was interrupted, which the client learns from the end
-                None => return Ok(()),
-            },
-            // the opener went away: dropping the lease abandons the task
-            () = &mut gone => return Ok(()),
-            // a comment now and then keeps proxies from closing a quiet connection
-            _ = tokio::time::sleep(Duration::from_secs(15)) => {
-                write_timed(&mut wr, b": ping\n\n").await?;
-            }
-        }
-    }
-}
-
 fn sse(e: &protocol::TaskEvent) -> String {
     format!("event: {}\ndata: {}\n\n", e.event, e.data)
-}
-
-/// An action's JSON body (`POST /api/…`), once it may be sent from where it comes ([`action_allowed`]); `None` when
-/// the request was answered already (refused, too large, not JSON)
-async fn action_body(
-    client: &mut Conn,
-    ctx: &Ctx,
-    req: &Head,
-    pass: &Pass,
-    body: &mut Vec<u8>,
-) -> anyhow::Result<Option<Value>> {
-    if !action_allowed(req, &ctx.access, ctx.port, ctx.tls.is_some(), pass.program()) {
-        reply(client, 403, "text/plain", b"forbidden").await?;
-        return Ok(None);
-    }
-    let len = req.content_length.unwrap_or(0);
-    if len > MAX_BODY {
-        reply(client, 413, "text/plain", b"too large").await?;
-        return Ok(None);
-    }
-    read_body(client, body, len).await?;
-    match serde_json::from_slice::<Value>(body) {
-        Ok(b) => Ok(Some(b)),
-        Err(_) => {
-            json_reply(client, 400, &json!({"ok": false, "message": "bad request"})).await?;
-            Ok(None)
-        }
-    }
 }
 
 /// `/api/agent/tasks/<id>/events`: the task's id
 fn task_events_id(path: &str) -> Option<&str> {
     path.strip_prefix("/api/agent/tasks/")?.strip_suffix("/events").filter(|id| !id.is_empty() && !id.contains('/'))
-}
-
-/// The rest of a request body: `body` holds what came with the head; `len` bytes in all. Returns what came after it
-/// (the start of the next request on a connection kept open)
-async fn read_body(client: &mut Conn, body: &mut Vec<u8>, len: usize) -> anyhow::Result<Vec<u8>> {
-    let read = async {
-        while body.len() < len {
-            let mut buf = [0u8; 4096];
-            let n = tokio::time::timeout(crate::READ_TIMEOUT, client.read(&mut buf)).await??;
-            if n == 0 {
-                bail!("body cut off");
-            }
-            body.extend_from_slice(&buf[..n]);
-        }
-        anyhow::Ok(())
-    };
-    // a whole body (at most `mcp::MAX_BODY`) in this time, however slowly it trickles in
-    tokio::time::timeout(BODY_TIMEOUT, read).await.map_err(|_| anyhow::anyhow!("body took too long"))??;
-    Ok(body.split_off(len))
-}
-
-const BODY_TIMEOUT: Duration = Duration::from_secs(60);
-
-/// Framing a chunked body may add to what it carries (sizes, extensions, trailers): past this much more than the
-/// decoded limit, on the wire, it is refused as too large
-const CHUNKED_OVERHEAD: usize = 64 * 1024;
-
-/// A chunked body (`/mcp` only): read until its last chunk, decoded. `Err` with [`mcp::Chunked::TooLarge`] when it,
-/// or its framing ([`CHUNKED_OVERHEAD`]), is bigger than allowed, [`mcp::Chunked::Invalid`] when it isn't chunked
-/// properly; the caller answers 413 or 400. What follows it is left unread: the connection closes after the answer.
-/// It is decoded again from the start as more comes, so it is read in large pieces: a 1 MB body takes about 16 passes
-async fn read_chunked(
-    client: &mut Conn,
-    mut raw: Vec<u8>,
-    max: usize,
-) -> anyhow::Result<Result<Vec<u8>, mcp::Chunked>> {
-    let read = async {
-        let mut buf = vec![0u8; 64 * 1024];
-        loop {
-            match mcp::dechunk(&raw, max) {
-                mcp::Chunked::Done(body, _) => return anyhow::Ok(Ok(body)),
-                mcp::Chunked::Partial if raw.len() > max + CHUNKED_OVERHEAD => return Ok(Err(mcp::Chunked::TooLarge)),
-                mcp::Chunked::Partial => {}
-                other => return Ok(Err(other)),
-            }
-            let n = tokio::time::timeout(crate::READ_TIMEOUT, client.read(&mut buf)).await??;
-            if n == 0 {
-                bail!("body cut off");
-            }
-            raw.extend_from_slice(&buf[..n]);
-        }
-    };
-    tokio::time::timeout(BODY_TIMEOUT, read).await.map_err(|_| anyhow::anyhow!("body took too long"))?
-}
-
-async fn json_reply(client: &mut Conn, status: u16, v: &Value) -> anyhow::Result<()> {
-    reply(client, status, "application/json", v.to_string().as_bytes()).await
-}
-
-async fn reply(client: &mut Conn, status: u16, kind: &str, body: &[u8]) -> anyhow::Result<()> {
-    reply_with(client, status, kind, body, "").await
-}
-
-/// [`reply`] with more header lines (`extra`: each ending with `\r\n`)
-async fn reply_with(client: &mut Conn, status: u16, kind: &str, body: &[u8], extra: &str) -> anyhow::Result<()> {
-    let reason = match status {
-        200 => "OK",
-        202 => "Accepted",
-        303 => "See Other",
-        400 => "Bad Request",
-        401 => "Unauthorized",
-        403 => "Forbidden",
-        404 => "Not Found",
-        409 => "Conflict",
-        411 => "Length Required",
-        413 => "Payload Too Large",
-        429 => "Too Many Requests",
-        503 => "Service Unavailable",
-        _ => "Bad Gateway",
-    };
-    // the request allows it ([`keepable`]): the connection stays for the next one
-    let keep = KEEP_ALIVE.try_with(|k| k.get() == Keep::May).unwrap_or(false);
-    let connection = if keep { "Connection: keep-alive\r\n" } else { "Connection: close\r\n" };
-    let head = format!(
-        "HTTP/1.1 {status} {reason}\r\nContent-Type: {kind}\r\nContent-Length: {}\r\nCache-Control: no-store\r\n\
-         X-Content-Type-Options: nosniff\r\nX-Frame-Options: DENY\r\nReferrer-Policy: no-referrer\r\n\
-         {extra}{connection}\r\n",
-        body.len()
-    );
-    write_timed(client, head.as_bytes()).await?;
-    // flushed: over TLS the last record may still be buffered
-    write_timed(client, body).await?;
-    if keep {
-        let _ = KEEP_ALIVE.try_with(|k| k.set(Keep::Kept));
-    } else {
-        linger(client).await;
-    }
-    Ok(())
 }
 
 /// Writing one answer, or one event of a stream, at most this long: a client that reads nothing would hold its
@@ -1289,34 +678,6 @@ fn accepts_gzip(v: &str) -> bool {
         *slot = Some(slot.unwrap_or(true) && taken);
     }
     named.or(star).unwrap_or(false)
-}
-
-/// Writes and flushes `bytes` within [`WRITE_TIMEOUT`]
-pub(crate) async fn write_timed<W: tokio::io::AsyncWrite + Unpin>(w: &mut W, bytes: &[u8]) -> anyhow::Result<()> {
-    tokio::time::timeout(WRITE_TIMEOUT, async {
-        w.write_all(bytes).await?;
-        w.flush().await
-    })
-    .await
-    .map_err(|_| anyhow::anyhow!("the client stopped reading"))??;
-    Ok(())
-}
-
-/// Closes after an answer without losing it: a socket closed with request data it never read (a body refused before
-/// it was read: 401, 403, 413) sends a reset, and the client may then never see the answer. So: end our side, then
-/// read what the client still sends until it closes too, for a second and 1 MB at most
-async fn linger(client: &mut Conn) {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(1);
-    // within the same second: over TLS ending our side writes (close_notify), which a client that stopped reading
-    // with its buffers full would hold up for good
-    let _ = tokio::time::timeout_at(deadline, client.shutdown()).await;
-    let (mut buf, mut left) = ([0u8; 8192], 1usize << 20);
-    while left > 0 {
-        match tokio::time::timeout_at(deadline, client.read(&mut buf)).await {
-            Ok(Ok(n)) if n > 0 => left = left.saturating_sub(n),
-            _ => return,
-        }
-    }
 }
 
 /// Who a request is, once [`login_gate`] let it in
@@ -1357,114 +718,12 @@ impl Pass {
     }
 }
 
-/// The login ([`auth`]) before anything else: who the request is when it may go on, otherwise `None` and it was
-/// answered (the login page, a login, or 401 / 429)
-async fn login_gate(
-    client: &mut Conn,
-    ctx: &Ctx,
-    head: &[u8],
-    req: &Head,
-    body: &mut Vec<u8>,
-) -> anyhow::Result<Option<Pass>> {
-    use auth::Verdict;
-    let Some(a) = &ctx.auth else { return Ok(Some(Pass::default())) };
-    let secure = client.is_tls();
-    // the link `iphone-control viewer token` shows
-    if req.method == "GET"
-        && req.path == "/"
-        && let Some(t) = req.query("token")
-    {
-        match a.try_token(&t) {
-            Verdict::Ok(w) => logged_in(client, a, &w.name, secure).await?,
-            v => login_page(client, v).await?,
-        }
-        return Ok(None);
-    }
-    // the login page's form
-    if req.method == "POST" && req.path == "/login" {
-        if req.origin.as_deref().is_some_and(|o| !ctx.access.origin_allowed(o, ctx.port, ctx.tls.is_some())) {
-            reply(client, 403, "text/plain", b"forbidden").await?;
-            return Ok(None);
-        }
-        let len = req.content_length.unwrap_or(0);
-        if len > 4096 {
-            reply(client, 413, "text/plain", b"too large").await?;
-            return Ok(None);
-        }
-        // a 4 KB form: no longer than a head may take ([`BODY_TIMEOUT`] is for large bodies)
-        tokio::time::timeout(crate::HEAD_TIMEOUT, read_body(client, body, len))
-            .await
-            .map_err(|_| anyhow::anyhow!("login form took too long"))??;
-        match auth::form_token(body).filter(|t| !t.trim().is_empty()).map(|t| a.try_token(&t)) {
-            Some(Verdict::Ok(w)) => logged_in(client, a, &w.name, secure).await?,
-            Some(v) => login_page(client, v).await?,
-            None => login_page(client, Verdict::Missing).await?,
-        }
-        return Ok(None);
-    }
-    let mut v = match a.check(head) {
-        Verdict::Ok(w) => return Ok(Some(Pass { who: Some(w), agent: false })),
-        v => v,
-    };
-    // an agent on another machine: its task's token instead of a login, only for that task (docs/task-control.md 7.6)
-    // (checked even after too many wrong tokens: a running task isn't cut off by someone sending wrong ones)
-    if TASK_PATHS.contains(&req.path.as_str())
-        && let Some(t) = &req.task_token
-    {
-        if protocol::task_check(&ctx.socket, t).await.is_ok() {
-            return Ok(Some(Pass { who: None, agent: true }));
-        }
-        // a wrong task token counts like a wrong login (once, when no login token was sent with it)
-        if v == Verdict::Missing {
-            v = a.failed();
-        }
-    }
-    let status = if v == Verdict::Limited { 429 } else { 401 };
-    match (req.method.as_str(), req.path.as_str()) {
-        ("GET", "/") => login_page(client, v).await?,
-        // MCP clients: send the token as a bearer token (RFC 6750)
-        (_, "/mcp") => {
-            let extra = "WWW-Authenticate: Bearer realm=\"iphone-control\"\r\n";
-            reply_with(client, status, "text/plain", b"log in: Authorization: Bearer <token>", extra).await?
-        }
-        _ => reply(client, status, "text/plain", b"log in first").await?,
-    }
-    Ok(None)
-}
-
-/// Logged in: a session cookie, and the page without the token in its address (and history)
-async fn logged_in(client: &mut Conn, a: &auth::Auth, name: &str, secure: bool) -> anyhow::Result<()> {
-    let extra = format!("Location: /\r\nSet-Cookie: {}\r\n", a.set_cookie(name, secure));
-    reply_with(client, 303, "text/plain", b"", &extra).await
-}
-
-/// The login page, saying why the last try failed
-async fn login_page(client: &mut Conn, v: auth::Verdict) -> anyhow::Result<()> {
-    let (status, why) = match v {
-        auth::Verdict::Wrong => (401, Some(auth::LoginError::Wrong)),
-        auth::Verdict::Limited => (429, Some(auth::LoginError::Limited)),
-        _ => (401, None),
-    };
-    let page = auth::login_page(why);
-    let csp = format!("Content-Security-Policy: {}\r\n", csp_for(&page));
-    reply_with(client, status, "text/html; charset=utf-8", page.as_bytes(), &csp).await
-}
-
 /// Where a plain HTTP request from the network goes: the same page over HTTPS, at the name it asked for (one of
 /// this machine's: [`lan::Access::host_allowed`] already checked it)
 fn https_location(head: &[u8], req: &Head, port: u16) -> Option<String> {
     let host = lan::host_header(head).filter(|h| !h.is_empty())?;
     let query = if req.query.is_empty() { String::new() } else { format!("?{}", req.query) };
     Some(format!("https://{host}:{port}{}{query}", req.path))
-}
-
-/// Temporary (307): with `--tls off` later, browsers mustn't remember it
-async fn redirect(client: &mut Conn, to: &str) -> anyhow::Result<()> {
-    let head = format!(
-        "HTTP/1.1 307 Temporary Redirect\r\nLocation: {to}\r\nContent-Length: 0\r\nCache-Control: no-store\r\n\
-         Referrer-Policy: no-referrer\r\nConnection: close\r\n\r\n"
-    );
-    write_timed(client, head.as_bytes()).await
 }
 
 struct Head {
@@ -1724,7 +983,19 @@ fn action_result(req: &Request, result: Result<Response, impl std::fmt::Display>
 
 #[cfg(test)]
 mod tests {
+    use super::api::*;
     use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    /// Requests on one connection, as the viewer serves them ([`server::serve_conn`])
+    async fn serve(
+        conn: Conn,
+        ctx: &Arc<Ctx>,
+        early: Option<Early>,
+        room: Option<Arc<tokio::sync::Semaphore>>,
+    ) -> anyhow::Result<()> {
+        server::serve_conn(conn, ctx.clone(), early, room).await
+    }
 
     fn test_ctx(dir: &Path, socket: &Path) -> Ctx {
         Ctx {
@@ -1754,7 +1025,7 @@ mod tests {
 
     /// One request through [`serve`] on a real connection; the whole answer. It asks to close after the answer, unless
     /// it says otherwise (connections kept open: [`requests_share_a_connection`])
-    async fn exchange(ctx: &Ctx, raw: String) -> String {
+    async fn exchange(ctx: &Arc<Ctx>, raw: String) -> String {
         let raw = if raw.to_ascii_lowercase().contains("\r\nconnection:") {
             raw
         } else {
@@ -1798,9 +1069,11 @@ mod tests {
     #[tokio::test]
     async fn requests_share_a_connection() {
         let temp = tempfile::tempdir_in("/tmp").unwrap();
-        let ctx = test_ctx(temp.path(), &temp.path().join("none.sock"));
+        let mut ctx = test_ctx(temp.path(), &temp.path().join("none.sock"));
+        ctx.port = 8202;
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
+        let ctx = Arc::new(ctx);
         let server = async {
             let (tcp, _) = listener.accept().await.unwrap();
             serve(Conn::Plain(tcp), &ctx, None, None).await.unwrap();
@@ -1811,12 +1084,14 @@ mod tests {
             // a body, then the next request in the same write: each read where it belongs
             let two = format!(
                 "POST /api/video/ack HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\n\
-                 Content-Length: {}\r\n\r\n{ack}GET /api/agent/backends HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n",
+                 Origin: http://127.0.0.1:8202\r\nContent-Length: {}\r\n\r\n{ack}\
+                 GET /api/agent/backends HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n",
                 ack.len()
             );
             s.write_all(two.as_bytes()).await.unwrap();
             let (h1, _) = answer(&mut s).await;
-            assert!(h1.contains("Connection: keep-alive"), "{h1}");
+            // no such stream: its body read, then refused
+            assert!(h1.starts_with("HTTP/1.1 404") && h1.contains("Connection: keep-alive"), "{h1}");
             let (h2, b2) = answer(&mut s).await;
             assert!(h2.starts_with("HTTP/1.1 200") && h2.contains("keep-alive") && b2.contains("backends"), "{h2}{b2}");
             // a stream's path (task events) closes, like a request that asks to
@@ -1834,6 +1109,113 @@ mod tests {
             let out = exchange(&ctx, req.to_owned()).await;
             assert!(out.contains("Connection: close") && out.contains("backends"), "{why}: {out}");
         }
+    }
+
+    /// On a connection kept open each head is checked as it came, not only the first: a later request with its length
+    /// twice is refused. And an answer given before a body was read closes the connection
+    #[tokio::test]
+    async fn each_head_on_a_kept_connection_is_checked_as_it_came() {
+        let temp = tempfile::tempdir_in("/tmp").unwrap();
+        let mut ctx = test_ctx(temp.path(), &temp.path().join("none.sock"));
+        ctx.port = 8202;
+        let ctx = Arc::new(ctx);
+        let ack = r#"{"stream":"x","bytes":5}"#;
+        let post = |origin: &str, extra: &str| {
+            format!(
+                "POST /api/video/ack HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\n\
+                 Origin: {origin}\r\n{extra}Content-Length: {}\r\n\r\n{ack}",
+                ack.len()
+            )
+        };
+        let ours = "http://127.0.0.1:8202";
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = async {
+            let (tcp, _) = listener.accept().await.unwrap();
+            serve(Conn::Plain(tcp), &ctx, None, None).await.unwrap();
+        };
+        let client = async {
+            let mut s = tokio::net::TcpStream::connect(addr).await.unwrap();
+            // the second request in the same write, its length twice
+            let two = format!("{}{}", post(ours, ""), post(ours, &format!("Content-Length: {}\r\n", ack.len())));
+            s.write_all(two.as_bytes()).await.unwrap();
+            let (h1, _) = answer(&mut s).await;
+            assert!(h1.starts_with("HTTP/1.1 404") && h1.contains("keep-alive"), "{h1}");
+            let (h2, _) = answer(&mut s).await;
+            assert!(h2.starts_with("HTTP/1.1 400") && h2.contains("Connection: close"), "{h2}");
+        };
+        tokio::join!(server, client);
+        // refused before its body was read: not kept open
+        let r = exchange(&ctx, post("http://elsewhere.example", "Connection: keep-alive\r\n")).await;
+        assert!(r.starts_with("HTTP/1.1 403") && r.contains("Connection: close"), "{r}");
+    }
+
+    /// `/mcp` ends when the token it logged in with goes (replaced here), its stream too, as every stream
+    #[tokio::test]
+    async fn mcp_ends_when_its_token_goes() {
+        let temp = tempfile::tempdir_in("/tmp").unwrap();
+        let mut ctx = test_ctx(temp.path(), &temp.path().join("none.sock"));
+        ctx.auth = Some(auth::Auth::load(temp.path(), 8202).unwrap());
+        ctx.mcp = Some(ictl_mcp::http_service(temp.path().join("none.sock")));
+        let ctx = Arc::new(ctx);
+        let token = auth::get(temp.path(), "owner").unwrap().token;
+        let mcp = |body: &str, extra: &str| {
+            format!(
+                "POST /mcp HTTP/1.1\r\nHost: 127.0.0.1:8202\r\nAuthorization: Bearer {token}\r\n\
+                 Content-Type: application/json\r\nAccept: application/json, text/event-stream\r\n{extra}\
+                 Content-Length: {}\r\n\r\n{body}",
+                body.len()
+            )
+        };
+        let init = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"test","version":"1"}}}"#;
+        let r = exchange(&ctx, mcp(init, "")).await;
+        assert!(r.starts_with("HTTP/1.1 200"), "{r}");
+        let session = r
+            .lines()
+            .find_map(|l| l.to_ascii_lowercase().strip_prefix("mcp-session-id:").map(|v| v.trim().to_owned()))
+            .expect("a session");
+        let sid = format!("Mcp-Session-Id: {session}\r\nMcp-Protocol-Version: 2025-06-18\r\n");
+        let r = exchange(&ctx, mcp(r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#, &sid)).await;
+        assert!(r.starts_with("HTTP/1.1 202"), "{r}");
+        // the server's stream of the session: open until the token goes
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn({
+            let ctx = ctx.clone();
+            async move {
+                let (tcp, _) = listener.accept().await.unwrap();
+                let _ = serve(Conn::Plain(tcp), &ctx, None, None).await;
+            }
+        });
+        let mut s = tokio::net::TcpStream::connect(addr).await.unwrap();
+        let get = format!(
+            "GET /mcp HTTP/1.1\r\nHost: 127.0.0.1:8202\r\nAuthorization: Bearer {token}\r\n\
+             Accept: text/event-stream\r\n{sid}\r\n"
+        );
+        s.write_all(get.as_bytes()).await.unwrap();
+        let mut got = Vec::new();
+        let mut b = [0u8; 1024];
+        while !got.windows(4).any(|w| w == b"\r\n\r\n") {
+            let n = s.read(&mut b).await.unwrap();
+            assert!(n > 0, "closed: {}", String::from_utf8_lossy(&got));
+            got.extend_from_slice(&b[..n]);
+        }
+        assert!(got.starts_with(b"HTTP/1.1 200"), "{}", String::from_utf8_lossy(&got));
+        // still open a while later
+        assert!(tokio::time::timeout(Duration::from_millis(500), s.read(&mut b)).await.is_err());
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        auth::renew(temp.path(), "owner").unwrap();
+        let end = tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                match s.read(&mut b).await {
+                    Ok(0) | Err(_) => return,
+                    Ok(_) => {}
+                }
+            }
+        })
+        .await;
+        assert!(end.is_ok(), "the stream outlived its token");
+        server.await.unwrap();
     }
 
     /// `/mcp` takes a chunked body (an MCP client or a proxy that streams the request) and answers a stream chunked;
@@ -1860,24 +1242,37 @@ mod tests {
             a.len(),
             b.len()
         );
+        let ctx = Arc::new(ctx);
         let r = exchange(&ctx, chunked).await;
         assert!(r.starts_with("HTTP/1.1 200"), "{r}");
         assert!(r.contains("Transfer-Encoding: chunked\r\n") && r.ends_with("\r\n0\r\n\r\n"), "{r}");
         assert!(r.contains("iphone"), "{r}");
-        let both =
-            format!("{}{init}", head(&format!("Transfer-Encoding: chunked\r\nContent-Length: {}\r\n", init.len())));
-        assert!(exchange(&ctx, both).await.starts_with("HTTP/1.1 400"));
+        // chunked and with a length, in either order (hyper drops the length: the head as it came is checked), and the
+        // body really chunked; a length twice, even the same
+        let body = format!("{:x}\r\n{init}\r\n0\r\n\r\n", init.len());
+        for framing in [
+            format!("Transfer-Encoding: chunked\r\nContent-Length: {}\r\n", body.len()),
+            format!("Content-Length: {}\r\nTransfer-Encoding: chunked\r\n", body.len()),
+        ] {
+            let r = exchange(&ctx, format!("{}{body}", head(&framing))).await;
+            assert!(r.starts_with("HTTP/1.1 400"), "{framing}: {r}");
+        }
+        let twice = format!("Content-Length: {0}\r\nContent-Length: {0}\r\n", init.len());
+        let r = exchange(&ctx, format!("{}{init}", head(&twice))).await;
+        assert!(r.starts_with("HTTP/1.1 400"), "{r}");
         let gzip = format!("{}0\r\n\r\n", head("Transfer-Encoding: gzip, chunked\r\n"));
         assert!(exchange(&ctx, gzip).await.starts_with("HTTP/1.1 400"));
         // a broken chunk is told so, not just cut off
         let broken = format!("{}zz\r\n{{}}\r\n0\r\n\r\n", head("Transfer-Encoding: chunked\r\n"));
         let r = exchange(&ctx, broken).await;
         assert!(r.starts_with("HTTP/1.1 400"), "{r}");
-        // framing that never ends (trailer lines, each short) stops at the limit instead of growing without bound
-        let trailers = "X-A: 1\r\n".repeat((mcp::MAX_BODY + CHUNKED_OVERHEAD) / 8 + 1);
+        // framing that never ends (trailer lines, each short) stops at the limit instead of growing without bound:
+        // hyper's, 16 KB of trailers. Four times that is sent, less than closing reads off (`io::LINGER_BYTES`): with
+        // more left unread the close is a reset, which on macOS loses the answer that came before it
+        let trailers = "X-A: 1\r\n".repeat(64 * 1024 / 8 + 1);
         let endless = format!("{}0\r\n{trailers}", head("Transfer-Encoding: chunked\r\n"));
         let r = exchange(&ctx, endless).await;
-        assert!(r.starts_with("HTTP/1.1 413"), "{r}");
+        assert!(r.starts_with("HTTP/1.1 413") || r.starts_with("HTTP/1.1 400"), "refused: {r}");
     }
 
     /// Before the login nothing is kept open: without a token a machine on the network can't hold the places
@@ -1890,6 +1285,7 @@ mod tests {
         let get = |extra: &str| {
             format!("GET /api/agent/backends HTTP/1.1\r\nHost: 127.0.0.1:8202\r\nConnection: keep-alive\r\n{extra}\r\n")
         };
+        let ctx = Arc::new(ctx);
         let r = exchange(&ctx, get("")).await;
         assert!(r.starts_with("HTTP/1.1 401") && r.contains("Connection: close"), "{r}");
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -1915,6 +1311,7 @@ mod tests {
         let ctx = test_ctx(temp.path(), &temp.path().join("none.sock"));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
+        let ctx = Arc::new(ctx);
         let server = async {
             let (tcp, _) = listener.accept().await.unwrap();
             let t0 = tokio::time::Instant::now();
@@ -1952,6 +1349,7 @@ mod tests {
         let get = |path: &str, extra: &str| format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1:8202\r\n{extra}\r\n");
         let status = |r: &str| r.split(' ').nth(1).unwrap_or_default().to_owned();
 
+        let ctx = Arc::new(ctx);
         let r = exchange(&ctx, get("/api/agent/backends", "")).await;
         assert_eq!(status(&r), "401", "{r}");
         let r = exchange(&ctx, get("/", "")).await;
@@ -1995,7 +1393,7 @@ mod tests {
 
         // MCP clients are told to send a bearer token
         let r = exchange(&ctx, "POST /mcp HTTP/1.1\r\nHost: 127.0.0.1:8202\r\nContent-Length: 0\r\n\r\n".into()).await;
-        assert!(status(&r) == "401" && r.contains("WWW-Authenticate: Bearer"), "{r}");
+        assert!(status(&r) == "401" && r.to_ascii_lowercase().contains("www-authenticate: bearer"), "{r}");
 
         // a read-only token looks but doesn't act
         let tv = format!("Authorization: Bearer {}\r\n", "v".repeat(64));
@@ -2056,10 +1454,11 @@ mod tests {
             )
         };
         let init = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"t","version":"1"}}}"#;
+        let ctx = Arc::new(ctx);
         let r = exchange(&ctx, post("/mcp", "good", init)).await;
         assert_eq!(status(&r), "200", "the tools: {r}");
         let r = exchange(&ctx, post("/mcp", "ended", init)).await;
-        assert!(status(&r) == "401" && r.contains("WWW-Authenticate: Bearer"), "{r}");
+        assert!(status(&r) == "401" && r.to_ascii_lowercase().contains("www-authenticate: bearer"), "{r}");
         let r = exchange(&ctx, post("/api/agent/tasks/finish", "good", r#"{"ok":true,"summary":"done"}"#)).await;
         assert_eq!(status(&r), "200", "{r}");
         let finish = seen.lock().unwrap().iter().find(|q| q["op"] == "task_finish").cloned().unwrap();
@@ -2104,6 +1503,7 @@ mod tests {
         let entry = auth::Entry { name: "owner".into(), role: auth::Role::Operate, token: login.clone(), created: 0 };
         ctx.auth = Some(auth::Auth::fixed(vec![entry], 8202));
         ctx.mcp = Some(ictl_mcp::http_service(socket.clone()));
+        let ctx = Arc::new(ctx);
         let ctx = Arc::new(ctx);
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
@@ -2198,15 +1598,20 @@ mod tests {
     /// An answer to a client that reads nothing gives up after [`WRITE_TIMEOUT`] instead of holding the connection
     #[tokio::test]
     async fn a_client_that_reads_nothing_is_let_go() {
+        let temp = tempfile::tempdir_in("/tmp").unwrap();
+        let mut ctx = test_ctx(temp.path(), &temp.path().join("none.sock"));
+        ctx.page = "x".repeat(32 << 20);
+        let ctx = Arc::new(ctx);
         let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
         let (client, accepted) =
             tokio::join!(tokio::net::TcpStream::connect(listener.local_addr().unwrap()), listener.accept());
-        let _never_reads = client.unwrap();
-        let mut conn = Conn::Plain(accepted.unwrap().0);
-        let big = vec![b'x'; 32 << 20];
+        let mut never_reads = client.unwrap();
+        never_reads.write_all(b"GET / HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n").await.unwrap();
         let t0 = std::time::Instant::now();
-        let r = tokio::time::timeout(Duration::from_secs(10), reply(&mut conn, 200, "text/plain", &big)).await;
-        assert!(matches!(r, Ok(Err(_))), "gave up with an error");
+        let r =
+            tokio::time::timeout(Duration::from_secs(10), serve(Conn::Plain(accepted.unwrap().0), &ctx, None, None))
+                .await;
+        assert!(r.is_ok(), "let go");
         assert!(t0.elapsed() < Duration::from_secs(5), "{:?}", t0.elapsed());
     }
 
@@ -2317,34 +1722,37 @@ mod tests {
         let token = "t".repeat(64);
         let entry = auth::Entry { name: "owner".into(), role: auth::Role::Operate, token: token.clone(), created: 0 };
         ctx.auth = Some(auth::Auth::fixed(vec![entry], 8202));
+        let ctx = Arc::new(ctx);
         let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
         let arriving = Arriving::default();
         let lan: std::net::IpAddr = "192.168.1.9".parse().unwrap();
-        let run = async |raw: String, early: &mut Option<Early>| {
+        let counted = || arriving.0.lock().unwrap().get(&lan).copied().unwrap_or(0);
+        // a request on a connection of its own, counted as arriving from `lan`; the answer's head, and whether the
+        // connection was still counted when it came (it stays open: closing lingers, a kept one waits)
+        let run = async |raw: &str| {
             let (tab, accepted) =
                 tokio::join!(tokio::net::TcpStream::connect(listener.local_addr().unwrap()), listener.accept());
             let mut tab = tab.unwrap();
-            let mut slot = Some(Conn::Plain(accepted.unwrap().0));
-            let head = Head::parse(raw.as_bytes()).unwrap();
-            let mut next = Vec::new();
-            let _ = handle(&mut slot, &ctx, raw.clone().into_bytes(), head, vec![], early, &mut next).await;
-            drop(slot);
-            answer(&mut tab).await.0
+            let early = arriving.enter(lan);
+            let server = tokio::spawn(server::serve_conn(Conn::Plain(accepted.unwrap().0), ctx.clone(), early, None));
+            tab.write_all(raw.as_bytes()).await.unwrap();
+            let head = answer(&mut tab).await.0;
+            let still = counted();
+            drop(tab);
+            let _ = server.await;
+            (head, still)
         };
-        let mut early = arriving.enter(lan);
-        let h = run("GET /api/daemon HTTP/1.1\r\nHost: 127.0.0.1:8202\r\n\r\n".into(), &mut early).await;
+        let (h, still) = run("GET /api/daemon HTTP/1.1\r\nHost: 127.0.0.1:8202\r\n\r\n").await;
         assert!(h.starts_with("HTTP/1.1 401"), "{h}");
-        assert!(early.is_some(), "not logged in: still counted");
-        let h = run(
-            "POST /api/tap HTTP/1.1\r\nHost: 127.0.0.1:8202\r\nTransfer-Encoding: chunked\r\n\r\n".into(),
-            &mut early,
-        )
-        .await;
+        assert_eq!(still, 1, "not logged in: still counted");
+        let (h, still) =
+            run("POST /api/tap HTTP/1.1\r\nHost: 127.0.0.1:8202\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n").await;
         assert!(h.starts_with("HTTP/1.1 411"), "{h}");
+        assert_eq!(still, 1);
         let logged = format!("GET / HTTP/1.1\r\nHost: 127.0.0.1:8202\r\nAuthorization: Bearer {token}\r\n\r\n");
-        let h = run(logged, &mut early).await;
+        let (h, still) = run(&logged).await;
         assert!(h.starts_with("HTTP/1.1 200"), "{h}");
-        assert!(early.is_none(), "logged in: the place is let go");
+        assert_eq!(still, 0, "logged in: the place is let go");
     }
 
     /// Without a login nothing of a body is waited for: a request that may keep its connection open used to read
@@ -2357,6 +1765,7 @@ mod tests {
         ctx.auth = Some(auth::Auth::fixed(vec![entry], 8202));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
+        let ctx = Arc::new(ctx);
         let server = async {
             let (tcp, _) = listener.accept().await.unwrap();
             let _ = serve(Conn::Plain(tcp), &ctx, None, None).await;
@@ -2372,31 +1781,32 @@ mod tests {
         tokio::join!(server, client);
     }
 
+    /// A page that goes away while its picture is still being opened lets go of its feed: a new page may take it
     #[tokio::test]
     async fn cancelled_picture_unregisters_its_feed() {
         let temp = tempfile::tempdir_in("/tmp").unwrap();
         let socket = temp.path().join("daemon.sock");
         let daemon = tokio::net::UnixListener::bind(&socket).unwrap();
-        let ctx = test_ctx(temp.path(), &socket);
+        let ctx = Arc::new(test_ctx(temp.path(), &socket));
         let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
         let (tab, accepted) =
             tokio::join!(tokio::net::TcpStream::connect(listener.local_addr().unwrap()), listener.accept());
-        let _tab = tab.unwrap();
-        let raw = b"GET /video?src=device&udid=TEST&feed=tab HTTP/1.1\r\nHost: localhost\r\n\r\n";
-        let (client, _) = accepted.unwrap();
-        let mut slot = Some(Conn::Plain(client));
-        let (mut early, mut next) = (None, Vec::new());
-        let mut request =
-            Box::pin(handle(&mut slot, &ctx, raw.to_vec(), Head::parse(raw).unwrap(), vec![], &mut early, &mut next));
+        let mut tab = tab.unwrap();
+        tab.write_all(b"GET /video?src=device&udid=TEST&feed=tab HTTP/1.1\r\nHost: localhost\r\n\r\n").await.unwrap();
+        let server = tokio::spawn(server::serve_conn(Conn::Plain(accepted.unwrap().0), ctx.clone(), None, None));
         // The simulated daemon has accepted the request but has not supplied a stream.
-        tokio::select! {
-            result = &mut request => panic!("picture ended before cancellation: {result:?}"),
-            peer = daemon.accept() => { let _peer = peer.unwrap(); }
-        }
-        assert!(FeedGuard::register(&ctx.feeds, "tab".into()).is_none(), "the first request still owns this ID");
+        let _peer = tokio::time::timeout(Duration::from_secs(5), daemon.accept()).await.unwrap().unwrap();
+        assert!(FeedGuard::register(&ctx, "tab".into()).is_none(), "the first request still owns this ID");
         assert!(ctx.feeds.lock().unwrap().contains("tab"));
-        drop(request);
-        assert!(!ctx.feeds.lock().unwrap().contains("tab"));
+        drop(tab);
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while ctx.feeds.lock().unwrap().contains("tab") {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("the feed let go once the page went away");
+        let _ = tokio::time::timeout(Duration::from_secs(5), server).await;
     }
 
     #[tokio::test]
@@ -2405,6 +1815,7 @@ mod tests {
         let socket = temp.path().join("daemon.sock");
         let daemon = tokio::net::UnixListener::bind(&socket).unwrap();
         let ctx = test_ctx(temp.path(), &socket);
+        let ctx = Arc::new(ctx);
         let guard = ctx.checking.lock().await;
         let finish_check = async {
             // The GET has consumed the release cache when its daemon snapshot begins.
@@ -2439,12 +1850,13 @@ mod tests {
         let daemon = tokio::net::UnixListener::bind(&socket).unwrap();
         let ctx = test_ctx(temp.path(), &socket);
         let body = json!({"text": "Settings", "index": 1});
+        let ctx = Arc::new(ctx);
         *ctx.udid.lock().unwrap() = "different-device".into();
-        assert_eq!(post(&ctx, "tap_element", &body, None, Caller::default()).await.0, 409);
-        assert_eq!(post(&ctx, "tap", &json!({"x": 1, "y": 2}), Some("phone"), Caller::default()).await.0, 409);
+        assert_eq!(post(&ctx, "tap_element", &body, None, routes::Caller::default()).await.0, 409);
+        assert_eq!(post(&ctx, "tap", &json!({"x": 1, "y": 2}), Some("phone"), routes::Caller::default()).await.0, 409);
         let (result, req) = tokio::time::timeout(Duration::from_secs(3), async {
             tokio::join!(
-                post(&ctx, "tap_element", &body, Some("phone"), Caller::default()),
+                post(&ctx, "tap_element", &body, Some("phone"), routes::Caller::default()),
                 reply_to_action(&daemon, Response::text("ok"))
             )
         })
@@ -2463,6 +1875,7 @@ mod tests {
         let socket = temp.path().join("daemon.sock");
         let daemon = tokio::net::UnixListener::bind(&socket).unwrap();
         let ctx = test_ctx(temp.path(), &socket);
+        let ctx = Arc::new(ctx);
         for (phase, daemon_retry, allow) in [("down", false, false), ("down", true, true), ("move", true, false)] {
             let body = json!({"phase":phase, "x":1, "y":2, "view":"portrait"});
             let reply =
@@ -2470,7 +1883,7 @@ mod tests {
             // The result comes directly from the action, with no follow-up status request.
             let ((_, result), req) = tokio::time::timeout(Duration::from_secs(3), async {
                 tokio::join!(
-                    post(&ctx, "touch", &body, Some("phone"), Caller::default()),
+                    post(&ctx, "touch", &body, Some("phone"), routes::Caller::default()),
                     reply_to_action(&daemon, reply)
                 )
             })

@@ -56,6 +56,11 @@ idevice = { version = "=0.1.68", default-features = false, features = [
 rmcp = { version = "=3.11.0", features = ["server", "transport-io", "transport-streamable-http-server"] }
 http = "=1.5.0"
 http-body-util = "=0.1.5"
+# the viewer's HTTP/1.1 server (already in the tree through reqwest and rmcp)
+hyper = { version = "=1.12.0", default-features = false, features = ["server", "http1"] }
+hyper-util = { version = "=0.1.21", default-features = false, features = ["tokio"] }
+http-body = "=1.1.0"
+tokio-util = { version = "=0.7.20", default-features = false }
 bytes = "=1.12.2"
 tokio = { version = "=1.54.1", features = ["full"] }
 # rustls-no-provider：不编进 aws-lc-rs（C 代码，编译慢、体积大）；idevice/plume_core 用 ring，入口处显式装 ring 为默认 provider

@@ -88,20 +88,16 @@ pub fn use_passcode_button(elements: &[Element]) -> Option<(i64, i64)> {
 /// 「触控 ID」提示的结构，和界面语言无关：SpringBoard 的 `SBCoverSheetWindow` 里没有锁屏日期（不是锁屏本身，
 /// 也不是通知中心），只有两个按钮。按钮上的字只认得中文和英文（[`USE_PASSCODE_LABELS`]），繁中、日、德、法……
 /// 的系统上靠这个认出锁屏：认不出时把锁着的 iPad 当成了解锁的，之后不再查锁屏
-pub(super) fn touch_id_prompt(xml: &str) -> bool {
-    let Some(at) = xml.find("name=\"SBCoverSheetWindow\"") else { return false };
-    let start = xml[..at].rfind('<').unwrap_or(0);
-    // the window itself: an element of another kind with that name would be matched to a window's end tag
-    if !xml[start..].starts_with("<XCUIElementTypeWindow ") {
+pub(super) fn touch_id_prompt(src: &Source) -> bool {
+    // two buttons exactly and no lock screen date: a read cut off may have lost the rest of either
+    if src.incomplete {
         return false;
     }
-    let Some(open_end) = xml[at..].find('>').map(|i| at + i) else { return false };
-    if xml[..open_end].ends_with('/') {
-        return false;
-    }
-    let Some(len) = xml[open_end..].find("</XCUIElementTypeWindow>") else { return false };
-    let window = &xml[start..open_end + len];
-    !window.contains("\"lockscreen-date-view\"") && window.matches("<XCUIElementTypeButton ").count() == 2
+    // the first element by that name: another kind of element called so isn't the window
+    let Some(window) = src.nodes().find(|n| n.name == "SBCoverSheetWindow") else { return false };
+    window.kind == "Window"
+        && !window.nodes().any(|n| n.says("lockscreen-date-view"))
+        && window.nodes().filter(|n| n.kind == "Button").count() == 2
 }
 
 /// 「触控 ID」提示上「使用密码」按钮的标签（英文的没在真机上核对过）
@@ -123,7 +119,7 @@ pub fn parse_passcode_value(value: &str) -> Option<(u32, u32)> {
     }
 }
 
-/// SpringBoard 元素树看到的是哪种「封面」界面。用来纠正 `/wda/locked`（见 [`crate::WdaClient::locked`]）。
+/// SpringBoard 元素树看到的是哪种「封面」界面。用来纠正 `/wda/locked`（见 `ictl_wda::WdaClient::locked`）。
 /// 锁屏的标识（iOS 27 iPhone 和 iPadOS 26.6.1 iPad mini 5 真机样本）：
 /// - Face ID 机型锁屏有锁图标 `proud-lock`（灵动岛里还有 `systemApertureElementIdentifierLock`），上滑后的密码键盘有 `passcode-view`
 /// - Touch ID 机型没有锁图标，锁屏有 `call-to-action-label`（「按下主屏幕按钮以解锁」）；上滑后的「触控 ID」提示和数字键盘
@@ -136,18 +132,16 @@ pub enum CoverSheet {
     None,
 }
 
-pub fn cover_sheet(xml: &str) -> CoverSheet {
-    let lock_glyph =
-        ["\"proud-lock\"", "systemApertureElementIdentifierLock", "\"passcode-view\"", "\"call-to-action-label\""]
-            .iter()
-            .any(|m| xml.contains(m));
-    let use_passcode = USE_PASSCODE_LABELS.iter().any(|l| xml.contains(&format!("label=\"{l}\"")));
-    static PASSCODE: LazyLock<Regex> =
-        LazyLock::new(|| regex(r#"<XCUIElementTypeSecureTextField [^>]*value="([^"]*)""#));
-    let passcode_field = PASSCODE.captures_iter(xml).any(|c| parse_passcode_value(&c[1]).is_some());
-    if lock_glyph || use_passcode || passcode_field || touch_id_prompt(xml) {
+pub fn cover_sheet(src: &Source) -> CoverSheet {
+    let lock_glyph = src.nodes().any(|n| {
+        ["proud-lock", "passcode-view", "call-to-action-label"].iter().any(|m| n.says(m))
+            || [&n.label, &n.name, &n.value].iter().any(|t| t.contains("systemApertureElementIdentifierLock"))
+    });
+    let use_passcode = src.nodes().any(|n| USE_PASSCODE_LABELS.contains(&n.label.as_str()));
+    let passcode_field = src.nodes().any(|n| n.kind == "SecureTextField" && parse_passcode_value(&n.value).is_some());
+    if lock_glyph || use_passcode || passcode_field || touch_id_prompt(src) {
         CoverSheet::Locked
-    } else if xml.contains("\"lockscreen-date-view\"") {
+    } else if src.nodes().any(|n| n.says("lockscreen-date-view")) {
         CoverSheet::NotificationCenter
     } else {
         CoverSheet::None

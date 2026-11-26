@@ -2,13 +2,13 @@
 //!
 //! - 启动：[`runner::WdaRunner`]，就绪判定 = 本进程持有的 runner 任务存活 **且** `/status` ready
 //! - 访问：[`http::DeviceTransport`] 经 usbmuxd 直连设备 8100 端口，本机不监听任何端口
-//! - 元素树：[`elements`]，纯函数，可见性按坐标判断
+//! - 元素树：[`elements`]（`ictl-ui`），纯函数，可见性按坐标判断
 
 /// WDA's MJPEG server on the phone (`MJPEG_SERVER_PORT`, WDA's default)
 pub const MJPEG_PORT: u16 = 9100;
 
 pub mod client;
-pub mod elements;
+pub use ictl_ui as elements;
 pub mod http;
 pub mod runner;
 

@@ -2,6 +2,7 @@
 resolver = "3"
 members = [
     "crates/ictl-ax",
+    "crates/ictl-ui",
     "crates/ictl-device",
     "crates/ictl-wda",
     "crates/ictl-protocol",
@@ -97,6 +98,7 @@ plume_core = { path = "vendor/plume_core" }
 plume_store = { path = "vendor/plume_store" }
 
 ictl-ax = { path = "crates/ictl-ax" }
+ictl-ui = { path = "crates/ictl-ui" }
 ictl-device = { path = "crates/ictl-device" }
 ictl-wda = { path = "crates/ictl-wda" }
 ictl-protocol = { path = "crates/ictl-protocol" }

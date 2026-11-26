@@ -474,7 +474,7 @@ mod tests {
             );
             elements::parse_tree(
                 &xml,
-                elements::View { screen: ScreenSize { width: 430.0, height: 932.0 }, orientation: None },
+                elements::View { screen: ScreenSize { width: 430.0, height: 932.0 }, rotation: None },
             )
         };
         let mut before = Seen::default();

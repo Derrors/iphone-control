@@ -24,7 +24,7 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use ictl_device::{Rotation, Tunnel};
+use ictl_device::Tunnel;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::sync::broadcast::error::RecvError;
@@ -42,15 +42,6 @@ const REOPEN_AFTER: Duration = Duration::from_millis(200);
 /// … this many times in a row without a frame in between; then the page reconnects. Unlocking holds the device until
 /// it is done, so a page waits for it once however often the session closes meanwhile
 const REOPEN_TRIES: u32 = 10;
-
-fn degrees(r: Rotation) -> u32 {
-    match r {
-        Rotation::Portrait => 0,
-        Rotation::TopToRight => 90,
-        Rotation::UpsideDown => 180,
-        Rotation::TopToLeft => 270,
-    }
-}
 
 /// One watching page: counted while it lives, so the HID session isn't closed under it. The flag: in low-bandwidth
 /// mode (`Inner::low_bandwidth_viewers`)
@@ -256,7 +247,7 @@ impl Daemon {
         if changed {
             self.publish(&g);
         }
-        rotation.map(degrees)
+        rotation.map(|r| u32::from(r.degrees()))
     }
 
     /// The next media stream after the last one closed under a watching page (see the module docs): taken once the
@@ -351,15 +342,7 @@ impl Daemon {
 mod tests {
     use super::*;
     use crate::core::{DisplayGeometry, tests::test_daemon};
-    use ictl_device::ScreenSize;
-
-    #[test]
-    fn rotation_degrees() {
-        assert_eq!(
-            [Rotation::Portrait, Rotation::TopToRight, Rotation::UpsideDown, Rotation::TopToLeft].map(degrees),
-            [0, 90, 180, 270]
-        );
-    }
+    use ictl_device::{Rotation, ScreenSize};
 
     /// One sampler however many pages watch; it stops once none does, and the next page starts it again
     #[tokio::test]

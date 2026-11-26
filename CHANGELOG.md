@@ -8,6 +8,7 @@ What changed in each release, one line per change. Versions follow [Semantic Ver
 
 ### Improvements
 
+- On iOS 27 the screen is read without the detour through WebDriverAgent-style XML: the accessibility tree becomes the element tree directly, the same one WDA's source gives. When auto-unlock fails on such a phone, its message no longer says "WDA unavailable" (#211).
 - Slow work that doesn't need the phone no longer holds up taps and reads: `doctor` checks this machine (usbmuxd, the Apple ID, ffmpeg) before it takes the phone, crash reports and uninstalling an app don't take it at all, and the details of a second connected device are read in the background (#207).
 - The control page's server now runs on hyper (already in the program through its HTTP client and MCP), in place of the hand-written HTTP/1.1. The login, the checks on each request, HTTPS for the network and the picture and task streams work as before; streams now go out chunked instead of ending at the close (#209).
 - Faster in a few places: a scroll search (`iphone_scroll_collect`, `iphone_tap_element` with `scroll`) no longer reads the screen again after each swipe (about 0.3 s a swipe); pasting into a password or web page field returns once the paste prompt was answered instead of after 5 s; the control page is sent gzipped (about 290 KB down to 90 KB); one phone's picture opening slowly no longer holds up another phone's pages; the developer disk image is written to disk as it downloads (#206).

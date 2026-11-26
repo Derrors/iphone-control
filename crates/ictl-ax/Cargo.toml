@@ -10,6 +10,7 @@ homepage.workspace = true
 description = "remoteAXService client: the phone's accessibility tree without WebDriverAgent (iOS 27+)"
 
 [dependencies]
+ictl-ui.workspace = true
 idevice.workspace = true
 plist.workspace = true
 tokio.workspace = true

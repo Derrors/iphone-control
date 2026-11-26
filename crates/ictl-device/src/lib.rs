@@ -46,6 +46,7 @@ use idevice::{
 
 pub use apps::AppInfo;
 pub use hid::{Button, HidSession};
+pub use ictl_ui::{Rotation, ScreenSize};
 pub use media::{FULL_BITRATE, LOW_BANDWIDTH_BITRATE, ScreenFeed, ScreenFrame, hevc_codec};
 
 /// A running log stream from the phone; see [`Device::log_stream`]
@@ -187,81 +188,14 @@ fn device_error_text(s: &str) -> Option<String> {
 
 pub type Result<T> = std::result::Result<T, DeviceError>;
 
-/// 屏幕逻辑尺寸（点）
-#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct ScreenSize {
-    pub width: f64,
-    pub height: f64,
-}
-
-impl ScreenSize {
-    /// 设备竖放时的尺寸（短边是宽）
-    pub fn portrait(self) -> Self {
-        Self { width: self.width.min(self.height), height: self.width.max(self.height) }
-    }
-}
-
-/// 界面相对设备竖放转了多少（WDA `GET /rotation` 的 z）。HID 触摸始终按设备竖放的坐标解释，
-/// 横屏时要把界面上的点换算回去。真机：iPhone 15 Pro Max 摄像头在左 z=270、在右 z=90；
-/// iPad mini 5 Home 键在左 z=90。两个横屏方向 WDA 的 `/orientation` 都报 `LANDSCAPE`，分不出来
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum Rotation {
-    #[default]
-    Portrait,
-    /// z=90：竖放的顶边转到了屏幕右边
-    TopToRight,
-    /// z=180
-    UpsideDown,
-    /// z=270：竖放的顶边转到了屏幕左边
-    TopToLeft,
-}
-
-impl Rotation {
-    pub fn from_degrees(z: f64) -> Option<Self> {
-        if !z.is_finite() || z.fract() != 0.0 {
-            return None;
-        }
-        Some(match z.rem_euclid(360.0) as u16 {
-            0 => Self::Portrait,
-            90 => Self::TopToRight,
-            180 => Self::UpsideDown,
-            270 => Self::TopToLeft,
-            _ => return None,
-        })
-    }
-
-    fn from_interface(orientation: InterfaceOrientation) -> Option<Self> {
-        match orientation {
-            InterfaceOrientation::Portrait => Some(Self::Portrait),
-            InterfaceOrientation::PortraitUpsideDown => Some(Self::UpsideDown),
-            InterfaceOrientation::LandscapeRight => Some(Self::TopToLeft),
-            InterfaceOrientation::LandscapeLeft => Some(Self::TopToRight),
-            InterfaceOrientation::Unknown => None,
-        }
-    }
-
-    pub fn degrees(self) -> u16 {
-        match self {
-            Self::Portrait => 0,
-            Self::TopToRight => 90,
-            Self::UpsideDown => 180,
-            Self::TopToLeft => 270,
-        }
-    }
-
-    pub fn is_landscape(self) -> bool {
-        matches!(self, Self::TopToRight | Self::TopToLeft)
-    }
-
-    /// 界面上的点 → 设备竖放时的点。`portrait`：竖放时的屏幕尺寸
-    pub fn to_portrait(self, (x, y): (f64, f64), portrait: ScreenSize) -> (f64, f64) {
-        let (w, h) = (portrait.width, portrait.height);
-        match self {
-            Self::Portrait => (x, y),
-            Self::UpsideDown => (w - x, h - y),
-            Self::TopToLeft => (w - y, x),
-            Self::TopToRight => (y, h - x),
-        }
+/// SpringBoard 报的界面方向。它的 `LandscapeLeft`（Home 键在左）是顶边转到了右边
+fn rotation_from_interface(orientation: InterfaceOrientation) -> Option<Rotation> {
+    match orientation {
+        InterfaceOrientation::Portrait => Some(Rotation::Portrait),
+        InterfaceOrientation::PortraitUpsideDown => Some(Rotation::UpsideDown),
+        InterfaceOrientation::LandscapeRight => Some(Rotation::TopToLeft),
+        InterfaceOrientation::LandscapeLeft => Some(Rotation::TopToRight),
+        InterfaceOrientation::Unknown => None,
     }
 }
 
@@ -511,7 +445,7 @@ impl Device {
     pub async fn interface_rotation(&self) -> Result<Option<Rotation>> {
         limit(ictl_l10n::text!("读界面方向", "read interface orientation"), Duration::from_secs(2), async {
             let mut springboard = SpringBoardServicesClient::connect(&*self.provider).await?;
-            Ok(Rotation::from_interface(springboard.get_interface_orientation().await?))
+            Ok(rotation_from_interface(springboard.get_interface_orientation().await?))
         })
         .await
     }
@@ -982,32 +916,11 @@ mod tests {
     #[test]
     fn springboard_interface_orientation_preserves_all_four_directions() {
         use InterfaceOrientation::*;
-        assert_eq!(Rotation::from_interface(Portrait), Some(Rotation::Portrait));
-        assert_eq!(Rotation::from_interface(PortraitUpsideDown), Some(Rotation::UpsideDown));
-        assert_eq!(Rotation::from_interface(LandscapeRight), Some(Rotation::TopToLeft));
-        assert_eq!(Rotation::from_interface(LandscapeLeft), Some(Rotation::TopToRight));
-        assert_eq!(Rotation::from_interface(Unknown), None);
-    }
-
-    /// 真机：摄像头在左（z=270）时，HID 按竖放发 (265,314) 落在了界面的 (314,165)，反过来要换算回 (265,314)
-    #[test]
-    fn rotation_maps_screen_points_back_to_portrait() {
-        let p = ScreenSize { width: 932.0, height: 430.0 }.portrait();
-        assert_eq!(p, ScreenSize { width: 430.0, height: 932.0 });
-        assert_eq!(Rotation::from_degrees(270.0), Some(Rotation::TopToLeft));
-        assert_eq!(Rotation::from_degrees(90.0), Some(Rotation::TopToRight));
-        assert_eq!(Rotation::from_degrees(-90.0), Some(Rotation::TopToLeft));
-        assert_eq!(Rotation::from_degrees(0.0), Some(Rotation::Portrait));
-        assert_eq!(Rotation::from_degrees(45.0), None);
-        for z in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, 0.4, 90.1] {
-            assert_eq!(Rotation::from_degrees(z), None);
-        }
-        assert_eq!(Rotation::TopToLeft.to_portrait((314.0, 165.0), p), (265.0, 314.0));
-        // 顶边在右：界面左上角是竖放时的左下角
-        assert_eq!(Rotation::TopToRight.to_portrait((0.0, 0.0), p), (0.0, 932.0));
-        assert_eq!(Rotation::TopToRight.to_portrait((226.0, 97.0), p), (97.0, 706.0));
-        assert_eq!(Rotation::UpsideDown.to_portrait((0.0, 0.0), p), (430.0, 932.0));
-        assert_eq!(Rotation::Portrait.to_portrait((12.0, 34.0), p), (12.0, 34.0));
+        assert_eq!(rotation_from_interface(Portrait), Some(Rotation::Portrait));
+        assert_eq!(rotation_from_interface(PortraitUpsideDown), Some(Rotation::UpsideDown));
+        assert_eq!(rotation_from_interface(LandscapeRight), Some(Rotation::TopToLeft));
+        assert_eq!(rotation_from_interface(LandscapeLeft), Some(Rotation::TopToRight));
+        assert_eq!(rotation_from_interface(Unknown), None);
     }
 
     #[test]

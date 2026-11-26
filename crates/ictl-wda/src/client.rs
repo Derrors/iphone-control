@@ -298,7 +298,7 @@ pub struct LockCheck {
     /// `locked` 这时为 false；能自动解锁的调用方应当按可能锁着处理
     pub uncertain: bool,
     /// 核对时取到的 SpringBoard 元素树（没核对或前台不是 SpringBoard 时为 None）
-    pub tree: Option<String>,
+    pub tree: Option<elements::Source>,
 }
 
 pub struct WdaClient<T> {

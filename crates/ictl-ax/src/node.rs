@@ -1,5 +1,5 @@
-//! An accessibility tree as the XML WebDriverAgent's `/source` gives (`XCUIElementType…` tags with `type`,
-//! `label`, `name`, `value`, `x`, `y`, `width`, `height`), so `ictl_wda::elements::parse_tree` reads it unchanged:
+//! An accessibility tree as the element tree WebDriverAgent's `/source` gives (an [`ictl_ui::Source`] of
+//! `XCUIElementType` kinds with labels, names, values and frames), so `ictl_ui::Tree::of` reads it as it reads WDA's:
 //! finding by text, what covers what, the keyboard, alerts, the lock screen and the passcode pad.
 //!
 //! Elements of other processes (a keyboard, an extension, a remote view) come with frames relative to the view
@@ -8,7 +8,8 @@
 //! whose elements are mostly single characters is the on-screen keyboard: it becomes one `Keyboard` element.
 
 use std::collections::{HashMap, HashSet};
-use std::fmt::Write;
+
+use ictl_ui::{Node, Rect, Source};
 
 use crate::tree::{Element, trait_bit};
 
@@ -237,59 +238,37 @@ fn place(els: &[Element], keyboard: &HashSet<i64>, web: &HashSet<i64>) -> Vec<Op
     out
 }
 
-fn esc(s: &str, out: &mut String) {
-    for c in s.chars() {
-        match c {
-            '&' => out.push_str("&amp;"),
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            '"' => out.push_str("&quot;"),
-            '\n' => out.push_str("&#10;"),
-            c if (c as u32) < 0x20 => {}
-            c => out.push(c),
-        }
+/// Text as WDA's XML gave it: no control characters but line breaks, no whitespace around it
+fn text(s: &str) -> String {
+    s.chars().filter(|c| *c == '\n' || u32::from(*c) >= 0x20).collect::<String>().trim().to_owned()
+}
+
+/// `e` as a node of `kind` at `frame` (whole points), without children. Its name is its identifier, or its label;
+/// its value is its value, or its placeholder
+fn node(kind: &str, e: &Element, (x, y, w, h): Frame) -> Node {
+    let whole = |v: f64| v.round() as i64 as f64;
+    Node {
+        kind: kind.to_owned(),
+        label: text(&e.label),
+        name: text(if e.identifier.is_empty() { &e.label } else { &e.identifier }),
+        value: text(if e.value.is_empty() { &e.placeholder } else { &e.value }),
+        frame: Rect { x: whole(x), y: whole(y), w: whole(w), h: whole(h) },
+        children: Vec::new(),
     }
 }
 
-fn open_tag(out: &mut String, kind: &str, e: &Element, (x, y, w, h): Frame, close: bool) {
-    let _ = write!(out, "<XCUIElementType{kind} type=\"XCUIElementType{kind}\"");
-    let mut field = |name: &str, v: &str| {
-        if !v.is_empty() {
-            let _ = write!(out, " {name}=\"");
-            esc(v, out);
-            out.push('"');
-        }
-    };
-    field("label", &e.label);
-    field("name", if e.identifier.is_empty() { &e.label } else { &e.identifier });
-    field("value", if e.value.is_empty() { &e.placeholder } else { &e.value });
-    field("placeholderValue", &e.placeholder);
-    let _ = write!(
-        out,
-        " enabled=\"{}\" selected=\"{}\" focused=\"{}\" x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\"{}>",
-        e.enabled,
-        e.selected,
-        e.focused,
-        x.round() as i64,
-        y.round() as i64,
-        w.round() as i64,
-        h.round() as i64,
-        if close { "/" } else { "" }
-    );
-}
-
-/// The XML for `app` (the frontmost application's tree, its element first) with `overlays` (what SpringBoard
+/// The tree for `app` (the frontmost application's tree, its element first) with `overlays` (what SpringBoard
 /// draws over it: alerts, banners; in screen points) after it, on a `width`×`height` screen. `web`: the processes
 /// that are WebKit's web content (a page's elements), placed as they come. `springboard_front`: SpringBoard is the
 /// app in front, as when it asks something over an app (see [`looks_like_dialog`])
-pub fn to_xml(
+pub fn to_node(
     app: &[Element],
     overlays: &[Element],
     width: f64,
     height: f64,
     web: &HashSet<i64>,
     springboard_front: bool,
-) -> String {
+) -> Source {
     let app_pid = app.first().map_or(0, Element::pid);
     let mut keys: HashMap<i64, usize> = HashMap::new();
     // a page's own one-letter links are no keys
@@ -299,13 +278,12 @@ pub fn to_xml(
     let keyboard: HashSet<i64> = keys.into_iter().filter(|(_, n)| *n >= KEYBOARD_KEYS).map(|(p, _)| p).collect();
     let placed = place(app, &keyboard, web);
 
-    let mut out = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\"?>");
     let root = app.first().cloned().unwrap_or_default();
-    open_tag(&mut out, "Application", &root, (0.0, 0.0, width, height), false);
+    let mut out = node("Application", &root, (0.0, 0.0, width, height));
     // the keyboard's keys, gathered under one Keyboard element at the end (drawn over the app)
     let mut kb_keys: Vec<(usize, Frame)> = Vec::new();
-    let dialog = springboard_front && looks_like_dialog(app);
-    if dialog {
+    let children = children(app, &placed, Some(0), 0, &keyboard, &mut kb_keys);
+    if springboard_front && looks_like_dialog(app) {
         let title = app
             .iter()
             .skip(1)
@@ -318,23 +296,18 @@ pub fn to_xml(
         };
         let boxes: Vec<(usize, Frame)> =
             placed.iter().enumerate().skip(1).filter_map(|(i, f)| f.map(|f| (i, f))).collect();
-        open_tag(&mut out, "Alert", &a, keys_box(&boxes).unwrap_or((0.0, 0.0, width, height)), false);
-    }
-    write_children(&mut out, app, &placed, Some(0), 0, &keyboard, &mut kb_keys);
-    if dialog {
-        out.push_str("</XCUIElementTypeAlert>");
+        let mut alert = node("Alert", &a, keys_box(&boxes).unwrap_or((0.0, 0.0, width, height)));
+        alert.children = children;
+        out.children.push(alert);
+    } else {
+        out.children = children;
     }
     let has_keyboard_type = app.iter().zip(&placed).any(|(e, p)| p.is_some() && kind(e) == "Keyboard");
     if !keyboard.is_empty() && !has_keyboard_type {
         let frame = keys_box(&kb_keys).unwrap_or((0.0, height * 0.6, width, height * 0.4));
-        let kb = Element { enabled: true, visible: true, ..Default::default() };
-        open_tag(&mut out, "Keyboard", &kb, frame, kb_keys.is_empty());
-        if !kb_keys.is_empty() {
-            for (i, f) in &kb_keys {
-                open_tag(&mut out, "Key", &app[*i], *f, true);
-            }
-            out.push_str("</XCUIElementTypeKeyboard>");
-        }
+        let mut kb = node("Keyboard", &Element::default(), frame);
+        kb.children = kb_keys.iter().map(|(i, f)| node("Key", &app[*i], *f)).collect();
+        out.children.push(kb);
     }
     // SpringBoard over the app, but not its status bar
     let shown: Vec<Option<Frame>> = overlays
@@ -342,8 +315,42 @@ pub fn to_xml(
         .map(|e| (e.traits & trait_bit::STATUS_BAR == 0).then_some(e.frame.unwrap_or_default()))
         .collect();
     let shown = inherit_skips(overlays, shown);
-    write_children(&mut out, overlays, &shown, None, 0, &HashSet::new(), &mut Vec::new());
-    out.push_str("</XCUIElementTypeApplication>");
+    out.children.extend(children_of(overlays, &shown));
+    Source { roots: vec![out], incomplete: false }
+}
+
+/// The roots of `els` (SpringBoard's overlays have no parent), each with its own children
+fn children_of(els: &[Element], placed: &[Option<Frame>]) -> Vec<Node> {
+    children(els, placed, None, 0, &HashSet::new(), &mut Vec::new())
+}
+
+/// The elements whose parent is `parent` (None: the roots of a list), each with its own children. A keyboard
+/// process's elements aren't nodes: their keys go to `kb_keys`, what is under them takes their place
+fn children(
+    els: &[Element],
+    placed: &[Option<Frame>],
+    parent: Option<usize>,
+    depth: usize,
+    keyboard: &HashSet<i64>,
+    kb_keys: &mut Vec<(usize, Frame)>,
+) -> Vec<Node> {
+    let mut out = Vec::new();
+    for (i, e) in els.iter().enumerate() {
+        if e.parent != parent || depth > 80 {
+            continue;
+        }
+        let Some(frame) = placed[i] else { continue };
+        if keyboard.contains(&e.pid()) {
+            if is_key_char(&e.label) && frame.2 > 0.0 && frame.3 > 0.0 {
+                kb_keys.push((i, frame));
+            }
+            out.extend(children(els, placed, Some(i), depth + 1, keyboard, kb_keys));
+            continue;
+        }
+        let mut n = node(kind(e), e, frame);
+        n.children = children(els, placed, Some(i), depth + 1, keyboard, kb_keys);
+        out.push(n);
+    }
     out
 }
 
@@ -383,38 +390,6 @@ fn keys_box(keys: &[(usize, Frame)]) -> Option<Frame> {
     Some((x1, y1, x2 - x1, y2 - y1))
 }
 
-/// Writes the elements whose parent is `parent` (None: the roots of a list, as SpringBoard's overlays have), each
-/// with its own children
-fn write_children(
-    out: &mut String,
-    els: &[Element],
-    placed: &[Option<Frame>],
-    parent: Option<usize>,
-    depth: usize,
-    keyboard: &HashSet<i64>,
-    kb_keys: &mut Vec<(usize, Frame)>,
-) {
-    for (i, e) in els.iter().enumerate() {
-        if e.parent != parent || depth > 80 {
-            continue;
-        }
-        let Some(frame) = placed[i] else { continue };
-        if keyboard.contains(&e.pid()) {
-            if is_key_char(&e.label) && frame.2 > 0.0 && frame.3 > 0.0 {
-                kb_keys.push((i, frame));
-            }
-            write_children(out, els, placed, Some(i), depth + 1, keyboard, kb_keys);
-            continue;
-        }
-        let has_children = els.iter().any(|c| c.parent == Some(i));
-        open_tag(out, kind(e), e, frame, !has_children);
-        if has_children {
-            write_children(out, els, placed, Some(i), depth + 1, keyboard, kb_keys);
-            let _ = write!(out, "</XCUIElementType{}>", kind(e));
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -433,6 +408,19 @@ mod tests {
         }
     }
 
+    fn tree(app: &[Element]) -> Source {
+        to_node(app, &[], 430.0, 932.0, &HashSet::new(), false)
+    }
+
+    /// The first node labelled `label`
+    fn find<'a>(s: &'a Source, label: &str) -> Option<&'a Node> {
+        s.nodes().find(|n| n.label == label)
+    }
+
+    fn frame(n: &Node) -> (f64, f64, f64, f64) {
+        (n.frame.x, n.frame.y, n.frame.w, n.frame.h)
+    }
+
     #[test]
     fn the_app_and_its_elements_nest_like_wda_source() {
         let els = vec![
@@ -441,19 +429,16 @@ mod tests {
             el(10, 3, Some(1), "通用", 9, (20.0, 745.3, 390.0, 52.3)),
             el(10, 4, Some(0), "a & <b>", 48, (1.0, 2.0, 3.0, 4.0)),
         ];
-        let xml = to_xml(&els, &[], 430.0, 932.0, &HashSet::new(), false);
-        assert!(xml.contains(r#"<XCUIElementTypeApplication type="XCUIElementTypeApplication" label="设置""#), "{xml}");
-        assert!(xml.contains(r#"<XCUIElementTypeOther type="XCUIElementTypeOther" enabled"#), "{xml}");
-        assert!(
-            xml.contains(r#"label="通用" name="通用" enabled="true" selected="false" focused="false" x="20" y="745" width="390" height="52"/>"#),
-            "{xml}"
-        );
-        assert!(xml.contains("</XCUIElementTypeOther>"));
-        assert!(xml.contains("a &amp; &lt;b&gt;"));
-        assert!(xml.ends_with("</XCUIElementTypeApplication>"));
-        // the button sits inside the Other, which is inside the app
-        let (o, b) = (xml.find("XCUIElementTypeOther ").unwrap(), xml.find("通用").unwrap());
-        assert!(o < b && b < xml.find("</XCUIElementTypeOther>").unwrap());
+        let s = tree(&els);
+        assert_eq!(s.roots.len(), 1);
+        let app = &s.roots[0];
+        assert_eq!((app.kind.as_str(), app.label.as_str()), ("Application", "设置"));
+        assert_eq!(app.children.iter().map(|c| c.kind.as_str()).collect::<Vec<_>>(), ["Other", "StaticText"]);
+        // the button sits inside the Other, which is inside the app; its name is its label, in whole points
+        let b = &app.children[0].children[0];
+        assert_eq!((b.kind.as_str(), b.label.as_str(), b.name.as_str()), ("Button", "通用", "通用"));
+        assert_eq!(frame(b), (20.0, 745.0, 390.0, 52.0));
+        assert_eq!(app.children[1].label, "a & <b>");
     }
 
     #[test]
@@ -468,15 +453,10 @@ mod tests {
             // a widget with no host before it
             el(88, 1, Some(0), "今天无日程", 48, (19.0, 97.0, 85.0, 21.0)),
         ];
-        let xml = to_xml(&els, &[], 430.0, 932.0, &HashSet::new(), false);
-        assert!(
-            xml.contains(
-                r#"label="上海市" name="上海市" enabled="true" selected="false" focused="false" x="46" y="100""#
-            ),
-            "{xml}"
-        );
-        assert!(!xml.contains("今天无日程"), "{xml}");
-        assert!(xml.contains("时钟"));
+        let s = tree(&els);
+        assert_eq!(frame(find(&s, "上海市").unwrap()), (46.0, 100.0, 52.0, 13.0));
+        assert!(find(&s, "今天无日程").is_none());
+        assert!(find(&s, "时钟").is_some());
     }
 
     #[test]
@@ -485,10 +465,12 @@ mod tests {
         for (i, c) in "qwertyuiop".chars().enumerate() {
             els.push(el(55, i as u64 + 1, Some(0), &c.to_string(), 0, (i as f64 * 40.0, 600.0, 40.0, 50.0)));
         }
-        let xml = to_xml(&els, &[], 430.0, 932.0, &HashSet::new(), false);
+        let s = tree(&els);
         // the keys can't be placed (no host): one Keyboard over the lower part of the screen
-        assert!(xml.contains(r#"<XCUIElementTypeKeyboard type="XCUIElementTypeKeyboard" enabled="true" selected="false" focused="false" x="0" y="559" width="430" height="373"/>"#), "{xml}");
-        assert!(!xml.contains(r#"label="q""#));
+        let kb = s.nodes().find(|n| n.kind == "Keyboard").expect("a keyboard");
+        assert_eq!(frame(kb), (0.0, 559.0, 430.0, 373.0));
+        assert!(kb.children.is_empty());
+        assert!(find(&s, "q").is_none());
     }
 
     #[test]
@@ -501,11 +483,11 @@ mod tests {
             el(39, 3, None, "“备忘录”想从“dtpasteboardd”粘贴", 7, (55.0, 390.0, 320.0, 175.0)),
             el(39, 4, Some(1), "允许粘贴", 9, (71.0, 501.0, 140.0, 49.0)),
         ];
-        let xml = to_xml(&app, &overlays, 430.0, 932.0, &HashSet::new(), false);
-        assert!(!xml.contains("14:03"));
-        let alert = xml.find("XCUIElementTypeAlert ").unwrap();
-        assert!(alert < xml.find("允许粘贴").unwrap());
-        assert!(xml.contains("</XCUIElementTypeAlert>"));
+        let s = to_node(&app, &overlays, 430.0, 932.0, &HashSet::new(), false);
+        assert!(find(&s, "14:03").is_none());
+        let alert = s.roots[0].children.last().unwrap();
+        assert_eq!(alert.kind, "Alert");
+        assert_eq!(alert.children[0].label, "允许粘贴");
     }
 
     #[test]
@@ -552,6 +534,12 @@ mod tests {
 
     #[test]
     fn a_page_is_placed_as_it_comes_and_a_widget_without_host_is_left_out() {
+        let s = to_node(&page(), &[], 430.0, 932.0, &[20].into(), false);
+        assert_eq!(frame(find(&s, "This domain is for use").unwrap()).1, 300.0);
+        assert!(find(&s, "Widget").is_none());
+    }
+
+    fn page() -> Vec<Element> {
         let obj = |pid: i64, id: u64| Some(crate::ObjectRef { pid, id, is_app: false });
         let el = |pid, id, parent, label: &str, y| Element {
             object: obj(pid, id),
@@ -566,35 +554,92 @@ mod tests {
         };
         let mut app = el(10, 1, None, "Safari", 0.0);
         app.frame = Some((0.0, 0.0, 430.0, 932.0));
-        let els = vec![app, el(20, 2, Some(0), "This domain is for use", 300.0), el(30, 3, Some(0), "Widget", 500.0)];
-        let web: HashSet<i64> = [20].into();
-        let xml = to_xml(&els, &[], 430.0, 932.0, &web, false);
-        assert!(xml.contains(r#"label="This domain is for use""#) && xml.contains(r#"y="300""#), "{xml}");
-        assert!(!xml.contains("Widget"), "{xml}");
+        vec![app, el(20, 2, Some(0), "This domain is for use", 300.0), el(30, 3, Some(0), "Widget", 500.0)]
     }
 
-    #[test]
-    fn a_question_springboard_asks_reads_as_an_alert() {
+    fn question() -> Vec<Element> {
         let f = |y| (40.0, y, 350.0, 40.0);
-        let els = vec![
+        vec![
             el(39, 1, None, " ", 2, (0.0, 0.0, 430.0, 932.0)),
             el(39, 2, Some(0), "“设置”想从“dtpasteboardd”粘贴", 48, f(380.0)),
             el(39, 3, Some(0), "你允许这样做吗？", 48, f(420.0)),
             el(39, 4, Some(0), "允许粘贴", 9, f(480.0)),
             el(39, 5, Some(0), "不允许粘贴", 9, f(530.0)),
-        ];
-        let xml = to_xml(&els, &[], 430.0, 932.0, &HashSet::new(), true);
-        assert!(
-            xml.contains(r#"<XCUIElementTypeAlert type="XCUIElementTypeAlert" label="“设置”想从“dtpasteboardd”粘贴""#),
-            "{xml}"
-        );
+        ]
+    }
+
+    #[test]
+    fn a_question_springboard_asks_reads_as_an_alert() {
+        let els = question();
+        let alert = |els: &[Element], front| {
+            to_node(els, &[], 430.0, 932.0, &HashSet::new(), front).nodes().find(|n| n.kind == "Alert").cloned()
+        };
+        let a = alert(&els, true).expect("an alert");
+        assert_eq!(a.label, "“设置”想从“dtpasteboardd”粘贴");
+        assert_eq!(a.children.len(), 4);
         // the same in an app, or the lock screen's single button: no alert
-        assert!(!to_xml(&els, &[], 430.0, 932.0, &HashSet::new(), false).contains("Alert"));
-        assert!(!to_xml(&els[..4], &[], 430.0, 932.0, &HashSet::new(), true).contains("Alert"));
+        assert!(alert(&els, false).is_none());
+        assert!(alert(&els[..4], true).is_none());
         // the status bar's time and buttons alone are no question
-        let bar =
-            |id, label: &str, xc| Element { traits: trait_bit::STATUS_BAR, ..el(39, id, Some(0), label, xc, f(10.0)) };
+        let f = (40.0, 10.0, 350.0, 40.0);
+        let bar = |id, label: &str, xc| Element { traits: trait_bit::STATUS_BAR, ..el(39, id, Some(0), label, xc, f) };
         let status_only = vec![els[0].clone(), bar(6, "18:36", 48), bar(7, "Wi-Fi", 9), bar(8, "电池", 9)];
-        assert!(!to_xml(&status_only, &[], 430.0, 932.0, &HashSet::new(), true).contains("Alert"));
+        assert!(alert(&status_only, true).is_none());
+    }
+
+    /// A read: the app's elements, SpringBoard's over it, the web content processes, SpringBoard in front
+    type Read = (Vec<Element>, Vec<Element>, HashSet<i64>, bool);
+
+    /// Reads of every kind the tests above make, and text XML has to escape or drop
+    fn reads() -> Vec<Read> {
+        let mut odd = vec![el(10, 1, None, " 设置 ", 2, (0.0, 0.0, 430.0, 932.0))];
+        let mut e = el(10, 2, Some(0), "two\nlines\t\u{1}and \"quotes\" & <tags>", 9, (10.4, 20.5, 30.6, 40.5));
+        e.identifier = "row-1".into();
+        e.placeholder = "  搜索  ".into();
+        odd.push(e);
+        let mut field = el(10, 3, Some(0), "", 49, (0.0, 100.0, 430.0, 40.0));
+        field.value = "共6位数，已输入2位".into();
+        odd.push(field);
+        let mut keyboard = vec![el(10, 1, None, "备忘录", 2, (0.0, 0.0, 430.0, 932.0))];
+        let mut host = el(10, 2, Some(0), "", 1, (0.0, 560.0, 430.0, 372.0));
+        host.traits = trait_bit::REMOTE_HOST;
+        keyboard.push(host);
+        for (i, c) in "asdfghjkl".chars().enumerate() {
+            keyboard.push(el(55, i as u64 + 1, Some(1), &c.to_string(), 0, (i as f64 * 43.0, 10.0, 40.0, 50.0)));
+        }
+        let mut time = el(39, 2, None, "14:03", 48, (0.0, 0.0, 80.0, 30.0));
+        time.traits = trait_bit::STATUS_BAR;
+        let overlays = vec![
+            time,
+            el(39, 3, None, "“备忘录”想从“dtpasteboardd”粘贴", 7, (55.0, 390.0, 320.0, 175.0)),
+            el(39, 4, Some(1), "允许粘贴", 9, (71.0, 501.0, 140.0, 49.0)),
+        ];
+        let mut host = el(10, 2, Some(0), "", 1, (27.0, 81.0, 179.0, 203.0));
+        host.traits = trait_bit::REMOTE_HOST;
+        let widgets = vec![
+            el(10, 1, None, "主屏", 2, (0.0, 0.0, 430.0, 932.0)),
+            host,
+            el(77, 1, Some(1), "上海市", 48, (19.0, 19.0, 52.0, 13.0)),
+            el(88, 1, Some(0), "今天无日程", 48, (19.0, 97.0, 85.0, 21.0)),
+        ];
+        let none = HashSet::new;
+        vec![
+            (odd, vec![], none(), false),
+            (keyboard.clone(), overlays.clone(), none(), false),
+            (keyboard[..3].to_vec(), vec![], none(), false),
+            (widgets, vec![], none(), false),
+            (page(), vec![], [20].into(), false),
+            (question(), vec![], none(), true),
+            (question()[..4].to_vec(), overlays, none(), true),
+        ]
+    }
+
+    /// Written out (`debug … --out`) and read back, a tree is the same
+    #[test]
+    fn a_tree_written_as_xml_reads_back_the_same() {
+        for (i, (app, overlays, web, front)) in reads().iter().enumerate() {
+            let t = to_node(app, overlays, 430.0, 932.0, web, *front);
+            assert_eq!(Source::from_xml(&t.to_xml()), t, "read {i}");
+        }
     }
 }

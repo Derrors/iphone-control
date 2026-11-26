@@ -16,6 +16,41 @@ pub(crate) struct Stroke {
 /// 手指移 300 点，0.3 秒滚了 618 点，0.6 秒 420 点，1 秒 282 点；W3C 在抬起前停一下也去不掉惯性）
 pub(super) const SEARCH_SWIPE_SECONDS: f64 = 1.0;
 
+/// 边滑边找找到之后、点之前，隔这么久再读一次，看要点的那个是不是还在原处（[`target_at_rest`]）
+const TARGET_REST_GAP: Duration = Duration::from_millis(250);
+/// 最多等这么久让它停在原处；到时照样点最后一次读到的位置
+const TARGET_REST_MAX: Duration = Duration::from_millis(2000);
+
+/// 要点的那个匹配（按 [`elements::find`] 的第 `index` 个）在哪里：中心和大小
+fn target_place(tree: &Tree, text: &str, index: usize) -> Option<((i64, i64), (i64, i64))> {
+    elements::find(&tree.elements, text).get(index).map(|e| (e.center, e.size))
+}
+
+/// 边滑边找停下时用的是 [`STILL_TOLERANCE`]（两次读之间动了不超过 3 点就算停了），列表减速的尾巴还在挪的时候也算；
+/// 这时点下去只让列表停住，点不到要点的那个，却照样报「已点击」（真机 iOS 27.2.1，设置里带 scroll 点「隐私与安全」：
+/// 6 次只进去 1 次；先停 2 秒再点 4 次进去 3 次）。所以点之前再读（`read`，隔 `gap`，用的是 [`TARGET_REST_GAP`]），
+/// 直到它连着两次在同一个地方，最多 `max`（[`TARGET_REST_MAX`]）；返回最后读到的树。读失败了、它不见了就不再等，
+/// 用手上最新的那棵
+async fn target_at_rest(
+    mut tree: Tree,
+    (text, index): (&str, usize),
+    (gap, max): (Duration, Duration),
+    mut read: impl AsyncFnMut() -> Option<Tree>,
+) -> Tree {
+    let t0 = Instant::now();
+    while t0.elapsed() < max {
+        let Some(was) = target_place(&tree, text, index) else { break };
+        tokio::time::sleep(gap).await;
+        let Some(next) = read().await else { break };
+        let still = target_place(&next, text, index) == Some(was);
+        tree = next;
+        if still {
+            break;
+        }
+    }
+    tree
+}
+
 /// 边滑边找时算找到了：有匹配，而且要点的那个没有被整个盖住（停在底部工具栏、悬浮栏下面的还要再滑一下）。
 /// index 超出匹配个数也算找到：滑下去不会让序号变得更有意义，交给后面照常报
 fn reachable_in(tree: &Tree, matches: &[&elements::Element], index: usize) -> bool {
@@ -364,6 +399,10 @@ impl Daemon {
                     back += 1;
                 }
             }
+        }
+        if scrolled + back > 0 {
+            let pace = (TARGET_REST_GAP, TARGET_REST_MAX);
+            tree = target_at_rest(tree, (text, index), pace, async || self.tree(g, Duration::ZERO).await.ok()).await;
         }
         let searched = match (scrolled, at_end, back) {
             (0, ..) => String::new(),
@@ -1156,6 +1195,60 @@ fn stopped_searching(completed: u32) -> String {
 mod tests {
     use super::*;
     use std::sync::Mutex;
+
+    /// Settings' list with 「隐私与安全」 at `y` (its center), between two other rows
+    fn settings_at(y: f64) -> Tree {
+        let row = |label: &str, y: f64| {
+            format!(
+                r#"<XCUIElementTypeButton type="XCUIElementTypeButton" name="{label}" label="{label}" x="20" y="{}" width="400" height="51"/>"#,
+                y - 25.5
+            )
+        };
+        let rows = [row("SOS紧急联络", y - 52.0), row("隐私与安全", y), row("钱包与Apple Pay", y + 86.0)].concat();
+        let xml = format!(
+            r#"<XCUIElementTypeApplication type="XCUIElementTypeApplication" name="设置" label="设置" x="0" y="0" width="440" height="956"><XCUIElementTypeTable type="XCUIElementTypeTable" x="0" y="0" width="440" height="956">{rows}</XCUIElementTypeTable></XCUIElementTypeApplication>"#
+        );
+        elements::parse_tree(&xml, ScreenSize { width: 440.0, height: 956.0 })
+    }
+
+    /// What [`target_at_rest`] read (how many times) and where it left the target, the reads coming from `ys` (None:
+    /// a failed read)
+    async fn rest_from(first: f64, ys: &[Option<f64>]) -> (usize, Option<i64>) {
+        let mut reads = ys.iter().copied();
+        let mut n = 0;
+        let pace = (Duration::from_millis(1), Duration::from_millis(200));
+        let tree = target_at_rest(settings_at(first), ("隐私与安全", 0), pace, async || {
+            n += 1;
+            reads.next().flatten().map(settings_at)
+        })
+        .await;
+        (n, target_place(&tree, "隐私与安全", 0).map(|(c, _)| c.1))
+    }
+
+    /// Found by scrolling, the row is tapped only once it is where it was a read before: a list still creeping by a
+    /// point or two counts as stopped for the scroll search, and a tap on it only stops it (Settings, iOS 27.2.1)
+    #[tokio::test]
+    async fn a_target_found_by_scrolling_is_tapped_at_rest() {
+        // creeping 846 → 831, then still: tapped where it stopped
+        let creeping = [846.0, 840.0, 836.0, 833.0, 831.0, 831.0].map(Some);
+        assert_eq!(rest_from(850.0, &creeping).await, (6, Some(831)));
+        // already at rest: one more read
+        assert_eq!(rest_from(831.0, &[Some(831.0)]).await, (1, Some(831)));
+        // a failed read: tapped where last seen
+        assert_eq!(rest_from(840.0, &[Some(836.0), None]).await, (2, Some(836)));
+        // gone from the screen (the list went on past it): no more waiting
+        assert_eq!(rest_from(840.0, &[Some(-200.0), Some(-200.0)]).await, (1, None));
+    }
+
+    /// A list that never settles is waited for no longer than the limit
+    #[tokio::test]
+    async fn a_target_that_never_settles_is_waited_for_a_while_only() {
+        let moving: Vec<_> = (0..10_000).map(|i| Some(800.0 - i as f64)).collect();
+        let t0 = Instant::now();
+        let (n, _) = rest_from(801.0, &moving).await;
+        assert!((2..10_000).contains(&n), "{n}");
+        assert!(t0.elapsed() < Duration::from_secs(2), "{:?}", t0.elapsed());
+    }
 
     /// A WDA with one focused field
     struct Fake(Mutex<Field>);

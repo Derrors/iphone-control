@@ -329,7 +329,8 @@ pub(crate) struct DoctorHost {
     picture: String,
 }
 
-/// 控制台（`iphone-control viewer`）的画面能不能用 H.264：macOS 上本程序直接调 VideoToolbox，不用 ffmpeg；
+/// 控制台（`iphone-control viewer`）的画面能不能用 H.264：macOS 上本程序直接调 VideoToolbox 编 WDA 的 JPEG，不用
+/// ffmpeg，但 iOS 27 起的手机自己的 HEVC 视频要在浏览器解不了 HEVC 时转成 H.264，这得有 ffmpeg（[`mac_picture`]）；
 /// 其他系统要有 ffmpeg，Linux 上用显卡编码还要能打开 `/dev/dri/renderD*`（`render` 组）。只看前提，不试编码：
 /// 用哪个编码器，`viewer` 启动时会说
 async fn viewer_picture() -> String {
@@ -337,13 +338,6 @@ async fn viewer_picture() -> String {
         return ictl_l10n::tr!(
             "✅ 控制台画面按设置用 MJPEG(IPHONE_CONTROL_VIEWER_CODEC=mjpeg)",
             "✅ Viewer picture uses MJPEG as set (IPHONE_CONTROL_VIEWER_CODEC=mjpeg)"
-        )
-        .into();
-    }
-    if cfg!(target_os = "macos") {
-        return ictl_l10n::tr!(
-            "✅ 控制台画面用 H.264(VideoToolbox,本程序直接调用,不需要 ffmpeg)",
-            "✅ The viewer's picture uses H.264 (VideoToolbox, called directly, no ffmpeg needed)"
         )
         .into();
     }
@@ -362,6 +356,9 @@ async fn viewer_picture() -> String {
             version = Some(line.split_whitespace().nth(2).unwrap_or("?").to_owned());
             break;
         }
+    }
+    if cfg!(target_os = "macos") {
+        return mac_picture(version.as_deref());
     }
     let Some(version) = version else {
         return ictl_l10n::trf!(
@@ -396,6 +393,25 @@ async fn viewer_picture() -> String {
     )
 }
 
+/// [`viewer_picture`] on macOS, given ffmpeg's version if there is one. WDA's picture is H.264 without ffmpeg; the
+/// phone's own HEVC (iOS 27 and later) is shown as it is where the browser decodes HEVC, and transcoded by ffmpeg
+/// where it doesn't: without ffmpeg such a page gets no picture (the control page's `/video` refuses, 404)
+fn mac_picture(ffmpeg: Option<&str>) -> String {
+    match ffmpeg {
+        Some(version) => ictl_l10n::trf!(
+            "✅ 控制台画面用 H.264(VideoToolbox,本程序直接调用);浏览器解不了手机的 HEVC 视频(iOS 27 起)时由 ffmpeg {version} 转成 H.264",
+            "✅ The viewer's picture uses H.264 (VideoToolbox, called directly); ffmpeg {version} turns the phone's HEVC video (iOS 27 and later) into H.264 for a browser that can't decode HEVC"
+        ),
+        None => ictl_l10n::tr!(
+            "✅ 控制台画面用 H.264(VideoToolbox,本程序直接调用,WDA 的画面不需要 ffmpeg)
+   iOS 27 起画面是手机自己的 HEVC 视频:浏览器解不了 HEVC 时要 ffmpeg 转成 H.264,没找到 ffmpeg 就没有画面(可选:brew install ffmpeg)",
+            "✅ The viewer's picture uses H.264 (VideoToolbox, called directly, no ffmpeg needed for WDA's picture)
+   From iOS 27 the picture is the phone's own HEVC video: a browser that can't decode HEVC needs ffmpeg to turn it into H.264, and without ffmpeg it gets no picture (optional: brew install ffmpeg)"
+        )
+        .into(),
+    }
+}
+
 /// 多久以前，粗到分钟、小时
 fn ago(d: Duration) -> String {
     let m = d.as_secs() / 60;
@@ -413,5 +429,20 @@ mod tests {
             assert_eq!(ago(Duration::from_secs(59 * 60)), "59 分钟");
             assert_eq!(ago(Duration::from_secs(25 * 3600)), "25 小时");
         });
+    }
+
+    /// On a Mac without ffmpeg, doctor no longer says H.264 needs none: the phone's HEVC (iOS 27) does, for a browser
+    /// that can't decode HEVC
+    #[test]
+    fn a_mac_without_ffmpeg_is_told_hevc_needs_it() {
+        for lang in [ictl_l10n::Lang::Zh, ictl_l10n::Lang::En] {
+            ictl_l10n::with_lang(lang, || {
+                let without = mac_picture(None);
+                assert!(without.contains("HEVC") && without.contains("brew install ffmpeg"), "{without}");
+                let with = mac_picture(Some("8.0"));
+                assert!(with.contains("ffmpeg 8.0") && with.contains("HEVC"), "{with}");
+                assert!(!with.contains("brew install"), "{with}");
+            });
+        }
     }
 }

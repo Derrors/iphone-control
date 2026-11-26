@@ -451,6 +451,10 @@ pub struct HevcCommand {
     pub label: &'static str,
     /// The encoder in use, when it is the one ffmpeg runs here (its index, for [`Encoders::give_up`])
     pub encoder: Option<usize>,
+    /// What it was made for, to make the next encoder's ([`Encoders::hevc_command`]): the screen in points and the
+    /// quantizer
+    pub points: Option<(f64, f64)>,
+    pub qp: u8,
 }
 
 impl Encoders {
@@ -522,6 +526,20 @@ impl Encoders {
         Ok(e)
     }
 
+    /// Only the native encoder, as on a Mac without ffmpeg: it encodes WDA's JPEG, but can't transcode HEVC
+    #[cfg(test)]
+    pub fn native_only() -> Arc<Self> {
+        Arc::new(Self {
+            ffmpeg: None,
+            qp: 20,
+            old: false,
+            list: vec![Kind::Native],
+            sample: Arc::default(),
+            current: Mutex::new(Some(Current { index: 0, kicks: 0, software: false })),
+            picking: tokio::sync::Mutex::new(()),
+        })
+    }
+
     fn current(&self) -> Option<Current> {
         *self.current.lock().unwrap_or_else(|p| p.into_inner())
     }
@@ -568,7 +586,7 @@ impl Encoders {
         let args = hevc_args(kind, points, qp, self.old).ok_or("no encoder for HEVC input")?;
         // the encoder in use, unless ffmpeg stands in for it (the built-in one takes JPEG only): only then is a failure
         // here that encoder's, to give up ([`Self::give_up`])
-        Ok(HevcCommand { ffmpeg, args, label: kind.label(), encoder: (!stand_in).then_some(c.index) })
+        Ok(HevcCommand { ffmpeg, args, label: kind.label(), encoder: (!stand_in).then_some(c.index), points, qp })
     }
 
     /// The quantizer set for the picture (`IPHONE_CONTROL_VIEWER_QP`)

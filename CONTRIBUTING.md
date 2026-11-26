@@ -36,7 +36,7 @@ docker run --rm -v "$PWD":/src -w /src rust:1-trixie sh -c \
 
 Behind a firewall add `--network host -e HTTP_PROXY -e HTTPS_PROXY` (`idevice` is a git dependency). `cargo test -p <one crate>` can fail to compile `plume_store` because of feature unification; test the whole workspace instead.
 
-The pure logic — element-tree parsing, occlusion, the auto-unlock rules (against a fake WebDriverAgent), the daemon state machine, MCP argument handling — is covered by unit tests. Real iOS 27 element trees used as fixtures are in [crates/ictl-wda/tests/fixtures](crates/ictl-wda/tests/fixtures).
+The pure logic — element-tree parsing, occlusion, the auto-unlock rules (against a fake WebDriverAgent), the daemon state machine, MCP argument handling — is covered by unit tests. Real iOS 27 element trees used as fixtures are in [crates/ictl-ui/tests/fixtures](crates/ictl-ui/tests/fixtures).
 
 ## Testing on a real phone
 

@@ -3,6 +3,7 @@
 //! 同一时间只控制一台（一个 WDA 会话、一把设备锁）。选哪台见 [`crate::machine::pick_device`]：
 //! 选定了就只认那一台；没选定时正在控制的那台一直用到它断开。切换时拆掉上一台的会话，在新的一台上拉起 WDA
 
+use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use ictl_device::{Device, DeviceInfo, UsbDevice};
@@ -46,45 +47,99 @@ pub(crate) struct CachedInfo {
 }
 
 impl CachedInfo {
-    async fn refresh(&mut self, now: Instant, probe: impl Future<Output = Option<DeviceInfo>>) {
+    /// Whether the details are to be read now: incomplete, and not tried within [`METADATA_RETRY`]. A read due is
+    /// counted as tried
+    fn due(&mut self, now: Instant) -> bool {
         if self.retry_at.is_some_and(|retry| now < retry) {
-            return;
+            return false;
         }
         if self
             .value
             .as_ref()
             .is_some_and(|i| !i.name.is_empty() && !i.product_type.is_empty() && !i.product_version.is_empty())
         {
-            return;
+            return false;
         }
         self.retry_at = Some(now + METADATA_RETRY);
-        if let Some(mut info) = probe.await {
-            if let Some(cached) = &self.value {
-                for (field, previous) in [
-                    (&mut info.product_type, &cached.product_type),
-                    (&mut info.name, &cached.name),
-                    (&mut info.product_version, &cached.product_version),
-                ] {
-                    if field.is_empty() {
-                        field.clone_from(previous);
-                    }
+        true
+    }
+
+    /// Takes what a read gave, keeping the fields it left empty from before
+    fn take(&mut self, mut info: DeviceInfo) {
+        if let Some(cached) = &self.value {
+            for (field, previous) in [
+                (&mut info.product_type, &cached.product_type),
+                (&mut info.name, &cached.name),
+                (&mut info.product_version, &cached.product_version),
+            ] {
+                if field.is_empty() {
+                    field.clone_from(previous);
                 }
             }
-            self.value = Some(info);
+        }
+        self.value = Some(info);
+    }
+}
+
+#[cfg(test)]
+impl CachedInfo {
+    /// [`Self::due`], then the read's details [`taken`](Self::take)
+    async fn refresh(&mut self, now: Instant, probe: impl Future<Output = Option<DeviceInfo>>) {
+        if self.due(now)
+            && let Some(info) = probe.await
+        {
+            self.take(info);
         }
     }
 }
 
+/// Details read in the background, by UDID and the usbmuxd connection they were read over ([`Daemon::probed`])
+pub(crate) type Probed = std::sync::Arc<std::sync::Mutex<HashMap<(String, u32), DeviceInfo>>>;
+
 impl Daemon {
     /// Read identity on attachment; lockdown can return partial metadata until the device is trusted.
+    /// The controlled device (or every device, while none is) is read here, under the device lock: its details are
+    /// used at once (`online`). The others are read in the background and taken at the next round
     pub(crate) async fn note_connected(&self, g: &mut Inner, devices: Vec<UsbDevice>) {
         g.infos.retain(|udid, _| devices.iter().any(|d| d.udid == *udid));
+        let probed = std::mem::take(&mut *self.probed.lock().unwrap_or_else(|p| p.into_inner()));
+        let now = Instant::now();
+        let current = g.device.as_ref().map(|d| d.udid.clone());
+        let mut here = Vec::new();
         for d in &devices {
             if !g.connected.contains(d) {
                 g.infos.remove(&d.udid);
             }
             let cached = g.infos.entry(d.udid.clone()).or_default();
-            cached.refresh(Instant::now(), async { Device::from_usb(d).info().await.ok() }).await;
+            // read over this very connection: one from before a replug may be another device's state
+            if let Some(info) = probed.get(&(d.udid.clone(), d.device_id)) {
+                cached.take(info.clone());
+            }
+            if !cached.due(now) {
+                continue;
+            }
+            if current.is_none() || current.as_deref() == Some(d.udid.as_str()) {
+                here.push(d.clone());
+            } else {
+                let (slot, d) = (self.probed.clone(), d.clone());
+                tokio::task::spawn_local(async move {
+                    if let Ok(info) = Device::from_usb(&d).info().await {
+                        slot.lock().unwrap_or_else(|p| p.into_inner()).insert((d.udid, d.device_id), info);
+                    }
+                });
+            }
+        }
+        // the ones read here, at once rather than one after another
+        let mut reads = tokio::task::JoinSet::new();
+        for d in here {
+            reads.spawn_local(async move { (d.udid.clone(), Device::from_usb(&d).info().await.ok()) });
+        }
+        while let Some(done) = reads.join_next().await {
+            if let Ok((udid, Some(info))) = done
+                && let Some(cached) = g.infos.get_mut(&udid)
+            {
+                cached.take(info);
+            }
         }
         g.connected = devices;
     }

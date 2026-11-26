@@ -6,13 +6,24 @@ use crate::core::{Daemon, DeviceProfile, Inner};
 use crate::machine::DeviceState;
 
 impl Daemon {
-    pub(crate) async fn doctor(&self, g: &mut Inner) -> String {
+    /// What [`Self::doctor`] checks without the phone, done before it takes the device lock (`ffmpeg -version` alone
+    /// can take 5 s for each ffmpeg found, and the phone was held meanwhile)
+    pub(crate) async fn doctor_host(&self) -> DoctorHost {
+        DoctorHost {
+            usbmuxd: ictl_device::list_devices().await.map(|_| ()).map_err(|e| e.to_string()),
+            usb: ictl_device::host_ios_usb_present().await,
+            signed_in: self.account().selected_email().await.is_ok(),
+            picture: viewer_picture().await,
+        }
+    }
+
+    pub(crate) async fn doctor(&self, g: &mut Inner, host: DoctorHost) -> String {
         let mut out: Vec<String> = Vec::new();
         let mut fails = 0;
 
         out.push(ictl_l10n::tr!("== 设备连接", "== Device connection").into());
-        match ictl_device::list_devices().await {
-            Ok(_) => out.push(ictl_l10n::tr!("✅ usbmuxd 在运行", "✅ usbmuxd is running").into()),
+        match host.usbmuxd {
+            Ok(()) => out.push(ictl_l10n::tr!("✅ usbmuxd 在运行", "✅ usbmuxd is running").into()),
             Err(e) => {
                 out.push(ictl_l10n::trf!("❌ 连不上 usbmuxd：{e}\n     → {}", "❌ Can't reach usbmuxd: {e}\n     → {}",
                     if cfg!(target_os = "macos") {
@@ -25,7 +36,7 @@ impl Daemon {
             }
         }
         // 判断不了（不是 Linux/macOS）就不报，免得误报「没有设备」
-        match ictl_device::host_ios_usb_present().await {
+        match host.usb {
             Some(true) => out.push(ictl_l10n::tr!("✅ USB 上有 iPhone/iPad", "✅ An iPhone/iPad is on USB").into()),
             Some(false) => {
                 out.push(ictl_l10n::tr!("❌ USB 上没有 iPhone/iPad\n     → 插好数据线;用 USB-C 转接头的话换一根试试", "❌ No iPhone/iPad on USB\n     → check the data cable; if you use a USB-C adapter, try another cable").into());
@@ -111,9 +122,9 @@ impl Daemon {
         } else {
             ictl_l10n::tr!("== Apple ID 与签名", "== Apple ID and signing").into()
         });
-        match self.account().selected_email().await {
-            Ok(_) => out.push(ictl_l10n::tr!("✅ 已登录 Apple ID", "✅ Signed in to an Apple ID").into()),
-            Err(_) => {
+        match host.signed_in {
+            true => out.push(ictl_l10n::tr!("✅ 已登录 Apple ID", "✅ Signed in to an Apple ID").into()),
+            false => {
                 out.push(
                     ictl_l10n::tr!(
                         "❌ 没有登录 Apple ID\n     → iphone-control login",
@@ -299,7 +310,7 @@ impl Daemon {
                     .into(),
             );
         }
-        out.push(viewer_picture().await);
+        out.push(host.picture);
         out.push(String::new());
         out.push(if fails == 0 {
             ictl_l10n::tr!("全部正常", "All good").into()
@@ -308,6 +319,14 @@ impl Daemon {
         });
         out.join("\n")
     }
+}
+
+/// [`Daemon::doctor`]'s checks of this machine ([`Daemon::doctor_host`])
+pub(crate) struct DoctorHost {
+    usbmuxd: Result<(), String>,
+    usb: Option<bool>,
+    signed_in: bool,
+    picture: String,
 }
 
 /// 控制台（`iphone-control viewer`）的画面能不能用 H.264：macOS 上本程序直接调 VideoToolbox，不用 ffmpeg；

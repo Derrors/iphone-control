@@ -155,8 +155,12 @@ impl Daemon {
         process.to_owned()
     }
 
-    pub(crate) async fn crash_reports(&self, g: &mut Inner, filter: &str, name: &str) -> crate::error::Result<String> {
-        let device = g.device.clone().ok_or(ictl_l10n::tr!("手机未连接", "Phone not connected"))?;
+    pub(crate) async fn crash_reports(
+        &self,
+        device: &ictl_device::Device,
+        filter: &str,
+        name: &str,
+    ) -> crate::error::Result<String> {
         if !name.is_empty() {
             if name.contains('/') || name.contains("..") {
                 return Err(ictl_l10n::tr!(
@@ -211,9 +215,10 @@ impl Daemon {
         Ok(ictl_l10n::trf!("已安装 {path}", "Installed {path}"))
     }
 
-    /// Uninstalling deletes the app's data, so unlike launching, the name must match exactly: a bundle ID or the
-    /// whole display name. The app lists are read again first, so an app installed a moment ago is found
-    pub(crate) async fn uninstall_app(&self, g: &mut Inner, app: &str) -> crate::error::Result<String> {
+    /// The bundle ID to uninstall for `app`. Uninstalling deletes the app's data, so unlike launching, the name must
+    /// match exactly: a bundle ID or the whole display name. The app lists are read again first, so an app installed
+    /// a moment ago is found. The uninstall itself is the caller's, without the device lock (`core`'s `Lane::Apart`)
+    pub(crate) async fn uninstall_target_of(&self, g: &mut Inner, app: &str) -> crate::error::Result<String> {
         g.dev.apps.clear();
         let mut all = self.list_apps(g, false).await?;
         all.extend(self.list_apps(g, true).await?);
@@ -225,10 +230,7 @@ impl Daemon {
             )
             .into());
         }
-        let device = g.device.clone().ok_or(ictl_l10n::tr!("手机未连接", "Phone not connected"))?;
-        device.uninstall(&bid).await?;
-        g.dev.apps.clear();
-        Ok(ictl_l10n::trf!("已卸载 {bid}", "Uninstalled {bid}"))
+        Ok(bid)
     }
 }
 

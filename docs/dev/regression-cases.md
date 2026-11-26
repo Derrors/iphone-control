@@ -244,3 +244,6 @@
 | 238 | `MjpegHub::subscribe` 连手机时拿着全局锁：一台手机的 WDA 不应答（最多等 8 秒），别的手机的页面也跟着等 | 每台手机一把锁，全局锁只在找位置时拿；同一台同时打开的页面仍共用一路；清理没人看的手机时，别人刚拿到、还没锁上的位置也保留（否则同一台会开出第二路） | 单测 `one_phone_opening_slowly_doesnt_hold_up_another`、原有的 `pages_share_one_stream_per_phone` |
 | 239 | 前台进程不在 App 列表里（系统的某些进程）时，控制台每次状态轮询都把用户 App 和系统 App 两份列表各读一遍 | 两份列表都读到了还没有的，60 秒内不再读（有一份没读到就不记） | 单测 `an_unknown_app_is_looked_for_again_only_after_a_while` |
 | 240 | 下载开发者镜像时整个文件（上百 MB）先读进内存再写盘 | 边收边写进 `.part` 临时文件，出错删掉，完整后再改名 | 代码审查（要真下载才能测） |
+| 241 | `doctor` 整个过程占着设备锁，其中查 usbmuxd、USB、Apple ID、`ffmpeg -version`（每个 ffmpeg 最多 5 秒）都和手机无关，这期间点击、读界面都在排队 | 新的 `Lane::Doctor`：先做本机的检查（`doctor_host`，不拿锁），再拿设备锁查手机 | 单测 `slow_checks_and_lockdown_tools_dont_hold_the_device_lock` + 真机（待补） |
+| 242 | 崩溃报告、卸载 App 走的是各自的 lockdown 服务（卸载最多 120 秒），却占着设备锁 | `Lane::Apart`：像安装一样先过任务的准入，短暂拿锁取设备（卸载时顺带从缓存的 App 列表里认出要卸的 App），之后不拿锁；卸载后清掉缓存的界面和 App 列表，记一次操作时间 | 单测 `slow_checks_and_lockdown_tools_dont_hold_the_device_lock`、原有的卸载目标单测 + 真机（待补） |
+| 243 | 巡检拿着设备锁逐台读接着的设备的信息：第二台信息不全时（没信任、刚开机没解锁）每 60 秒一次 lockdown 查询，最长 15 秒，期间点击、读界面都等着 | 正在控制的那台（还没控制任何一台时是全部）照旧当场读，几台同时读；其余的在后台读，结果下一轮巡检再收（按 UDID 和 usbmuxd 连接号认，重插过的不算） | 原有的 `incomplete_metadata_retries_without_polling_lockdown_each_tick`（改用 `due`/`take` 之后照样过）+ 真机（待补） |

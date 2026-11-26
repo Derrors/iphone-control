@@ -207,7 +207,7 @@ Running → Waiting（等确认）→ Running
 **做法**：暂停、继续、接管、交还、确认这几种控制只能由人来做；停止不限，Agent 可以放弃。下面两种请求会被拒绝：
 
 1. **带任务口令的控制请求**：`iphone-control task …` 会自动带上环境里的 `IPHONE_CONTROL_TASK_TOKEN`，所以 Agent 在自己的环境里执行就会被拒绝。
-2. **Agent 进程发来的控制请求**：开任务的进程（控制台、`task run`）在启动 Agent 之前发 `task_agent`（带口令；守护进程用 `SO_PEERCRED` 核对它就是开任务的进程），说明「我之后启动的进程都是 Agent」。之后，控制请求如果来自它的子孙进程（`SO_PEERCRED` 取 pid，再沿父进程链往上找），就拒绝；开任务的进程自己发的不拒绝（控制台转发页面上的点击，`task run` 收到 Ctrl-C 后停止任务）。控制台的接口也一样：本机来的请求，控制台在 Linux 上通过 `/proc/net/tcp` 和 `/proc/*/fd` 查出是哪个进程连过来的，作为 `for_pid` 一起交给守护进程判断。在 macOS 上查不出，这条路只能靠第 1 条。
+2. **Agent 进程发来的控制请求**：开任务的进程（控制台、`task run`）在启动 Agent 之前发 `task_agent`（带口令；守护进程用 `SO_PEERCRED` 核对它就是开任务的进程），说明「我之后启动的进程都是 Agent」。之后，控制请求如果来自它的子孙进程（`SO_PEERCRED` 取 pid，再沿父进程链往上找），就拒绝；开任务的进程自己发的不拒绝（控制台转发页面上的点击，`task run` 收到 Ctrl-C 后停止任务）。控制台的接口也一样：本机来的请求，控制台在 Linux 上通过 `/proc/net/tcp` 和 `/proc/*/fd`、在 macOS 上通过 `libproc`（`proc_listpids` / `proc_pidfdinfo`）查出是哪个进程连过来的，作为 `for_pid` 一起交给守护进程判断。
 
 成功的控制会记一条 `control` 事件 `{action, by, step?, approve?}`，`by` 是 `viewer`（局域网来的带上 IP）、`cli` 或 `owner`。
 

@@ -44,7 +44,7 @@ iOS 27 and later are controlled natively by default, which needs only pairing, D
 
 ## MCP
 
-- **The client can't connect** ("connection closed", "failed to reconnect"): restarting the daemon (`iphone-control service restart`) ends the MCP process; reconnect from the client (in Claude Code, run `/mcp`). Check the registered command with `iphone-control mcp-config`.
+- **The client can't connect** ("connection closed", "failed to reconnect"): the MCP process itself ended or couldn't start (restarting the daemon doesn't end it: each call connects anew and waits up to 10 seconds for a daemon that is restarting). Reconnect from the client (in Claude Code, run `/mcp`) and check the registered command with `iphone-control mcp-config`. After an upgrade, reconnect too: a running MCP process keeps the old version's tools.
 - **"守护进程正忙…已放弃执行":** an action waited more than 30 seconds for the device, so it was dropped instead of tapping a screen that has changed. Take a screenshot and try again.
 - **An action reports that the WDA connection dropped:** the request was already sent, so it may have happened. It is not redone over HID, to avoid tapping or typing twice. Take a screenshot before trying again.
 - **Taps do nothing:** a system alert may be covering the screen; the tool result says so (「屏幕上有系统弹窗…」). Dismiss it with `iphone_tap_element`. Taps right after launching an app are delayed until the launch animation is over.

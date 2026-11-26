@@ -73,7 +73,7 @@ iphone-control passcode set --device <UDID 或设备名>     # 设备要接着
 
 ## 通知
 
-通知文字不带设备名。收到通知时用 `status` 或 `devices` 看是哪台。
+通知标题带着设备名（手机上设置的名称），看标题就知道是哪台；`status`、`devices` 列出的也是这个名字。
 
 ## iPad 的差异
 

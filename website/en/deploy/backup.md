@@ -39,7 +39,7 @@ Install on the new host first (see [Getting Started](../guide/getting-started#in
 
 ## Moving from the Docker deployment
 
-From the next release on there is no Docker image. Your data is in `./data` next to the compose file (or wherever `DATA_DIR` pointed), owned by root. After installing the new version, and before running `iphone-control` for the first time:
+There is no Docker image since 0.2.0. Your data is in `./data` next to the compose file (or wherever `DATA_DIR` pointed), owned by root. After installing the new version, and before running `iphone-control` for the first time:
 
 ```bash
 docker compose down                                  # in the directory of your old compose.yaml

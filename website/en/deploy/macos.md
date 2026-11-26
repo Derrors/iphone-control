@@ -111,7 +111,7 @@ sudo launchctl kickstart -k system/com.apple.usbmuxd
 
 Read the upgrade notes in the [changelog](https://github.com/Derrors/iphone-control/blob/main/CHANGELOG.md) first.
 
-For a managed script installation, close Viewer, MCP and other device clients, then run `iphone-control update`. On Homebrew the same command upgrades the executable on disk through the tap. A running `brew services` service is restarted afterwards. Reopen Viewer and reconnect your MCP client to use the new version.
+For a managed script installation, let AI tasks finish, then run `iphone-control update`. A Viewer running as a background service is stopped for the upgrade and started again afterwards, and idle MCP clients can stay open (they hold the device only during a tool call); a `viewer`, `wda-bridge` or `task run` you started by hand in a terminal has to be closed first. On Homebrew the same command upgrades the executable on disk through the tap. A running `brew services` service is restarted afterwards. Reconnect your MCP client once (in Claude Code, run `/mcp`) to get the new version's tools.
 
 For a source build, run the following commands.
 

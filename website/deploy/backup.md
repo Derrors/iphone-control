@@ -39,7 +39,7 @@ iphone-control service start
 
 ## 从 Docker 部署迁过来
 
-从下一个版本起不再提供 Docker 镜像。原来的数据在 compose 文件旁边的 `./data`（或 `DATA_DIR` 指的目录），属于 root。装好新版本后、第一次运行 `iphone-control` 之前：
+从 0.2.0 起不再提供 Docker 镜像。原来的数据在 compose 文件旁边的 `./data`（或 `DATA_DIR` 指的目录），属于 root。装好新版本后、第一次运行 `iphone-control` 之前：
 
 ```bash
 docker compose down                                  # 在原来的 compose.yaml 所在目录

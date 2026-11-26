@@ -15,7 +15,7 @@ codex mcp add iphone -- /path/to/iphone-control --socket <路径> mcp
 
 后来才装 Claude Code 或 Codex、或者要重新注册时，运行 `iphone-control setup --reconfigure`，选「注册 MCP」。也可以手动执行 `iphone-control mcp-config` 打印的命令。
 
-守护进程重启后 MCP 连接会断开，在 Claude Code 里运行 `/mcp` 重新连接。
+MCP 服务每次调用都重新连守护进程，守护进程重启（`service restart`）不会断开，重启的那几秒里调用会等它回来。升级以后，已经开着的 MCP 进程还是旧版本、列的还是旧的工具；要用新版的工具，在 Claude Code 里运行 `/mcp` 重新连接（或开一个新会话）。
 
 ## Claude Desktop、Cursor 等
 

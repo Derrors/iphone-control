@@ -16,6 +16,7 @@ What changed in each release, one line per change. Versions follow [Semantic Ver
 
 ### Fixes
 
+- `iphone-control update` says what actually has to stop before an upgrade (AI tasks, a viewer or `wda-bridge` started by hand; the viewer service and idle MCP clients are handled), and `notify-test --help` lists `cert`. The README, the site and the architecture notes match the code again: the tool table includes `iphone_scroll_collect`, notifications do name the device, restarting the daemon doesn't drop MCP clients, and the picture paths are described as they now work (#205).
 - iOS 27+: a phone ready for native control is checked every 5 minutes while nobody uses it. When the developer disk image is gone or the tunnel no longer answers, it is prepared again instead of staying "ready" until the next action fails; after mounting the image again, the accessibility service left from before is restarted, as it would no longer read the screen (#204).
 - iOS 27+: what a process of the phone is (the app in front, a web page's process) is looked up again after 10 minutes, and SpringBoard's process after a minute or when reading it fails. A daemon running for weeks could otherwise go by a process number another app had taken, or miss alerts after SpringBoard restarted (#204).
 - The daemon no longer keeps the events of its last 50 tasks in memory: they are read from the task's log file when a page or `task events` replays them (#204).

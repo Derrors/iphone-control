@@ -48,7 +48,7 @@ Zsh 在 `~/.zshrc` 的 `compinit` 之前添加 `fpath=(~/.zsh/completions $fpath
 
 | 安装方式 | 运行 `iphone-control update` 后 |
 | --- | --- |
-| 签名安装脚本部署的受管用户服务 | 验证发布者签名后安装，重启服务并检查健康状态；新版本 60 秒内起不来就自动换回旧版本。先关闭 Viewer 和其他直连设备的客户端；MCP 服务只在工具调用期间占用，空闲时不用关，升级后下一次调用自动连上新的守护进程。通过 `--version` 固定版本的安装，须先显式运行 `iphone-control update unpin` 才能升级。 |
+| 签名安装脚本部署的受管用户服务 | 验证发布者签名后安装，重启服务并检查健康状态；新版本 60 秒内起不来就自动换回旧版本。先等 AI 任务做完，关掉在终端里手动开的 `viewer`、`wda-bridge` 等直连设备的客户端；作为后台服务运行的 Viewer 会在升级时自动停下、升级后再启动；MCP 服务只在工具调用期间占用，空闲时不用关，升级后下一次调用自动连上新的守护进程。通过 `--version` 固定版本的安装，须先显式运行 `iphone-control update unpin` 才能升级。 |
 | Homebrew | 通过该安装绑定的 tap 运行 Homebrew 升级，以 tap 提供的版本为准。`brew services` 在运行的话，升级后重启它。 |
 | Debian / Ubuntu 软件包 | 下载同一发布者提供的、匹配目标版本和主机架构的 `.deb`，验证发布者对它的签名后，用 `sudo` 交给 apt 安装（会询问密码）。deb 带的 systemd 用户服务在运行的话，升级后重启它。用 `apt-mark hold` 锁定了的不会升级，先 `sudo apt-mark unhold iphone-control`。 |
 | 源码安装、没有受管服务的脚本安装或无法识别的安装 | 显示适用的手动升级指引。未绑定发布者的开发构建在本地给出说明。 |
@@ -61,7 +61,7 @@ Viewer 要用令牌登录（见下面的 `viewer`）。持有令牌的人（只�
 
 受管服务默认只做后台检查。`update apply` 不询问直接安装（受管服务），替换意外中断后用 `update recover`。没有回退到上一版的命令：要换回旧版本，先用发行页的安装脚本加 `--uninstall` 卸载（设置和设备数据保留），再加 `--version vX.Y.Z` 安装那个版本。如果正在使用 0.2.2 的 CLI，先运行 `iphone-control update check` 并按该版本显示的命令升级。新版 CLI 才支持直接运行 `iphone-control update`。
 
-主动运行 `iphone-control update policy auto-patch` 后，服务只在空闲时自动安装兼容补丁。Viewer 和直连设备的客户端要先退出，暂停的任务也视为占用；空闲的 MCP 服务不挡升级，正在执行的工具调用结束后才会升级。新 daemon 健康检查失败会恢复旧程序，失败版本须手动重试。`update policy notify` 改回仅检查，`update policy manual` 移除定时任务。
+主动运行 `iphone-control update policy auto-patch` 后，服务只在空闲时自动安装兼容补丁。有 AI 任务在进行时（暂停的也算）不升级，手动开着的 `viewer`、`wda-bridge` 等直连设备的客户端也要先退出；作为后台服务运行的 Viewer 会被自动停下、升级后再启动；空闲的 MCP 服务不挡升级，正在执行的工具调用结束后才会升级。新 daemon 健康检查失败会恢复旧程序，失败版本须手动重试。`update policy notify` 改回仅检查，`update policy manual` 移除定时任务。
 
 如果新程序无法启动，直接用安装目录中的备份：`<prefix>/bin/.iphone-control-update/recovery update recover`。自定义 socket 时，在 `update` 之前加 `--socket <路径>`。
 
@@ -128,7 +128,7 @@ Viewer 要用令牌登录（见下面的 `viewer`）。持有令牌的人（只�
 
 | 命令 | 作用 |
 |---|---|
-| `notify-test [事件]` | 发测试通知：每类事件各一条，或只发一类（`resign`、`session`、`pin`、`pin-recovered`、`unlock`、`offline`、`online`） |
+| `notify-test [事件]` | 发测试通知：每类事件各一条，或只发一类（`resign`、`session`、`pin`、`pin-recovered`、`unlock`、`offline`、`online`、`cert`） |
 | `wda-bridge [--port <端口>]` | 把 WDA 桥接到 `127.0.0.1`（只有用 WDA 的设备），端口默认 8100，给别的工具用。WDA 没有认证，本机任何用户都能连上，用完就停 |
 | `viewer [--port <端口>] [--lan] [--lan-host <名字>…] [--tls auto\|on\|off] [--tls-cert <PEM> --tls-key <PEM>] [--mcp on\|off]` | 浏览器里的控制台，**要先登录**：所有经 HTTP 的访问（本机也一样，经 frp 等反向代理转发进来的访问看起来就是本机）都要令牌，`viewer token` 显示令牌和点开就能登录的链接；浏览器登录一次后记住 30 天，程序和 MCP 客户端用 `Authorization: Bearer <令牌>`。同一个端口的 `/mcp` 还提供 MCP over HTTP（见[接入 AI 客户端](./mcp-clients#通过-url-接入-http)，`--mcp off` 关掉），地址 `http://127.0.0.1:8200/`（默认端口）；加 `--lan` 时局域网里也能用 `https://<这台机器的 IP>:8200/` 打开（同一个端口；局域网来的 `http://` 会跳到 `https://`）。证书默认是本机生成的自签证书（存在数据目录的 `viewer-tls/`，一直沿用），浏览器第一次打开会提示不受信任：核对启动时或 `service status` 显示的 SHA-256 指纹一致后继续。用 `--tls-cert`/`--tls-key` 换成自己的证书（mkcert、`tailscale cert` 等）就没有这个提示。`--tls off` 时局域网里是 HTTP，画面退回 MJPEG（浏览器只在 localhost 或 HTTPS 上提供 WebCodecs）。页面有中英文两种（默认跟着 `IPHONE_CONTROL_LANG`，页面上可切换）。**画面：** 实时画面像触摸屏一样用：点一下是点击，拖动是滑动，按住是长按，滚动鼠标滚轮或触控板也能滚动页面，另有输入框和硬件键。iOS 27 起手指跟着鼠标实时移动（经 CoreDevice HID，最后一次触摸后 30 秒内手机保持亮屏）；更低的版本在松开后发整段手势。操作都和 MCP 调用一样经守护进程，和 agent 的操作排队，并先自动解锁。iOS 27 及以上画面直接用手机自己的视频；其余来自 WDA（WDA 没就绪时没有画面），是 H.264 或 MJPEG，见下面的[画面编码](#viewer-picture)。画面与设备实测的尺寸、方向一致时可以点按。转屏或换机后，请在新画面上重新操作。侧栏底部的「设置」可调整主题和字号，画面缩放用画面上方的加减号调整（双指捏合不缩放，免得拖动时误触）。**设备面板：** 状态和就绪检查、已安装的 App、屏幕上的元素。页面跟着守护进程控制的设备走，在页面上或别处切换设备，画面和面板都会跟过去，见[多台设备](./multi-device#control-page)。**AI 任务：** 写下任务，交给本机的 agent 执行（PATH 里有的 Claude Code 或 Codex，在页面上选）。开任务前可以用 Agent 旁边的 App 按钮限定范围，到了别的 App 每一步都先等你确认。可以暂停、接管后交还、停止；付款、删除、发消息之前它会在页面上请你确认。令牌就是钥匙，别外传。详见[控制台与远程使用](./remote) |
 | `viewer token [--new]` | 显示控制台的 `owner` 登录令牌、本机和局域网的登录链接，以及接入 HTTP MCP 的命令；`--new` 换一个新的，用旧令牌登录的浏览器和 MCP 客户端都要用新的。令牌存在数据目录的 `viewer-tokens.json`（0600），改动马上生效，不用重启控制台 |

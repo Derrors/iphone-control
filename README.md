@@ -146,7 +146,8 @@ More: [step-by-step guide](https://derrors.github.io/iphone-control/en/guide/get
 | `iphone_press_button` | `home`, `volume_up`, `volume_down`, `lock` |
 | `iphone_list_apps` / `iphone_launch_app` / `iphone_terminate_app` | Manage apps by name or bundle ID |
 | `iphone_open_url` | Open a URL or URL scheme |
-| `iphone_wait_for` | Wait until some text appears instead of polling with screenshots |
+| `iphone_wait_for` | Wait until some text appears (or, with `state: "disappeared"`, goes) instead of polling with screenshots |
+| `iphone_scroll_collect` | Scroll through a list and collect its rows in one call, or stop where some text shows up |
 | `iphone_batch` | Run up to 20 steps in one call, stopping at the first error |
 | `iphone_list_devices` | Every iPhone/iPad on USB; marks the one being controlled |
 | `iphone_select_device` | Switch to another device, or back to automatic choice |
@@ -181,7 +182,7 @@ Tool texts, results, CLI output and logs are in Simplified Chinese by default; s
 | `task run [--url <viewer>] -- <command>` | AI tasks for other agent platforms; with `--url` the phone is on another machine. `task list`, `pause`, `approve`… follow and control tasks |
 | `viewer token [add <name> [--read-only]\|list\|show <name>\|remove <name>]` | The viewer's login tokens: show the owner's, or add named and read-only ones |
 | `service viewer install\|uninstall\|start\|stop\|restart` | Run the viewer as a background service of its own |
-| `update check\|apply\|policy` | Check for, install, or set the policy for updates |
+| `update [check\|apply\|policy\|unpin\|recover]` | Check for and install an update (no subcommand), or each step on its own; `unpin` releases a version pin set by the installer (without turning on automatic updates), `recover` finishes or rolls back a replacement that was interrupted |
 | `completions <shell>` | Bash, Zsh or Fish completion script |
 
 All commands and options: [CLI reference](https://derrors.github.io/iphone-control/en/guide/cli).
@@ -197,10 +198,10 @@ Uninstall with `sh iphone-control-install.sh --uninstall`, `brew uninstall iphon
 | | |
 | --- | --- |
 | Guide | [What is it](https://derrors.github.io/iphone-control/en/guide/what-is-iphone-control) · [Limitations](https://derrors.github.io/iphone-control/en/guide/what-is-iphone-control#limitations) · [Getting started](https://derrors.github.io/iphone-control/en/guide/getting-started) · [AI clients](https://derrors.github.io/iphone-control/en/guide/mcp-clients) · [Tools](https://derrors.github.io/iphone-control/en/guide/tools) |
-| Usage | [Configuration](https://derrors.github.io/iphone-control/en/guide/configuration) · [CLI](https://derrors.github.io/iphone-control/en/guide/cli) · [Several devices](https://derrors.github.io/iphone-control/en/guide/multi-device) · [Notifications](https://derrors.github.io/iphone-control/en/guide/notifications) · [Auto-unlock](https://derrors.github.io/iphone-control/en/guide/auto-unlock) |
+| Usage | [Configuration](https://derrors.github.io/iphone-control/en/guide/configuration) · [CLI](https://derrors.github.io/iphone-control/en/guide/cli) · [Several devices](https://derrors.github.io/iphone-control/en/guide/multi-device) · [Notifications](https://derrors.github.io/iphone-control/en/guide/notifications) · [Auto-unlock](https://derrors.github.io/iphone-control/en/guide/auto-unlock) · [Viewer and remote use](https://derrors.github.io/iphone-control/en/guide/remote) |
 | Deployment | [Install](https://derrors.github.io/iphone-control/en/guide/getting-started#install) · [Build from source](https://derrors.github.io/iphone-control/en/deploy/source) · [macOS](https://derrors.github.io/iphone-control/en/deploy/macos) · [Data and backups](https://derrors.github.io/iphone-control/en/deploy/backup) |
 | Problems | [FAQ](https://derrors.github.io/iphone-control/en/troubleshoot/faq) · [Troubleshooting](docs/troubleshooting.md) · [Issues](https://github.com/Derrors/iphone-control/issues) |
-| Security | [SECURITY.md](SECURITY.md): what is stored, who can reach it, reporting vulnerabilities |
+| Security | [Security and privacy](https://derrors.github.io/iphone-control/en/guide/security) · [SECURITY.md](SECURITY.md): what is stored, who can reach it, reporting vulnerabilities |
 | Development | [Contributing](CONTRIBUTING.md) · [Architecture](docs/architecture.md) · [Decisions](docs/decisions.md) · [Changelog](CHANGELOG.md) |
 | Licensing | [THIRD_PARTY.md](THIRD_PARTY.md): vendored components, versions and licenses |
 

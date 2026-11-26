@@ -8,7 +8,7 @@ What changed in each release, one line per change. Versions follow [Semantic Ver
 
 ### Improvements
 
-- The daemon now subscribes to usbmuxd's `Listen` event stream and wakes the supervision loop immediately on USB attach/detach events (cutting hotplug discovery from up to 10 s to milliseconds while keeping the 10-second periodic poll as fallback), filtering out non-USB network chatter and reconnecting with quiet exponential backoff when usbmuxd is absent or restarts (#PR).
+- The daemon now subscribes to usbmuxd's `Listen` event stream and wakes the supervision loop immediately on USB attach/detach events (cutting hotplug discovery from up to 10 s to milliseconds while keeping the 10-second periodic poll as fallback), filtering out non-USB network chatter and reconnecting with quiet exponential backoff when usbmuxd is absent or restarts (#221).
 - The daemon now detects when the previous instance exited unexpectedly (crash, `SIGKILL`, power loss) or was restarted by the watchdog via a persisted `run-state.json` marker, logs every incident to `daemon.log`, and sends a `daemon` notification (`iphone-control notify-test daemon`) throttled by a persisted 30-minute anti-storm cooldown that summarizes suppressed restarts in crash loops (#219).
 - On macOS, control requests sent to the viewer's local HTTP API now also identify the calling process (via `libproc`), so an agent on the same machine can no longer pause, resume or approve its own task through the HTTP API either (#215).
 - On iOS 27 the screen is read without the detour through WebDriverAgent-style XML: the accessibility tree becomes the element tree directly, the same one WDA's source gives. When auto-unlock fails on such a phone, its message no longer says "WDA unavailable" (#211).

@@ -456,6 +456,7 @@ impl Daemon {
                         self.log.log(&ictl_l10n::log_trf!("开发者镜像已挂载 {v}", "Developer disk image mounted {v}"));
                         // a tunnel opened before the image was mounted doesn't list the accessibility service
                         drop_tunnel(g).await;
+                        self.restart_ax_after_mount(g, &device).await;
                     }
                     match Box::pin(self.native_check(g, &device)).await {
                         Ok(()) => {
@@ -582,6 +583,26 @@ impl Daemon {
                 self.set_state(g, DeviceState::Preparing { last_error: Some(why) });
                 true
             }
+        }
+    }
+
+    /// The image was mounted again while the phone kept running (it had gone, [`Self::native_gone`]): axauditd, the
+    /// process behind the accessibility service, may still be the one started from the image before, which then
+    /// answers every read with «no frontmost app» (iPhone 15 Pro Max, iOS 27.2.1), and preparing would fail for good.
+    /// Ended, the next connection starts it from the image now mounted; after a reboot none runs yet and nothing is
+    /// ended
+    async fn restart_ax_after_mount(&self, g: &mut Inner, device: &Device) {
+        let ended = match self.ensure_tunnel(g, device).await {
+            Ok(t) => t.restart_ax_daemon().await,
+            Err(e) => Err(e),
+        };
+        match ended {
+            Ok(0) => {}
+            Ok(n) => self.log.log(&ictl_l10n::log_trf!(
+                "开发者镜像重新挂上了，结束了之前的 axauditd（{n} 个进程），无障碍服务会重新启动",
+                "The developer disk image was mounted again: ended the axauditd from before ({n} processes), the accessibility service starts again"
+            )),
+            Err(e) => tracing::info!("restarting axauditd after mounting the image: {e}"),
         }
     }
 

@@ -4,7 +4,7 @@ use super::*;
 
 /// 锁屏密码键盘上 0～9 各键的中心点；没找齐 10 个返回 None。
 /// 找到了也不代表键盘在屏幕上——按键后要核对密码栏的已输入位数。
-/// 键位不像电话键盘时也返回 None（见 [`keypad_layout_ok`]）。
+/// 键位不像电话键盘时也返回 None（见 `keypad_layout_ok`）。
 pub fn keypad(elements: &[Element]) -> Option<[(i64, i64); 10]> {
     let mut keys: [Option<(i64, i64)>; 10] = [None; 10];
     for e in elements.iter().filter(|e| e.kind == "Button" || e.kind == "Key") {

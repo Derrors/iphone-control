@@ -345,7 +345,7 @@ pub fn verify_signed(app_dir: &Path, udid: &str, signing_cert: Option<&[u8]>) ->
     Ok(p)
 }
 
-/// [`AccountDir::sign_ipa`]'s scratch directory, removed when dropped
+/// [`Session::sign_ipa`]'s scratch directory, removed when dropped
 struct WorkDir(PathBuf);
 
 impl Drop for WorkDir {

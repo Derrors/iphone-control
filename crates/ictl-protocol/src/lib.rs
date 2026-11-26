@@ -734,7 +734,7 @@ const RESTART_RECENT: std::time::Duration = std::time::Duration::from_secs(20);
 const RESTART_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// Connects to the daemon. While it restarts (`systemctl restart`, an update) the socket is briefly gone or refuses:
-/// then this waits for it, up to [`RESTART_WAIT`]. Nothing was sent yet, so trying again does nothing twice. A daemon
+/// then this waits for it, up to `RESTART_WAIT`. Nothing was sent yet, so trying again does nothing twice. A daemon
 /// that isn't running (stopped a while ago, or never started) is reported at once
 pub async fn connect(socket: &std::path::Path) -> std::io::Result<tokio::net::UnixStream> {
     let started = std::time::Instant::now();

@@ -82,7 +82,7 @@ impl<T: Transport> WdaClient<T> {
     }
 
     /// Poll rotation to detect a changed view. The screen size (a slower request) is measured on acquisition and on
-    /// rotation, and again once the last measurement is older than [`SCREEN_RECHECK`] (Display Zoom) when
+    /// rotation, and again once the last measurement is older than `SCREEN_RECHECK` (Display Zoom) when
     /// `refresh_stale`: a poll while nobody acts, never a gesture's start, which costs only the rotation request.
     pub async fn display_sample(
         &mut self,

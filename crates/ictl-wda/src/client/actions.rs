@@ -43,8 +43,8 @@ impl<T: Transport> WdaClient<T> {
         self.quick_gesture(&swipe_steps(from, to, ms), IdleSettings::NO_COOL_OFF).await
     }
 
-    /// The MJPEG stream (the live viewer) at up to [`MJPEG_FPS`] frames a second instead of WDA's 10, at full size
-    /// ([`MJPEG_SCALE`], why not smaller) and never turned upright, set with each new session: the picture follows a
+    /// The MJPEG stream (the live viewer) at up to `MJPEG_FPS` frames a second instead of WDA's 10, at full size
+    /// (`MJPEG_SCALE`, why not smaller) and never turned upright, set with each new session: the picture follows a
     /// drag closely. In landscape the frames stay portrait with the content sideways (on an iPhone; an iPad's are
     /// already landscape) and the viewer page turns them by the interface rotation, as it does the phone's own video:
     /// `mjpegFixOrientation` makes WDA decode, rotate and re-encode every frame, 92 % of a core on an iPhone 15 Pro Max
@@ -143,7 +143,7 @@ impl<T: Transport> WdaClient<T> {
         self.hid_event(HID_PAGE_CONSUMER, HID_AC_HOME, 0.05).await
     }
 
-    /// 经 IOHID 短按电源键（[`POWER_PRESS_SECS`]，和手指按一下差不多）。WDA 自己的 `/wda/lock` 在 iOS 27 上按住 0.5 秒，
+    /// 经 IOHID 短按电源键（`POWER_PRESS_SECS`，和手指按一下差不多）。WDA 自己的 `/wda/lock` 在 iOS 27 上按住 0.5 秒，
     /// iOS 27 以下用 XCTest 的 `pressLockButton`，iPhone 12 mini（iOS 26.4.1）、iPad mini 5（iPadOS 26.7.3）上锁不了屏。
     /// 屏幕已熄灭时按它会把屏幕点亮，调用方要先确认没锁屏
     pub async fn press_power_hid(&mut self) -> Result<()> {

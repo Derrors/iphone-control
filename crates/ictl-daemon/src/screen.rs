@@ -1,4 +1,4 @@
-//! The phone's own screen video for the control page ([`protocol::Request::ScreenStream`]).
+//! The phone's own screen video for the control page ([`crate::protocol::Request::ScreenStream`]).
 //!
 //! The CoreDevice screen media stream (iOS 27 and later) is the phone's hardware-encoded HEVC at about 60 frames a
 //! second and its native size. The HID session already owns it (HID events need it); here it is handed on:
@@ -89,7 +89,7 @@ async fn page_gone(reader: &mut tokio::io::BufReader<OwnedReadHalf>) {
 }
 
 impl Daemon {
-    /// Serves one [`protocol::Request::ScreenStream`] connection until either side closes it
+    /// Serves one [`crate::protocol::Request::ScreenStream`] connection until either side closes it
     pub(crate) async fn screen_stream(
         self: &Arc<Self>,
         mut reader: tokio::io::BufReader<OwnedReadHalf>,

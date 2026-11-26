@@ -1461,7 +1461,7 @@ async fn read_head_from(
         .map_err(|_| anyhow::anyhow!("{}", ictl_l10n::tr!("请求头没有按时发完", "request headers took too long")))?
 }
 
-/// HTTP 请求头里的 Host 是不是 localhost / 127.0.0.1 / [::1]（端口不限）
+/// HTTP 请求头里的 Host 是不是 `localhost` / `127.0.0.1` / `[::1]`（端口不限）
 fn host_is_loopback(head: &[u8]) -> bool {
     let text = String::from_utf8_lossy(head);
     let Some(host) = text.split("\r\n").skip(1).find_map(|l| {

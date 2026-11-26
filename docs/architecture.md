@@ -19,7 +19,7 @@
 │       │                │ ictl-device：lockdown · CoreDeviceProxy 隧道（用户态 TCP）         │  │
 │       │                │              · HID · 截图 · App 管理 · 媒体流 · Web Inspector      │  │
 │       │                │ ictl-ax：remoteAXService 会话（iOS 27 原生读界面）                 │  │
-│       │                │ ictl-wda：后台启动 WDA · WDA HTTP · 元素树解析                     │  │
+│       │                │ ictl-wda：后台启动 WDA · WDA HTTP   ictl-ui：元素树 · 尺寸与方向   │  │
 │       │                │ ictl-unlock：自动解锁   ictl-sign：Apple ID 登录与签名             │  │
 │       │                │ ictl-l10n：界面文字的语言（其余 crate 都用它）                     │  │
 │                        └────────────────────────────────────────────────────────────────────┘  │
@@ -114,7 +114,7 @@
         └─ 镜像失败 ───────────────────────────▶ Preparing { last_error }，按退避重试
 ```
 
-各工具在 WDA 不在、设备走原生时改走 `native.rs`：读界面每次都向 remoteAXService 走一遍前台 App 的树（类型 4，再按层一次发出这一层每个元素的类型 5 请求、按答复里的元素对象配对，最多 400 个、4 秒），网页内容进程（WebKit WebContent）的元素原样放置，再读 SpringBoard 盖在上面的元素，转成 WDA `/source` 风格的 XML 交给 `ictl_wda::elements::parse_tree`，按名字找、遮挡、弹窗、密码栏的逻辑都复用。手机只在前台 App 变化时主动推送树，App 内换页不推，所以不靠推送。等稳定和 WDA 一样轮询（连续两次一样），操作后先等 0.4 秒。触摸、按键经 HID；输入一律粘贴；启动 App、打开链接经 CoreDevice AppService；锁屏状态问 lockdown（`PasswordProtected`，要建会话）；自动解锁经 `ictl_unlock::Screen` 用同一套规则，每次读锁屏前先关 HID 会话（媒体流开着时锁屏对无障碍是空的）。无障碍会话归 `Tunnel`，空闲 60 秒关闭。
+各工具在 WDA 不在、设备走原生时改走 `native.rs`：读界面每次都向 remoteAXService 走一遍前台 App 的树（类型 4，再按层一次发出这一层每个元素的类型 5 请求、按答复里的元素对象配对，最多 400 个、4 秒），网页内容进程（WebKit WebContent）的元素原样放置，再读 SpringBoard 盖在上面的元素，直接拼成 `ictl_ui::Source`（和 WDA `/source` 解析出的是同一种树，不经 XML）交给 `ictl_ui::Tree::of`，按名字找、遮挡、弹窗、密码栏的逻辑都复用。手机只在前台 App 变化时主动推送树，App 内换页不推，所以不靠推送。等稳定和 WDA 一样轮询（连续两次一样），操作后先等 0.4 秒。触摸、按键经 HID；输入一律粘贴；启动 App、打开链接经 CoreDevice AppService；锁屏状态问 lockdown（`PasswordProtected`，要建会话）；自动解锁经 `ictl_unlock::Screen` 用同一套规则，每次读锁屏前先关 HID 会话（媒体流开着时锁屏对无障碍是空的）。无障碍会话归 `Tunnel`，空闲 60 秒关闭。
 
 要点（每一条都来自 toolkit 实际踩过的坑）：
 
@@ -135,7 +135,7 @@
 | `ictl-ui` | 界面元素树（纯函数，可单测）：读到的树 `Source`（`node.rs`：读写 WDA `/source` 的 XML；原生控制由 `ictl-ax` 直接拼成，不经 XML），由它算出留下的元素和谁盖住谁（`parse.rs`）、按文字找元素和点哪里（`query.rs`）、锁屏的键盘和密码栏（`lock.rs`）、竖屏坐标换算（`geometry.rs`）；屏幕尺寸 `ScreenSize` 和方向 `Rotation`（WDA 的 `/rotation`、`/orientation`，SpringBoard 和 HID 用的都是它，`ictl-device` 再导出） | `quick-xml`、`regex` |
 | `ictl-ax` | remoteAXService 的 DTX 会话：握手、读帧、按层读前台 App 和 SpringBoard 的元素，直接拼成和 WDA `/source` 一样的元素树（`node.rs`，`ictl_ui::Source`，iOS 27 及以上原生控制读界面用） | `idevice`、`plist`、`ictl-ui` |
 | `ictl-webinspector` | Web Inspector 服务（`com.apple.webinspector`，经 lockdown）的客户端：列出可检查的网页和 WebView、在页面里执行 JavaScript（`Target` 域和旧版直接收命令两种都支持，Promise 用 `Runtime.awaitPromise` 等待）。纯协议，消息解析可单测 | `idevice`、`plist` |
-| `ictl-l10n` | 界面文字的语言：取当前语言，`tr!` / `trf!` / `log_tr!` / `log_trf!` 宏（每条文字在代码里原地写成中英一对，见 D12） | 无 |
+| `ictl-l10n` | 界面文字的语言：取当前语言，`tr!` / `trf!` / `log_tr!` / `log_trf!` 宏，以及同时存着两种语言、显示时才选语言的 `Text`（`text!` / `textf!` 宏，每条文字在代码里原地写成中英一对，见 D12） | `tokio`（只开 `rt`） |
 | `ictl-protocol` | 控制接口的 `Request`/`Response` 类型和客户端 `call(socket, req, timeout)`、任务的流式请求；`Response::Text` 除了给人和 agent 看的文字，还可以带 `data`（状态、元素、App 列表、系统弹窗的结构化字段，给控制台这类程序用，文字措辞改了也不影响它们）；默认的数据目录、socket 路径和 root 判断 | `serde`、`serde_json`、`tokio`、`libc`、`ictl-l10n` |
 | `ictl-sign` | Apple ID 登录（含双重认证交互）、会话持久化、注册设备、App ID、描述文件、签名 `.app`/`.ipa`（**包括 `.xctest`**；bundle 逻辑改写自 plume_utils）、签后自检 | vendored 的 `plume_core`/`plume_store`（MPL-2.0/MIT；经 plume_core 用 vendored 的 `omnisette` 和打过补丁的 `apple-codesign`） |
 | `ictl-unlock` | 锁屏密码键盘定位、逐位输入并核对密码栏、从第 2 位起先写停用标记；要手机做的事是 `Screen` trait（自己的错误 `ScreenError` 和 `LockCheck`），WDA 的实现在 `wda.rs`，原生的在守护进程 | `ictl-ui`；`ictl-wda`（只有 `wda.rs`） |

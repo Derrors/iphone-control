@@ -120,7 +120,7 @@ fn automation_signal(msg: &str) -> Option<AutomationSignal> {
     }
 }
 
-/// 设备拒绝启动 runner（见 [`launch_hint`]）：还没信任开发者，或签 WDA 的证书已被吊销。守护进程据此判断要不要重签
+/// 设备拒绝启动 runner（见 `launch_hint`）：还没信任开发者，或签 WDA 的证书已被吊销。守护进程据此判断要不要重签
 pub fn launch_refused(msg: &str) -> bool {
     msg.contains("unexpected response")
 }

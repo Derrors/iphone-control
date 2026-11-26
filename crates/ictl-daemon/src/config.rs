@@ -12,7 +12,7 @@ pub struct Config {
     /// 固定要控制的手机（`IPHONE_UDID`）；None 时可以在运行中选（见 [`crate::core::Persisted::selected_udid`]）。
     /// 都没选是自动选：正在控制的那台一直用到断开，没有正在控制的才取 usbmuxd 列出的第一台
     pub udid: Option<String>,
-    /// 未签名的 WDA：默认是数据目录里的 [`Config::wda_unsigned_cache`]，第一次签名前下载
+    /// 未签名的 WDA：默认是数据目录里的 `wda_unsigned_cache`，第一次签名前下载
     pub wda_unsigned: PathBuf,
     pub ddi_url: String,
     /// 自己从 Xcode 提取的 DDI Restore 目录；设了就不下载，也从不删除里面的文件
@@ -170,7 +170,7 @@ impl Config {
         if legacy { self.ddi_cache().join("personalized") } else { self.ddi_cache() }
     }
     /// 旧版本的锁屏密码：只有一份，不知道是哪台设备的。USB 上只接着一台时归到那台名下（见
-    /// [`crate::core::Daemon::adopt_legacy_passcode`]），接着多台时不用，免得把一台的密码输进另一台
+    /// `crate::core::Daemon::adopt_legacy_passcode`），接着多台时不用，免得把一台的密码输进另一台
     pub fn legacy_passcode_file(&self) -> PathBuf {
         self.data_dir.join("secrets/passcode")
     }
@@ -196,7 +196,7 @@ impl Config {
     pub fn state_file(&self) -> PathBuf {
         self.data_dir.join("state.json")
     }
-    /// A marker per phone with a HID session open ([`crate::hidmark`])
+    /// A marker per phone with a HID session open (`crate::hidmark`)
     pub fn hid_marker_dir(&self) -> PathBuf {
         self.data_dir.join("hid-open")
     }

@@ -766,7 +766,7 @@ struct Gated {
 tokio::task_local! {
     /// A background check is being dispatched ([`ictl_protocol::BACKGROUND`]): it may be dropped halfway for an action
     /// and has no business with side effects such as restarting the phone's accessibility daemon
-    pub(crate) static BACKGROUND: bool;
+    static BACKGROUND: bool;
 }
 
 /// Whether the request being dispatched is a background check ([`BACKGROUND`])

@@ -1,6 +1,5 @@
 //! 在解析好的树里找：按文字找元素、点哪里、和上一次读的比
 
-use super::parse::EDITABLE;
 use super::*;
 
 impl Tree {
@@ -152,6 +151,9 @@ impl Element {
         s
     }
 }
+
+/// 输入框类元素
+const EDITABLE: [&str; 4] = ["TextField", "SearchField", "TextView", "SecureTextField"];
 
 /// 类型/标签/名字/值里包含 `text` 的元素（不区分大小写）。列元素时筛选用，可以按类型筛（如 `SearchField`）
 pub fn filter<'a>(elements: &'a [Element], text: &str) -> Vec<&'a Element> {

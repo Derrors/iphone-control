@@ -21,8 +21,6 @@ const MODALS: [&str; 4] = ["Keyboard", "Alert", "Sheet", "Popover"];
 /// 自成一组的层：组里的东西互相不算盖住（弹窗按钮后面排着弹窗自己的背景层）
 const GROUPS: [&str; 7] = ["Toolbar", "TabBar", "NavigationBar", "Keyboard", "Alert", "Sheet", "Popover"];
 
-/// 输入框类元素
-pub(super) const EDITABLE: [&str; 4] = ["TextField", "SearchField", "TextView", "SecureTextField"];
 /// 子元素的文字已经包含在它们的文字里时，子元素不再单列
 const CONTAINERS: [&str; 10] =
     ["Button", "Cell", "Link", "Icon", "MenuItem", "SearchField", "TextField", "Switch", "Tab", "Key"];

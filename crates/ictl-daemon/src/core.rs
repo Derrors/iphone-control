@@ -326,7 +326,7 @@ pub struct Daemon {
     waiting: std::sync::atomic::AtomicUsize,
     /// An action started waiting: a background check that runs gives the phone up
     give_way: tokio::sync::Notify,
-    /// When the last action was done: background checks wait for a quiet moment ([`quiet_before`])
+    /// When the last action was done: background checks wait for a quiet moment (`dispatch::quiet_before`)
     last_action: std::sync::Mutex<Option<Instant>>,
     /// Details of devices other than the controlled one, read in the background (a lockdown query can take up to
     /// 15 s, which the device lock shouldn't wait for); taken into [`Inner::infos`] at the next round

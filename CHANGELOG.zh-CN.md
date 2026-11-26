@@ -22,7 +22,7 @@
 
 ### 修复
 
-- 修复在真实浏览器里经控制台登录页表单（`POST /login`）提交令牌会返回 `403 forbidden` 的问题：登录页携带 `Referrer-Policy: no-referrer` 时浏览器在同源表单 POST 会发送 `Origin: null`。现在登录页改用 `Referrer-Policy: same-origin`（对跨站依然不发 `Referer`），其余响应照旧保持 `no-referrer`，且 `POST /login` 仅在同时带有 `Sec-Fetch-Site: same-origin` 时放行 `Origin: null`（#PR）。
+- 修复在真实浏览器里经控制台登录页表单（`POST /login`）提交令牌会返回 `403 forbidden` 的问题：登录页携带 `Referrer-Policy: no-referrer` 时浏览器在同源表单 POST 会发送 `Origin: null`。现在登录页改用 `Referrer-Policy: same-origin`（对跨站依然不发 `Referer`），其余响应照旧保持 `no-referrer`，且 `POST /login` 仅在同时带有 `Sec-Fetch-Site: same-origin` 时放行 `Origin: null`（#220）。
 - 单个 AI 任务的事件日志（`tasks/<id>.jsonl`）现在设有上限（16,384 条 / 16 MiB，满额后停写普通事件但始终保留 `task` 与终态 `done`）；订阅和慢消费者重追时不再在主循环里持锁同步读盘，改为拍下文件长度与序号后异步读精确前缀（#218）。
 - iOS 27 起：往网页输入框（Safari）输入文字可以用了：「允许粘贴」的提示不用读网页就能找到并点掉，网页在提示回答之前读不出来。以前在这里输入会失败，或者字进去了却报没输进去（#213）。
 - iOS 27 起：系统是任何语言都会点「允许粘贴」：按钮文字认不出时，点提示框两个按钮里的前一个（#213）。

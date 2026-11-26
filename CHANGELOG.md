@@ -22,7 +22,7 @@ What changed in each release, one line per change. Versions follow [Semantic Ver
 
 ### Fixes
 
-- Fixed submitting the control page's login form (`POST /login`) returning `403 forbidden` in real browsers: `Referrer-Policy: no-referrer` caused browsers to send `Origin: null` on same-origin form POSTs. The login page now sends `Referrer-Policy: same-origin` (still never leaking a `Referer` cross-origin) while all other responses keep `no-referrer`, and `POST /login` accepts `Origin: null` when accompanied by `Sec-Fetch-Site: same-origin` (#PR).
+- Fixed submitting the control page's login form (`POST /login`) returning `403 forbidden` in real browsers: `Referrer-Policy: no-referrer` caused browsers to send `Origin: null` on same-origin form POSTs. The login page now sends `Referrer-Policy: same-origin` (still never leaking a `Referer` cross-origin) while all other responses keep `no-referrer`, and `POST /login` accepts `Origin: null` when accompanied by `Sec-Fetch-Site: same-origin` (#220).
 - Task event logs (`tasks/<id>.jsonl`) are now bounded per task (16,384 events / 16 MiB, always keeping `task` and terminal `done`), and replaying them on subscribe or after broadcast lag now reads the exact file prefix asynchronously off the daemon's `LocalSet` without holding the task mutex (#218).
 - iOS 27+: typing into a web page's field (Safari) works: the paste prompt is found and answered without reading the page, which can't be read until it is answered. Before, typing there failed, or the text went in but was reported missing (#213).
 - iOS 27+: "Allow Paste" is tapped whatever the phone's language: when its text isn't known, the first of the prompt's two buttons (#213).

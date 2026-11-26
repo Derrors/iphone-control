@@ -742,7 +742,7 @@ struct Head {
     task_token: Option<String>,
     /// HTTP/1.0, or `Connection: close`: the client closes after the answer
     close: bool,
-    /// `Transfer-Encoding`: a body without a length, which this server reads only for `/mcp` ([`read_chunked`])
+    /// `Transfer-Encoding`: a body without a length, which this server reads only for `/mcp` (hyper decodes it)
     chunked: bool,
     /// … and it is just `chunked`
     transfer_chunked_only: bool,

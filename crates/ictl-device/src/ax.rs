@@ -22,7 +22,7 @@ const OVERLAY_BUDGET: Duration = Duration::from_secs(2);
 impl From<ictl_ax::AxError> for DeviceError {
     fn from(e: ictl_ax::AxError) -> Self {
         match e {
-            ictl_ax::AxError::Timeout(what) => Self::AxUnanswered(format!("remoteAXService: {what}")),
+            ictl_ax::AxError::Timeout(what) => Self::AxUnanswered(format!("remoteAXService: {what}").into()),
             other => Self::Idevice(other.to_string()),
         }
     }
@@ -88,21 +88,22 @@ impl Tunnel {
             let adapter = &mut self.adapter;
             let stream: Box<dyn ReadWrite> = Box::new(
                 limit(
-                    ictl_l10n::tr!("连接无障碍服务的端口", "connect to the accessibility service's port"),
+                    ictl_l10n::text!("连接无障碍服务的端口", "connect to the accessibility service's port"),
                     CONNECT_WAIT,
                     async { Ok(adapter.connect(port).await?) },
                 )
                 .await?,
             );
-            let s =
-                limit(ictl_l10n::tr!("连接无障碍服务", "connect to the accessibility service"), CONNECT_WAIT, async {
-                    Ok(AxSession::connect(stream, CONNECT_WAIT).await?)
-                })
-                .await
-                .map_err(|e| match e {
-                    DeviceError::Timeout(what) => DeviceError::AxUnanswered(what),
-                    e => e,
-                })?;
+            let s = limit(
+                ictl_l10n::text!("连接无障碍服务", "connect to the accessibility service"),
+                CONNECT_WAIT,
+                async { Ok(AxSession::connect(stream, CONNECT_WAIT).await?) },
+            )
+            .await
+            .map_err(|e| match e {
+                DeviceError::Timeout(what) => DeviceError::AxUnanswered(what),
+                e => e,
+            })?;
             self.ax = Some(s);
         }
         Ok(self.ax.as_ref().expect("just opened"))
@@ -254,7 +255,7 @@ impl Tunnel {
 /// service not answering ([`DeviceError::AxUnanswered`], read the same as before), which the daemon restarts it for.
 /// Not to be confused with the lock screen under the HID screen stream (#126), which reads one element, the app's
 fn nothing_read() -> DeviceError {
-    DeviceError::AxUnanswered(ictl_l10n::tr!("没有读到界面元素", "no screen elements read").into())
+    DeviceError::AxUnanswered(ictl_l10n::text!("没有读到界面元素", "no screen elements read"))
 }
 
 /// The frontmost app's element, asked again for up to `wait` while the phone has none (between two apps)
@@ -289,7 +290,10 @@ mod wedge_tests {
     #[test]
     fn an_unanswered_accessibility_service_is_told_apart_and_reads_as_a_timeout() {
         let e = DeviceError::from(ictl_ax::AxError::Timeout("deviceAPIVersion"));
-        assert!(matches!(&e, DeviceError::AxUnanswered(w) if w == "remoteAXService: deviceAPIVersion"), "{e:?}");
+        assert!(
+            matches!(&e, DeviceError::AxUnanswered(w) if w.to_string() == "remoteAXService: deviceAPIVersion"),
+            "{e:?}"
+        );
         assert_eq!(e.to_string(), DeviceError::Timeout("remoteAXService: deviceAPIVersion".into()).to_string());
     }
 
@@ -298,7 +302,7 @@ mod wedge_tests {
     fn an_app_read_with_no_elements_is_an_unanswered_accessibility_service() {
         let e = nothing_read();
         assert!(matches!(&e, DeviceError::AxUnanswered(_)), "{e:?}");
-        let before = DeviceError::Timeout(ictl_l10n::tr!("没有读到界面元素", "no screen elements read").into());
+        let before = DeviceError::Timeout(ictl_l10n::text!("没有读到界面元素", "no screen elements read"));
         assert_eq!(e.to_string(), before.to_string());
     }
 

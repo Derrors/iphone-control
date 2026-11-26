@@ -170,9 +170,93 @@ macro_rules! log_trf {
     };
 }
 
+/// A text in both languages, put into one when shown ([`std::fmt::Display`]: the language current then), not when
+/// made. For what a low-level error says: made while a request in one language is handled, it may be shown in another
+/// (the daemon's log, in its own language: [`log_trf!`]), where a text fixed in the request's language came out mixed
+/// («超时：read device info (15 s)»). Made with [`text!`] / [`textf!`]; a plain `String` or `&str` (an error from
+/// elsewhere, a name) is the same in both
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Text {
+    zh: std::borrow::Cow<'static, str>,
+    en: std::borrow::Cow<'static, str>,
+}
+
+impl Text {
+    pub const fn pair(zh: &'static str, en: &'static str) -> Self {
+        Self { zh: std::borrow::Cow::Borrowed(zh), en: std::borrow::Cow::Borrowed(en) }
+    }
+
+    pub fn owned(zh: String, en: String) -> Self {
+        Self { zh: zh.into(), en: en.into() }
+    }
+
+    /// In language `l`
+    pub fn get(&self, l: Lang) -> &str {
+        match l {
+            Lang::Zh => &self.zh,
+            Lang::En => &self.en,
+        }
+    }
+
+    /// This text, then a time limit: «建隧道（30 秒）» / «open the tunnel (30 s)»
+    pub fn with_secs(&self, secs: u64) -> Self {
+        Self::owned(format!("{}（{secs} 秒）", self.zh), format!("{} ({secs} s)", self.en))
+    }
+}
+
+impl std::fmt::Display for Text {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.get(lang()))
+    }
+}
+
+impl From<String> for Text {
+    fn from(s: String) -> Self {
+        Self { zh: s.clone().into(), en: s.into() }
+    }
+}
+
+impl From<&'static str> for Text {
+    fn from(s: &'static str) -> Self {
+        Self::pair(s, s)
+    }
+}
+
+/// A [`Text`] of fixed words: `text!("设备未连接", "Device not connected")`
+#[macro_export]
+macro_rules! text {
+    ($zh:literal, $en:literal $(,)?) => {
+        $crate::Text::pair($zh, $en)
+    };
+}
+
+/// A [`Text`] formatted in each language, as [`trf!`] does in one: the arguments are formatted in that language too
+/// (an error among them comes out in it), so they are evaluated once for each
+#[macro_export]
+macro_rules! textf {
+    ($zh:literal, $en:literal $(, $arg:expr)* $(,)?) => {
+        $crate::Text::owned(
+            $crate::with_lang($crate::Lang::Zh, || format!($zh $(, $arg)*)),
+            $crate::with_lang($crate::Lang::En, || format!($en $(, $arg)*)),
+        )
+    };
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A text is put into a language when shown, not when made: made while English was current, it still shows in
+    /// Chinese where Chinese is current (the daemon's log), arguments formatted in it included
+    #[test]
+    fn a_text_takes_the_language_it_is_shown_in() {
+        let inner = text!("读设备信息", "read device info");
+        let made = with_lang(Lang::En, || textf!("超时：{}", "Timed out: {}", inner.with_secs(15)));
+        assert_eq!(with_lang(Lang::Zh, || made.to_string()), "超时：读设备信息（15 秒）");
+        assert_eq!(with_lang(Lang::En, || made.to_string()), "Timed out: read device info (15 s)");
+        let plain: Text = "HID Delete".into();
+        assert_eq!(with_lang(Lang::Zh, || plain.to_string()), "HID Delete");
+    }
 
     #[test]
     fn parses_language_names() {

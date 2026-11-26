@@ -10,4 +10,9 @@ homepage.workspace = true
 description = "Language of user- and agent-facing text (Simplified Chinese or English), chosen by IPHONE_CONTROL_LANG"
 
 [dependencies]
-tokio.workspace = true
+# only `task_local!` (and the runtime under it): the workspace's tokio has every feature, which a crate everything
+# else depends on needn't pull in. Same version as the workspace's
+tokio = { version = "=1.54.1", default-features = false, features = ["rt"] }
+
+[dev-dependencies]
+tokio = { version = "=1.54.1", default-features = false, features = ["rt", "macros"] }

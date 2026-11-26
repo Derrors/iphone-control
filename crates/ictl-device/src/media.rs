@@ -346,7 +346,7 @@ pub(crate) async fn start(
         DeviceError::Idevice(ictl_l10n::trf!("媒体流 {what}：{e}", "media stream {what}: {e}"))
     };
 
-    let mut client = limit(ictl_l10n::tr!("连接 displayservice", "connect to displayservice"), STEP, async {
+    let mut client = limit(ictl_l10n::text!("连接 displayservice", "connect to displayservice"), STEP, async {
         DisplayServiceClient::connect_rsd(adapter, handshake)
             .await
             .map_err(|e| fail(ictl_l10n::tr!("连接 displayservice", "connect to displayservice"), &e))
@@ -399,7 +399,7 @@ pub(crate) async fn start(
         display_id,
         session,
     );
-    let started = limit(ictl_l10n::tr!("启动媒体流", "start the media stream"), STEP * 2, async {
+    let started = limit(ictl_l10n::text!("启动媒体流", "start the media stream"), STEP * 2, async {
         client
             .start_media_stream(audio_params)
             .await

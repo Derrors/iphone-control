@@ -43,7 +43,7 @@ impl<T: Transport> WdaClient<T> {
         // 设备会被占好几分钟，守护进程没机会重启 WDA）
         if let Some(reason) = self.stall_reason() {
             let why = reason.describe();
-            return Err(WdaError::Unavailable(ictl_l10n::trf!(
+            return Err(WdaError::Unavailable(ictl_l10n::textf!(
                 "WDA 卡死判定：{why}，等守护进程重启它",
                 "WDA is considered stuck: {why}; waiting for the daemon to restart it"
             )));
@@ -97,10 +97,10 @@ impl<T: Transport> WdaClient<T> {
     pub(super) async fn send(&self, method: &str, path: &str, body: Option<Value>, timeout: Duration) -> Result<Value> {
         let body = body.map(|b| b.to_string().into_bytes());
         let (status, raw) = self.transport.send(method, path, body, timeout).await.map_err(|e| match e.kind() {
-            std::io::ErrorKind::TimedOut => WdaError::Timeout(e.to_string()),
-            crate::http::WRITE_FAILED if acts(method, path) => WdaError::Write(e.to_string()),
-            crate::http::AFTER_SENT => WdaError::Interrupted(e.to_string()),
-            _ => WdaError::Unavailable(e.to_string()),
+            std::io::ErrorKind::TimedOut => WdaError::Timeout(e.to_string().into()),
+            crate::http::WRITE_FAILED if acts(method, path) => WdaError::Write(e.to_string().into()),
+            crate::http::AFTER_SENT => WdaError::Interrupted(e.to_string().into()),
+            _ => WdaError::Unavailable(e.to_string().into()),
         })?;
         let v: Value = match serde_json::from_slice(&raw) {
             Ok(v) => v,
@@ -108,7 +108,10 @@ impl<T: Transport> WdaClient<T> {
                 return Err(WdaError::Remote { kind: "http".into(), message: status.to_string() });
             }
             Err(e) => {
-                return Err(WdaError::Interrupted(ictl_l10n::trf!("响应不是 JSON：{e}", "response is not JSON: {e}")));
+                return Err(WdaError::Interrupted(ictl_l10n::textf!(
+                    "响应不是 JSON：{e}",
+                    "response is not JSON: {e}"
+                )));
             }
         };
         if let Some(err) = v.get("value").and_then(|x| x.get("error")).and_then(|e| e.as_str()) {
@@ -140,9 +143,10 @@ impl<T: Transport> WdaClient<T> {
             .and_then(|s| s.as_str())
             .or_else(|| r["value"].get("sessionId").and_then(|s| s.as_str()))
             .ok_or_else(|| {
-                WdaError::Unavailable(
-                    ictl_l10n::tr!("创建会话没有返回 sessionId", "creating a session returned no sessionId").into(),
-                )
+                WdaError::Unavailable(ictl_l10n::text!(
+                    "创建会话没有返回 sessionId",
+                    "creating a session returned no sessionId"
+                ))
             })?
             .to_owned();
         self.session = Some(id.clone());

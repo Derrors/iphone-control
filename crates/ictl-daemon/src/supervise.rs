@@ -815,7 +815,7 @@ impl Daemon {
                     ));
                 }
                 Err(e) => {
-                    return StartOutcome::Wda(WdaError::StartFailed(ictl_l10n::trf!(
+                    return StartOutcome::Wda(WdaError::StartFailed(ictl_l10n::textf!(
                         "后台启动 WDA 失败：{e}",
                         "Launching WDA in the background failed: {e}"
                     )));
@@ -841,7 +841,7 @@ impl Daemon {
         }
         let h = g.starting.take().expect("刚检查过");
         let outcome = h.await.unwrap_or_else(|e| {
-            StartOutcome::Wda(WdaError::StartFailed(ictl_l10n::trf!("启动任务异常：{e}", "Start task failed: {e}")))
+            StartOutcome::Wda(WdaError::StartFailed(ictl_l10n::textf!("启动任务异常：{e}", "Start task failed: {e}")))
         });
         // 后台启动被拒绝和 XCTest 会话启动被拒绝（unexpected response）走同一条路：记失败，查证书
         match outcome {
@@ -897,7 +897,7 @@ impl Daemon {
             failed @ (StartOutcome::Wda(_) | StartOutcome::Refused(_)) => {
                 // 后台启动被拒绝和 XCTest 会话启动被拒绝（unexpected response）走同一条路：记失败，查证书
                 let (e, refused_in_background) = match failed {
-                    StartOutcome::Refused(m) => (WdaError::StartFailed(m), true),
+                    StartOutcome::Refused(m) => (WdaError::StartFailed(m.into()), true),
                     StartOutcome::Wda(e) => (e, false),
                     _ => unreachable!("上面只匹配了这两种"),
                 };
@@ -906,7 +906,7 @@ impl Daemon {
                 self.forget_detached_here(g);
                 // StartFailed 自己就以「WDA 启动失败：」开头，日志和状态里再加一遍就重复了
                 let e = match e {
-                    WdaError::StartFailed(m) | WdaError::NotReadyInTime(m) => m,
+                    WdaError::StartFailed(m) | WdaError::NotReadyInTime(m) => m.to_string(),
                     e => e.to_string(),
                 };
                 self.log.log(&ictl_l10n::log_trf!("WDA 启动失败：{e}", "WDA failed to start: {e}"));

@@ -107,7 +107,7 @@ pub const TYPES: [&str; 83] = [
 pub fn kind(e: &Element) -> &'static str {
     let k = typed_kind(e);
     // the lock screen's passcode field reads as a plain text field here (typed or not); WDA calls it a secure one,
-    // which is what finds it when unlocking (`ictl_wda::elements::passcode_field`, `cover_sheet`)
+    // which is what finds it when unlocking (`ictl_ui::passcode_field`, `cover_sheet`)
     if k == "TextField" && is_passcode_field(e) { "SecureTextField" } else { k }
 }
 

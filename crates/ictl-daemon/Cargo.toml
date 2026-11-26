@@ -14,6 +14,7 @@ libc.workspace = true
 ictl-l10n.workspace = true
 ictl-webinspector.workspace = true
 ictl-ax.workspace = true
+ictl-ui.workspace = true
 ictl-device.workspace = true
 ictl-wda.workspace = true
 ictl-sign.workspace = true

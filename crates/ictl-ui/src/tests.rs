@@ -11,24 +11,24 @@ fn touch_id_prompt(xml: &str) -> bool {
 }
 
 const SCREEN: ScreenSize = ScreenSize { width: 430.0, height: 932.0 };
-const HOME: &str = include_str!("../../ictl-wda/tests/fixtures/home.xml");
-const LOCK: &str = include_str!("../../ictl-wda/tests/fixtures/lockscreen.xml");
-const LOCK_IOS27: &str = include_str!("../../ictl-wda/tests/fixtures/lockscreen-ios27.xml");
-const PIN_IOS27: &str = include_str!("../../ictl-wda/tests/fixtures/passcode-view-ios27.xml");
-const NC_IOS27: &str = include_str!("../../ictl-wda/tests/fixtures/notification-center-ios27.xml");
-const PARTIAL_IOS27: &str = include_str!("../../ictl-wda/tests/fixtures/passcode-partial-ios27.xml");
-const SETTINGS_IOS27: &str = include_str!("../../ictl-wda/tests/fixtures/settings-floating-search-ios27.xml");
-const HOME_WIDGETS_IOS27: &str = include_str!("../../ictl-wda/tests/fixtures/home-widgets-ios27.xml");
-const WALLET_IOS27: &str = include_str!("../../ictl-wda/tests/fixtures/settings-wallet-ios27.xml");
-const IPAD_TOUCHID: &str = include_str!("../../ictl-wda/tests/fixtures/ipad-touchid-landscape.xml");
+const HOME: &str = include_str!("../tests/fixtures/home.xml");
+const LOCK: &str = include_str!("../tests/fixtures/lockscreen.xml");
+const LOCK_IOS27: &str = include_str!("../tests/fixtures/lockscreen-ios27.xml");
+const PIN_IOS27: &str = include_str!("../tests/fixtures/passcode-view-ios27.xml");
+const NC_IOS27: &str = include_str!("../tests/fixtures/notification-center-ios27.xml");
+const PARTIAL_IOS27: &str = include_str!("../tests/fixtures/passcode-partial-ios27.xml");
+const SETTINGS_IOS27: &str = include_str!("../tests/fixtures/settings-floating-search-ios27.xml");
+const HOME_WIDGETS_IOS27: &str = include_str!("../tests/fixtures/home-widgets-ios27.xml");
+const WALLET_IOS27: &str = include_str!("../tests/fixtures/settings-wallet-ios27.xml");
+const IPAD_TOUCHID: &str = include_str!("../tests/fixtures/ipad-touchid-landscape.xml");
 /// iPhone 15, iOS 27.2, German: Clock → Stopwatch, with four scroll bars labelled "… Rollbalken"
-const CLOCK_DE_IOS27: &str = include_str!("../../ictl-wda/tests/fixtures/clock-stopwatch-de-ios27.xml");
-const IPAD_PIN: &str = include_str!("../../ictl-wda/tests/fixtures/ipad-passcode-landscape.xml");
-const IPAD_LOCK_P: &str = include_str!("../../ictl-wda/tests/fixtures/ipad-lockscreen-portrait.xml");
-const IPAD_TOUCHID_P: &str = include_str!("../../ictl-wda/tests/fixtures/ipad-touchid-portrait.xml");
-const IPAD_PIN_P: &str = include_str!("../../ictl-wda/tests/fixtures/ipad-passcode-portrait.xml");
-const IPAD_TOUCHID_LEFT: &str = include_str!("../../ictl-wda/tests/fixtures/ipad-touchid-landscape-home-left.xml");
-const IPAD_PIN_LEFT: &str = include_str!("../../ictl-wda/tests/fixtures/ipad-passcode-landscape-home-left.xml");
+const CLOCK_DE_IOS27: &str = include_str!("../tests/fixtures/clock-stopwatch-de-ios27.xml");
+const IPAD_PIN: &str = include_str!("../tests/fixtures/ipad-passcode-landscape.xml");
+const IPAD_LOCK_P: &str = include_str!("../tests/fixtures/ipad-lockscreen-portrait.xml");
+const IPAD_TOUCHID_P: &str = include_str!("../tests/fixtures/ipad-touchid-portrait.xml");
+const IPAD_PIN_P: &str = include_str!("../tests/fixtures/ipad-passcode-portrait.xml");
+const IPAD_TOUCHID_LEFT: &str = include_str!("../tests/fixtures/ipad-touchid-landscape-home-left.xml");
+const IPAD_PIN_LEFT: &str = include_str!("../tests/fixtures/ipad-passcode-landscape-home-left.xml");
 const IPAD_LAND: ScreenSize = ScreenSize { width: 1024.0, height: 768.0 };
 
 fn land(o: Option<Rotation>) -> View {
@@ -251,7 +251,7 @@ fn alert_buttons_are_not_covered_by_their_own_alert() {
 /// 它们不是盖在列表上的东西，侧栏里的「通用」要点得到
 #[test]
 fn ipad_floating_sidebar_rows_are_not_covered_by_sidebar_backdrop() {
-    let xml = include_str!("../../ictl-wda/tests/fixtures/ipad-settings-sidebar-landscape.xml");
+    let xml = include_str!("../tests/fixtures/ipad-settings-sidebar-landscape.xml");
     let tree = parse_tree(xml, IPAD_LAND);
     for text in ["通用", "电池", "辅助功能", "关于本机"] {
         let e = find(&tree.elements, text)[0];
@@ -319,7 +319,7 @@ fn web_contents_keep_screen_coordinates() {
 /// 也要像工具栏一样挡住下面的行。它吞掉输入框（866）往上 58 点以内的点击：806 还能进下面那一行，812 就不行
 #[test]
 fn a_native_floating_search_field_covers_the_rows_under_it() {
-    const XML: &str = include_str!("../../ictl-wda/tests/fixtures/settings-floating-search-native-ios27.xml");
+    const XML: &str = include_str!("../tests/fixtures/settings-floating-search-native-ios27.xml");
     let row = |t: &Tree, label: &str| t.elements.iter().find(|e| e.label == label).cloned().unwrap();
     let t = parse_tree(XML, SCREEN);
     // 766..818: clear of it, tapped at its center

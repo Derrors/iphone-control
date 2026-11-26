@@ -43,24 +43,24 @@ pub enum SignError {
     #[error("{}", ictl_l10n::tr!("账号下没有可用的开发团队", "The account has no usable development team"))]
     NoTeam,
     #[error("{}", ictl_l10n::trf!("签名失败：{0}", "Signing failed: {0}", .0))]
-    Codesign(String),
+    Codesign(ictl_l10n::Text),
     #[error("{}", ictl_l10n::trf!("开发者服务：{0}", "Developer services: {0}", .0))]
-    Developer(String),
+    Developer(ictl_l10n::Text),
     #[error("{}", ictl_l10n::trf!("签名结果检查不通过：{0}", "The signed result failed verification: {0}", .0))]
-    Verify(String),
+    Verify(ictl_l10n::Text),
     #[error("{0}")]
     Io(#[from] std::io::Error),
 }
 
 impl From<plume_core::Error> for SignError {
     fn from(e: plume_core::Error) -> Self {
-        Self::Developer(e.to_string())
+        Self::Developer(e.to_string().into())
     }
 }
 
 impl From<plume_core::AppleCodesignError> for SignError {
     fn from(e: plume_core::AppleCodesignError) -> Self {
-        Self::Codesign(e.to_string())
+        Self::Codesign(e.to_string().into())
     }
 }
 
@@ -98,12 +98,13 @@ impl AccountDir {
         restrict_dir(&self.dir)?;
         let (e, p) = (email.to_owned(), password.to_owned());
         let account = PlumeAccount::login(move || Ok((e.clone(), p.clone())), two_factor, self.anisette()).await?;
-        let mut store =
-            AccountStore::load(&Some(self.store_path())).await.map_err(|e| SignError::Developer(e.to_string()))?;
+        let mut store = AccountStore::load(&Some(self.store_path()))
+            .await
+            .map_err(|e| SignError::Developer(e.to_string().into()))?;
         store
             .accounts_add_from_session(email.to_owned(), account)
             .await
-            .map_err(|e| SignError::Developer(e.to_string()))?;
+            .map_err(|e| SignError::Developer(e.to_string().into()))?;
         // the session's tokens were just written with the default umask
         restrict_tree(&self.dir)?;
         Ok(email.to_owned())
@@ -123,8 +124,9 @@ impl AccountDir {
 
     /// 当前选中账号的邮箱
     pub async fn selected_email(&self) -> Result<String> {
-        let store =
-            AccountStore::load(&Some(self.store_path())).await.map_err(|e| SignError::Developer(e.to_string()))?;
+        let store = AccountStore::load(&Some(self.store_path()))
+            .await
+            .map_err(|e| SignError::Developer(e.to_string().into()))?;
         store.selected_account().map(|a| a.email().clone()).ok_or(SignError::NotLoggedIn)
     }
 
@@ -132,8 +134,9 @@ impl AccountDir {
     pub async fn session(&self) -> Result<Session> {
         restrict_dir(&self.dir)?;
         restrict_tree(&self.dir)?;
-        let store =
-            AccountStore::load(&Some(self.store_path())).await.map_err(|e| SignError::Developer(e.to_string()))?;
+        let store = AccountStore::load(&Some(self.store_path()))
+            .await
+            .map_err(|e| SignError::Developer(e.to_string().into()))?;
         let acct = store.selected_account().ok_or(SignError::NotLoggedIn)?.clone();
         let inner = DeveloperSession::new(acct.adsid().clone(), acct.xcode_gs_token().clone(), self.anisette())
             .await
@@ -200,14 +203,13 @@ impl Session {
     async fn sign_in(&self, work: &Path, input: &Path, output: &Path, udid: &str) -> Result<Signed> {
         let app = ipa::unpack(input, work)?;
         let bundles = bundle::collect_sorted(&app)?;
-        let main = bundles
-            .last()
-            .cloned()
-            .ok_or_else(|| SignError::Codesign(ictl_l10n::tr!("空的 .app", "empty .app").into()))?;
+        let main =
+            bundles.last().cloned().ok_or_else(|| SignError::Codesign(ictl_l10n::text!("空的 .app", "empty .app")))?;
         let orig = main.identifier().ok_or_else(|| {
-            SignError::Codesign(
-                ictl_l10n::tr!("主程序没有 CFBundleIdentifier", "the main executable has no CFBundleIdentifier").into(),
-            )
+            SignError::Codesign(ictl_l10n::text!(
+                "主程序没有 CFBundleIdentifier",
+                "the main executable has no CFBundleIdentifier"
+            ))
         })?;
         let team = &self.team_id;
         let new_id = if orig.ends_with(&format!(".{team}")) { orig.clone() } else { format!("{orig}.{team}") };
@@ -251,7 +253,7 @@ impl Session {
             let name = b.name().unwrap_or_else(|| id.clone());
             self.inner.qh_ensure_app_id(team, &name, &id).await?;
             let app_id = self.inner.qh_get_app_id(team, &id).await?.ok_or_else(|| {
-                SignError::Developer(ictl_l10n::trf!(
+                SignError::Developer(ictl_l10n::textf!(
                     "刚创建的 App ID {id} 查不到",
                     "The App ID {id} that was just created can't be found"
                 ))
@@ -307,40 +309,34 @@ pub fn verify_signed(app_dir: &Path, udid: &str, signing_cert: Option<&[u8]>) ->
             continue;
         }
         if !b.dir.join("_CodeSignature/CodeResources").is_file() {
-            return Err(SignError::Verify(ictl_l10n::trf!("{} 没有签名", "{} is not signed", b.dir.display())));
+            return Err(SignError::Verify(ictl_l10n::textf!("{} 没有签名", "{} is not signed", b.dir.display())));
         }
     }
     let p = Profile::load(&app_dir.join("embedded.mobileprovision")).ok_or_else(|| {
-        SignError::Verify(
-            ictl_l10n::tr!(
-                "主程序没有可解析的 embedded.mobileprovision",
-                "the main executable has no readable embedded.mobileprovision"
-            )
-            .into(),
-        )
+        SignError::Verify(ictl_l10n::text!(
+            "主程序没有可解析的 embedded.mobileprovision",
+            "the main executable has no readable embedded.mobileprovision"
+        ))
     })?;
     if !p.devices.iter().any(|d| d == udid) {
-        return Err(SignError::Verify(
-            ictl_l10n::tr!(
-                "描述文件里没有这台手机，先注册设备",
-                "this phone is not in the provisioning profile; register the device first"
-            )
-            .into(),
-        ));
+        return Err(SignError::Verify(ictl_l10n::text!(
+            "描述文件里没有这台手机，先注册设备",
+            "this phone is not in the provisioning profile; register the device first"
+        )));
     }
     if !p.get_task_allow {
-        return Err(SignError::Verify(
-            ictl_l10n::tr!(
-                "描述文件不带 get-task-allow，WDA 起不来",
-                "the provisioning profile lacks get-task-allow, WDA won't start"
-            )
-            .into(),
-        ));
+        return Err(SignError::Verify(ictl_l10n::text!(
+            "描述文件不带 get-task-allow，WDA 起不来",
+            "the provisioning profile lacks get-task-allow, WDA won't start"
+        )));
     }
     if let Some(der) = signing_cert
         && !p.certificates.iter().any(|c| c == der)
     {
-        return Err(SignError::Verify(ictl_l10n::tr!("描述文件里没有签名用的证书（证书在描述文件生成后才换过），手机会拒装", "the provisioning profile doesn't contain the signing certificate (the certificate changed after the profile was created); the phone would refuse to install it").into()));
+        return Err(SignError::Verify(ictl_l10n::text!(
+            "描述文件里没有签名用的证书（证书在描述文件生成后才换过），手机会拒装",
+            "the provisioning profile doesn't contain the signing certificate (the certificate changed after the profile was created); the phone would refuse to install it"
+        )));
     }
     Ok(p)
 }
@@ -470,7 +466,11 @@ mod tests {
         assert!(verify_signed(&app, "UDID-1", Some(b"CERT-A")).is_ok());
         assert!(verify_signed(&app, "UDID-2", None).unwrap_err().to_string().contains("没有这台手机"));
         // 描述文件生成后证书被换掉（本地无私钥时 plume 会吊销重建）
-        assert!(verify_signed(&app, "UDID-1", Some(b"CERT-B")).unwrap_err().to_string().contains("签名用的证书"));
+        let cert_err =
+            ictl_l10n::with_lang(ictl_l10n::Lang::Zh, || verify_signed(&app, "UDID-1", Some(b"CERT-B")).unwrap_err());
+        assert!(ictl_l10n::with_lang(ictl_l10n::Lang::Zh, || cert_err.to_string()).contains("签名用的证书"));
+        let en = ictl_l10n::with_lang(ictl_l10n::Lang::En, || cert_err.to_string());
+        assert!(en.contains("The signed result failed verification:") && en.contains("signing certificate"), "{en}");
         std::fs::remove_dir_all(root).unwrap();
     }
 

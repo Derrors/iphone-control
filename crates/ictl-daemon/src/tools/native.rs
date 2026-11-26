@@ -6,8 +6,8 @@
 //! The tools keep their WDA code; where WDA isn't there they come here when [`Daemon::native`] says so.
 
 use ictl_device::DeviceInfo;
+use ictl_ui::View;
 use ictl_unlock::{LockCheck, Screen, ScreenError, ScreenResult};
-use ictl_wda::elements::View;
 
 use super::*;
 use crate::config::IosBackend;

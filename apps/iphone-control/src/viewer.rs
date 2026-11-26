@@ -136,9 +136,10 @@ pub async fn run(
 ) -> anyhow::Result<()> {
     // only a first guess: the page follows whichever device the daemon controls (see `info`). Not knowing yet is
     // fine: the daemon may still be starting (started together with this at login), and with several devices
-    // connected it is the one that picks
-    let udid = match crate::client::target_device(socket, None).await {
-        Ok(d) => d.udid,
+    // connected it is the one that picks. Ask the daemon's snapshot only, never falling back to enumerating USB
+    // directly from the viewer
+    let udid = match crate::client::snapshot(socket).await {
+        Ok(s) => s.device.map(|d| d.udid).or(s.pinned).unwrap_or_default(),
         Err(e) => {
             eprintln!(
                 "{}",

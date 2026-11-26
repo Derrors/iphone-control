@@ -643,8 +643,8 @@ fn a_held_drag_holds_with_a_move_in_place() {
 
 #[tokio::test]
 async fn locked_checks_tree_until_unlocked_once_then_trusts_wda() {
-    let lock_xml = serde_json::to_string(include_str!("../../tests/fixtures/lockscreen-ios27.xml")).unwrap();
-    let home_xml = serde_json::to_string(include_str!("../../tests/fixtures/home.xml")).unwrap();
+    let lock_xml = serde_json::to_string(include_str!("../../../ictl-ui/tests/fixtures/lockscreen-ios27.xml")).unwrap();
+    let home_xml = serde_json::to_string(include_str!("../../../ictl-ui/tests/fixtures/home.xml")).unwrap();
     let sb = r#"{"value":{"bundleId":"com.apple.springboard"}}"#;
     let no = r#"{"value":false}"#;
     let (lock_src, home_src) = (format!(r#"{{"value":{lock_xml}}}"#), format!(r#"{{"value":{home_xml}}}"#));
@@ -675,8 +675,9 @@ async fn locked_checks_tree_until_unlocked_once_then_trusts_wda() {
 
 #[tokio::test]
 async fn notification_center_is_not_locked_even_if_wda_says_so() {
-    let nc = serde_json::to_string(include_str!("../../tests/fixtures/notification-center-ios27.xml")).unwrap();
-    let pin = serde_json::to_string(include_str!("../../tests/fixtures/passcode-view-ios27.xml")).unwrap();
+    let nc =
+        serde_json::to_string(include_str!("../../../ictl-ui/tests/fixtures/notification-center-ios27.xml")).unwrap();
+    let pin = serde_json::to_string(include_str!("../../../ictl-ui/tests/fixtures/passcode-view-ios27.xml")).unwrap();
     let sb = r#"{"value":{"bundleId":"com.apple.springboard"}}"#;
     let yes = r#"{"value":true}"#;
     let (nc, pin) = (format!(r#"{{"value":{nc}}}"#), format!(r#"{{"value":{pin}}}"#));

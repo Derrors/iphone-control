@@ -15,9 +15,9 @@ use base64::Engine;
 use ictl_device::{
     AppInfo, Button, ClipboardRestore, DeviceError, HidSession, Rotation, ScreenSize, apps, hid::ascii_to_usage,
 };
+use ictl_ui::{self as elements, TapPoint, Tree};
 use ictl_unlock::UnlockError;
 use ictl_wda::client::SPRINGBOARD;
-use ictl_wda::elements::{self, TapPoint, Tree};
 use ictl_wda::http::DeviceTransport;
 use ictl_wda::{Launch, WdaClient, WdaError};
 

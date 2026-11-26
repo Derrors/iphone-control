@@ -308,7 +308,7 @@ mod darwin {
         }
         let item = std::mem::size_of::<libc::pid_t>();
         let mut cap = (bytes as usize / item).saturating_add(64);
-        let mut pids = Vec::new();
+        let mut pids: Vec<libc::pid_t> = Vec::new();
         for _ in 0..3 {
             let buf_bytes = libc::c_int::try_from(cap.checked_mul(item)?).ok()?;
             pids.resize(cap, 0);
@@ -336,7 +336,7 @@ mod darwin {
         }
         let item = std::mem::size_of::<libc::proc_fdinfo>();
         let mut cap = (bytes as usize / item).saturating_add(16);
-        let mut fds = Vec::new();
+        let mut fds: Vec<libc::proc_fdinfo> = Vec::new();
         for _ in 0..3 {
             let buf_bytes = libc::c_int::try_from(cap.checked_mul(item)?).ok()?;
             // SAFETY: `libc::proc_fdinfo` is a plain C struct (`i32` + `u32`); all-zero is valid.

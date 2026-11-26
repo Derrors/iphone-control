@@ -22,9 +22,14 @@ use super::{AbortOnDrop, STREAM_IDLE, mjpeg};
 /// One JPEG frame
 pub type Frame = Arc<Vec<u8>>;
 
+/// A phone's place in the hub: its stream, locked while one is opened (pages opened at once share it)
+type Slot = Arc<tokio::sync::Mutex<Weak<Source>>>;
+
 /// The phones' shared MJPEG streams, by UDID
 pub struct MjpegHub {
-    sources: tokio::sync::Mutex<HashMap<String, Weak<Source>>>,
+    /// Held only to find a phone's slot: opening one phone's stream (up to [`STREAM_IDLE`] when it doesn't answer)
+    /// doesn't hold up another phone's pages
+    sources: std::sync::Mutex<HashMap<String, Slot>>,
     /// A stream that brings no frame for this long has stalled (WDA repeats even a still screen)
     idle: std::time::Duration,
 }
@@ -61,17 +66,22 @@ impl MjpegHub {
         F: FnOnce() -> Fut,
         Fut: Future<Output = anyhow::Result<S>>,
     {
-        // held while connecting: two pages opened at once share one stream
-        let mut sources = self.sources.lock().await;
-        sources.retain(|_, w| w.strong_count() > 0);
-        let live = sources.get(udid).and_then(Weak::upgrade).filter(|s| s.frames.has_changed().is_ok());
+        let slot = {
+            let mut sources = self.sources.lock().unwrap_or_else(|p| p.into_inner());
+            // phones nobody watches any more: a slot in use (locked) is kept
+            sources.retain(|_, slot| slot.try_lock().map_or(true, |w| w.strong_count() > 0));
+            sources.entry(udid.to_owned()).or_default().clone()
+        };
+        // held while connecting: two pages of this phone opened at once share one stream
+        let mut current = slot.lock().await;
+        let live = current.upgrade().filter(|s| s.frames.has_changed().is_ok());
         let source = match live {
             Some(s) => s,
             None => {
                 let src = connect().await?;
                 let (tx, rx) = watch::channel(None);
                 let s = Arc::new(Source { frames: rx, _reader: AbortOnDrop(tokio::spawn(pump(src, tx, self.idle))) });
-                sources.insert(udid.to_owned(), Arc::downgrade(&s));
+                *current = Arc::downgrade(&s);
                 s
             }
         };
@@ -83,7 +93,12 @@ impl MjpegHub {
     /// How many phones' streams are open (for tests)
     #[cfg(test)]
     async fn open(&self) -> usize {
-        self.sources.lock().await.values().filter(|w| w.strong_count() > 0).count()
+        let slots: Vec<Slot> = self.sources.lock().unwrap().values().cloned().collect();
+        let mut n = 0;
+        for s in slots {
+            n += usize::from(s.lock().await.strong_count() > 0);
+        }
+        n
     }
 }
 
@@ -122,6 +137,25 @@ mod tests {
 
     fn part(j: &[u8]) -> Vec<u8> {
         [format!("--wda\r\nContent-Length: {}\r\n\r\n", j.len()).as_bytes(), j, b"\r\n"].concat()
+    }
+
+    /// A phone whose stream doesn't open (WDA not answering) doesn't hold up another phone's pages: they used to wait
+    /// behind it, up to the 8 s a stream is waited for
+    #[tokio::test]
+    async fn one_phone_opening_slowly_doesnt_hold_up_another() {
+        let hub = Arc::new(MjpegHub::default());
+        let slow = {
+            let hub = hub.clone();
+            tokio::spawn(async move {
+                hub.subscribe("A", std::future::pending::<anyhow::Result<tokio::io::DuplexStream>>).await.map(|_| ())
+            })
+        };
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let (_phone, src) = tokio::io::duplex(64);
+        let other = tokio::time::timeout(Duration::from_secs(1), hub.subscribe("B", || async move { Ok(src) })).await;
+        assert!(other.is_ok_and(|r| r.is_ok()), "phone B's page waited for phone A");
+        assert!(!slow.is_finished(), "A still opening");
+        slow.abort();
     }
 
     /// Five pages on one phone open one stream; each gets the frame that is there when it comes; the stream closes

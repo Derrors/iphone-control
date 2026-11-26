@@ -149,21 +149,48 @@ pub(super) fn status_json(s: &protocol::StatusData, hid: bool) -> Value {
 }
 
 /// The display name of an installed app (the home screen for SpringBoard); the bundle id when unknown
+/// App names by bundle ID, and the IDs the app lists didn't have when last read ([`app_name`])
+#[derive(Default)]
+pub(super) struct AppNames {
+    known: HashMap<String, String>,
+    missed: HashMap<String, std::time::Instant>,
+}
+
+/// An ID not in the app lists is looked for again only this much later: a process that isn't an installed app (some
+/// of the system's) is in front for a while, and each status poll would read both lists again meanwhile
+const MISSED_FOR: std::time::Duration = std::time::Duration::from_secs(60);
+
+impl AppNames {
+    /// Whether the lists should be read for `bundle`
+    fn wants_lists(&self, bundle: &str, now: std::time::Instant) -> bool {
+        !self.known.contains_key(bundle)
+            && self.missed.get(bundle).is_none_or(|at| now.saturating_duration_since(*at) >= MISSED_FOR)
+    }
+}
+
 pub(super) async fn app_name(ctx: &Ctx, bundle: &str) -> String {
     if bundle == SPRINGBOARD {
         return ictl_l10n::tr!("主屏幕", "Home Screen").into();
     }
     let mut names = ctx.names.lock().await;
-    if !names.contains_key(bundle) {
+    let now = std::time::Instant::now();
+    if names.wants_lists(bundle, now) {
+        let mut read = false;
         for system in [false, true] {
             if let Ok(list) = list_apps(ctx, system).await {
-                for (n, b) in list {
-                    names.insert(b, n);
-                }
+                read = true;
+                names.known.extend(list.into_iter().map(|(n, b)| (b, n)));
             }
         }
+        // only when the lists were read: a daemon that didn't answer is asked again next time
+        if read && !names.known.contains_key(bundle) {
+            if names.missed.len() > 200 {
+                names.missed.clear();
+            }
+            names.missed.insert(bundle.to_owned(), now);
+        }
     }
-    names.get(bundle).cloned().unwrap_or_else(|| bundle.to_owned())
+    names.known.get(bundle).cloned().unwrap_or_else(|| bundle.to_owned())
 }
 
 pub(super) async fn list_apps(ctx: &Ctx, system: bool) -> Result<Vec<(String, String)>, String> {
@@ -250,4 +277,22 @@ pub(super) fn alert_parts(els: &[Value]) -> (Value, Vec<Value>) {
 /// a device, is used as is, like the daemon does)
 pub(super) fn screen_of(p: &ictl_daemon::core::Persisted, udid: &str) -> Option<ictl_device::ScreenSize> {
     p.screen_for(Some(udid)).map(|s| s.portrait())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// An ID the app lists didn't have is looked for again only after a minute; a known one never
+    #[test]
+    fn an_unknown_app_is_looked_for_again_only_after_a_while() {
+        let t0 = std::time::Instant::now();
+        let mut names = AppNames::default();
+        assert!(names.wants_lists("com.example.gone", t0));
+        names.missed.insert("com.example.gone".into(), t0);
+        assert!(!names.wants_lists("com.example.gone", t0 + std::time::Duration::from_secs(30)));
+        assert!(names.wants_lists("com.example.gone", t0 + MISSED_FOR));
+        names.known.insert("com.apple.Preferences".into(), "设置".into());
+        assert!(!names.wants_lists("com.apple.Preferences", t0));
+    }
 }

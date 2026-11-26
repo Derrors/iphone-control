@@ -283,7 +283,24 @@ impl Daemon {
             (from.0, to.0) = (x, x);
         }
         Box::pin(self.swipe(g, Stroke { from, to, seconds: SEARCH_SWIPE_SECONDS, hold: 0.0 }, None, false)).await?;
+        // the read that saw the list stop is the screen now: not read again (about 0.3 s a swipe, 8 to 15 a search)
+        if let Some(tree) = self.swiped(g).await {
+            g.elements_cache = Some((Instant::now(), tree.clone()));
+            g.dev.seen.saw_tree(&tree);
+            return Ok(tree);
+        }
         self.tree(g, Duration::ZERO).await
+    }
+
+    /// The tree read as the last swipe's list stopped, if still fresh ([`SWIPED_TREE_FRESH`]); taken. Under native
+    /// control that read was of the app alone: what SpringBoard shows over it (an alert) is read now
+    async fn swiped(&self, g: &mut Inner) -> Option<Tree> {
+        let fresh = |at: &Instant| at.elapsed() < SWIPED_TREE_FRESH;
+        if let Some((_, tree)) = g.swiped_tree.take().filter(|(at, _)| fresh(at)) {
+            return Some(tree);
+        }
+        let (_, snap) = g.swiped_snap.take().filter(|(at, _)| fresh(at))?;
+        Box::pin(self.with_overlays(g, snap)).await.ok()
     }
 
     pub(crate) async fn tap_element(
@@ -502,12 +519,14 @@ impl Daemon {
                 Ok(()) if watched => {
                     w.end_polling().await;
                     g.swiped_tree = None;
+                    g.swiped_snap = None;
                     return Ok(ictl_l10n::trf!("已滑动 {desc}", "Swiped {desc}"));
                 }
                 Ok(()) => {
                     let vertical = (to.1 - from.1).abs() >= (to.0 - from.0).abs();
                     let (note, tree) = wait_scrolled(w, vertical).await;
                     g.swiped_tree = tree.map(|t| (Instant::now(), t));
+                    g.swiped_snap = None;
                     return Ok(ictl_l10n::trf!("已滑动 {desc}{note}", "Swiped {desc}{note}"));
                 }
                 Err(WdaError::Unavailable(_)) if view.is_none() => {}
@@ -531,11 +550,14 @@ impl Daemon {
         }
         // as through WDA: a list still scrolling only stops at the next tap; someone watching sees when it stops
         g.swiped_tree = None;
+        g.swiped_snap = None;
         let note = if watched {
             String::new()
         } else {
             let vertical = (to.1 - from.1).abs() >= (to.0 - from.0).abs();
-            Box::pin(self.native_scrolled(g, vertical)).await
+            let (note, snap) = Box::pin(self.native_scrolled(g, vertical)).await;
+            g.swiped_snap = snap.map(|s| (Instant::now(), s));
+            note
         };
         Ok(ictl_l10n::trf!("已滑动 {desc}{note}", "Swiped {desc}{note}"))
     }

@@ -111,13 +111,27 @@ pub async fn ensure_cache(dir: &Path, base_url: &str, files: &[&str]) -> Result<
             .await
             .and_then(|r| r.error_for_status())
             .map_err(|e| DeviceError::Download(format!("{name}: {e}")))?;
-        let bytes = resp.bytes().await.map_err(|e| DeviceError::Download(format!("{name}: {e}")))?;
+        // written as it comes: the image is well over 100 MB, held whole in memory before
         let tmp = dir.join(format!(".{name}.part"));
-        tokio::fs::write(&tmp, &bytes).await?;
+        if let Err(e) = save_body(resp, &tmp, name).await {
+            let _ = tokio::fs::remove_file(&tmp).await;
+            return Err(e);
+        }
         tokio::fs::rename(&tmp, &dest).await?;
     }
     tokio::fs::write(dir.join(SOURCE_STAMP), base_url).await?;
     Ok(dir.to_owned())
+}
+
+/// Writes the body of `resp` to `to`, piece by piece
+async fn save_body(mut resp: reqwest::Response, to: &Path, name: &str) -> Result<()> {
+    use tokio::io::AsyncWriteExt;
+    let mut f = tokio::fs::File::create(to).await?;
+    while let Some(piece) = resp.chunk().await.map_err(|e| DeviceError::Download(format!("{name}: {e}")))? {
+        f.write_all(&piece).await?;
+    }
+    f.flush().await?;
+    Ok(())
 }
 
 #[cfg(test)]

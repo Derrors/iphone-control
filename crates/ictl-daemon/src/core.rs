@@ -576,6 +576,9 @@ pub(crate) struct Inner {
     pub elements_cache: Option<(Instant, ictl_wda::elements::Tree)>,
     /// 滑动等列表停下时最后读到的树（[`crate::tools`] 的 `settle` 拿来当比较的起点）
     pub swiped_tree: Option<(Instant, ictl_wda::elements::Tree)>,
+    /// The same under native control: the frontmost app's last read once the list stopped, without what SpringBoard
+    /// shows over it (that is read once by whoever uses it)
+    pub swiped_snap: Option<(Instant, ictl_device::ax::AxScreen)>,
     pub dedup: Dedup,
     /// 各设备最近一次因为证书自动重签的时间（按 UDID，换设备、重插也记着）：[`crate::supervise::CERT_HEAL_EVERY`] 内
     /// 不再自动重签同一台，免得重签也治不好时反复签
@@ -763,6 +766,7 @@ impl Daemon {
             low_bandwidth_viewers: 0,
             elements_cache: None,
             swiped_tree: None,
+            swiped_snap: None,
             dedup: Dedup::default(),
             cert_heals: HashMap::new(),
             own_cert: None,
@@ -929,6 +933,7 @@ impl Daemon {
         g.dev.display_verified_at = None;
         g.elements_cache = None;
         g.swiped_tree = None;
+        g.swiped_snap = None;
         drop_tunnel(g).await;
         g.wda_misses.reset();
     }

@@ -68,6 +68,22 @@ enum Pasted {
     Missing,
 }
 
+/// What a look at the field after pasting means: done with this outcome, or look again (None). `answered`: how long
+/// ago the paste prompt was answered; `late`: the time for pasting is up
+fn paste_outcome(seen: Pasted, answered: Option<Duration>, late: bool) -> Option<Pasted> {
+    let settled = answered.is_some_and(|t| t >= PASTE_SAME_SETTLE);
+    match seen {
+        Pasted::Typed | Pasted::Trimmed => Some(seen),
+        // only once the prompt was answered: before that, the paste hasn't gone in yet. A field that can't be read
+        // won't tell more by waiting (it used to be looked at for all of the 5 s, the phone held meanwhile)
+        Pasted::Unchanged | Pasted::Unreadable if settled => Some(seen),
+        // never asked: iOS asks for every paste of ours, so nothing may have been pasted at all
+        Pasted::Unchanged if late => Some(Pasted::Missing),
+        _ if late => Some(seen),
+        _ => None,
+    }
+}
+
 /// Compare only the original focused field's raw value, preserving whitespace. Whitespace the field changed (a
 /// single-line field turns a pasted newline into a space) makes it [`Pasted::Trimmed`], not missing
 fn paste_seen(now: Option<&str>, old: &str, wanted: &str) -> Pasted {
@@ -372,12 +388,22 @@ impl Daemon {
     /// row are alike and nothing is loading, at most `max`. The first read waits a moment after the action (the
     /// app's reaction, a page's slide in), or two reads of the old screen would count as settled. The reads meanwhile
     /// are of the app alone; what SpringBoard shows over it is read once, for the tree returned
-    pub(crate) async fn native_settle(&self, g: &mut Inner, max: Duration) -> crate::error::Result<(String, Tree)> {
+    /// `seed`: the read that just saw a swiped list stop, taken as the first one (it still has to be read the same
+    /// again to count as settled)
+    pub(crate) async fn native_settle(
+        &self,
+        g: &mut Inner,
+        max: Duration,
+        seed: Option<ictl_device::ax::AxScreen>,
+    ) -> crate::error::Result<(String, Tree)> {
         let t0 = Instant::now();
         if let Some(left) = g.dev.acted_at.and_then(|t| REACT.checked_sub(t.elapsed())) {
             tokio::time::sleep(left).await;
         }
-        let mut snap = self.ax_snapshot(g, AX_WAIT, false).await?;
+        let mut snap = match seed {
+            Some(s) => s,
+            None => self.ax_snapshot(g, AX_WAIT, false).await?,
+        };
         let mut prev = self.snapshot_tree(g, &snap).await?;
         if prev.elements.len() < VISUAL_SETTLE_BELOW {
             // between two pages (a slide in or back) the tree can be nearly empty for a moment: once more. Few
@@ -431,30 +457,41 @@ impl Daemon {
     }
 
     /// `s`, a read of the app alone, with what SpringBoard shows over it, as a tree
-    async fn with_overlays(&self, g: &mut Inner, mut s: ictl_device::ax::AxScreen) -> crate::error::Result<Tree> {
+    pub(super) async fn with_overlays(
+        &self,
+        g: &mut Inner,
+        mut s: ictl_device::ax::AxScreen,
+    ) -> crate::error::Result<Tree> {
         if let Some(t) = g.tunnel.as_mut() {
             (s.overlays, s.overlays_complete) = t.ax_overlays(s.app_pid).await;
         }
         self.snapshot_tree(g, &s).await
     }
 
-    /// The frontmost app's elements alone ([`Self::ax_read_with`])
-    async fn ax_tree_app(&self, g: &mut Inner) -> crate::error::Result<Tree> {
-        let (xml, size, _) = self.ax_read_with(g, AX_WAIT, false).await?;
-        Ok(elements::parse_tree(&xml, size))
+    /// The frontmost app's elements alone, as a read and as a tree
+    async fn ax_app_read(&self, g: &mut Inner) -> crate::error::Result<(ictl_device::ax::AxScreen, Tree)> {
+        let s = self.ax_snapshot(g, AX_WAIT, false).await?;
+        let (xml, size, _) = self.ax_render(g, &s).await?;
+        Ok((s, elements::parse_tree(&xml, size)))
     }
 
     /// After a swipe, waits for the list to stop (at most [`SCROLL_SETTLE`]): two reads in a row with the elements
     /// in the same place along the swipe. Says when it was still moving; a screen with few elements isn't waited for
-    pub(crate) async fn native_scrolled(&self, g: &mut Inner, vertical: bool) -> String {
+    /// Also returns the read that saw it stop (or the one with few elements), for the next look at the screen
+    /// ([`crate::core::Inner::swiped_snap`]); none when it was still moving
+    pub(crate) async fn native_scrolled(
+        &self,
+        g: &mut Inner,
+        vertical: bool,
+    ) -> (String, Option<ictl_device::ax::AxScreen>) {
         let t0 = Instant::now();
 
-        let Ok(mut prev) = self.ax_tree_app(g).await else { return String::new() };
+        let Ok((snap, mut prev)) = self.ax_app_read(g).await else { return (String::new(), None) };
         if prev.elements.len() < VISUAL_SETTLE_BELOW {
-            return String::new();
+            return (String::new(), Some(snap));
         }
         while t0.elapsed() < SCROLL_SETTLE {
-            let Ok(cur) = self.ax_tree_app(g).await else { return String::new() };
+            let Ok((snap, cur)) = self.ax_app_read(g).await else { return (String::new(), None) };
             let still = cur.still_along_common(&prev, vertical, STILL_TOLERANCE);
             tracing::debug!(
                 "scroll wait at {:.2} s: {} then {} elements, still: {still}",
@@ -463,15 +500,16 @@ impl Daemon {
                 cur.elements.len()
             );
             if still {
-                return String::new();
+                return (String::new(), Some(snap));
             }
             prev = cur;
         }
-        ictl_l10n::trf!(
+        let note = ictl_l10n::trf!(
             "({:.1} 秒后列表还在动,可能还在滚动)",
             " (the list was still moving after {:.1} s, it may still be scrolling)",
             SCROLL_SETTLE.as_secs_f64()
-        )
+        );
+        (note, None)
     }
 
     /// Text appearing on screen, natively: the tree read again every 0.3 s
@@ -850,14 +888,8 @@ impl Daemon {
                     PasteTarget::Append(None) => Pasted::Unreadable,
                     PasteTarget::Replace(object) => replacement_seen(&screen, object, text),
                 };
-                match seen {
-                    Pasted::Typed | Pasted::Trimmed => break seen,
-                    // only once the prompt was answered: before that, the paste hasn't gone in yet
-                    Pasted::Unchanged if answered.is_some_and(|t| t.elapsed() >= PASTE_SAME_SETTLE) => break seen,
-                    // never asked: iOS asks for every paste of ours, so nothing may have been pasted at all
-                    Pasted::Unchanged if Instant::now() >= deadline => break Pasted::Missing,
-                    _ if Instant::now() >= deadline => break seen,
-                    _ => {}
+                if let Some(done) = paste_outcome(seen, answered.map(|t| t.elapsed()), Instant::now() >= deadline) {
+                    break done;
                 }
                 tokio::time::sleep(Duration::from_millis(250)).await;
             };
@@ -1147,6 +1179,22 @@ fn tunnel_timed_out<T>(r: &ictl_device::Result<T>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A field that can't be read (a password, a web page's) is done with once the paste prompt was answered and
+    /// had a moment, not looked at until the time is up; before the answer the paste hasn't gone in yet
+    #[test]
+    fn an_unreadable_field_is_done_once_the_prompt_was_answered() {
+        let ms = Duration::from_millis;
+        assert_eq!(paste_outcome(Pasted::Unreadable, None, false), None, "not asked yet");
+        assert_eq!(paste_outcome(Pasted::Unreadable, Some(ms(300)), false), None, "just answered");
+        assert_eq!(paste_outcome(Pasted::Unreadable, Some(PASTE_SAME_SETTLE), false), Some(Pasted::Unreadable));
+        assert_eq!(paste_outcome(Pasted::Unreadable, None, true), Some(Pasted::Unreadable), "never asked: at the end");
+        assert_eq!(paste_outcome(Pasted::Unchanged, None, true), Some(Pasted::Missing));
+        assert_eq!(paste_outcome(Pasted::Unchanged, Some(PASTE_SAME_SETTLE), false), Some(Pasted::Unchanged));
+        assert_eq!(paste_outcome(Pasted::Typed, None, false), Some(Pasted::Typed));
+        assert_eq!(paste_outcome(Pasted::Missing, Some(PASTE_SAME_SETTLE), false), None, "keeps looking");
+        assert_eq!(paste_outcome(Pasted::Missing, Some(PASTE_SAME_SETTLE), true), Some(Pasted::Missing));
+    }
 
     /// Only a time-out in the tunnel itself drops it; the accessibility daemon's is restarted instead
     #[test]

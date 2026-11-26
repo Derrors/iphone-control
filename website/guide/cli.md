@@ -48,7 +48,7 @@ Zsh 在 `~/.zshrc` 的 `compinit` 之前添加 `fpath=(~/.zsh/completions $fpath
 
 | 安装方式 | 运行 `iphone-control update` 后 |
 | --- | --- |
-| 签名安装脚本部署的受管用户服务 | 验证发布者签名后安装，重启服务并检查健康状态；新版本 60 秒内起不来就自动换回旧版本。先关闭 Viewer 和其他直连设备的客户端；MCP 服务只在工具调用期间占用，空闲时不用关，升级后下一次调用自动连上新的守护进程。通过 `--version` 固定版本的安装，须先显式运行 `iphone-control update unpin` 才能升级。 |
+| 签名安装脚本部署的受管用户服务 | 验证发布者签名后安装，重启服务并检查健康状态；新版本 60 秒内起不来就自动换回旧版本。先等 AI 任务做完，关掉在终端里手动开的 `viewer`、`wda-bridge` 等直连设备的客户端；作为后台服务运行的 Viewer 会在升级时自动停下、升级后再启动；MCP 服务只在工具调用期间占用，空闲时不用关，升级后下一次调用自动连上新的守护进程。通过 `--version` 固定版本的安装，须先显式运行 `iphone-control update unpin` 才能升级。 |
 | Homebrew | 通过该安装绑定的 tap 运行 Homebrew 升级，以 tap 提供的版本为准。`brew services` 在运行的话，升级后重启它。 |
 | Debian / Ubuntu 软件包 | 下载同一发布者提供的、匹配目标版本和主机架构的 `.deb`，验证发布者对它的签名后，用 `sudo` 交给 apt 安装（会询问密码）。deb 带的 systemd 用户服务在运行的话，升级后重启它。用 `apt-mark hold` 锁定了的不会升级，先 `sudo apt-mark unhold iphone-control`。 |
 | 源码安装、没有受管服务的脚本安装或无法识别的安装 | 显示适用的手动升级指引。未绑定发布者的开发构建在本地给出说明。 |
@@ -61,7 +61,7 @@ Viewer 要用令牌登录（见下面的 `viewer`）。持有令牌的人（只�
 
 受管服务默认只做后台检查。`update apply` 不询问直接安装（受管服务），替换意外中断后用 `update recover`。没有回退到上一版的命令：要换回旧版本，先用发行页的安装脚本加 `--uninstall` 卸载（设置和设备数据保留），再加 `--version vX.Y.Z` 安装那个版本。如果正在使用 0.2.2 的 CLI，先运行 `iphone-control update check` 并按该版本显示的命令升级。新版 CLI 才支持直接运行 `iphone-control update`。
 
-主动运行 `iphone-control update policy auto-patch` 后，服务只在空闲时自动安装兼容补丁。Viewer 和直连设备的客户端要先退出，暂停的任务也视为占用；空闲的 MCP 服务不挡升级，正在执行的工具调用结束后才会升级。新 daemon 健康检查失败会恢复旧程序，失败版本须手动重试。`update policy notify` 改回仅检查，`update policy manual` 移除定时任务。
+主动运行 `iphone-control update policy auto-patch` 后，服务只在空闲时自动安装兼容补丁。有 AI 任务在进行时（暂停的也算）不升级，手动开着的 `viewer`、`wda-bridge` 等直连设备的客户端也要先退出；作为后台服务运行的 Viewer 会被自动停下、升级后再启动；空闲的 MCP 服务不挡升级，正在执行的工具调用结束后才会升级。新 daemon 健康检查失败会恢复旧程序，失败版本须手动重试。`update policy notify` 改回仅检查，`update policy manual` 移除定时任务。
 
 如果新程序无法启动，直接用安装目录中的备份：`<prefix>/bin/.iphone-control-update/recovery update recover`。自定义 socket 时，在 `update` 之前加 `--socket <路径>`。
 

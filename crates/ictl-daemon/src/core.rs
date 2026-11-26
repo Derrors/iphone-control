@@ -625,6 +625,9 @@ pub struct Daemon {
     give_way: tokio::sync::Notify,
     /// When the last action was done: background checks wait for a quiet moment ([`quiet_before`])
     last_action: std::sync::Mutex<Option<Instant>>,
+    /// Details of devices other than the controlled one, read in the background (a lockdown query can take up to
+    /// 15 s, which the device lock shouldn't wait for); taken into [`Inner::infos`] at the next round
+    pub(crate) probed: crate::devices::Probed,
     /// The interface rotation (degrees) for the pages watching the screen video, sampled once for all of them
     /// while any watches (see [`crate::screen`])
     pub(crate) rotation: watch::Sender<Option<u32>>,
@@ -821,6 +824,7 @@ impl Daemon {
             waiting: std::sync::atomic::AtomicUsize::new(0),
             give_way: tokio::sync::Notify::new(),
             last_action: std::sync::Mutex::new(None),
+            probed: Default::default(),
             rotation: watch::channel(None).0,
             rotation_sampling: std::sync::atomic::AtomicBool::new(false),
         })
@@ -1368,6 +1372,71 @@ impl Daemon {
                 // install_app clears the app lists itself once installed
                 return text(self.install_app(&device, &path).await);
             }
+            // the checks of this machine first, without the device lock; then the phone's, with it
+            Lane::Doctor => {
+                let host = self.doctor_host().await;
+                let mut g =
+                    match self.lock_admitted(&self.inner, &req, admission, &mut queued_at, &mut ctx.gone, true).await {
+                        Ok(g) => g,
+                        Err(r) => return r.with_failure(Delivery::NotSent, FailureStage::Preflight),
+                    };
+                let g = &mut *g;
+                if let Err(r) = admit(&req, queued_at, &ctx, g.device.as_ref().map(|d| d.udid.as_str())) {
+                    return r.with_failure(Delivery::NotSent, FailureStage::Preflight);
+                }
+                return Response::text(self.doctor(g, host).await);
+            }
+            // lockdown services of their own (crash reports, uninstalling): taking seconds, they don't hold the
+            // device lock, which taps and reads wait for; like installs
+            Lane::Apart => {
+                if ctx.gone.as_mut().is_some_and(|g| g.try_recv().is_ok()) {
+                    return cancelled();
+                }
+                loop {
+                    match self.tasks.still(admission, &req) {
+                        crate::tasks::Still::Admitted => break,
+                        crate::tasks::Still::Refused(r) => return r,
+                        crate::tasks::Still::Wait(t) => {
+                            if let Err(r) = t.wait_running(&mut ctx.gone).await {
+                                return r;
+                            }
+                            queued_at = Instant::now();
+                        }
+                    }
+                }
+                let mut g = self.inner.lock().await;
+                if let Err(r) = admit(&req, queued_at, &ctx, g.device.as_ref().map(|d| d.udid.as_str())) {
+                    return r.with_failure(Delivery::NotSent, FailureStage::Preflight);
+                }
+                let Some(device) = g.device.clone() else {
+                    return Response::error(ictl_l10n::tr!("手机未连接", "Phone not connected"));
+                };
+                return match req {
+                    Request::CrashReports { filter, name } => {
+                        drop(g);
+                        text(self.crash_reports(&device, &filter, &name).await)
+                    }
+                    Request::UninstallApp { app } => {
+                        // which app: from the lists, with the lock (they are cached there)
+                        let bid = match self.uninstall_target_of(&mut g, &app).await {
+                            Ok(b) => b,
+                            Err(e) => return text(Err(e)),
+                        };
+                        drop(g);
+                        let r = device.uninstall(&bid).await;
+                        // an action on the phone: what was read of the screen and the apps is out of date
+                        let mut g = self.inner.lock().await;
+                        g.dev.apps.clear();
+                        g.elements_cache = None;
+                        g.swiped_tree = None;
+                        g.swiped_snap = None;
+                        drop(g);
+                        *self.last_action.lock().unwrap_or_else(|p| p.into_inner()) = Some(Instant::now());
+                        text(r.map(|()| ictl_l10n::trf!("已卸载 {bid}", "Uninstalled {bid}")).map_err(Into::into))
+                    }
+                    _ => unreachable!("lane"),
+                };
+            }
             Lane::Device => {}
         }
 
@@ -1567,7 +1636,6 @@ impl Daemon {
             Request::WaitForDisappearance { ref text, timeout_ms } => {
                 self.wait_for(g, text, Duration::from_millis(timeout_ms), true, &mut || may_continue(&req)).await
             }
-            Request::Doctor => Ok(self.doctor(g).await),
             Request::UnlockReset => {
                 let _ = std::fs::remove_file(self.cfg.unlock_disabled_flag());
                 g.dedup.clear("unlock");
@@ -1578,11 +1646,12 @@ impl Daemon {
             Request::AppLogs { process, grep, since_secs, limit, errors_only } => {
                 self.app_logs(g, &process, &grep, Duration::from_secs(since_secs), limit, errors_only).await
             }
-            Request::CrashReports { filter, name } => self.crash_reports(g, &filter, &name).await,
-            Request::UninstallApp { app } => self.uninstall_app(g, &app).await,
             Request::Daemon
             | Request::Resign { .. }
             | Request::InstallApp { .. }
+            | Request::Doctor
+            | Request::CrashReports { .. }
+            | Request::UninstallApp { .. }
             | Request::WebTargets
             | Request::WebEval { .. }
             | Request::TaskOpen { .. }
@@ -1622,6 +1691,10 @@ enum Lane {
     Web,
     /// no device lock; installs queue among themselves
     Install,
+    /// `doctor`: this machine's checks without the device lock, the phone's with it
+    Doctor,
+    /// lockdown services of their own (crash reports, uninstalling), without the device lock
+    Apart,
     /// the device lock
     Device,
     /// tasks: the streams are served by the connection (`lib::serve_conn`), the rest before any lane
@@ -1634,6 +1707,8 @@ fn lane(req: &Request) -> Lane {
         Request::Resign { .. } => Lane::Resign,
         Request::WebTargets | Request::WebEval { .. } => Lane::Web,
         Request::InstallApp { .. } => Lane::Install,
+        Request::Doctor => Lane::Doctor,
+        Request::CrashReports { .. } | Request::UninstallApp { .. } => Lane::Apart,
         Request::TaskOpen { .. }
         | Request::TaskEvents { .. }
         | Request::TaskList
@@ -1668,13 +1743,10 @@ fn lane(req: &Request) -> Lane {
         | Request::AlertCheck
         | Request::WaitFor { .. }
         | Request::WaitForDisappearance { .. }
-        | Request::Doctor
         | Request::UnlockReset
         | Request::ListDevices
         | Request::SelectDevice { .. }
-        | Request::AppLogs { .. }
-        | Request::CrashReports { .. }
-        | Request::UninstallApp { .. } => Lane::Device,
+        | Request::AppLogs { .. } => Lane::Device,
     }
 }
 
@@ -1921,6 +1993,25 @@ fn check_request(req: &Request) -> Result<(), String> {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+
+    /// What takes seconds without needing the device lock doesn't hold it: `doctor` checks this machine before
+    /// taking it, crash reports and uninstalling (lockdown services of their own) don't take it at all
+    #[test]
+    fn slow_checks_and_lockdown_tools_dont_hold_the_device_lock() {
+        assert!(matches!(lane(&Request::Doctor), Lane::Doctor));
+        assert!(matches!(lane(&Request::CrashReports { filter: String::new(), name: String::new() }), Lane::Apart));
+        assert!(matches!(lane(&Request::UninstallApp { app: "x".into() }), Lane::Apart));
+        assert!(matches!(
+            lane(&Request::AppLogs {
+                process: String::new(),
+                grep: String::new(),
+                since_secs: 10,
+                limit: 10,
+                errors_only: false
+            }),
+            Lane::Device
+        ));
+    }
 
     /// What a process is, is known for a while, then asked again: by then its number may be another process's
     #[test]

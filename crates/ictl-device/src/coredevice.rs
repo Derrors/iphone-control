@@ -59,7 +59,7 @@ impl Tunnel {
     /// Launches an app in front (a running one comes to the front without restarting), with `url` for it to open;
     /// returns its process. SpringBoard refuses while the phone is locked
     pub async fn launch_foreground(&mut self, bundle_id: &str, url: Option<&str>) -> Result<u64> {
-        limit(ictl_l10n::tr!("启动 App", "launch the app"), Duration::from_secs(30), async {
+        limit(ictl_l10n::text!("启动 App", "launch the app"), Duration::from_secs(30), async {
             let mut c = AppService::connect_rsd(&mut self.adapter, &mut self.handshake).await?;
             let res =
                 c.0.invoke_with_plist("com.apple.coredevice.feature.launchapplication", launch_request(bundle_id, url))
@@ -77,7 +77,7 @@ impl Tunnel {
 
     /// Sends `pid` a signal (9 ends it) through CoreDevice AppService
     pub async fn signal(&mut self, pid: u64, signal: u32) -> Result<()> {
-        limit(ictl_l10n::tr!("结束进程", "end a process"), Duration::from_secs(20), async {
+        limit(ictl_l10n::text!("结束进程", "end a process"), Duration::from_secs(20), async {
             let mut c = AppServiceClient::connect_rsd(&mut self.adapter, &mut self.handshake).await?;
             c.send_signal(pid as u32, signal).await?;
             Ok(())
@@ -91,7 +91,7 @@ impl Device {
     /// developer disk image doesn't implement CoreDevice's lock state). A phone without a passcode never reads as
     /// locked
     pub async fn passcode_locked(&self) -> Result<bool> {
-        limit(ictl_l10n::tr!("查锁屏状态", "check the lock state"), Duration::from_secs(5), async {
+        limit(ictl_l10n::text!("查锁屏状态", "check the lock state"), Duration::from_secs(5), async {
             let mut lockdown = LockdownClient::connect(&*self.provider).await?;
             // asked without a session, lockdown answers "this request was prohibited"
             let pairing = idevice::provider::IdeviceProvider::get_pairing_file(&*self.provider).await?;

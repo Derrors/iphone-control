@@ -57,7 +57,7 @@ const MAX_GESTURE: f64 = 60.0;
 /// `Duration::from_secs_f64` 遇到它会 panic
 fn gesture_time(seconds: f64) -> Result<Duration> {
     if !seconds.is_finite() {
-        return Err(DeviceError::InvalidInput(ictl_l10n::trf!(
+        return Err(DeviceError::InvalidInput(ictl_l10n::textf!(
             "手势时长不是有效的数：{seconds}",
             "The gesture's duration isn't a valid number: {seconds}"
         )));
@@ -68,7 +68,7 @@ fn gesture_time(seconds: f64) -> Result<Duration> {
 /// 界面上的点 → HID 归一化坐标。不是有限数的坐标、量不出的屏幕尺寸不换算：`NaN` 会悄悄变成 (0,0)，点到左上角
 fn map_point(p: (f64, f64), screen: ScreenSize, rotation: Rotation) -> Result<(u16, u16)> {
     if !(p.0.is_finite() && p.1.is_finite()) {
-        return Err(DeviceError::InvalidInput(ictl_l10n::trf!(
+        return Err(DeviceError::InvalidInput(ictl_l10n::textf!(
             "坐标不是有效的数：({}, {})",
             "The point isn't a valid number: ({}, {})",
             p.0,
@@ -76,10 +76,10 @@ fn map_point(p: (f64, f64), screen: ScreenSize, rotation: Rotation) -> Result<(u
         )));
     }
     if !(screen.width.is_finite() && screen.height.is_finite() && screen.width > 0.0 && screen.height > 0.0) {
-        return Err(DeviceError::InvalidInput(
-            ictl_l10n::tr!("屏幕尺寸未知，没法换算坐标", "The screen size is unknown, so the point can't be mapped")
-                .into(),
-        ));
+        return Err(DeviceError::InvalidInput(ictl_l10n::text!(
+            "屏幕尺寸未知，没法换算坐标",
+            "The screen size is unknown, so the point can't be mapped"
+        )));
     }
     let (x, y) = rotation.to_portrait(p, screen);
     Ok(to_hid(x, y, screen))
@@ -166,7 +166,7 @@ impl HidSession {
         let stream = crate::media::start(adapter, handshake, 1, max_bitrate).await?;
         // 时限加在这里而不是外层：外层取消会直接丢掉媒体流，走不到下面的 stop
         let clients =
-            limit(ictl_l10n::tr!("连接 HID 服务", "connect to the HID service"), Duration::from_secs(20), async {
+            limit(ictl_l10n::text!("连接 HID 服务", "connect to the HID service"), Duration::from_secs(20), async {
                 // backboardd 要一点时间把 HID 设备和刚授权的媒体流对上
                 tokio::time::sleep(Duration::from_millis(300)).await;
                 let touch = UniversalHidServiceClient::connect_rsd(adapter, handshake).await?;
@@ -199,7 +199,7 @@ impl HidSession {
 
     pub async fn tap(&mut self, x: f64, y: f64) -> Result<()> {
         let (hx, hy) = self.hid_point((x, y))?;
-        limit(ictl_l10n::tr!("HID 点击", "HID tap"), Duration::from_secs(10), async {
+        limit(ictl_l10n::text!("HID 点击", "HID tap"), Duration::from_secs(10), async {
             Ok(self.touch.tap(hx, hy).await?)
         })
         .await
@@ -212,7 +212,7 @@ impl HidSession {
         let moving = gesture_time(seconds)?;
         let steps = ((moving.as_secs_f64() * 1000.0 / 20.0).round() as u32).max(10);
         let d = moving + Duration::from_secs(10);
-        limit(ictl_l10n::tr!("HID 拖动", "HID drag"), d, async {
+        limit(ictl_l10n::text!("HID 拖动", "HID drag"), d, async {
             Ok(self.touch.drag(x1, y1, x2, y2, steps, 20).await?)
         })
         .await
@@ -227,7 +227,7 @@ impl HidSession {
         let moving = gesture_time(seconds)?;
         let steps = ((moving.as_secs_f64() * 1000.0 / 20.0).round() as u32).max(10);
         let d = held + moving + Duration::from_secs(10);
-        limit(ictl_l10n::tr!("HID 按住拖动", "HID held drag"), d, async {
+        limit(ictl_l10n::text!("HID 按住拖动", "HID held drag"), d, async {
             let end = tokio::time::Instant::now() + held;
             self.touch.send_touchscreen(TOUCHSCREEN_STATE_CONTACT, x1, y1, None).await?;
             // the finger is down: if this fails or times out from here on, closing the session lifts it
@@ -250,7 +250,7 @@ impl HidSession {
     pub async fn touch(&mut self, contact: bool, x: f64, y: f64) -> Result<()> {
         let (hx, hy) = self.hid_point((x, y))?;
         let state = if contact { TOUCHSCREEN_STATE_CONTACT } else { TOUCHSCREEN_STATE_RELEASE };
-        limit(ictl_l10n::tr!("HID 触摸", "HID touch"), Duration::from_secs(5), async {
+        limit(ictl_l10n::text!("HID 触摸", "HID touch"), Duration::from_secs(5), async {
             self.touch.send_touchscreen(state, hx, hy, None).await?;
             self.contact = contact.then_some((hx, hy));
             Ok(())
@@ -263,7 +263,7 @@ impl HidSession {
     pub async fn long_press(&mut self, x: f64, y: f64, seconds: f64) -> Result<()> {
         let (hx, hy) = self.hid_point((x, y))?;
         let held = gesture_time(seconds)?;
-        limit(ictl_l10n::tr!("HID 长按", "HID long press"), held + Duration::from_secs(10), async {
+        limit(ictl_l10n::text!("HID 长按", "HID long press"), held + Duration::from_secs(10), async {
             let end = tokio::time::Instant::now() + held;
             self.touch.send_touchscreen(TOUCHSCREEN_STATE_CONTACT, hx, hy, None).await?;
             self.contact = Some((hx, hy));
@@ -280,7 +280,7 @@ impl HidSession {
 
     pub async fn press(&mut self, button: Button) -> Result<()> {
         let (page, code, hold) = button.usage();
-        limit(ictl_l10n::tr!("HID 按键", "HID key press"), Duration::from_secs(10), async {
+        limit(ictl_l10n::text!("HID 按键", "HID key press"), Duration::from_secs(10), async {
             self.indigo.send_button(page, code, ButtonState::Down).await?;
             tokio::time::sleep(Duration::from_millis(hold)).await;
             Ok(self.indigo.send_button(page, code, ButtonState::Up).await?)
@@ -294,7 +294,7 @@ impl HidSession {
             .chars()
             .map(|c| {
                 ascii_to_usage(c).ok_or_else(|| {
-                    DeviceError::InvalidInput(ictl_l10n::trf!(
+                    DeviceError::InvalidInput(ictl_l10n::textf!(
                         "HID 不能输入字符 {c:?}",
                         "HID can't type the character {c:?}"
                     ))
@@ -302,7 +302,7 @@ impl HidSession {
             })
             .collect::<Result<_>>()?;
         let d = Duration::from_secs(10) + Duration::from_millis(50 * keys.len() as u64);
-        limit(ictl_l10n::tr!("HID 输入", "HID typing"), d, self.send_keys(keys)).await
+        limit(ictl_l10n::text!("HID 输入", "HID typing"), d, self.send_keys(keys)).await
     }
 
     /// 按 Cmd-V（硬件键盘的粘贴）：按住 Cmd，按一下 V，松开 Cmd。手机不确认收到，粘没粘上只能看屏幕
@@ -327,7 +327,7 @@ impl HidSession {
     }
 
     async fn command_shortcut(&mut self, key: u64, name: &str) -> Result<()> {
-        limit(name, Duration::from_secs(10), async {
+        limit(name.to_owned(), Duration::from_secs(10), async {
             self.indigo.send_keyboard(KEY_LEFT_GUI, ButtonState::Down).await?;
             let r = async {
                 self.indigo.send_keyboard(key, ButtonState::Down).await?;

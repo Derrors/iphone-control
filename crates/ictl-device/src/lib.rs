@@ -117,17 +117,17 @@ pub enum DeviceError {
     Idevice(String),
     /// 手机上的服务没在限定时间内应答。调用方应丢掉隧道重建
     #[error("{}", ictl_l10n::trf!("超时：{0}", "Timed out: {0}", .0))]
-    Timeout(String),
+    Timeout(ictl_l10n::Text),
     /// 无障碍服务（remoteAXService）没在限定时间内应答：连接、握手或请求超时。读出来和 [`Self::Timeout`] 一样。
     /// 手机上的 axauditd 卡住时就是这样，重连、重建隧道都没用，要结束它（[`Tunnel::restart_ax_daemon`]）
     #[error("{}", ictl_l10n::trf!("超时：{0}", "Timed out: {0}", .0))]
-    AxUnanswered(String),
+    AxUnanswered(ictl_l10n::Text),
     /// 调用方给的参数不合法（例如 HID 不能输入的字符）。与连接无关，不需要重建会话
     #[error("{0}")]
-    InvalidInput(String),
+    InvalidInput(ictl_l10n::Text),
     /// Preparing the pasteboard failed before the paste shortcut was sent.
     #[error("{0}")]
-    PasteNotSent(String),
+    PasteNotSent(ictl_l10n::Text),
     /// 手机拒绝启动 App（[`Tunnel::launch_in_background`] 回了 NSError）。签名证书被吊销时就是这样：
     /// 手机日志里 amfid 报 `The identity used to sign the executable is no longer valid`
     #[error("{}", ictl_l10n::trf!("手机拒绝启动（NSError code {0}）", "The phone refused to launch it (NSError code {0})", .0))]
@@ -141,10 +141,12 @@ static INSTALLING: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 const QUERY: Duration = Duration::from_secs(15);
 
 /// 给对手机的一次调用加时限：卡住的服务不能把调用方（守护进程持锁时）一起卡死
-pub(crate) async fn limit<T>(what: &str, d: Duration, f: impl Future<Output = Result<T>>) -> Result<T> {
-    tokio::time::timeout(d, f)
-        .await
-        .map_err(|_| DeviceError::Timeout(ictl_l10n::trf!("{what}（{} 秒）", "{what} ({} s)", d.as_secs())))?
+pub(crate) async fn limit<T>(
+    what: impl Into<ictl_l10n::Text>,
+    d: Duration,
+    f: impl Future<Output = Result<T>>,
+) -> Result<T> {
+    tokio::time::timeout(d, f).await.map_err(|_| DeviceError::Timeout(what.into().with_secs(d.as_secs())))?
 }
 
 impl From<IdeviceError> for DeviceError {
@@ -335,7 +337,7 @@ fn ioreg_has_ios_device(out: &str) -> bool {
 
 /// usbmuxd 看到的 USB 设备（不含网络设备）。usbmuxd 没在运行时返回错误。
 pub async fn list_devices() -> Result<Vec<UsbDevice>> {
-    limit(ictl_l10n::tr!("列出 usbmuxd 设备", "list usbmuxd devices"), QUERY, async {
+    limit(ictl_l10n::text!("列出 usbmuxd 设备", "list usbmuxd devices"), QUERY, async {
         // 不用 UsbmuxdConnection::default()：它固定连 /var/run/usbmuxd，不看 USBMUXD_SOCKET_ADDRESS
         let mut mux = usbmuxd_addr().connect(0).await?;
         Ok(mux
@@ -398,7 +400,7 @@ impl Device {
     /// usbmuxd 里有没有这台手机的配对记录。只有「没有记录」算 false；连不上 usbmuxd 等错误照常返回，
     /// 免得 usbmuxd 抖一下就让状态变成「请在手机上点信任」
     pub async fn paired(&self) -> Result<bool> {
-        limit(ictl_l10n::tr!("查配对记录", "check the pairing record"), QUERY, async {
+        limit(ictl_l10n::text!("查配对记录", "check the pairing record"), QUERY, async {
             let mut mux = self.provider.addr.connect(0).await?;
             match mux.get_pair_record(&self.udid).await {
                 Ok(_) => Ok(true),
@@ -413,7 +415,7 @@ impl Device {
     /// 发起配对：手机上弹「信任此电脑」。用户还没点时返回 [`DeviceError::PairingPending`]，调用方应轮询重试。
     /// 成功后配对记录交给 usbmuxd 保存（Linux 上是 `/var/lib/lockdown`，macOS 上是 `/var/db/lockdown`）。
     pub async fn pair(&self, host_name: &str) -> Result<()> {
-        limit(ictl_l10n::tr!("配对", "pair"), Duration::from_secs(30), async {
+        limit(ictl_l10n::text!("配对", "pair"), Duration::from_secs(30), async {
             let mut mux = self.provider.addr.connect(0).await?;
             let buid = mux.get_buid().await?;
             let mut lockdown = LockdownClient::connect(&*self.provider).await?;
@@ -429,7 +431,7 @@ impl Device {
     /// iOS 17–18: whether the classic personalized image is mounted (by us, Xcode or `devicectl`). A locked phone
     /// or a dropped connection is an error, not «not mounted»
     pub async fn legacy_ddi_mounted(&self) -> Result<bool> {
-        limit(ictl_l10n::tr!("查询开发者镜像", "query the developer disk image"), QUERY, async {
+        limit(ictl_l10n::text!("查询开发者镜像", "query the developer disk image"), QUERY, async {
             let mut mounter = ImageMounter::connect(&*self.provider).await?;
             match mounter.lookup_image("Personalized").await {
                 Ok(_) => Ok(true),
@@ -448,7 +450,7 @@ impl Device {
             tokio::fs::read(dir.join("Image.dmg.trustcache")).await?,
             tokio::fs::read(dir.join("BuildManifest.plist")).await?,
         );
-        limit(ictl_l10n::tr!("挂载开发者镜像", "mount the developer disk image"), Duration::from_secs(180), async {
+        limit(ictl_l10n::text!("挂载开发者镜像", "mount the developer disk image"), Duration::from_secs(180), async {
             // the chip id from a lockdown session closed before the mounter connects: idevice's ImageMounter note
             // wants any lockdown session opened after the mounter (mount_personalized opens its own)
             let ecid = {
@@ -471,7 +473,7 @@ impl Device {
 
     /// 名称、型号、iOS 版本（不需要配对）
     pub async fn info(&self) -> Result<DeviceInfo> {
-        limit(ictl_l10n::tr!("读设备信息", "read device info"), QUERY, self.info_inner()).await
+        limit(ictl_l10n::text!("读设备信息", "read device info"), QUERY, self.info_inner()).await
     }
 
     async fn info_inner(&self) -> Result<DeviceInfo> {
@@ -499,7 +501,7 @@ impl Device {
     /// 手机上装着的全部描述文件（.mobileprovision 原始内容，经 misagent 读）。装 App 时随包带的描述文件会留在这里，
     /// 用它判断「这台手机上的 WDA 还能用多久」：同一个 Apple ID 给几台手机先后签过，每台装的是各自那一次签的
     pub async fn installed_profiles(&self) -> Result<Vec<Vec<u8>>> {
-        limit(ictl_l10n::tr!("读描述文件", "read provisioning profiles"), QUERY, async {
+        limit(ictl_l10n::text!("读描述文件", "read provisioning profiles"), QUERY, async {
             Ok(MisagentClient::connect(&*self.provider).await?.copy_all().await?)
         })
         .await
@@ -507,7 +509,7 @@ impl Device {
 
     /// SpringBoard reports the four interface orientations separately, even when WDA lacks /rotation.
     pub async fn interface_rotation(&self) -> Result<Option<Rotation>> {
-        limit(ictl_l10n::tr!("读界面方向", "read interface orientation"), Duration::from_secs(2), async {
+        limit(ictl_l10n::text!("读界面方向", "read interface orientation"), Duration::from_secs(2), async {
             let mut springboard = SpringBoardServicesClient::connect(&*self.provider).await?;
             Ok(Rotation::from_interface(springboard.get_interface_orientation().await?))
         })
@@ -515,7 +517,7 @@ impl Device {
     }
 
     pub async fn developer_mode_enabled(&self) -> Result<bool> {
-        limit(ictl_l10n::tr!("查开发者模式", "check Developer Mode"), QUERY, async {
+        limit(ictl_l10n::text!("查开发者模式", "check Developer Mode"), QUERY, async {
             Ok(AmfiClient::connect(&*self.provider).await?.get_developer_mode_status().await?)
         })
         .await
@@ -523,7 +525,7 @@ impl Device {
 
     /// 让「设置 → 隐私与安全性」里出现开发者模式开关（打开仍需用户在手机上操作）
     pub async fn reveal_developer_mode(&self) -> Result<()> {
-        limit(ictl_l10n::tr!("显示开发者模式开关", "reveal the Developer Mode switch"), QUERY, async {
+        limit(ictl_l10n::text!("显示开发者模式开关", "reveal the Developer Mode switch"), QUERY, async {
             Ok(AmfiClient::connect(&*self.provider).await?.reveal_developer_mode_option_in_ui().await?)
         })
         .await
@@ -531,7 +533,7 @@ impl Device {
 
     /// 建立 CoreDeviceProxy 用户态隧道并完成 RSD 握手。锁屏时报 [`DeviceError::PasswordProtected`]。
     pub async fn open_tunnel(&self) -> Result<Tunnel> {
-        limit(ictl_l10n::tr!("建隧道", "open the tunnel"), Duration::from_secs(30), async {
+        limit(ictl_l10n::text!("建隧道", "open the tunnel"), Duration::from_secs(30), async {
             let proxy = CoreDeviceProxy::connect(&*self.provider).await?;
             let rsd_port = proxy.tunnel_info().server_rsd_port;
             tracing::debug!("CoreDeviceProxy tunnel: MTU {}", proxy.tunnel_info().mtu);
@@ -553,7 +555,7 @@ impl Device {
 
     /// 已安装的 App。`include_system` 为 false 只列用户 App，为 true 只列系统 App（与 toolkit 一致）。
     pub async fn list_apps(&self, include_system: bool) -> Result<Vec<AppInfo>> {
-        limit(ictl_l10n::tr!("列出 App", "list apps"), Duration::from_secs(30), async {
+        limit(ictl_l10n::text!("列出 App", "list apps"), Duration::from_secs(30), async {
             let mut proxy = InstallationProxyClient::connect(&*self.provider).await?;
             let kind = if include_system { "System" } else { "User" };
             Ok(apps::parse_apps(proxy.get_apps(Some(kind), None).await?))
@@ -563,7 +565,7 @@ impl Device {
 
     /// 经 usbmuxd 直连手机上的 TCP 端口（`iphone-control wda-bridge` 用）
     pub async fn connect_port(&self, port: u16) -> Result<Box<dyn idevice::ReadWrite>> {
-        let dev = limit(ictl_l10n::tr!("连接手机端口", "connect to a port on the phone"), QUERY, async {
+        let dev = limit(ictl_l10n::text!("连接手机端口", "connect to a port on the phone"), QUERY, async {
             Ok(self.provider.connect(port).await?)
         })
         .await?;
@@ -578,7 +580,7 @@ impl Device {
         // （重签和 iphone_install_app 撞上、两个会话同时安装）。排队等的时间不算进下面的时限
         let _one_at_a_time = INSTALLING.lock().await;
         // 含上传几十 MB 的包，USB 2 上也就一两分钟
-        limit(ictl_l10n::tr!("安装", "install"), Duration::from_secs(600), async {
+        limit(ictl_l10n::text!("安装", "install"), Duration::from_secs(600), async {
             idevice::utils::installation::install_package(&*self.provider, package, None).await?;
             Ok(())
         })
@@ -587,7 +589,7 @@ impl Device {
 
     /// Removes an app by bundle ID (installation_proxy)
     pub async fn uninstall(&self, bundle_id: &str) -> Result<()> {
-        limit(ictl_l10n::tr!("卸载", "uninstall"), Duration::from_secs(120), async {
+        limit(ictl_l10n::text!("卸载", "uninstall"), Duration::from_secs(120), async {
             let mut proxy = InstallationProxyClient::connect(&*self.provider).await?;
             proxy.uninstall(bundle_id, None).await?;
             Ok(())
@@ -597,7 +599,7 @@ impl Device {
 
     /// Names of the crash reports in the top directory, after asking the phone to move new ones there
     pub async fn crash_reports(&self) -> Result<Vec<String>> {
-        limit(ictl_l10n::tr!("列出崩溃报告", "list crash reports"), Duration::from_secs(30), async {
+        limit(ictl_l10n::text!("列出崩溃报告", "list crash reports"), Duration::from_secs(30), async {
             // without the flush, reports from the last minutes may not be visible yet; it is only a hint
             let _ = idevice::crashreportcopymobile::flush_reports(&*self.provider).await;
             let mut c = CrashReportCopyMobileClient::connect(&*self.provider).await?;
@@ -608,7 +610,7 @@ impl Device {
 
     /// One crash report's content
     pub async fn crash_report(&self, name: &str) -> Result<Vec<u8>> {
-        limit(ictl_l10n::tr!("读取崩溃报告", "read crash report"), Duration::from_secs(30), async {
+        limit(ictl_l10n::text!("读取崩溃报告", "read crash report"), Duration::from_secs(30), async {
             let mut c = CrashReportCopyMobileClient::connect(&*self.provider).await?;
             Ok(c.pull(name).await?)
         })
@@ -617,7 +619,7 @@ impl Device {
 
     /// Opens the Web Inspector service (inspectable pages and WebViews)
     pub async fn web_inspector(&self) -> Result<ictl_webinspector::WebInspector> {
-        limit(ictl_l10n::tr!("打开 Web Inspector", "open the Web Inspector"), QUERY, async {
+        limit(ictl_l10n::text!("打开 Web Inspector", "open the Web Inspector"), QUERY, async {
             ictl_webinspector::WebInspector::open(&*self.provider).await.map_err(|e| match e {
                 ictl_webinspector::Error::Device(e) => e.into(),
                 // kept as I/O so the caller can tell the phone closed the connection (Web Inspector off)
@@ -639,7 +641,7 @@ impl Device {
     pub async fn log_stream(&self) -> Result<LogStream> {
         let flags = oslog::flags::LIVE;
         let inner =
-            limit(ictl_l10n::tr!("打开日志流", "open the log stream"), QUERY, oslog::start(&*self.provider, flags))
+            limit(ictl_l10n::text!("打开日志流", "open the log stream"), QUERY, oslog::start(&*self.provider, flags))
                 .await?;
         Ok(LogStream(inner))
     }
@@ -669,7 +671,7 @@ async fn write_back(
     handshake: &mut RsdHandshake,
     items: &[pasteboard::Item],
 ) -> ClipboardRestore {
-    match limit(ictl_l10n::tr!("还原剪贴板", "restore the pasteboard"), Duration::from_secs(10), async {
+    match limit(ictl_l10n::text!("还原剪贴板", "restore the pasteboard"), Duration::from_secs(10), async {
         pasteboard::write(adapter, handshake, items).await
     })
     .await
@@ -706,7 +708,7 @@ impl Tunnel {
 
     /// 已挂载的开发者镜像版本，未挂载返回 None
     pub async fn ddi_mounted(&mut self) -> Result<Option<String>> {
-        limit(ictl_l10n::tr!("查询开发者镜像", "query the developer disk image"), Duration::from_secs(20), async {
+        limit(ictl_l10n::text!("查询开发者镜像", "query the developer disk image"), Duration::from_secs(20), async {
             Ok(installed_ddi(&mut self.adapter, &mut self.handshake).await?.map(|c| c.version))
         })
         .await
@@ -716,7 +718,7 @@ impl Tunnel {
     pub async fn mount_ddi(&mut self, restore_dir: &Path) -> Result<String> {
         let assets = Cryptex1Assets::load(restore_dir).await?;
         // 含 TSS 联网签票
-        limit(ictl_l10n::tr!("挂载开发者镜像", "mount the developer disk image"), Duration::from_secs(180), async {
+        limit(ictl_l10n::text!("挂载开发者镜像", "mount the developer disk image"), Duration::from_secs(180), async {
             Ok(install_ddi(&mut self.adapter, &mut self.handshake, &assets).await?.version)
         })
         .await
@@ -725,7 +727,7 @@ impl Tunnel {
     /// The screen in the format the phone calls `format` (`requestedFormat`; idevice's "jpeg" is refused: «Cannot
     /// initialize ScreenshotImageFormat from invalid String value jpeg»)
     pub async fn screenshot_as(&mut self, format: &str) -> Result<Vec<u8>> {
-        limit(ictl_l10n::tr!("截图", "screenshot"), Duration::from_secs(30), async {
+        limit(ictl_l10n::text!("截图", "screenshot"), Duration::from_secs(30), async {
             let port = self
                 .handshake
                 .services
@@ -755,7 +757,7 @@ impl Tunnel {
     /// a new one does the service's handshake too (0.82 s against 0.30 s for the next ones on a simple screen). A
     /// connection that fails is dropped and one new one tried
     pub async fn screenshot_png(&mut self) -> Result<Vec<u8>> {
-        limit(ictl_l10n::tr!("截图", "screenshot"), Duration::from_secs(30), async {
+        limit(ictl_l10n::text!("截图", "screenshot"), Duration::from_secs(30), async {
             if let Some(c) = self.screenshots.as_mut() {
                 match c.take_screenshot(None, ImageFormat::Png).await {
                     Ok(png) => return Ok(png),
@@ -808,32 +810,29 @@ impl Tunnel {
     pub async fn paste_text(&mut self, text: &str) -> Result<Option<PendingRestore>> {
         let Tunnel { adapter, handshake, hid, .. } = self;
         let Some(hid) = hid.as_mut() else {
-            return Err(DeviceError::InvalidInput(ictl_l10n::tr!("HID 会话没开", "The HID session isn't open").into()));
+            return Err(DeviceError::InvalidInput(ictl_l10n::text!("HID 会话没开", "The HID session isn't open")));
         };
         if !pasteboard::supported(handshake) {
-            return Err(DeviceError::InvalidInput(
-                ictl_l10n::tr!(
-                    "手机没有提供剪贴板服务，HID 不能输入非 ASCII 文字",
-                    "The phone offers no pasteboard service, so HID can't type non-ASCII text"
-                )
-                .into(),
-            ));
+            return Err(DeviceError::InvalidInput(ictl_l10n::text!(
+                "手机没有提供剪贴板服务，HID 不能输入非 ASCII 文字",
+                "The phone offers no pasteboard service, so HID can't type non-ASCII text"
+            )));
         }
         // 读不出来不影响粘贴；连接卡住时别等太久
-        let saved = limit(ictl_l10n::tr!("读剪贴板", "read the pasteboard"), Duration::from_secs(5), async {
+        let saved = limit(ictl_l10n::text!("读剪贴板", "read the pasteboard"), Duration::from_secs(5), async {
             pasteboard::read(adapter, handshake).await
         })
         .await
         .ok()
         .and_then(|c| c.items);
         let ours = pasteboard::text_items(text);
-        let written = limit(ictl_l10n::tr!("写剪贴板", "write the pasteboard"), Duration::from_secs(10), async {
+        let written = limit(ictl_l10n::text!("写剪贴板", "write the pasteboard"), Duration::from_secs(10), async {
             pasteboard::write(adapter, handshake, &ours).await?;
             pasteboard::read(adapter, handshake).await
         })
         .await
         .map_err(|e| {
-            DeviceError::PasteNotSent(ictl_l10n::trf!(
+            DeviceError::PasteNotSent(ictl_l10n::textf!(
                 "文字写不进剪贴板，没有粘贴：{e}",
                 "The text couldn't be put on the pasteboard; nothing was pasted: {e}"
             ))
@@ -843,13 +842,10 @@ impl Tunnel {
             if let Some(items) = &saved {
                 write_back(adapter, handshake, items).await;
             }
-            return Err(DeviceError::PasteNotSent(
-                ictl_l10n::tr!(
-                    "文字写进剪贴板后读回来对不上，没有粘贴",
-                    "The text read back from the pasteboard didn't match what was written; nothing was pasted"
-                )
-                .into(),
-            ));
+            return Err(DeviceError::PasteNotSent(ictl_l10n::text!(
+                "文字写进剪贴板后读回来对不上，没有粘贴",
+                "The text read back from the pasteboard didn't match what was written; nothing was pasted"
+            )));
         }
         hid.paste_shortcut().await.map_err(|e| {
             DeviceError::Idevice(ictl_l10n::trf!(
@@ -862,7 +858,7 @@ impl Tunnel {
 
     /// 把 [`Self::paste_text`] 存下的原剪贴板写回去。剪贴板已经不是粘贴的那段文字（期间有人复制了别的）就不动它
     pub async fn restore_pasteboard(&mut self, p: PendingRestore) -> ClipboardRestore {
-        let now = limit(ictl_l10n::tr!("读剪贴板", "read the pasteboard"), Duration::from_secs(5), async {
+        let now = limit(ictl_l10n::text!("读剪贴板", "read the pasteboard"), Duration::from_secs(5), async {
             pasteboard::read(&mut self.adapter, &mut self.handshake).await
         })
         .await;
@@ -891,7 +887,7 @@ impl Tunnel {
     /// `env` 是这个进程的环境变量（WDA 的 `USE_IP` 就靠它）
     pub async fn launch_in_background(&mut self, bundle_id: &str, env: &[(&str, &str)]) -> Result<u64> {
         use idevice::dvt::{message::AuxValue, remote_server::RemoteServerClient};
-        limit(ictl_l10n::tr!("后台启动 App", "launch an app in the background"), Duration::from_secs(60), async {
+        limit(ictl_l10n::text!("后台启动 App", "launch an app in the background"), Duration::from_secs(60), async {
             let mut dvt: RemoteServerClient<Box<dyn idevice::ReadWrite>> =
                 RemoteServerClient::connect_rsd(&mut self.adapter, &mut self.handshake).await?;
             let mut ch = dvt.make_channel("com.apple.instruments.server.services.processcontrol").await?;
@@ -929,7 +925,7 @@ impl Tunnel {
     /// 手机上正在运行的进程：（进程号，可执行文件路径）
     pub async fn processes(&mut self) -> Result<Vec<(u64, String)>> {
         use idevice::core_device::AppServiceClient;
-        limit(ictl_l10n::tr!("列出进程", "list processes"), Duration::from_secs(20), async {
+        limit(ictl_l10n::text!("列出进程", "list processes"), Duration::from_secs(20), async {
             let mut c = AppServiceClient::connect_rsd(&mut self.adapter, &mut self.handshake).await?;
             Ok(c.list_processes()
                 .await?
@@ -955,6 +951,25 @@ fn environment(env: &[(&str, &str)]) -> plist::Dictionary {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A time limit hit while an English request was handled reads in Chinese in the daemon's Chinese log, the
+    /// thing that timed out included: it came out «超时：read device info (15 s)»
+    #[tokio::test]
+    async fn a_timeout_reads_in_the_language_it_is_shown_in() {
+        let e = ictl_l10n::scope(ictl_l10n::Lang::En, async {
+            limit(
+                ictl_l10n::text!("读设备信息", "read device info"),
+                Duration::ZERO,
+                std::future::pending::<Result<()>>(),
+            )
+            .await
+            .unwrap_err()
+        })
+        .await;
+        let zh = ictl_l10n::with_lang(ictl_l10n::Lang::Zh, || e.to_string());
+        let en = ictl_l10n::with_lang(ictl_l10n::Lang::En, || e.to_string());
+        assert_eq!((zh.as_str(), en.as_str()), ("超时：读设备信息（0 秒）", "Timed out: read device info (0 s)"));
+    }
 
     #[test]
     fn the_launch_environment_is_a_dictionary_of_strings() {

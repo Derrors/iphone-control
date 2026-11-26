@@ -129,14 +129,14 @@ pub fn launch_refused(msg: &str) -> bool {
 /// 只报 `unexpected response`。首次安装后最常见的原因是还没信任开发者（iPad mini 5 / iPadOS 26.6.1 真机：
 /// 点「信任」之前这样报，之后下一次就能启动）；用过的设备则可能是签 WDA 的证书变了（给另一台设备重签时换了证书，
 /// 同一台 iPad 上点 runner 图标提示「无法验证 App」，重签这台后就能启动），两种都在报错里提示一句
-fn launch_hint(msg: String) -> String {
+fn launch_hint(msg: String) -> ictl_l10n::Text {
     if launch_refused(&msg) {
-        ictl_l10n::trf!(
+        ictl_l10n::textf!(
             "{msg}(第一次在这台设备上装 WDA 的:到 设置 → 通用 → VPN 与设备管理 里信任你的 Apple ID 开发者,需要联网;已经信任过的,可能是签名证书变了:运行 iphone-control sign 重签这台)",
             "{msg} (first WDA install on this device: trust your Apple ID developer under Settings → General → VPN & Device Management, which needs internet; already trusted: the signing certificate may have changed, run iphone-control sign to re-sign this device)"
         )
     } else {
-        msg
+        msg.into()
     }
 }
 
@@ -224,15 +224,16 @@ impl WdaRunner {
         timeout: Duration,
     ) -> Result<(Self, WdaClient<DeviceTransport>)> {
         let lookup = async {
-            let mut ip =
-                InstallationProxyClient::connect(&*provider).await.map_err(|e| WdaError::Unavailable(e.to_string()))?;
+            let mut ip = InstallationProxyClient::connect(&*provider)
+                .await
+                .map_err(|e| WdaError::Unavailable(e.to_string().into()))?;
             TestConfig::from_installation_proxy(&mut ip, bundle_id, None).await.map_err(|e| match e {
                 IdeviceError::AppNotInstalled => WdaError::NotInstalled(bundle_id.to_owned()),
-                other => WdaError::StartFailed(other.to_string()),
+                other => WdaError::StartFailed(other.to_string().into()),
             })
         };
         let mut cfg = tokio::time::timeout(LOOKUP_TIMEOUT, lookup).await.map_err(|_| {
-            WdaError::StartFailed(ictl_l10n::trf!(
+            WdaError::StartFailed(ictl_l10n::textf!(
                 "查 WDA 安装信息超时（{} 秒）",
                 "querying the WDA install info timed out ({} s)",
                 LOOKUP_TIMEOUT.as_secs()
@@ -372,13 +373,13 @@ impl WdaRunner {
                     return Err(WdaError::NeedsAutomationPin);
                 }
                 return Err(WdaError::NotReadyInTime(if watching {
-                    ictl_l10n::trf!(
+                    ictl_l10n::textf!(
                         "后台启动的 WDA {} 秒内没有就绪",
                         "WDA launched in the background wasn't ready within {} s",
                         timeout.as_secs()
                     )
                 } else {
-                    ictl_l10n::trf!(
+                    ictl_l10n::textf!(
                         "后台启动的 WDA {} 秒内没有就绪（手机重启后第一次启动要在手机上输入密码，允许 UI 自动化）",
                         "WDA launched in the background wasn't ready within {} s (after a reboot the phone asks for its passcode to allow UI automation)",
                         timeout.as_secs()
@@ -421,8 +422,15 @@ mod tests {
     #[test]
     fn untrusted_developer_hint_only_for_unexpected_response() {
         let m = launch_hint("unexpected response from device: unexpected response".into());
-        assert!(m.contains("VPN 与设备管理") && m.contains("iphone-control sign"), "{m}");
-        assert_eq!(launch_hint("WDA 在限定时间内没有就绪".into()), "WDA 在限定时间内没有就绪");
+        // both languages carry the hint, whichever is current when it is made
+        let (zh, en) = (m.get(ictl_l10n::Lang::Zh), m.get(ictl_l10n::Lang::En));
+        assert!(
+            zh.contains("VPN 与设备管理")
+                && en.contains("VPN & Device Management")
+                && zh.contains("iphone-control sign")
+        );
+        let m = m.to_string();
+        assert_eq!(launch_hint("WDA 在限定时间内没有就绪".into()).to_string(), "WDA 在限定时间内没有就绪");
         // 守护进程据此决定要不要查证书、自动重签：带不带提示都认
         assert!(launch_refused("unexpected response from device: unexpected response"));
         assert!(launch_refused(&m));

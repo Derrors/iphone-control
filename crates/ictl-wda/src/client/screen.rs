@@ -8,12 +8,10 @@ impl<T: Transport> WdaClient<T> {
         let v = self.get("/wda/screen").await?;
         let s = &v["screenSize"];
         let positive = |key: &str| s[key].as_f64().filter(|n| n.is_finite() && *n > 0.0);
-        let size = positive("width")
-            .zip(positive("height"))
-            .map(|(width, height)| ScreenSize { width, height })
-            .ok_or_else(|| {
-                WdaError::Unavailable(ictl_l10n::tr!("/wda/screen 尺寸无效", "Invalid /wda/screen dimensions").into())
-            })?;
+        let size =
+            positive("width").zip(positive("height")).map(|(width, height)| ScreenSize { width, height }).ok_or_else(
+                || WdaError::Unavailable(ictl_l10n::text!("/wda/screen 尺寸无效", "Invalid /wda/screen dimensions")),
+            )?;
         self.screen = Some(size);
         self.screen_at = Some(Instant::now());
         Ok(size)
@@ -55,7 +53,7 @@ impl<T: Transport> WdaClient<T> {
     pub async fn rotation(&mut self) -> Result<ictl_device::Rotation> {
         let v = self.in_session("GET", "/rotation", None, Duration::from_secs(10)).await?;
         v["z"].as_f64().and_then(ictl_device::Rotation::from_degrees).ok_or_else(|| {
-            WdaError::Unavailable(ictl_l10n::trf!(
+            WdaError::Unavailable(ictl_l10n::textf!(
                 "看不懂 WDA 给的旋转角：{v}",
                 "Can't make sense of the rotation WDA reported: {v}"
             ))
@@ -107,7 +105,7 @@ impl<T: Transport> WdaClient<T> {
     pub async fn orientation(&mut self) -> Result<elements::Orientation> {
         let v = self.in_session("GET", "/orientation", None, Duration::from_secs(10)).await?;
         v.as_str().and_then(elements::Orientation::from_wda).ok_or_else(|| {
-            WdaError::Unavailable(ictl_l10n::trf!(
+            WdaError::Unavailable(ictl_l10n::textf!(
                 "看不懂 WDA 给的方向：{v}",
                 "Can't make sense of the orientation WDA reported: {v}"
             ))
@@ -208,13 +206,17 @@ impl<T: Transport> WdaClient<T> {
     pub async fn screenshot_png(&self) -> Result<Vec<u8>> {
         // base64 约 11MB：从 JSON 里直接拿走字符串，原地去掉换行，不再另外复制
         let Value::String(mut b64) = self.get("/screenshot").await? else {
-            return Err(WdaError::Unavailable(
-                ictl_l10n::tr!("截图响应不是字符串", "screenshot response is not a string").into(),
-            ));
+            return Err(WdaError::Unavailable(ictl_l10n::text!(
+                "截图响应不是字符串",
+                "screenshot response is not a string"
+            )));
         };
         b64.retain(|c| !c.is_whitespace());
         base64::engine::general_purpose::STANDARD.decode(b64).map_err(|e| {
-            WdaError::Unavailable(ictl_l10n::trf!("截图不是有效的 base64：{e}", "screenshot is not valid base64: {e}"))
+            WdaError::Unavailable(ictl_l10n::textf!(
+                "截图不是有效的 base64：{e}",
+                "screenshot is not valid base64: {e}"
+            ))
         })
     }
 

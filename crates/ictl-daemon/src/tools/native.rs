@@ -181,7 +181,7 @@ impl Daemon {
             }
             if let Err(ictl_device::DeviceError::AxUnanswered(e)) = &r
                 && !restarted
-                && Box::pin(self.restart_stuck_ax(g, &device, e)).await
+                && Box::pin(self.restart_stuck_ax(g, &device, &e.to_string())).await
             {
                 restarted = true;
                 continue;
@@ -301,7 +301,7 @@ impl Daemon {
             }
             if let Err(ictl_device::DeviceError::AxUnanswered(e)) = &r
                 && !restarted
-                && Box::pin(self.restart_stuck_ax(g, &device, e)).await
+                && Box::pin(self.restart_stuck_ax(g, &device, &e.to_string())).await
             {
                 restarted = true;
                 continue;
@@ -1107,7 +1107,7 @@ fn step(e: impl std::fmt::Display) -> WdaError {
 
 impl Screen for NativeScreen<'_> {
     async fn reports_locked(&mut self) -> std::result::Result<bool, WdaError> {
-        self.d.native_locked(self.g).await.map_err(|e| WdaError::Unavailable(e.to_string()))
+        self.d.native_locked(self.g).await.map_err(|e| WdaError::Unavailable(e.to_string().into()))
     }
 
     fn lock_state_trusted(&self) -> bool {
@@ -1116,7 +1116,7 @@ impl Screen for NativeScreen<'_> {
     }
 
     async fn check_lock(&mut self, _reported: Option<bool>, _strict: bool) -> std::result::Result<LockCheck, WdaError> {
-        let locked = self.d.native_locked(self.g).await.map_err(|e| WdaError::Unavailable(e.to_string()))?;
+        let locked = self.d.native_locked(self.g).await.map_err(|e| WdaError::Unavailable(e.to_string().into()))?;
         let tree = if locked { read_lock_screen(self.d, self.g).await.ok().map(|(x, _, _)| x) } else { None };
         Ok(LockCheck { locked, uncertain: false, tree })
     }
@@ -1134,7 +1134,7 @@ impl Screen for NativeScreen<'_> {
     }
 
     async fn view(&mut self) -> std::result::Result<View, WdaError> {
-        self.d.screen(self.g).await.map(View::from).map_err(|e| WdaError::Unavailable(e.to_string()))
+        self.d.screen(self.g).await.map(View::from).map_err(|e| WdaError::Unavailable(e.to_string().into()))
     }
 
     async fn swipe(&mut self, from: (f64, f64), to: (f64, f64), ms: u64) -> std::result::Result<(), WdaError> {

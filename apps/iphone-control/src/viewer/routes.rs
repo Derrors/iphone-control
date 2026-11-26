@@ -90,7 +90,7 @@ pub(super) async fn route(
         ("POST", "/api/agent/tasks/open" | "/api/agent/tasks/finish") => {
             let b = match action_body(&ctx, &head, &pass, body).await {
                 Ok(b) => b,
-                Err(answered) => return answered,
+                Err(answered) => return *answered,
             };
             if head.path == "/api/agent/tasks/open" {
                 let who = pass.who.as_ref().map_or("remote", |w| w.name.as_str()).to_owned();
@@ -140,7 +140,7 @@ pub(super) async fn route(
         ("POST", p) if p.starts_with("/api/") => {
             let b = match action_body(&ctx, &head, &pass, body).await {
                 Ok(b) => b,
-                Err(answered) => return answered,
+                Err(answered) => return *answered,
             };
             // controlling a task: who, for its log, and which local process (the daemon refuses the task's agent)
             let caller = if p.starts_with("/api/agent/tasks/") {
@@ -157,20 +157,20 @@ pub(super) async fn route(
 
 /// An action's JSON body (`POST /api/…`), once it may be sent from where it comes ([`action_allowed`]); otherwise
 /// the answer (refused, too large, not JSON)
-async fn action_body(ctx: &Ctx, head: &Head, pass: &Pass, body: Incoming) -> Result<Value, Reply> {
+async fn action_body(ctx: &Ctx, head: &Head, pass: &Pass, body: Incoming) -> Result<Value, Box<Reply>> {
     if !action_allowed(head, &ctx.access, ctx.port, ctx.tls.is_some(), pass.program()) {
-        return Err(reply(403, "text/plain", "forbidden"));
+        return Err(Box::new(reply(403, "text/plain", "forbidden")));
     }
     if head.content_length.unwrap_or(0) > MAX_BODY {
-        return Err(reply(413, "text/plain", "too large"));
+        return Err(Box::new(reply(413, "text/plain", "too large")));
     }
+    let bad = || Box::new(json_reply(400, &json!({"ok": false, "message": "bad request"})));
     let bytes = match read_body(body, MAX_BODY, super::server::BODY_TIMEOUT).await {
         Ok(b) => b,
-        Err(BodyError::TooLarge) => return Err(reply(413, "text/plain", "too large")),
-        Err(BodyError::Broken) => return Err(json_reply(400, &json!({"ok": false, "message": "bad request"}))),
+        Err(BodyError::TooLarge) => return Err(Box::new(reply(413, "text/plain", "too large"))),
+        Err(BodyError::Broken) => return Err(bad()),
     };
-    serde_json::from_slice::<Value>(&bytes)
-        .map_err(|_| json_reply(400, &json!({"ok": false, "message": "bad request"})))
+    serde_json::from_slice::<Value>(&bytes).map_err(|_| bad())
 }
 
 /// Who controls a task from the page: the token's name for its log, and the local process when it is one

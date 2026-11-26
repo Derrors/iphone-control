@@ -149,7 +149,7 @@ async fn checked(
     let mut body = Some(body);
     let pass = match login_gate(&ctx, &conn, &raw, &head, &mut body).await {
         Ok(p) => p,
-        Err(answered) => return closing(answered),
+        Err(answered) => return closing(*answered),
     };
     drop(conn.early.lock().unwrap_or_else(|p| p.into_inner()).take());
     if !pass.may(&head) {
@@ -223,7 +223,7 @@ async fn login_gate(
     raw: &[u8],
     head: &Head,
     body: &mut Option<Incoming>,
-) -> Result<Pass, Reply> {
+) -> Result<Pass, Box<Reply>> {
     use auth::Verdict;
     let Some(a) = &ctx.auth else { return Ok(Pass::default()) };
     let secure = conn.tls;
@@ -232,30 +232,32 @@ async fn login_gate(
         && head.path == "/"
         && let Some(t) = head.query("token")
     {
-        return Err(match a.try_token(&t) {
+        return Err(Box::new(match a.try_token(&t) {
             Verdict::Ok(w) => logged_in(a, &w.name, secure),
             v => login_page(v),
-        });
+        }));
     }
     // the login page's form
     if head.method == "POST" && head.path == "/login" {
         if head.origin.as_deref().is_some_and(|o| !ctx.access.origin_allowed(o, ctx.port, ctx.tls.is_some())) {
-            return Err(reply(403, "text/plain", "forbidden"));
+            return Err(Box::new(reply(403, "text/plain", "forbidden")));
         }
         if head.content_length.unwrap_or(0) > 4096 {
-            return Err(reply(413, "text/plain", "too large"));
+            return Err(Box::new(reply(413, "text/plain", "too large")));
         }
         // a 4 KB form: no longer than a head may take ([`BODY_TIMEOUT`] is for large bodies)
         let form = match read_body(body.take().expect("not read yet"), 4096, crate::HEAD_TIMEOUT).await {
             Ok(b) => b,
-            Err(BodyError::TooLarge) => return Err(reply(413, "text/plain", "too large")),
-            Err(BodyError::Broken) => return Err(reply(400, "text/plain", "bad request")),
+            Err(BodyError::TooLarge) => return Err(Box::new(reply(413, "text/plain", "too large"))),
+            Err(BodyError::Broken) => return Err(Box::new(reply(400, "text/plain", "bad request"))),
         };
-        return Err(match auth::form_token(&form).filter(|t| !t.trim().is_empty()).map(|t| a.try_token(&t)) {
-            Some(Verdict::Ok(w)) => logged_in(a, &w.name, secure),
-            Some(v) => login_page(v),
-            None => login_page(Verdict::Missing),
-        });
+        return Err(Box::new(
+            match auth::form_token(&form).filter(|t| !t.trim().is_empty()).map(|t| a.try_token(&t)) {
+                Some(Verdict::Ok(w)) => logged_in(a, &w.name, secure),
+                Some(v) => login_page(v),
+                None => login_page(Verdict::Missing),
+            },
+        ));
     }
     let mut v = match a.check(raw) {
         Verdict::Ok(w) => return Ok(Pass { who: Some(w), agent: false }),
@@ -275,7 +277,7 @@ async fn login_gate(
         }
     }
     let status = if v == Verdict::Limited { 429 } else { 401 };
-    Err(match (head.method.as_str(), head.path.as_str()) {
+    Err(Box::new(match (head.method.as_str(), head.path.as_str()) {
         ("GET", "/") => login_page(v),
         // MCP clients: send the token as a bearer token (RFC 6750)
         (_, "/mcp") => reply_with(
@@ -285,7 +287,7 @@ async fn login_gate(
             &[("WWW-Authenticate", "Bearer realm=\"iphone-control\"")],
         ),
         _ => reply(status, "text/plain", "log in first"),
-    })
+    }))
 }
 
 /// Logged in: a session cookie, and the page without the token in its address (and history)

@@ -21,7 +21,7 @@ pub fn find_app(payload: &Path) -> io::Result<PathBuf> {
         .ok_or_else(|| {
             io::Error::new(
                 io::ErrorKind::NotFound,
-                ictl_l10n::tr!("ipa 里没有 Payload/*.app", "no Payload/*.app in the ipa"),
+                ictl_l10n::text!("ipa 里没有 Payload/*.app", "no Payload/*.app in the ipa"),
             )
         })
 }
@@ -60,7 +60,7 @@ pub fn from_app_zip(src: &Path, out: &Path) -> io::Result<()> {
     if !zip.file_names().flatten().any(|n| n.split('/').next().is_some_and(|top| top.ends_with(".app"))) {
         return Err(io::Error::new(
             io::ErrorKind::NotFound,
-            ictl_l10n::tr!("zip 根目录下没有 .app", "no .app at the root of the zip"),
+            ictl_l10n::text!("zip 根目录下没有 .app", "no .app at the root of the zip"),
         ));
     }
     write_atomically(out, |f| {

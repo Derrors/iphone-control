@@ -431,7 +431,7 @@ mod tests {
 
     #[test]
     fn a_covered_row_cannot_stop_the_search() {
-        let xml = include_str!("../../../ictl-wda/tests/fixtures/settings-floating-search-native-ios27.xml");
+        let xml = include_str!("../../../ictl-ui/tests/fixtures/settings-floating-search-native-ios27.xml");
         let tree = elements::parse_tree(xml, ScreenSize { width: 430.0, height: 932.0 });
         let page = visible_page(&tree, true);
         assert!(visible_match(&page, "资源库").is_none());

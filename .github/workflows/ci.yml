@@ -57,6 +57,13 @@ jobs:
         run: for p in ictl-ax ictl-ui ictl-l10n ictl-webinspector ictl-device ictl-wda ictl-sign ictl-unlock ictl-daemon ictl-mcp ictl-protocol iphone-control; do cargo fmt -p $p -- --check; done
       # --all-features：默认不编的 debug-cmds（调试子命令）也要能编译
       - run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+      # rustdoc 断链与公开项引用私有项检查：两条互补（默认查 private_intra_doc_links，--document-private-items 补查私有注释里的断链）
+      - name: rustdoc
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: |
+          cargo doc --workspace --no-deps --all-features --locked
+          cargo doc --workspace --no-deps --all-features --locked --document-private-items
       # check_fish_candidates 的候选词断言需要真正的 fish；缺了它该段会被静默跳过
       - name: Install fish for completion tests
         run: sudo apt-get update && sudo apt-get install -y fish
@@ -150,7 +157,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@1.89.0
       - uses: Swatinem/rust-cache@v2
-      - run: cargo check --workspace --locked
+      - run: cargo check --workspace --all-features --locked
 
   secrets:
     runs-on: ubuntu-latest

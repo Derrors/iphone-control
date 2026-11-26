@@ -1963,6 +1963,7 @@ dependencies = [
  "ictl-l10n",
  "ictl-protocol",
  "ictl-sign",
+ "ictl-ui",
  "ictl-unlock",
  "ictl-wda",
  "ictl-webinspector",

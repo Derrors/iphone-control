@@ -5,10 +5,11 @@ use std::time::{Duration, Instant};
 
 use base64::Engine;
 use ictl_device::{Rotation, ScreenSize};
+use ictl_ui as elements;
 use serde_json::{Value, json};
 
 use crate::http::Transport;
-use crate::{Result, WdaError, elements};
+use crate::{Result, WdaError};
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 /// [`WdaClient::xctest_responsive`] 的时限。正常几十到几百毫秒；守护进程每轮巡检问一次，等太久会拖住巡检

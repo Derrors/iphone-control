@@ -1132,29 +1132,31 @@ impl Daemon {
                 crate::wda_pkg::WDA_VERSION
             ));
         }
-        // plume_core 的签名 future 不是 Send（持有 &mut dyn FnMut 和非 Send 的私钥），放到阻塞线程里 block_on
-        let r: Result<ictl_sign::Signed, String> = tokio::task::spawn_blocking(move || {
+        // plume_core 的签名 future 不是 Send（持有 &mut dyn FnMut 和非 Send 的私钥），放到阻塞线程里 block_on；
+        // 错误用 Text 保留双语：日志和落盘按守护进程自己的语言，返回给调用方再按请求语言，不会互相串味
+        let r: Result<ictl_sign::Signed, ictl_l10n::Text> = tokio::task::spawn_blocking(move || {
             tokio::runtime::Handle::current()
                 .block_on(tokio::time::timeout(RESIGN_TIMEOUT, async move {
                     if fetch {
                         crate::wda_pkg::ensure(&unsigned).await?;
                     }
-                    let session = account.session().await.map_err(|e| e.to_string())?;
-                    session.ensure_device(&device.udid, &name).await.map_err(|e| e.to_string())?;
-                    std::fs::create_dir_all(&wda_dir).map_err(|e| e.to_string())?;
+                    let session = account.session().await.map_err(|e| ictl_l10n::Text::of(&e))?;
+                    session.ensure_device(&device.udid, &name).await.map_err(|e| ictl_l10n::Text::of(&e))?;
+                    std::fs::create_dir_all(&wda_dir).map_err(|e| ictl_l10n::Text::from(e.to_string()))?;
                     let tmp = wda_dir.join("WDA-signing.ipa");
-                    let signed = session.sign_ipa(&unsigned, &tmp, &device.udid).await.map_err(|e| e.to_string())?;
+                    let signed =
+                        session.sign_ipa(&unsigned, &tmp, &device.udid).await.map_err(|e| ictl_l10n::Text::of(&e))?;
                     device.install(&tmp).await.map_err(|e| {
-                        ictl_l10n::trf!(
+                        ictl_l10n::textf!(
                             "安装到手机失败(手机锁屏?)：{e}",
                             "Installing on the phone failed (phone locked?): {e}"
                         )
                     })?;
-                    std::fs::rename(&tmp, &signed_path).map_err(|e| e.to_string())?;
+                    std::fs::rename(&tmp, &signed_path).map_err(|e| ictl_l10n::Text::from(e.to_string()))?;
                     Ok(signed)
                 }))
                 .unwrap_or_else(|_| {
-                    Err(ictl_l10n::trf!(
+                    Err(ictl_l10n::textf!(
                         "{} 分钟内没有完成(苹果服务器或安装卡住)",
                         "not finished within {} minutes (Apple's servers or the install got stuck)",
                         RESIGN_TIMEOUT.as_secs() / 60
@@ -1162,7 +1164,7 @@ impl Daemon {
                 })
         })
         .await
-        .unwrap_or_else(|e| Err(ictl_l10n::trf!("签名任务异常退出：{e}", "The signing task exited abnormally: {e}")));
+        .unwrap_or_else(|e| Err(ictl_l10n::textf!("签名任务异常退出：{e}", "The signing task exited abnormally: {e}")));
 
         let mut g = self.inner.lock().await;
         let g = &mut *g;
@@ -1213,10 +1215,10 @@ impl Daemon {
                 ))
             }
             Err(e) => {
-                g.persisted.record_resign(now_secs(), Some(e.clone()));
+                g.persisted.record_resign(now_secs(), Some(ictl_l10n::in_own_lang(|| e.to_string())));
                 g.persisted.save(&self.cfg.state_file());
                 self.log.log(&ictl_l10n::log_trf!("重签失败：{e}", "Re-signing failed: {e}"));
-                Err(e.into())
+                Err(e.to_string().into())
             }
         };
         self.publish(g);
@@ -1377,5 +1379,44 @@ mod upkeep_tests {
         // never installed WDA (native only): no Apple ID upkeep at all
         assert_eq!(wda_upkeep(true, false, false), Upkeep { resign: false, session: false });
         assert_eq!(wda_upkeep(false, false, false), Upkeep { resign: false, session: false });
+    }
+
+    /// A `resign` failure inside `spawn_blocking` answers the caller in the request's language while recording the
+    /// event log and `state.json` in the daemon's own language (never mixing or leaking the caller's language)
+    #[tokio::test]
+    async fn resign_error_follows_caller_language_without_polluting_daemon_log() {
+        let dir = std::env::temp_dir().join(format!("ictl-resign-lang-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(dir.join("logs")).unwrap();
+        let mut cfg = crate::Config::from_env(&dir);
+        cfg.wda_unsigned = dir.join("unsigned.ipa");
+        std::fs::write(&cfg.wda_unsigned, b"stub").unwrap();
+        let d = crate::Daemon::new(cfg);
+        {
+            let mut g = d.inner.lock().await;
+            g.device = Some(Device::from_usb(&ictl_device::UsbDevice { udid: "TEST-UDID".into(), device_id: 1 }));
+        }
+
+        let own = ictl_l10n::own_lang();
+        let other = if own == ictl_l10n::Lang::En { ictl_l10n::Lang::Zh } else { ictl_l10n::Lang::En };
+        let err = ictl_l10n::scope(other, d.resign_now(true)).await.unwrap_err().to_string();
+
+        let (want_other, want_own) = if own == ictl_l10n::Lang::En {
+            ("还没有登录 Apple ID", "Not signed in to an Apple ID yet")
+        } else {
+            ("Not signed in to an Apple ID yet", "还没有登录 Apple ID")
+        };
+        assert!(err.contains(want_other), "caller got: {err}");
+        assert!(!err.contains(want_own), "caller mixed languages: {err}");
+
+        let log = std::fs::read_to_string(dir.join("logs/daemon.log")).unwrap();
+        assert!(log.contains(want_own), "daemon log got: {log}");
+        assert!(!log.contains(want_other), "daemon log polluted by caller language: {log}");
+
+        let state = d.inner.lock().await.persisted.resign_result.clone().unwrap();
+        let recorded = state.error.unwrap();
+        assert!(recorded.contains(want_own), "state.json got: {recorded}");
+        assert!(!recorded.contains(want_other), "state.json polluted by caller language: {recorded}");
+
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

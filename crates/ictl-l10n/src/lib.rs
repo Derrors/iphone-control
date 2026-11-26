@@ -190,6 +190,11 @@ impl Text {
         Self { zh: zh.into(), en: en.into() }
     }
 
+    /// Render a [`std::fmt::Display`] whose output follows [`lang`] (such as an error enum) in both languages
+    pub fn of(d: &impl std::fmt::Display) -> Self {
+        Self::owned(with_lang(Lang::Zh, || d.to_string()), with_lang(Lang::En, || d.to_string()))
+    }
+
     /// In language `l`
     pub fn get(&self, l: Lang) -> &str {
         match l {
@@ -209,6 +214,8 @@ impl std::fmt::Display for Text {
         f.write_str(self.get(lang()))
     }
 }
+
+impl std::error::Error for Text {}
 
 impl From<String> for Text {
     fn from(s: String) -> Self {

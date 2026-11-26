@@ -291,9 +291,9 @@ pub(crate) struct Inner {
     /// session's video is capped at [`ictl_device::LOW_BANDWIDTH_BITRATE`]
     pub low_bandwidth_viewers: usize,
     /// 最近一次读到的元素树。只在调用方允许（max_age_ms）时复用；改变界面的操作做完就清掉
-    pub elements_cache: Option<(Instant, ictl_wda::elements::Tree)>,
+    pub elements_cache: Option<(Instant, ictl_ui::Tree)>,
     /// 滑动等列表停下时最后读到的树（[`crate::tools`] 的 `settle` 拿来当比较的起点）
-    pub swiped_tree: Option<Swiped<ictl_wda::elements::Tree>>,
+    pub swiped_tree: Option<Swiped<ictl_ui::Tree>>,
     /// The same under native control: the frontmost app's last read once the list stopped, without what SpringBoard
     /// shows over it (that is read once by whoever uses it)
     pub swiped_snap: Option<Swiped<ictl_device::ax::AxScreen>>,

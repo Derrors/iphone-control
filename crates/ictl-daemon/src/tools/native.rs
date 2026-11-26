@@ -176,7 +176,7 @@ impl Daemon {
 
     /// remoteAXService didn't answer: unless that was already tried within [`AX_RESTART_EVERY`], end axauditd on the
     /// phone ([`ictl_device::Tunnel::restart_ax_daemon`]). Whether it was ended, so the read is worth repeating
-    async fn restart_stuck_ax(&self, g: &mut Inner, device: &ictl_device::Device, why: &str) -> bool {
+    pub(crate) async fn restart_stuck_ax(&self, g: &mut Inner, device: &ictl_device::Device, why: &str) -> bool {
         // a background check (the page's alert and status polls) doesn't restart it: it may be dropped halfway for an
         // action, and the next action finds out for itself
         if crate::core::in_background() {

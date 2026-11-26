@@ -15,6 +15,9 @@ function applyInfo(v) {
     if (changed) {
       S.daemon = null; S.dstatus = null; S.apps = []; S.appsState = 'idle'; appNames.map = null; appNames.loading = false;
       T.warm = 0; V.noDevice = false; V.devRetries = 0; clearTimeout(V.devTimer); V.devTimer = 0;
+      // the host's H.264 given up for a while on the device before: tried again now, not by a retry that would reconnect
+      // this one's picture out of turn later. Given up for good (404, a codec the browser can't decode) it stays so
+      if (V.offTimer) { clearTimeout(V.offTimer); V.offTimer = 0; V.off = false; V.offRetries = 0; }
     }
   }
   const reconnect = feedId && (changed || S.display?.id !== display?.id);

@@ -9,9 +9,9 @@ const src = html.match(/^const VIDEO_RETRY_MS = .*$/m)[0] + '\n' + html.match(/^
 
 function load() {
   const timers = [], ctx = { V: {}, S: { mode: 'live' }, connects: 0, errors: 0 };
-  // a timer is the index it was pushed at; a cleared one is marked
-  ctx.setTimeout = (f, ms) => timers.push({ f, ms }) - 1;
-  ctx.clearTimeout = id => { if (timers[id]) timers[id].cleared = true; };
+  // a timer's id is its place in the list, from 1 (as in a browser, 0 is never one)
+  ctx.setTimeout = (f, ms) => timers.push({ f, ms });
+  ctx.clearTimeout = id => { if (timers[id - 1]) timers[id - 1].cleared = true; };
   ctx.connect = () => { ctx.connects++; };
   ctx.feedError = () => { ctx.errors++; };
   runInNewContext(src + '\nthis.giveUpVideo = giveUpVideo; this.videoEnded = videoEnded;', ctx);
@@ -72,4 +72,18 @@ test('giving up again replaces the retry that was waiting', () => {
   assert.equal(timers[0].cleared, true);
   ctx.giveUpVideo(true, true);
   assert.equal(timers.filter(t => !t.cleared).length, 0, 'given up for good: none left');
+});
+
+// Both kinds given up at once (a restart): the phone's own video comes back first, and the host's retry after it
+// doesn't reconnect that working picture
+test('the host\'s retry leaves the phone\'s own video, back already, alone', () => {
+  const { ctx, timers } = load();
+  ctx.S.deviceVideo = true;
+  ctx.giveUpVideo(true, false);
+  ctx.giveUpVideo(false, false);
+  timers[0].f();
+  assert.equal(ctx.connects, 1, 'the phone\'s video again');
+  timers[1].f();
+  assert.equal(ctx.V.off, false, 'the host\'s may be used again');
+  assert.equal(ctx.connects, 1, 'but not reconnected for it');
 });

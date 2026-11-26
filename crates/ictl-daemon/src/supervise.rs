@@ -623,7 +623,19 @@ impl Daemon {
                 .into());
             }
         }
-        Box::pin(self.ax_read(g, crate::tools::AX_WAIT)).await.map(|_| ()).map_err(|e| e.to_string())
+        match Box::pin(self.ax_read(g, crate::tools::AX_WAIT)).await {
+            Ok(_) => Ok(()),
+            // the screen can't be read at all while preparing: axauditd may be one left from an image mounted before
+            // (it answers «no frontmost app» for good), also when the mount wasn't seen here (it finished after its
+            // time limit, or something else mounted it). Ended once (not again within `AX_RESTART_EVERY`), read again
+            Err(e) => {
+                let why = e.to_string();
+                if !Box::pin(self.restart_stuck_ax(g, device, &why)).await {
+                    return Err(why);
+                }
+                Box::pin(self.ax_read(g, crate::tools::AX_WAIT)).await.map(|_| ()).map_err(|e| e.to_string())
+            }
+        }
     }
 
     /// A mount that failed may be a broken cache: after a few in a row it is downloaded again (`ICTL_DDI_DIR` is the

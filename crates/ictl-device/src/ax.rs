@@ -165,6 +165,10 @@ impl Tunnel {
             if sb == app_pid {
                 return (Vec::new(), true);
             }
+            // found again under the same number: it didn't restart, and reading it again would only fail again
+            if tried == Some(sb) {
+                return (Vec::new(), false);
+            }
             match self.springboard_elements(sb).await {
                 Ok(r) => return r,
                 Err(e) => {

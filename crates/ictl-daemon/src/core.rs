@@ -510,7 +510,8 @@ impl<V> PidCache<V> {
     }
 
     fn insert_at(&mut self, pid: i64, v: V, now: Instant) {
-        if self.entries.len() >= Self::MAX {
+        // an entry renewed takes no room
+        if self.entries.len() >= Self::MAX && !self.entries.contains_key(&pid) {
             self.entries.retain(|_, (at, _)| now.saturating_duration_since(*at) < Self::FOR);
             if self.entries.len() >= Self::MAX {
                 self.entries.clear();
@@ -1913,6 +1914,8 @@ pub(crate) mod tests {
         }
         c.insert_at(1000, String::new(), t0 + PidCache::<String>::FOR + Duration::from_secs(1));
         assert_eq!(c.entries.len(), PidCache::<String>::MAX, "the stale one made room");
+        c.insert_at(5, String::new(), t0 + PidCache::<String>::FOR + Duration::from_secs(2));
+        assert_eq!(c.entries.len(), PidCache::<String>::MAX, "one renewed: nothing cleared");
         c.insert_at(1001, String::new(), t0 + PidCache::<String>::FOR + Duration::from_secs(2));
         assert_eq!(c.entries.len(), 1, "all recent: cleared");
     }

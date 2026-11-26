@@ -95,7 +95,8 @@ function giveUpVideo(dev, permanent) {
   V[key] = setTimeout(() => {
     V[key] = 0;
     if (dev) V.noDevice = false; else V.off = false;
-    if (S.mode === 'live') connect();
+    // the host's H.264 only comes in when the phone's own video isn't used: that one, back already, isn't interrupted
+    if (S.mode === 'live' && (dev || !(S.deviceVideo && !V.noDevice))) connect();
   }, VIDEO_RETRY_MS[n - 1]);
 }
 /* 一路画面结束了：出过画面就是断了，照常重连；没出过画面时，服务端或浏览器明确说不行（404、解不了这种编码，

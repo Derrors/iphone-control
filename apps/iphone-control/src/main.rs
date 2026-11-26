@@ -167,7 +167,7 @@ enum Command {
     Debug(debug::DebugArgs),
     #[command(about = ictl_l10n::tr!("按已配置的渠道发测试通知：每类事件各一条（标题带「[测试]」），或只发指定的一类", "Send test notifications over the configured channels: one per event type (title starts with “[test]”), or only the given one"))]
     NotifyTest {
-        #[arg(help = ictl_l10n::tr!("resign / session / pin / pin-recovered / unlock / offline / online / cert；不给就全发", "resign / session / pin / pin-recovered / unlock / offline / online / cert; all if not given"))]
+        #[arg(help = ictl_l10n::tr!("resign / session / pin / pin-recovered / unlock / offline / online / cert / daemon；不给就全发", "resign / session / pin / pin-recovered / unlock / offline / online / cert / daemon; all if not given"))]
         event: Option<String>,
     },
 }

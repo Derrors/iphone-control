@@ -127,11 +127,15 @@ const RETRY_ROUND: std::time::Duration = std::time::Duration::from_millis(200);
 const MAX_CONNECTIONS: usize = 256;
 
 async fn serve(cfg: Config, listener: tokio::net::UnixListener) -> anyhow::Result<()> {
+    let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
     let daemon = Daemon::new(cfg);
     daemon.log.log(ictl_l10n::log_tr!("守护进程启动", "Daemon started"));
-    watchdog::spawn(daemon.heartbeat.clone(), daemon.log.clone());
+    let run_state = Arc::new(watchdog::RunState::new(daemon.cfg.run_state_file()));
+    if let Some(incident) = run_state.on_startup(daemon.cfg.notify.any()) {
+        report_abnormal_restart(&daemon, incident).await;
+    }
+    watchdog::spawn(daemon.heartbeat.clone(), daemon.log.clone(), run_state.clone());
 
-    let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
     let mut tick = tokio::time::interval(core::TICK);
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     // 每个连接一个任务；请求在任务里等设备锁，主循环本身从不阻塞，停止信号随时能处理
@@ -205,7 +209,35 @@ async fn serve(cfg: Config, listener: tokio::net::UnixListener) -> anyhow::Resul
         let _ = t.await;
     }
     daemon.shutdown().await;
+    run_state.mark_clean_shutdown();
     Ok(())
+}
+
+async fn report_abnormal_restart(daemon: &Daemon, incident: watchdog::AbnormalRestart) {
+    let pid = incident.previous_pid;
+    let recent = incident.recent;
+    let note = match incident.suppressed_by_cooldown {
+        Some(n) => ictl_l10n::log_trf!(
+            "；通知在冷却期内已跳过（累计抑制 {n} 次）",
+            "; notification suppressed during cooldown ({n} suppressed so far)"
+        ),
+        None => String::new(),
+    };
+    let line = match incident.reason {
+        notify::RestartReason::Watchdog { silent_secs } => ictl_l10n::log_trf!(
+            "检测到上次守护进程（pid {pid}）因卡死 {silent_secs} 秒由看门狗退出并已重启（近 1 小时异常重启 {recent} 次）{note}",
+            "Detected previous daemon (pid {pid}) exited by watchdog after {silent_secs} s with no progress and restarted ({recent} abnormal restart(s) in the last hour){note}"
+        ),
+        notify::RestartReason::Unexpected => ictl_l10n::log_trf!(
+            "检测到上次守护进程（pid {pid}）未正常关闭（崩溃、被终止或断电）并已重启（近 1 小时异常重启 {recent} 次）{note}",
+            "Detected previous daemon (pid {pid}) exited unexpectedly (crash, killed, or power loss) and restarted ({recent} abnormal restart(s) in the last hour){note}"
+        ),
+    };
+    daemon.log.log(&line);
+    if let Some(event) = incident.notify {
+        let mut g = daemon.inner.lock().await;
+        daemon.notify(&mut g, event);
+    }
 }
 
 async fn serve_conn(daemon: Arc<Daemon>, stream: tokio::net::UnixStream) {
@@ -669,5 +701,65 @@ mod tests {
         let (_, _, _, lang) = parse_request(br#"{"op":"status","lang":"klingon"}"#).unwrap();
         assert_eq!(lang, Lang::Zh);
         assert!(parse_request(b"{").is_err());
+    }
+
+    /// End-to-end abnormal restart reporting: detects unexpected exit and watchdog exit across daemon restarts,
+    /// writes every incident to `daemon.log`, dispatches a notification once per cooldown, and suppresses storm repeats.
+    #[tokio::test]
+    async fn abnormal_restart_reports_to_log_and_throttles_notifications_across_restarts() {
+        let dir = std::env::temp_dir().join(format!("ictl-abnormal-restart-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(dir.join("logs")).unwrap();
+        let make_daemon = || {
+            let mut cfg = Config::from_env(&dir);
+            cfg.notify = config::NotifyConfig::default();
+            Daemon::new(cfg)
+        };
+        let d1 = make_daemon();
+        let state_file = d1.cfg.run_state_file();
+        let base = 1_000_000u64;
+
+        // First start is clean and writes the live marker.
+        let rs1 = watchdog::RunState::new(state_file.clone());
+        assert!(rs1.on_startup_at(base, 1001, true).is_none());
+
+        // Daemon 1 vanishes without clean shutdown -> Daemon 2 starts and reports + notifies once.
+        let rs2 = watchdog::RunState::new(state_file.clone());
+        let inc1 = rs2.on_startup_at(base + 10, 1002, true).expect("unexpected exit detected");
+        report_abnormal_restart(&d1, inc1).await;
+        assert!(d1.inner.lock().await.dedup.was_sent("daemon"));
+
+        // Daemon 2 also crashes 5 s later -> Daemon 3 logs suppression and does not emit a second notification.
+        let d2 = make_daemon();
+        let rs3 = watchdog::RunState::new(state_file.clone());
+        let inc2 = rs3.on_startup_at(base + 15, 1003, true).expect("storm crash detected");
+        assert_eq!(inc2.suppressed_by_cooldown, Some(1));
+        assert!(inc2.notify.is_none());
+        report_abnormal_restart(&d2, inc2).await;
+        assert!(!d2.inner.lock().await.dedup.was_sent("daemon"));
+
+        // Watchdog triggers after cooldown expires -> Daemon 4 logs watchdog cause and dispatches summary alert.
+        let after_cd = base + 10 + watchdog::ALERT_COOLDOWN.as_secs();
+        assert!(rs3.mark_watchdog_exit_at(1003, 605, after_cd - 2));
+        let d3 = make_daemon();
+        let rs4 = watchdog::RunState::new(state_file);
+        let inc3 = rs4.on_startup_at(after_cd, 1004, true).expect("watchdog exit detected");
+        assert_eq!(inc3.reason, notify::RestartReason::Watchdog { silent_secs: 605 });
+        assert_eq!(
+            inc3.notify,
+            Some(notify::Event::DaemonRestarted {
+                reason: notify::RestartReason::Watchdog { silent_secs: 605 },
+                recent: 3,
+                suppressed: 1,
+            })
+        );
+        report_abnormal_restart(&d3, inc3).await;
+        assert!(d3.inner.lock().await.dedup.was_sent("daemon"));
+
+        let log_text = std::fs::read_to_string(dir.join("logs/daemon.log")).unwrap();
+        assert!(log_text.contains("1001") && log_text.contains("605"), "{log_text}");
+        assert!(log_text.contains("抑制 1") || log_text.contains("1 suppressed"), "{log_text}");
+        let notify_lines = log_text.lines().filter(|l| l.contains("通知：") || l.contains("Notification:")).count();
+        assert_eq!(notify_lines, 2, "only the first crash and the post-cooldown watchdog summary notify:\n{log_text}");
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

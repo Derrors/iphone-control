@@ -200,6 +200,10 @@ impl Config {
     pub fn hid_marker_dir(&self) -> PathBuf {
         self.data_dir.join("hid-open")
     }
+    /// Persistent daemon lifecycle marker and anti-storm alert state (`crate::watchdog`)
+    pub fn run_state_file(&self) -> PathBuf {
+        self.data_dir.join("run-state.json")
+    }
 
     /// 建好数据目录并收紧权限：账号私钥、锁屏密码都在里面（配对记录归系统的 usbmuxd 管）
     pub fn prepare_dirs(&self) -> std::io::Result<()> {

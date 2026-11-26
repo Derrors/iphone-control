@@ -5,6 +5,15 @@ use std::time::{Duration, Instant};
 
 use crate::config::NotifyConfig;
 
+/// Why the previous daemon exited abnormally before this one started
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum RestartReason {
+    /// The watchdog found no heartbeat progress for `silent_secs` and exited so the service manager restarts it
+    Watchdog { silent_secs: u64 },
+    /// The previous daemon disappeared without a clean shutdown (crash, OOM, SIGKILL, power loss)
+    Unexpected,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Event {
     ResignFailed(String),
@@ -21,6 +30,14 @@ pub enum Event {
     /// 签名时新建了证书；`revoked`：团队里证书满了，还吊销了一张旧的
     CertificateChanged {
         revoked: bool,
+    },
+    /// 上一次守护进程异常退出或由看门狗触发重启，重启后由新进程自感知并告警（带持久化防风暴冷却）
+    DaemonRestarted {
+        reason: RestartReason,
+        /// 近 1 小时内异常重启总次数（含本次）
+        recent: u32,
+        /// 自上次通知后在冷却期内被合并的异常重启次数
+        suppressed: u32,
     },
 }
 
@@ -67,6 +84,7 @@ impl Event {
             Self::DeviceOffline { .. } => "offline",
             Self::DeviceOnline { .. } => "online",
             Self::CertificateChanged { .. } => "cert",
+            Self::DaemonRestarted { .. } => "daemon",
         }
     }
 
@@ -83,6 +101,7 @@ impl Event {
             Self::DeviceOffline { minutes: 10 },
             Self::DeviceOnline { minutes: 12 },
             Self::CertificateChanged { revoked: true },
+            Self::DaemonRestarted { reason: RestartReason::Watchdog { silent_secs: 600 }, recent: 1, suppressed: 0 },
         ]
     }
 
@@ -125,6 +144,42 @@ impl Event {
                 ictl_l10n::tr!("签名证书换了", "Signing certificate replaced").into(),
                 ictl_l10n::tr!("这次签名新建了证书(第一次在这台机器上签名,或原来的证书已被别处吊销)。之前用别的证书签的设备,WDA 起不来时会自动重签,也可以运行 iphone-control sign。", "This signing created a new certificate (the first signing on this machine, or the previous one was revoked elsewhere). Devices signed with another certificate are re-signed automatically when their WDA won't start, or run iphone-control sign.").into(),
             ),
+            Self::DaemonRestarted { reason, recent, suppressed } => {
+                let extra = if *suppressed > 0 && *recent > *suppressed {
+                    ictl_l10n::trf!(
+                        "\n冷却期内已合并 {suppressed} 次异常重启（近 1 小时共 {recent} 次）；如持续发生请排查循环崩溃。",
+                        "\n{suppressed} earlier abnormal restart(s) were suppressed during cooldown ({recent} in the last hour); check for a crash loop if this keeps happening."
+                    )
+                } else if *suppressed > 0 {
+                    ictl_l10n::trf!(
+                        "\n自上次通知起冷却期内已合并 {suppressed} 次异常重启；如持续发生请排查循环崩溃。",
+                        "\n{suppressed} earlier abnormal restart(s) were suppressed since the previous alert; check for a crash loop if this keeps happening."
+                    )
+                } else if *recent > 1 {
+                    ictl_l10n::trf!(
+                        "\n近 1 小时内已异常重启 {recent} 次。",
+                        "\n{recent} abnormal restarts in the last hour."
+                    )
+                } else {
+                    String::new()
+                };
+                match reason {
+                    RestartReason::Watchdog { silent_secs } => (
+                        ictl_l10n::tr!("守护进程卡死，已由看门狗重启", "Daemon stuck, restarted by watchdog").into(),
+                        ictl_l10n::trf!(
+                            "上一个守护进程已 {silent_secs} 秒没有进展，看门狗退出后已由后台服务重新拉起。{extra}\n排查：iphone-control status（或查看 logs/daemon.log）",
+                            "The previous daemon made no progress for {silent_secs} s; the watchdog exited and the service restarted it.{extra}\nCheck: iphone-control status (or logs/daemon.log)"
+                        ),
+                    ),
+                    RestartReason::Unexpected => (
+                        ictl_l10n::tr!("守护进程异常退出后已重启", "Daemon restarted after unexpected exit").into(),
+                        ictl_l10n::trf!(
+                            "上一个守护进程未正常关闭就退出了（可能是崩溃、被系统终止或主机断电），现已重新启动。{extra}\n排查：iphone-control status（或查看 logs/daemon.log）",
+                            "The previous daemon exited without shutting down cleanly (crash, killed by the OS, or power loss) and has been restarted.{extra}\nCheck: iphone-control status (or logs/daemon.log)"
+                        ),
+                    ),
+                }
+            }
         }
     }
 }
@@ -135,10 +190,11 @@ pub struct Dedup {
     sent: HashMap<&'static str, Instant>,
 }
 
-/// 冷却：重签失败、会话失效 20 小时内不重复推；其余等恢复事件清除
+/// 冷却：重签失败、会话失效 20 小时内不重复推；异常重启 30 分钟冷却（持久化防风暴）；其余等恢复事件清除
 fn cooldown(e: &Event) -> Option<Duration> {
     match e {
         Event::ResignFailed(_) | Event::SessionExpired(_) => Some(Duration::from_secs(20 * 3600)),
+        Event::DaemonRestarted { .. } => Some(crate::watchdog::ALERT_COOLDOWN),
         // 证书每换一次都要知道
         Event::WdaRecovered | Event::DeviceOnline { .. } | Event::CertificateChanged { .. } => Some(Duration::ZERO),
         _ => None,
@@ -228,7 +284,7 @@ mod tests {
         uniq.dedup();
         assert_eq!(uniq.len(), names.len());
         // 新增事件时这里的数字要跟着改，提醒同时补样例
-        assert_eq!(names.len(), 8);
+        assert_eq!(names.len(), 9);
     }
 
     #[test]
@@ -284,5 +340,35 @@ mod tests {
         let (title, _) =
             ictl_l10n::with_lang(ictl_l10n::Lang::En, || Event::DeviceOffline { minutes: 3 }.title_body(&ipad));
         assert_eq!(title, "客厅的iPad offline for 3 minutes");
+    }
+
+    #[test]
+    fn daemon_restarted_messages_render_both_reasons_and_storm_counts() {
+        let t = Target::sample();
+        let (title, body) = ictl_l10n::with_lang(ictl_l10n::Lang::Zh, || {
+            Event::DaemonRestarted { reason: RestartReason::Watchdog { silent_secs: 615 }, recent: 1, suppressed: 0 }
+                .title_body(&t)
+        });
+        assert!(title.contains("看门狗"), "{title}");
+        assert!(body.contains("615") && !body.contains("合并") && !body.contains("近 1 小时"), "{body}");
+
+        let (title, body) = ictl_l10n::with_lang(ictl_l10n::Lang::En, || {
+            Event::DaemonRestarted { reason: RestartReason::Unexpected, recent: 11, suppressed: 9 }.title_body(&t)
+        });
+        assert!(title.contains("unexpected exit"), "{title}");
+        assert!(body.contains("9 earlier abnormal restart") && body.contains("11 in the last hour"), "{body}");
+
+        let (_, body) = ictl_l10n::with_lang(ictl_l10n::Lang::Zh, || {
+            Event::DaemonRestarted { reason: RestartReason::Unexpected, recent: 3, suppressed: 0 }.title_body(&t)
+        });
+        assert!(body.contains("近 1 小时内已异常重启 3 次"), "{body}");
+
+        // Memory Dedup uses the same 30-minute cooldown as persistent throttling.
+        let mut d = Dedup::default();
+        let now = Instant::now();
+        let ev = Event::DaemonRestarted { reason: RestartReason::Unexpected, recent: 1, suppressed: 0 };
+        assert!(d.should_send(&ev, now));
+        assert!(!d.should_send(&ev, now + Duration::from_secs(10 * 60)));
+        assert!(d.should_send(&ev, now + crate::watchdog::ALERT_COOLDOWN));
     }
 }

@@ -68,8 +68,12 @@ impl MjpegHub {
     {
         let slot = {
             let mut sources = self.sources.lock().unwrap_or_else(|p| p.into_inner());
-            // phones nobody watches any more: a slot in use (locked) is kept
-            sources.retain(|_, slot| slot.try_lock().map_or(true, |w| w.strong_count() > 0));
+            // phones nobody watches any more. A slot someone else holds (taken here, about to be locked: every
+            // subscriber clones it under this lock) or that is locked is kept: dropped from the map, its phone's next
+            // page would open a second stream beside the one being opened
+            sources.retain(|_, slot| {
+                Arc::strong_count(slot) > 1 || slot.try_lock().map_or(true, |w| w.strong_count() > 0)
+            });
             sources.entry(udid.to_owned()).or_default().clone()
         };
         // held while connecting: two pages of this phone opened at once share one stream

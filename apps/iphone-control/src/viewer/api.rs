@@ -148,7 +148,6 @@ pub(super) fn status_json(s: &protocol::StatusData, hid: bool) -> Value {
     })
 }
 
-/// The display name of an installed app (the home screen for SpringBoard); the bundle id when unknown
 /// App names by bundle ID, and the IDs the app lists didn't have when last read ([`app_name`])
 #[derive(Default)]
 pub(super) struct AppNames {
@@ -168,6 +167,7 @@ impl AppNames {
     }
 }
 
+/// The display name of an installed app (the home screen for SpringBoard); the bundle id when unknown
 pub(super) async fn app_name(ctx: &Ctx, bundle: &str) -> String {
     if bundle == SPRINGBOARD {
         return ictl_l10n::tr!("主屏幕", "Home Screen").into();
@@ -175,15 +175,15 @@ pub(super) async fn app_name(ctx: &Ctx, bundle: &str) -> String {
     let mut names = ctx.names.lock().await;
     let now = std::time::Instant::now();
     if names.wants_lists(bundle, now) {
-        let mut read = false;
+        let mut both = true;
         for system in [false, true] {
-            if let Ok(list) = list_apps(ctx, system).await {
-                read = true;
-                names.known.extend(list.into_iter().map(|(n, b)| (b, n)));
+            match list_apps(ctx, system).await {
+                Ok(list) => names.known.extend(list.into_iter().map(|(n, b)| (b, n))),
+                Err(_) => both = false,
             }
         }
-        // only when the lists were read: a daemon that didn't answer is asked again next time
-        if read && !names.known.contains_key(bundle) {
+        // only when both lists were read: one that didn't come may have it, and is asked again next time
+        if both && !names.known.contains_key(bundle) {
             if names.missed.len() > 200 {
                 names.missed.clear();
             }

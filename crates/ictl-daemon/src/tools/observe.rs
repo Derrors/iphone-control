@@ -90,8 +90,9 @@ impl Daemon {
     pub(crate) async fn settle(&self, g: &mut Inner, max: Duration) -> crate::error::Result<String> {
         let t0 = Instant::now();
         // 刚滑完读到的树：只作比较的起点，是不是真稳定还要看下一次读到的
-        let seed = g.swiped_tree.take().filter(|(at, _)| at.elapsed() < SWIPED_TREE_FRESH).map(|(_, t)| t);
-        let native_seed = g.swiped_snap.take().filter(|(at, _)| at.elapsed() < SWIPED_TREE_FRESH).map(|(_, s)| s);
+        // a starting point only, confirmed or not: it still has to be read the same again
+        let seed = g.swiped_tree.take().filter(|s| s.at.elapsed() < SWIPED_TREE_FRESH).map(|s| s.read);
+        let native_seed = g.swiped_snap.take().filter(|s| s.at.elapsed() < SWIPED_TREE_FRESH).map(|s| s.read);
         let w = match self.route(g) {
             Route::Wda(w) => w,
             Route::Native => return Box::pin(self.settle_native(g, t0, max, native_seed)).await,

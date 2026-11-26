@@ -1267,18 +1267,28 @@ fn gzip(data: &[u8]) -> Vec<u8> {
     e.write_all(data).and_then(|()| e.finish()).unwrap_or_default()
 }
 
-/// Whether an `Accept-Encoding` value takes gzip: `gzip` or `*`, not with `q=0`
+/// Whether an `Accept-Encoding` list takes gzip (RFC 9110 §12.5.3): `gzip` named, or else `*`; either with a `q` that
+/// isn't a number above 0 (`q=0`, `q=NaN`) refuses it. `*` stands only for the codings not named, so `gzip;q=0, *`
+/// refuses gzip
 fn accepts_gzip(v: &str) -> bool {
-    v.split(',').any(|c| {
+    let (mut named, mut star) = (None::<bool>, None::<bool>);
+    for c in v.split(',') {
         let mut parts = c.split(';').map(str::trim);
         let name = parts.next().unwrap_or("");
-        let refused = parts.any(|p| {
-            p.split_once('=').is_some_and(|(k, q)| {
-                k.trim().eq_ignore_ascii_case("q") && q.trim().parse::<f32>().is_ok_and(|q| q <= 0.0)
-            })
-        });
-        (name.eq_ignore_ascii_case("gzip") || name == "*") && !refused
-    })
+        let taken = parts.filter_map(|p| p.split_once('=')).filter(|(k, _)| k.trim().eq_ignore_ascii_case("q")).all(
+            |(_, q)| q.trim().parse::<f32>().is_ok_and(|q| q > 0.0), // NaN isn't above 0 either
+        );
+        // named twice: refused if either refuses
+        let slot = if name.eq_ignore_ascii_case("gzip") {
+            &mut named
+        } else if name == "*" {
+            &mut star
+        } else {
+            continue;
+        };
+        *slot = Some(slot.unwrap_or(true) && taken);
+    }
+    named.or(star).unwrap_or(false)
 }
 
 /// Writes and flushes `bytes` within [`WRITE_TIMEOUT`]
@@ -1530,6 +1540,8 @@ impl Head {
             gzip: false,
         };
         let mut hosts = 0;
+        // every `Accept-Encoding` line together: they make one list (RFC 9110 §5.3)
+        let mut accept = String::new();
         for l in lines {
             // a line without a colon (a folded continuation, garbage) or a name with blanks (`Content-Length : 1`,
             // which some proxies read and others don't): 400, as RFC 9112 §5.1 asks
@@ -1548,7 +1560,10 @@ impl Head {
                 "content-length" => h.content_length = Some(v.parse().ok()?),
                 "sec-fetch-site" => h.fetch_site = Some(v.to_ascii_lowercase()),
                 "x-ictl-lang" => h.lang = ictl_l10n::parse(v),
-                "accept-encoding" => h.gzip |= accepts_gzip(v),
+                "accept-encoding" => {
+                    accept.push_str(v);
+                    accept.push(',');
+                }
                 "x-ictl-device" if !v.is_empty() => h.device = Some(v.to_owned()),
                 "connection" => h.close |= v.split(',').any(|t| t.trim().eq_ignore_ascii_case("close")),
                 "transfer-encoding" => {
@@ -1563,6 +1578,7 @@ impl Head {
         if hosts > 1 || (h.chunked && h.content_length.is_some()) {
             return None;
         }
+        h.gzip = accepts_gzip(&accept);
         Some(h)
     }
 
@@ -2194,8 +2210,6 @@ mod tests {
         assert!(t0.elapsed() < Duration::from_secs(5), "{:?}", t0.elapsed());
     }
 
-    /// The pages run their own inline scripts only: the policy names each by its hash, and a script changed or added
-    /// by someone else matches none
     /// The page goes out gzipped to a browser that takes it (about a third of the size), as it is otherwise
     #[test]
     fn the_page_is_gzipped_for_browsers_that_take_it() {
@@ -2209,6 +2223,11 @@ mod tests {
             ("deflate, br", false),
             ("", false),
             ("x-gzip", false),
+            ("gzip;q=0, *", false),
+            ("*;q=0, gzip", true),
+            ("gzip;q=NaN", false),
+            ("gzip;q=abc", false),
+            ("gzip, gzip;q=0", false),
         ] {
             assert_eq!(accepts_gzip(v), want, "{v}");
         }
@@ -2222,8 +2241,14 @@ mod tests {
             Head::parse(format!("GET / HTTP/1.1\r\nHost: a\r\nAccept-Encoding: {accept}\r\n").as_bytes()).unwrap()
         };
         assert!(head("gzip").gzip && !head("identity").gzip);
+        // two lines make one list: the explicit refusal on the second wins over the first line's `*`
+        let two =
+            Head::parse(b"GET / HTTP/1.1\r\nHost: a\r\nAccept-Encoding: *\r\nAccept-Encoding: gzip;q=0\r\n").unwrap();
+        assert!(!two.gzip);
     }
 
+    /// The pages run their own inline scripts only: the policy names each by its hash, and a script changed or added
+    /// by someone else matches none
     #[test]
     fn pages_allow_only_their_own_scripts() {
         use sha2::{Digest, Sha256};

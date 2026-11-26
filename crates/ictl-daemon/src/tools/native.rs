@@ -477,18 +477,19 @@ impl Daemon {
 
     /// After a swipe, waits for the list to stop (at most [`SCROLL_SETTLE`]): two reads in a row with the elements
     /// in the same place along the swipe. Says when it was still moving; a screen with few elements isn't waited for
-    /// Also returns the read that saw it stop (or the one with few elements), for the next look at the screen
-    /// ([`crate::core::Inner::swiped_snap`]); none when it was still moving
+    /// Also returns the read that saw it stop, confirmed by two reads, or the one read of a screen with few elements
+    /// (not confirmed), for the next look at the screen ([`crate::core::Inner::swiped_snap`]); none when it was still
+    /// moving
     pub(crate) async fn native_scrolled(
         &self,
         g: &mut Inner,
         vertical: bool,
-    ) -> (String, Option<ictl_device::ax::AxScreen>) {
+    ) -> (String, Option<(ictl_device::ax::AxScreen, bool)>) {
         let t0 = Instant::now();
 
         let Ok((snap, mut prev)) = self.ax_app_read(g).await else { return (String::new(), None) };
         if prev.elements.len() < VISUAL_SETTLE_BELOW {
-            return (String::new(), Some(snap));
+            return (String::new(), Some((snap, false)));
         }
         while t0.elapsed() < SCROLL_SETTLE {
             let Ok((snap, cur)) = self.ax_app_read(g).await else { return (String::new(), None) };
@@ -500,7 +501,7 @@ impl Daemon {
                 cur.elements.len()
             );
             if still {
-                return (String::new(), Some(snap));
+                return (String::new(), Some((snap, true)));
             }
             prev = cur;
         }

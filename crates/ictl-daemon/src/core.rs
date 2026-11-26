@@ -531,6 +531,21 @@ impl<V> PidCache<V> {
 pub(crate) type Prepared =
     std::result::Result<(Option<String>, Option<(String, crate::detached::StoppedWda)>), (DeviceError, bool)>;
 
+/// A read taken as a swiped list stopped ([`Inner::swiped_tree`])
+pub(crate) struct Swiped<T> {
+    pub at: Instant,
+    pub read: T,
+    /// Two reads in a row agreed the list stood still. A screen with few elements isn't waited for: its single read
+    /// only serves as a starting point for waiting, not as the screen now
+    pub still: bool,
+}
+
+impl<T> Swiped<T> {
+    pub fn now(read: T, still: bool) -> Self {
+        Self { at: Instant::now(), read, still }
+    }
+}
+
 pub(crate) struct Inner {
     pub persisted: Persisted,
     pub dev: PerDevice,
@@ -575,10 +590,10 @@ pub(crate) struct Inner {
     /// 最近一次读到的元素树。只在调用方允许（max_age_ms）时复用；改变界面的操作做完就清掉
     pub elements_cache: Option<(Instant, ictl_wda::elements::Tree)>,
     /// 滑动等列表停下时最后读到的树（[`crate::tools`] 的 `settle` 拿来当比较的起点）
-    pub swiped_tree: Option<(Instant, ictl_wda::elements::Tree)>,
+    pub swiped_tree: Option<Swiped<ictl_wda::elements::Tree>>,
     /// The same under native control: the frontmost app's last read once the list stopped, without what SpringBoard
     /// shows over it (that is read once by whoever uses it)
-    pub swiped_snap: Option<(Instant, ictl_device::ax::AxScreen)>,
+    pub swiped_snap: Option<Swiped<ictl_device::ax::AxScreen>>,
     pub dedup: Dedup,
     /// 各设备最近一次因为证书自动重签的时间（按 UDID，换设备、重插也记着）：[`crate::supervise::CERT_HEAL_EVERY`] 内
     /// 不再自动重签同一台，免得重签也治不好时反复签
@@ -1425,6 +1440,10 @@ impl Daemon {
                 g.dev.repeats.start(&req);
                 // 原生控制等界面稳定时，从这之后手机推来的树算起
                 g.dev.acted_at = Some(Instant::now());
+                // what an earlier swipe read is no starting point after this action (a tap right after a swipe would
+                // be found settled on the screen before the tap); a swipe sets it again as it ends
+                g.swiped_tree = None;
+                g.swiped_snap = None;
             }
             // boxed, like the request in `handle`: two of its large state machine on the stack overflowed a test thread
             let r = Box::pin(self.dispatch(g, req, view, ctx.watched, &mut may_continue)).await;

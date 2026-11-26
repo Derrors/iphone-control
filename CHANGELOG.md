@@ -8,7 +8,7 @@ What changed in each release, one line per change. Versions follow [Semantic Ver
 
 ### Improvements
 
-- The daemon now detects when the previous instance exited unexpectedly (crash, `SIGKILL`, power loss) or was restarted by the watchdog via a persisted `run-state.json` marker, logs every incident to `daemon.log`, and sends a `daemon` notification (`iphone-control notify-test daemon`) throttled by a persisted 30-minute anti-storm cooldown that summarizes suppressed restarts in crash loops (#PR).
+- The daemon now detects when the previous instance exited unexpectedly (crash, `SIGKILL`, power loss) or was restarted by the watchdog via a persisted `run-state.json` marker, logs every incident to `daemon.log`, and sends a `daemon` notification (`iphone-control notify-test daemon`) throttled by a persisted 30-minute anti-storm cooldown that summarizes suppressed restarts in crash loops (#219).
 - On macOS, control requests sent to the viewer's local HTTP API now also identify the calling process (via `libproc`), so an agent on the same machine can no longer pause, resume or approve its own task through the HTTP API either (#215).
 - On iOS 27 the screen is read without the detour through WebDriverAgent-style XML: the accessibility tree becomes the element tree directly, the same one WDA's source gives. When auto-unlock fails on such a phone, its message no longer says "WDA unavailable" (#211).
 - Slow work that doesn't need the phone no longer holds up taps and reads: `doctor` checks this machine (usbmuxd, the Apple ID, ffmpeg) before it takes the phone, crash reports and uninstalling an app don't take it at all, and the details of a second connected device are read in the background (#207).

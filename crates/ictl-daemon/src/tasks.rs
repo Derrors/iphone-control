@@ -38,7 +38,7 @@ use tokio::sync::{Notify, broadcast, oneshot};
 use crate::protocol::{Request, Response, TaskEvent, TaskInfo, TouchPhase};
 
 pub use scope::{Check, Target, scope_check};
-use store::{drop_unreadable, first_started, restore};
+use store::{MAX_LOG_BYTES, MAX_LOG_EVENTS, drop_unreadable, first_started, restore};
 use task::request_gesture;
 
 /// Task logs kept on disk, and the tasks listed (their events are read from the logs, see `TaskState::on_disk`)
@@ -93,12 +93,23 @@ impl Status {
 
 struct TaskState {
     status: Status,
-    /// The events so far, kept here only while they aren't all in the task's file ([`Self::on_disk`]): the daemon
-    /// keeps the last [`KEEP`] tasks, and their logs have no bound of their own
-    log: Vec<TaskEvent>,
-    /// Every event is in [`Task::file`]: read from there when wanted, not held in memory. Off without a file, and from
-    /// the first write to it that fails (the events so far are read into [`Self::log`] then)
+    /// The events so far (each paired with its monotonic sequence number), kept here only while they aren't all in the
+    /// task's file ([`Self::on_disk`]). Both disk and in-memory logs are bounded by `max_events` / `max_bytes`, with
+    /// `task` and `done` always allowed through.
+    log: Vec<(u64, TaskEvent)>,
+    /// Every stored event is in [`Task::file`]: read from there asynchronously without holding this mutex. Off without
+    /// a file, and from the first write to it that fails (the events so far are read into [`Self::log`] then).
     on_disk: bool,
+    /// Highest monotonic sequence number emitted for this task (1-based; 0 before the first event).
+    next_seq: u64,
+    /// Number of events persisted to [`Task::file`] (or held in [`Self::log`] when `!on_disk`).
+    stored_events: usize,
+    /// Exact byte length written to [`Task::file`] (or cumulative serialized bytes in [`Self::log`] when `!on_disk`).
+    stored_bytes: u64,
+    /// Whether this task has already logged a one-time warning after hitting the log cap.
+    capped: bool,
+    max_events: usize,
+    max_bytes: u64,
     next_step: u64,
     /// What the agent said it is about to do, for the next step
     thought: Option<String>,
@@ -123,6 +134,18 @@ struct TaskState {
     agent_below_opener: bool,
 }
 
+/// Consistent snapshot of a task's stored history paired with its live event receiver, captured without holding the
+/// task mutex while reading the on-disk log.
+pub struct Subscription {
+    /// Stored events up to [`Self::snap_seq`], in order, each with its monotonic sequence number.
+    pub events: Vec<(u64, TaskEvent)>,
+    /// Highest sequence number emitted when this subscription was taken (including any ordinary events skipped after
+    /// the log cap was hit); live items with `seq <= snap_seq` are already covered.
+    pub snap_seq: u64,
+    pub rx: broadcast::Receiver<(u64, TaskEvent)>,
+    pub ended: bool,
+}
+
 pub struct Task {
     pub id: String,
     token: String,
@@ -134,7 +157,7 @@ pub struct Task {
     opener: Option<u32>,
     file: Option<PathBuf>,
     st: Mutex<TaskState>,
-    tx: broadcast::Sender<TaskEvent>,
+    tx: broadcast::Sender<(u64, TaskEvent)>,
     /// Wakes requests held for the task when its status changes
     changed: Notify,
 }
@@ -320,6 +343,12 @@ impl Tasks {
                 status: Status::Running,
                 log: Vec::new(),
                 on_disk,
+                next_seq: 0,
+                stored_events: 0,
+                stored_bytes: 0,
+                capped: false,
+                max_events: MAX_LOG_EVENTS,
+                max_bytes: MAX_LOG_BYTES,
                 next_step: 1,
                 thought: None,
                 last: None,

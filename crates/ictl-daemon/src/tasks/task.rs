@@ -1,14 +1,15 @@
 //! Single-task lifecycle: event emission, steps, thoughts, user confirmations, and control actions.
 
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
-use tokio::sync::{broadcast, oneshot};
+use tokio::sync::oneshot;
 
 use crate::protocol::{Request, Response, TaskEvent, TaskInfo};
 
-use super::store::{append, read_events};
-use super::{Asked, End, Status, Task, TaskState, cancelled, ended_message, now_ms, refuse};
+use super::store::{append_line, encode_line, read_events_prefix};
+use super::{Asked, End, Status, Subscription, Task, TaskState, cancelled, ended_message, now_ms, refuse};
 
 /// A thought sent this soon after a step started belongs to that step (it comes from the agent's output, which
 /// reaches its opener slightly after the tool call reached the daemon)
@@ -45,17 +46,56 @@ impl Task {
         if !st.status.active() && name != "done" {
             return;
         }
+        st.next_seq += 1;
+        let seq = st.next_seq;
         let e = TaskEvent { event: name.into(), data };
-        let saved = self.file.as_deref().is_some_and(|f| append(f, &e));
-        if st.on_disk && !saved {
-            // what the file has so far, here from now on
-            st.log = self.file.as_deref().map(read_events).unwrap_or_default();
-            st.on_disk = false;
+        // `task` (header) and `done` (terminal outcome) are always persisted even after hitting the cap so restart
+        // recovery never misclassifies a finished task as `interrupted` and lagged followers always receive `done`.
+        let essential = matches!(name, "task" | "done");
+        if !essential && st.capped {
+            let _ = self.tx.send((seq, e));
+            return;
         }
-        if !st.on_disk {
-            st.log.push(e.clone());
+        let line = encode_line(seq, &e);
+        let line_bytes = line.len() as u64;
+        let over_limit = !essential
+            && (st.stored_events >= st.max_events || st.stored_bytes.saturating_add(line_bytes) > st.max_bytes);
+        if over_limit {
+            st.capped = true;
+            tracing::warn!(
+                "{}",
+                ictl_l10n::log_trf!(
+                    "任务 {} 日志达到上限（{} 条 / {} 字节），后续普通事件不再落盘（保留终态 done）",
+                    "Task {} log reached its limit ({} events / {} bytes); skipping further ordinary events on disk (done is still kept)",
+                    self.id,
+                    st.max_events,
+                    st.max_bytes
+                )
+            );
+            let _ = self.tx.send((seq, e));
+            return;
         }
-        let _ = self.tx.send(e);
+        if st.on_disk {
+            match self.file.as_deref().and_then(|f| append_line(f, &line)) {
+                Some(new_len) => {
+                    st.stored_bytes = new_len;
+                    st.stored_events += 1;
+                }
+                None => {
+                    // what the file has so far, here from now on
+                    st.log = self.file.as_deref().map(|f| read_events_prefix(f, st.stored_bytes)).unwrap_or_default();
+                    st.on_disk = false;
+                    st.log.push((seq, e.clone()));
+                    st.stored_events += 1;
+                    st.stored_bytes = st.stored_bytes.saturating_add(line_bytes);
+                }
+            }
+        } else {
+            st.log.push((seq, e.clone()));
+            st.stored_events += 1;
+            st.stored_bytes = st.stored_bytes.saturating_add(line_bytes);
+        }
+        let _ = self.tx.send((seq, e));
     }
 
     fn set_status(&self, st: &mut TaskState, s: Status) {
@@ -68,18 +108,40 @@ impl Task {
         }
     }
 
-    /// The whole task so far and the events after it (taken together, so nothing falls between), and whether it ended
-    pub fn subscribe(&self) -> (Vec<TaskEvent>, broadcast::Receiver<TaskEvent>, bool) {
-        let st = self.lock();
-        (self.events(&st), self.tx.subscribe(), !st.status.active())
+    /// Takes a consistent snapshot of the task's stored history and its live broadcast receiver without holding the
+    /// task mutex during disk reads: the lock only subscribes to `tx` and records the exact file byte length (or clones
+    /// the in-memory fallback), and the file prefix is then read on a blocking thread.
+    pub async fn subscribe(&self) -> Subscription {
+        enum Source {
+            File { path: PathBuf, len: u64 },
+            Memory(Vec<(u64, TaskEvent)>),
+        }
+        let (source, snap_seq, rx, ended) = {
+            let st = self.lock();
+            let rx = self.tx.subscribe();
+            let snap_seq = st.next_seq;
+            let ended = !st.status.active();
+            let source = match self.file.as_deref() {
+                Some(f) if st.on_disk => Source::File { path: f.to_owned(), len: st.stored_bytes },
+                _ => Source::Memory(st.log.clone()),
+            };
+            (source, snap_seq, rx, ended)
+        };
+        let events = match source {
+            Source::Memory(events) => events,
+            Source::File { len: 0, .. } => Vec::new(),
+            Source::File { path, len } => {
+                tokio::task::spawn_blocking(move || read_events_prefix(&path, len)).await.unwrap_or_default()
+            }
+        };
+        Subscription { events, snap_seq, rx, ended }
     }
 
-    /// Every event so far, in order (under `st`'s lock, which every event is written under)
-    fn events(&self, st: &TaskState) -> Vec<TaskEvent> {
-        match self.file.as_deref() {
-            Some(f) if st.on_disk => read_events(f),
-            _ => st.log.clone(),
-        }
+    #[cfg(test)]
+    pub(crate) fn set_log_limits(&self, max_events: usize, max_bytes: u64) {
+        let mut st = self.lock();
+        st.max_events = max_events;
+        st.max_bytes = max_bytes;
     }
 
     /// Ends the task unless it already ended. Returns whether it did

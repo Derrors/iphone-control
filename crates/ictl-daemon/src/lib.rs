@@ -375,19 +375,24 @@ async fn task_stream(
         Some(o) => serde_json::to_string(o).unwrap_or_default(),
         None => "streaming".into(),
     };
-    let (log, mut rx, ended) = task.subscribe();
+    let sub = task.subscribe().await;
     let mut ok = send(&mut w, &protocol::Response::text(first)).await;
-    for e in &log {
+    for (_, e) in &sub.events {
         ok = ok && send(&mut w, e).await;
     }
-    // events sent so far: the task's log is complete, so a reader that fell behind catches up from it
-    let mut sent = log.len();
-    if ok && !ended {
+    // Highest sequence number already covered by the initial snapshot (or sent live): deduplicates any overlap with
+    // `rx` and lets a lagged reader catch up by sequence number even after the task log hit its cap.
+    let mut last_seq = sub.snap_seq;
+    let mut rx = sub.rx;
+    if ok && !sub.ended {
         loop {
             tokio::select! {
                 e = rx.recv() => match e {
-                    Ok(e) => {
-                        sent += 1;
+                    Ok((seq, e)) => {
+                        if seq <= last_seq {
+                            continue;
+                        }
+                        last_seq = seq;
                         let done = e.event == "done";
                         if !send(&mut w, &e).await {
                             break;
@@ -397,21 +402,25 @@ async fn task_stream(
                         }
                     }
                     // fell behind and missed some, maybe `done` (then nothing more would come, and the connection would
-                    // stay open for good): what was missed comes from the log, then events again from there
+                    // stay open for good): re-read the log asynchronously and replay everything past `last_seq`
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
-                        let (log, again, ended) = task.subscribe();
-                        for e in log.iter().skip(sent) {
+                        let again = task.subscribe().await;
+                        for (seq, e) in &again.events {
+                            if *seq <= last_seq {
+                                continue;
+                            }
+                            last_seq = *seq;
                             if !send(&mut w, e).await {
                                 ok = false;
                                 break;
                             }
                         }
-                        sent = sent.max(log.len());
-                        rx = again;
+                        last_seq = last_seq.max(again.snap_seq);
+                        rx = again.rx;
                         if !ok {
                             break;
                         }
-                        if ended {
+                        if again.ended {
                             return;
                         }
                     }
@@ -543,9 +552,76 @@ mod tests {
                     .await
                     .expect("the stream ended")
                     .unwrap();
-                let (log, _, _) = t.subscribe();
-                assert_eq!(got.len(), 1 + log.len(), "the answer line, then every event once");
+                let sub = t.subscribe().await;
+                assert_eq!(got.len(), 1 + sub.events.len(), "the answer line, then every event once");
                 assert!(got.last().unwrap().contains("\"done\""), "{}", got.last().unwrap());
+                std::fs::remove_dir_all(dir).unwrap();
+            })
+            .await;
+    }
+
+    /// Even when a task's log hits its cap and a slow follower lags past the broadcast buffer after already receiving
+    /// live events beyond the persisted prefix, the follower still receives `done` (never skipped by length) and ends.
+    #[tokio::test]
+    async fn a_capped_lagged_follower_still_receives_done_and_ends() {
+        use tokio::io::AsyncBufReadExt;
+        let local = tokio::task::LocalSet::new();
+        local
+            .run_until(async {
+                let (d, dir) = core::tests::test_daemon("lagged-capped");
+                let t = d.tasks.open("x", "test", Some("phone"), Vec::new(), None).unwrap();
+                t.set_log_limits(20, 16 * 1024 * 1024);
+                let (ours, theirs) = tokio::net::UnixStream::pair().unwrap();
+                let (r, w) = ours.into_split();
+                let (daemon, id) = (d.clone(), t.id.clone());
+                let follow = tokio::task::spawn_local(async move {
+                    task_stream(&daemon, BufReader::new(r), w, protocol::Request::TaskEvents { id }, None).await
+                });
+                let mut lines = tokio::io::BufReader::new(theirs).lines();
+                // Read the initial answer + `task` event + enough live events to move `last_seq` well past the cap.
+                let mut got = Vec::new();
+                got.push(lines.next_line().await.unwrap().unwrap());
+                got.push(lines.next_line().await.unwrap().unwrap());
+                for _ in 0..15 {
+                    t.control_as_user("pause").unwrap();
+                    t.control_as_user("resume").unwrap();
+                }
+                // 15 * 4 = 60 live events (> cap 20): read them so last_seq > 20 before lagging.
+                for _ in 0..60 {
+                    let l = tokio::time::timeout(std::time::Duration::from_secs(5), lines.next_line())
+                        .await
+                        .unwrap()
+                        .unwrap()
+                        .unwrap();
+                    got.push(l);
+                }
+                // Now stop reading while emitting > broadcast capacity (4096) events and ending the task.
+                for _ in 0..1500 {
+                    t.control_as_user("pause").unwrap();
+                    t.control_as_user("resume").unwrap();
+                }
+                t.end(tasks::End::Cancelled, "stopped");
+                while let Ok(Ok(Some(l))) =
+                    tokio::time::timeout(std::time::Duration::from_secs(10), lines.next_line()).await
+                {
+                    got.push(l);
+                }
+                tokio::time::timeout(std::time::Duration::from_secs(5), follow)
+                    .await
+                    .expect("the stream ended")
+                    .unwrap();
+                let done_count = got.iter().filter(|l| l.contains("\"event\":\"done\"")).count();
+                assert_eq!(done_count, 1, "done must arrive exactly once even after cap + lag");
+                assert!(got.last().unwrap().contains("\"done\""), "{}", got.last().unwrap());
+                // Persisted log stayed capped to 20 ordinary events + terminal `done`.
+                let sub = t.subscribe().await;
+                assert!(sub.ended);
+                assert_eq!(sub.events.len(), 21, "20 events up to cap + mandatory done");
+                assert_eq!(sub.events.last().unwrap().1.event, "done");
+                // Restart recovery reads the capped file and sees `cancelled`, not `interrupted`.
+                let reloaded = tasks::Tasks::load(Some(dir.join("tasks")));
+                let info = reloaded.infos().into_iter().find(|i| i.id == t.id).unwrap();
+                assert_eq!(info.state, "cancelled");
                 std::fs::remove_dir_all(dir).unwrap();
             })
             .await;

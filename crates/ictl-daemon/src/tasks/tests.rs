@@ -3,10 +3,16 @@ use std::time::Duration;
 use serde_json::Value;
 
 use super::scope::{SAFARI, SPRINGBOARD, out_of_scope};
+use super::store::read_events_prefix;
 use super::task::gesture;
 use super::*;
 
 const PHONE: &str = "00008150-000A";
+
+async fn log_of(t: &Task) -> (Vec<TaskEvent>, bool) {
+    let sub = t.subscribe().await;
+    (sub.events.into_iter().map(|(_, e)| e).collect(), sub.ended)
+}
 
 fn tasks() -> Tasks {
     Tasks::load(None)
@@ -204,7 +210,7 @@ async fn the_agent_cant_control_its_own_task() {
     // the opener itself (the page passing on the user's click), or someone else (the user's own terminal)
     assert!(!refused(pause(None, Some(opener), None).await));
     assert!(!refused(ts.handle(&control("resume", None), None, Some(1), &mut None).await));
-    let by: Vec<_> = t.subscribe().0.into_iter().filter(|e| e.event == "control").map(|e| e.data).collect();
+    let by: Vec<_> = log_of(&t).await.0.into_iter().filter(|e| e.event == "control").map(|e| e.data).collect();
     assert_eq!(by.len(), 4);
     assert_eq!((by[0]["action"].as_str(), by[0]["by"].as_str()), (Some("pause"), Some("cli")));
     // giving up is allowed from anywhere
@@ -306,7 +312,7 @@ async fn nothing_follows_done() {
     t.end(End::Cancelled, "stopped");
     let _ = asked.await.unwrap();
     t.observed();
-    let (log, _, ended) = t.subscribe();
+    let (log, ended) = log_of(&t).await;
     assert!(ended);
     let names: Vec<&str> = log.iter().map(|e| e.event.as_str()).collect();
     assert_eq!(names.last(), Some(&"done"), "{names:?}");
@@ -339,7 +345,7 @@ async fn every_step_under_way_is_stopped_before_done() {
     assert!(asking.await.unwrap().is_err());
     t.step_done(2, false, 5, "refused", None);
     t.step_done(1, true, 5, "late", None);
-    let (log, _, _) = t.subscribe();
+    let (log, _) = log_of(&t).await;
     assert_eq!(log.last().map(|e| e.event.as_str()), Some("done"));
     let last_status =
         |id: u64| log.iter().rev().find(|e| e.event == "step" && e.data["id"] == id).map(|e| e.data["status"].clone());
@@ -410,7 +416,7 @@ async fn steps_get_thoughts_results_and_marks() {
     t.thought("点一下");
     let n = ts.auto_step(&t, &Request::Swipe { from: (1.0, 2.0), to: (3.0, 4.0), seconds: 0.3, hold: 0.0 });
     assert_eq!(n, 3);
-    let (log, _, _) = t.subscribe();
+    let (log, _) = log_of(&t).await;
     let steps: Vec<&Value> = log.iter().filter(|e| e.event == "step").map(|e| &e.data).collect();
     assert_eq!(steps[0]["thought"], "先点「通用」");
     assert_eq!(steps[1]["gesture"], json!({"kind": "tap", "x": 200.0, "y": 300.0}));
@@ -434,7 +440,7 @@ async fn only_a_tap_by_text_gets_a_mark_from_its_result() {
     t.step_done(1, true, 80, listed, None);
     ts.handle(&req("iphone_tap_element", json!({"text": "蓝牙"})), Some(&t.token), None, &mut None).await;
     t.step_done(2, true, 90, "已点击 Button \"蓝牙\" @(200,350) 100x40", None);
-    let (log, _, _) = t.subscribe();
+    let (log, _) = log_of(&t).await;
     let done: Vec<&Value> =
         log.iter().filter(|e| e.event == "step" && e.data.get("ms").is_some()).map(|e| &e.data).collect();
     assert!(done[0].get("gesture").is_none(), "{}", done[0]);
@@ -455,8 +461,8 @@ async fn another_device_interrupts_the_task() {
 /// A task with a file holds none of its events in memory (the daemon keeps 50 tasks, each log of any size): they
 /// are read from the file, the same and in the same order as they were sent. Once writing the file fails, the
 /// events are kept in memory from then on, those before included
-#[test]
-fn a_task_s_events_are_kept_on_disk_not_in_memory() {
+#[tokio::test]
+async fn a_task_s_events_are_kept_on_disk_not_in_memory() {
     use std::os::unix::fs::PermissionsExt;
     // root writes a read-only file all the same
     if crate::protocol::running_as_root() {
@@ -466,15 +472,15 @@ fn a_task_s_events_are_kept_on_disk_not_in_memory() {
     let _ = std::fs::remove_dir_all(&dir);
     let ts = Tasks::load(Some(dir.clone()));
     let t = open(&ts);
-    let (_, mut rx, _) = t.subscribe();
+    let mut rx = t.subscribe().await.rx;
     t.thought("看一下");
     t.step_done(1, true, 5, "ok", None);
     assert!(t.lock().log.is_empty() && t.lock().on_disk);
     let mut sent = Vec::new();
-    while let Ok(e) = rx.try_recv() {
+    while let Ok((_, e)) = rx.try_recv() {
         sent.push(e);
     }
-    let (log, _, _) = t.subscribe();
+    let (log, _) = log_of(&t).await;
     assert_eq!(log.first().map(|e| e.event.as_str()), Some("task"));
     assert_eq!(log[1..], sent[..], "what was sent, from the file");
 
@@ -482,7 +488,7 @@ fn a_task_s_events_are_kept_on_disk_not_in_memory() {
     let file = t.file.clone().unwrap();
     std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o444)).unwrap();
     t.end(End::Completed, "好了");
-    let (after, _, ended) = t.subscribe();
+    let (after, ended) = log_of(&t).await;
     assert!(ended && !t.lock().on_disk);
     assert_eq!(after[..log.len()], log[..]);
     assert_eq!(after.last().map(|e| e.event.as_str()), Some("done"));
@@ -491,8 +497,8 @@ fn a_task_s_events_are_kept_on_disk_not_in_memory() {
 
 /// A log cut short in the middle of its last line (a power cut) loses that half line when it is loaded: the task,
 /// interrupted then, ends with its `done`, read back like every other event, instead of glued to the half line
-#[test]
-fn a_log_cut_short_still_ends_with_its_end() {
+#[tokio::test]
+async fn a_log_cut_short_still_ends_with_its_end() {
     let dir = std::env::temp_dir().join(format!("ictl-tasks-cut-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     let ts = Tasks::load(Some(dir.clone()));
@@ -504,7 +510,7 @@ fn a_log_cut_short_still_ends_with_its_end() {
     std::io::Write::write_all(&mut f, br#"{"t":1,"event":"step","data":{"id":2,"sta"#).unwrap();
     drop(f);
     let ts = Tasks::load(Some(dir.clone()));
-    let (log, _, ended) = ts.get(&t.id).unwrap().subscribe();
+    let (log, ended) = log_of(&ts.get(&t.id).unwrap()).await;
     assert!(ended);
     let names: Vec<&str> = log.iter().map(|e| e.event.as_str()).collect();
     assert_eq!(names, ["task", "step", "done"], "{log:?}");
@@ -513,8 +519,8 @@ fn a_log_cut_short_still_ends_with_its_end() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
-#[test]
-fn logs_survive_a_restart_and_unfinished_tasks_are_interrupted() {
+#[tokio::test]
+async fn logs_survive_a_restart_and_unfinished_tasks_are_interrupted() {
     let dir = std::env::temp_dir().join(format!("ictl-tasks-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     let ts = Tasks::load(Some(dir.clone()));
@@ -532,11 +538,11 @@ fn logs_survive_a_restart_and_unfinished_tasks_are_interrupted() {
     assert_eq!((infos[1].id.as_str(), infos[1].state.as_str()), (running.id.as_str(), "interrupted"));
     assert!(ts.active().is_none());
     assert!(ts.by_token(&running.token).is_none(), "the old token means nothing now");
-    let (log, _, ended) = ts.get(&running.id).unwrap().subscribe();
+    let (log, ended) = log_of(&ts.get(&running.id).unwrap()).await;
     assert!(ended && log.last().unwrap().data["outcome"] == "interrupted");
     // and it stays that way on the next start
     let ts = Tasks::load(Some(dir.clone()));
-    let (log, _, _) = ts.get(&running.id).unwrap().subscribe();
+    let (log, _) = log_of(&ts.get(&running.id).unwrap()).await;
     assert_eq!(log.iter().filter(|e| e.event == "done").count(), 1);
     std::fs::remove_dir_all(dir).unwrap();
 }
@@ -640,7 +646,7 @@ async fn a_rejected_app_refuses_that_step_but_the_task_can_go_back() {
     assert!(matches!(r, Err(Response::Error { message, .. }) if message.contains("com.apple.Preferences")));
     t.step_done(7, false, 5, "refused", None);
     t.step_done(8, false, 5, "WDA unavailable", None);
-    let (log, _, _) = t.subscribe();
+    let (log, _) = log_of(&t).await;
     let status = |id: u64| {
         log.iter()
             .rev()
@@ -715,5 +721,142 @@ fn unreadable_logs_are_removed() {
     left.sort();
     assert_eq!(left.len(), 2, "{left:?}");
     assert!(left.iter().any(|n| n == "notes.txt"), "only task logs are touched");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// Ordinary events stop being persisted once the per-task event count limit is reached, while `task` and terminal
+/// `done` are always written so restart recovery sees the real outcome instead of `interrupted`.
+#[tokio::test]
+async fn task_log_caps_ordinary_events_but_keeps_task_and_done_by_count() {
+    let dir = std::env::temp_dir().join(format!("ictl-tasks-cap-count-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let ts = Tasks::load(Some(dir.clone()));
+    let t = open(&ts);
+    t.set_log_limits(5, 16 * 1024 * 1024);
+    for i in 1..=20 {
+        t.step_done(i, true, 1, "ok", None);
+    }
+    assert!(t.lock().capped);
+    assert_eq!(t.lock().stored_events, 5, "1 task header + 4 ordinary events");
+    t.end(End::Completed, "done");
+
+    let sub = t.subscribe().await;
+    assert!(sub.ended);
+    assert_eq!(sub.events.len(), 6, "5 stored before cap + mandatory done");
+    assert_eq!(sub.events.first().unwrap().1.event, "task");
+    assert_eq!(sub.events.last().unwrap().1.event, "done");
+    assert_eq!(sub.events.last().unwrap().0, sub.snap_seq, "done carries its real monotonic seq past skipped events");
+    assert!(sub.snap_seq > 20);
+
+    // Reloading from disk must see `completed`, not `interrupted`.
+    drop(ts);
+    let reloaded = Tasks::load(Some(dir.clone()));
+    let info = reloaded.infos().into_iter().find(|i| i.id == t.id).unwrap();
+    assert_eq!(info.state, "completed");
+    let (log, ended) = log_of(&reloaded.get(&t.id).unwrap()).await;
+    assert!(ended);
+    assert_eq!(log.last().unwrap().event, "done");
+    assert_eq!(log.last().unwrap().data["outcome"], "completed");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// Ordinary events stop being persisted once the byte limit would be exceeded, while terminal `done` is still written.
+#[tokio::test]
+async fn task_log_caps_ordinary_events_by_bytes_and_still_writes_done() {
+    let dir = std::env::temp_dir().join(format!("ictl-tasks-cap-bytes-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let ts = Tasks::load(Some(dir.clone()));
+    let t = open(&ts);
+    let initial_bytes = t.lock().stored_bytes;
+    // Allow room for only a couple of ordinary events beyond the header.
+    let cap_bytes = initial_bytes + 300;
+    t.set_log_limits(10_000, cap_bytes);
+    let payload = "x".repeat(120);
+    for i in 1..=20 {
+        t.step_done(i, true, 1, &payload, None);
+    }
+    assert!(t.lock().capped);
+    let before_done_bytes = t.lock().stored_bytes;
+    let before_done_count = t.lock().stored_events;
+    assert!(before_done_bytes <= cap_bytes, "{before_done_bytes} <= {cap_bytes}");
+    // Once capped, even a tiny ordinary event must not slip in behind skipped events.
+    t.step_done(21, true, 1, "tiny", None);
+    assert_eq!(t.lock().stored_bytes, before_done_bytes);
+    assert_eq!(t.lock().stored_events, before_done_count);
+    t.end(End::Completed, "finished");
+
+    let file = t.file.clone().unwrap();
+    let on_disk_len = std::fs::metadata(&file).unwrap().len();
+    assert_eq!(on_disk_len, t.lock().stored_bytes);
+    assert!(on_disk_len > before_done_bytes, "done was still appended past the byte cap");
+    let (log, ended) = log_of(&t).await;
+    assert!(ended);
+    assert_eq!(log.last().unwrap().event, "done");
+
+    drop(ts);
+    let reloaded = Tasks::load(Some(dir.clone()));
+    let info = reloaded.infos().into_iter().find(|i| i.id == t.id).unwrap();
+    assert_eq!(info.state, "completed");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// Reading the exact file prefix captured under the lock ignores events appended concurrently after the lock is
+/// released; those newer events arrive through the broadcast receiver with strictly higher sequence numbers.
+#[tokio::test]
+async fn async_subscribe_reads_exact_prefix_without_duplicates_under_concurrent_writes() {
+    let dir = std::env::temp_dir().join(format!("ictl-tasks-prefix-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let ts = Tasks::load(Some(dir.clone()));
+    let t = open(&ts);
+    t.step_done(1, true, 1, "first", None);
+
+    // Simulate capturing (file_len, snap_seq, rx) under lock, releasing lock, then writing more before disk read.
+    let (path, snap_len, snap_seq, mut rx) = {
+        let st = t.lock();
+        (t.file.clone().unwrap(), st.stored_bytes, st.next_seq, t.tx.subscribe())
+    };
+    t.step_done(2, true, 1, "second", None);
+    t.end(End::Completed, "all done");
+
+    let prefix = read_events_prefix(&path, snap_len);
+    assert_eq!(prefix.last().unwrap().0, snap_seq, "prefix stops exactly at snap_len");
+    let mut combined: Vec<(u64, String)> = prefix.into_iter().map(|(s, e)| (s, e.event)).collect();
+    let mut last_seq = snap_seq;
+    while let Ok((seq, e)) = rx.try_recv() {
+        if seq > last_seq {
+            last_seq = seq;
+            combined.push((seq, e.event));
+        }
+    }
+    let seqs: Vec<u64> = combined.iter().map(|(s, _)| *s).collect();
+    assert_eq!(seqs, vec![1, 2, 3, 4], "every event seen once with strictly increasing seq");
+    assert_eq!(combined.last().unwrap().1, "done");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// Pre-existing `.jsonl` task logs written without `"seq"` fields still restore and replay with monotonic numbers.
+#[tokio::test]
+async fn legacy_log_without_seq_fields_replays_and_restores() {
+    let dir = std::env::temp_dir().join(format!("ictl-tasks-legacy-seq-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("legacy123456.jsonl");
+    let raw = concat!(
+        r#"{"t":1000,"event":"task","data":{"id":"legacy123456","title":"old","owner":"test","udid":"u1","started":1000,"apps":[]}}"#,
+        "\n",
+        r#"{"t":1001,"event":"step","data":{"id":1,"status":"ok","ms":5}}"#,
+        "\n",
+        r#"{"t":1002,"event":"done","data":{"ok":true,"stopped":false,"outcome":"completed","summary":"ok"}}"#,
+        "\n",
+    );
+    std::fs::write(&file, raw).unwrap();
+
+    let ts = Tasks::load(Some(dir.clone()));
+    let t = ts.get("legacy123456").unwrap();
+    let sub = t.subscribe().await;
+    assert!(sub.ended);
+    let pairs: Vec<(u64, &str)> = sub.events.iter().map(|(s, e)| (*s, e.event.as_str())).collect();
+    assert_eq!(pairs, vec![(1, "task"), (2, "step"), (3, "done")]);
+    assert_eq!(sub.snap_seq, 3);
     std::fs::remove_dir_all(dir).unwrap();
 }

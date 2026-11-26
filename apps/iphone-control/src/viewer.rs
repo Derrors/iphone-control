@@ -1266,8 +1266,10 @@ mod tests {
         let broken = format!("{}zz\r\n{{}}\r\n0\r\n\r\n", head("Transfer-Encoding: chunked\r\n"));
         let r = exchange(&ctx, broken).await;
         assert!(r.starts_with("HTTP/1.1 400"), "{r}");
-        // framing that never ends (trailer lines, each short) stops at the limit instead of growing without bound
-        let trailers = "X-A: 1\r\n".repeat((mcp::MAX_BODY + 64 * 1024) / 8 + 1);
+        // framing that never ends (trailer lines, each short) stops at the limit instead of growing without bound:
+        // hyper's, 16 KB of trailers. Four times that is sent, less than closing reads off (`io::LINGER_BYTES`): with
+        // more left unread the close is a reset, which on macOS loses the answer that came before it
+        let trailers = "X-A: 1\r\n".repeat(64 * 1024 / 8 + 1);
         let endless = format!("{}0\r\n{trailers}", head("Transfer-Encoding: chunked\r\n"));
         let r = exchange(&ctx, endless).await;
         assert!(r.starts_with("HTTP/1.1 413") || r.starts_with("HTTP/1.1 400"), "refused: {r}");

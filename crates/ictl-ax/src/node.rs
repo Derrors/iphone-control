@@ -395,155 +395,6 @@ mod tests {
     use super::*;
     use crate::archive::ObjectRef;
 
-    /// The XML the native path used to make (before `to_node`), kept for [`the_tree_is_the_one_the_xml_made`]
-    mod old {
-        use super::super::*;
-        use std::fmt::Write;
-
-        fn esc(s: &str, out: &mut String) {
-            for c in s.chars() {
-                match c {
-                    '&' => out.push_str("&amp;"),
-                    '<' => out.push_str("&lt;"),
-                    '>' => out.push_str("&gt;"),
-                    '"' => out.push_str("&quot;"),
-                    '\n' => out.push_str("&#10;"),
-                    c if (c as u32) < 0x20 => {}
-                    c => out.push(c),
-                }
-            }
-        }
-
-        fn open_tag(out: &mut String, kind: &str, e: &Element, (x, y, w, h): Frame, close: bool) {
-            let _ = write!(out, "<XCUIElementType{kind} type=\"XCUIElementType{kind}\"");
-            let mut field = |name: &str, v: &str| {
-                if !v.is_empty() {
-                    let _ = write!(out, " {name}=\"");
-                    esc(v, out);
-                    out.push('"');
-                }
-            };
-            field("label", &e.label);
-            field("name", if e.identifier.is_empty() { &e.label } else { &e.identifier });
-            field("value", if e.value.is_empty() { &e.placeholder } else { &e.value });
-            field("placeholderValue", &e.placeholder);
-            let _ = write!(
-                out,
-                " enabled=\"{}\" selected=\"{}\" focused=\"{}\" x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\"{}>",
-                e.enabled,
-                e.selected,
-                e.focused,
-                x.round() as i64,
-                y.round() as i64,
-                w.round() as i64,
-                h.round() as i64,
-                if close { "/" } else { "" }
-            );
-        }
-
-        /// The XML for `app` (the frontmost application's tree, its element first) with `overlays` (what SpringBoard
-        /// draws over it: alerts, banners; in screen points) after it, on a `width`×`height` screen. `web`: the processes
-        /// that are WebKit's web content (a page's elements), placed as they come. `springboard_front`: SpringBoard is the
-        /// app in front, as when it asks something over an app (see [`looks_like_dialog`])
-        pub fn to_xml(
-            app: &[Element],
-            overlays: &[Element],
-            width: f64,
-            height: f64,
-            web: &HashSet<i64>,
-            springboard_front: bool,
-        ) -> String {
-            let app_pid = app.first().map_or(0, Element::pid);
-            let mut keys: HashMap<i64, usize> = HashMap::new();
-            // a page's own one-letter links are no keys
-            for e in app.iter().filter(|e| e.pid() != app_pid && !web.contains(&e.pid()) && is_key_char(&e.label)) {
-                *keys.entry(e.pid()).or_default() += 1;
-            }
-            let keyboard: HashSet<i64> =
-                keys.into_iter().filter(|(_, n)| *n >= KEYBOARD_KEYS).map(|(p, _)| p).collect();
-            let placed = place(app, &keyboard, web);
-
-            let mut out = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\"?>");
-            let root = app.first().cloned().unwrap_or_default();
-            open_tag(&mut out, "Application", &root, (0.0, 0.0, width, height), false);
-            // the keyboard's keys, gathered under one Keyboard element at the end (drawn over the app)
-            let mut kb_keys: Vec<(usize, Frame)> = Vec::new();
-            let dialog = springboard_front && looks_like_dialog(app);
-            if dialog {
-                let title = app
-                    .iter()
-                    .skip(1)
-                    .find(|e| kind(e) == "StaticText" && !e.label.is_empty() && e.traits & trait_bit::STATUS_BAR == 0);
-                let a = Element {
-                    label: title.map(|e| e.label.clone()).unwrap_or_default(),
-                    enabled: true,
-                    visible: true,
-                    ..Default::default()
-                };
-                let boxes: Vec<(usize, Frame)> =
-                    placed.iter().enumerate().skip(1).filter_map(|(i, f)| f.map(|f| (i, f))).collect();
-                open_tag(&mut out, "Alert", &a, keys_box(&boxes).unwrap_or((0.0, 0.0, width, height)), false);
-            }
-            write_children(&mut out, app, &placed, Some(0), 0, &keyboard, &mut kb_keys);
-            if dialog {
-                out.push_str("</XCUIElementTypeAlert>");
-            }
-            let has_keyboard_type = app.iter().zip(&placed).any(|(e, p)| p.is_some() && kind(e) == "Keyboard");
-            if !keyboard.is_empty() && !has_keyboard_type {
-                let frame = keys_box(&kb_keys).unwrap_or((0.0, height * 0.6, width, height * 0.4));
-                let kb = Element { enabled: true, visible: true, ..Default::default() };
-                open_tag(&mut out, "Keyboard", &kb, frame, kb_keys.is_empty());
-                if !kb_keys.is_empty() {
-                    for (i, f) in &kb_keys {
-                        open_tag(&mut out, "Key", &app[*i], *f, true);
-                    }
-                    out.push_str("</XCUIElementTypeKeyboard>");
-                }
-            }
-            // SpringBoard over the app, but not its status bar
-            let shown: Vec<Option<Frame>> = overlays
-                .iter()
-                .map(|e| (e.traits & trait_bit::STATUS_BAR == 0).then_some(e.frame.unwrap_or_default()))
-                .collect();
-            let shown = inherit_skips(overlays, shown);
-            write_children(&mut out, overlays, &shown, None, 0, &HashSet::new(), &mut Vec::new());
-            out.push_str("</XCUIElementTypeApplication>");
-            out
-        }
-
-        /// Writes the elements whose parent is `parent` (None: the roots of a list, as SpringBoard's overlays have), each
-        /// with its own children
-        fn write_children(
-            out: &mut String,
-            els: &[Element],
-            placed: &[Option<Frame>],
-            parent: Option<usize>,
-            depth: usize,
-            keyboard: &HashSet<i64>,
-            kb_keys: &mut Vec<(usize, Frame)>,
-        ) {
-            for (i, e) in els.iter().enumerate() {
-                if e.parent != parent || depth > 80 {
-                    continue;
-                }
-                let Some(frame) = placed[i] else { continue };
-                if keyboard.contains(&e.pid()) {
-                    if is_key_char(&e.label) && frame.2 > 0.0 && frame.3 > 0.0 {
-                        kb_keys.push((i, frame));
-                    }
-                    write_children(out, els, placed, Some(i), depth + 1, keyboard, kb_keys);
-                    continue;
-                }
-                let has_children = els.iter().any(|c| c.parent == Some(i));
-                open_tag(out, kind(e), e, frame, !has_children);
-                if has_children {
-                    write_children(out, els, placed, Some(i), depth + 1, keyboard, kb_keys);
-                    let _ = write!(out, "</XCUIElementType{}>", kind(e));
-                }
-            }
-        }
-    }
-
     fn el(pid: i64, id: u64, parent: Option<usize>, label: &str, xc: i64, frame: Frame) -> Element {
         Element {
             object: Some(ObjectRef { pid, id, is_app: parent.is_none() }),
@@ -739,7 +590,7 @@ mod tests {
     /// A read: the app's elements, SpringBoard's over it, the web content processes, SpringBoard in front
     type Read = (Vec<Element>, Vec<Element>, HashSet<i64>, bool);
 
-    /// Reads of every kind the tests above make, and text the XML had to escape or drop
+    /// Reads of every kind the tests above make, and text XML has to escape or drop
     fn reads() -> Vec<Read> {
         let mut odd = vec![el(10, 1, None, " 设置 ", 2, (0.0, 0.0, 430.0, 932.0))];
         let mut e = el(10, 2, Some(0), "two\nlines\t\u{1}and \"quotes\" & <tags>", 9, (10.4, 20.5, 30.6, 40.5));
@@ -781,24 +632,6 @@ mod tests {
             (question(), vec![], none(), true),
             (question()[..4].to_vec(), overlays, none(), true),
         ]
-    }
-
-    /// The tree made directly is the one the native path made by writing XML and reading it back (the old `to_xml`,
-    /// read by `Source::from_xml` as WDA's is): the same nodes, hence the same `Tree` for finding, tapping, the lock
-    /// screen
-    #[test]
-    fn the_tree_is_the_one_the_xml_made() {
-        for (i, (app, overlays, web, front)) in reads().iter().enumerate() {
-            let direct = to_node(app, overlays, 430.0, 932.0, web, *front);
-            let via_xml = Source::from_xml(&old::to_xml(app, overlays, 430.0, 932.0, web, *front));
-            assert_eq!(direct, via_xml, "read {i}");
-            let view = ictl_ui::ScreenSize { width: 430.0, height: 932.0 };
-            assert_eq!(
-                format!("{:?}", ictl_ui::Tree::of(&direct, view)),
-                format!("{:?}", ictl_ui::parse_tree(&old::to_xml(app, overlays, 430.0, 932.0, web, *front), view)),
-                "read {i}"
-            );
-        }
     }
 
     /// Written out (`debug … --out`) and read back, a tree is the same

@@ -6,8 +6,7 @@
 //! The tools keep their WDA code; where WDA isn't there they come here when [`Daemon::native`] says so.
 
 use ictl_device::DeviceInfo;
-use ictl_unlock::Screen;
-use ictl_wda::client::LockCheck;
+use ictl_unlock::{LockCheck, Screen, ScreenError, ScreenResult};
 use ictl_wda::elements::View;
 
 use super::*;
@@ -1101,13 +1100,21 @@ fn touch_lands_in(since: Option<Duration>) -> Option<Duration> {
 const LOCK_SCREEN_BACK: Duration = Duration::from_secs(3);
 
 /// A step that failed: unlocking tries another round
-fn step(e: impl std::fmt::Display) -> WdaError {
-    WdaError::Remote { kind: "native".into(), message: e.to_string() }
+fn step(e: impl std::error::Error + Send + Sync + 'static) -> ScreenError {
+    ScreenError::Step(Box::new(e))
+}
+
+/// The phone can't be looked at: unlocking takes it for not locked, the next call says why
+fn unavailable(e: impl std::error::Error + Send + Sync + 'static) -> ScreenError {
+    ScreenError::Unavailable(Box::new(e))
 }
 
 impl Screen for NativeScreen<'_> {
-    async fn reports_locked(&mut self) -> std::result::Result<bool, WdaError> {
-        self.d.native_locked(self.g).await.map_err(|e| WdaError::Unavailable(e.to_string().into()))
+    // nothing to set: no waits as WDA's
+    type Waits = ();
+
+    async fn reports_locked(&mut self) -> ScreenResult<bool> {
+        self.d.native_locked(self.g).await.map_err(unavailable)
     }
 
     fn lock_state_trusted(&self) -> bool {
@@ -1115,29 +1122,29 @@ impl Screen for NativeScreen<'_> {
         true
     }
 
-    async fn check_lock(&mut self, _reported: Option<bool>, _strict: bool) -> std::result::Result<LockCheck, WdaError> {
-        let locked = self.d.native_locked(self.g).await.map_err(|e| WdaError::Unavailable(e.to_string().into()))?;
+    async fn check_lock(&mut self, _reported: Option<bool>, _strict: bool) -> ScreenResult<LockCheck> {
+        let locked = self.d.native_locked(self.g).await.map_err(unavailable)?;
         let tree = if locked { read_lock_screen(self.d, self.g).await.ok().map(|(src, _, _)| src) } else { None };
         Ok(LockCheck { locked, uncertain: false, tree })
     }
 
-    async fn quick_waits(&mut self) -> std::result::Result<Option<ictl_wda::IdleSettings>, WdaError> {
+    async fn quick_waits(&mut self) -> ScreenResult<Option<()>> {
         Ok(None)
     }
 
-    async fn restore_waits(&mut self, _: ictl_wda::IdleSettings) -> std::result::Result<(), WdaError> {
+    async fn restore_waits(&mut self, _: ()) -> ScreenResult<()> {
         Ok(())
     }
 
-    async fn press_home(&mut self, _round: u32) -> std::result::Result<(), WdaError> {
+    async fn press_home(&mut self, _round: u32) -> ScreenResult<()> {
         self.d.hid_do(self.g, |h| Box::pin(h.press(Button::Home))).await.map_err(step)
     }
 
-    async fn view(&mut self) -> std::result::Result<View, WdaError> {
-        self.d.screen(self.g).await.map(View::from).map_err(|e| WdaError::Unavailable(e.to_string().into()))
+    async fn view(&mut self) -> ScreenResult<View> {
+        self.d.screen(self.g).await.map(View::from).map_err(unavailable)
     }
 
-    async fn swipe(&mut self, from: (f64, f64), to: (f64, f64), ms: u64) -> std::result::Result<(), WdaError> {
+    async fn swipe(&mut self, from: (f64, f64), to: (f64, f64), ms: u64) -> ScreenResult<()> {
         let rot = self.d.hid_touch_rotation(self.g).await.map_err(step)?;
         let seconds = ms as f64 / 1000.0;
         self.d
@@ -1151,16 +1158,16 @@ impl Screen for NativeScreen<'_> {
             .map_err(step)
     }
 
-    async fn tap(&mut self, x: f64, y: f64, _press_ms: u64) -> std::result::Result<(), WdaError> {
+    async fn tap(&mut self, x: f64, y: f64, _press_ms: u64) -> ScreenResult<()> {
         self.d.native_tap(self.g, x, y).await.map_err(step)
     }
 
-    async fn elements(&mut self) -> std::result::Result<Vec<elements::Element>, WdaError> {
+    async fn elements(&mut self) -> ScreenResult<Vec<elements::Element>> {
         let (src, size, _) = read_lock_screen(self.d, self.g).await.map_err(step)?;
         Ok(Tree::of(&src, size).elements)
     }
 
-    async fn passcode_field(&mut self) -> std::result::Result<Option<(u32, u32)>, WdaError> {
+    async fn passcode_field(&mut self) -> ScreenResult<Option<(u32, u32)>> {
         Ok(elements::passcode_field(&self.elements().await?))
     }
 

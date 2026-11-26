@@ -17,77 +17,65 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use ictl_wda::client::LockCheck;
-use ictl_wda::{IdleSettings, WdaClient, WdaError, elements, http::Transport, swipe_steps, tap_steps};
+use ictl_ui as elements;
 
-/// What unlocking needs of the phone. WebDriverAgent implements it below; the daemon's native path (iOS 27 without
-/// WDA: HID, remoteAXService, lockdown) implements it too. Errors are WDA's: the native path maps its own onto them
-/// (`Unavailable` when it can't reach the phone, `Remote` for a step that failed and can be tried again)
+mod wda;
+
+/// Why a step on the screen didn't happen. Each holds the error as it came (WDA's, the daemon's), shown as it is
+#[derive(Debug, thiserror::Error)]
+pub enum ScreenError {
+    /// The phone can't be reached to look (WDA down, no tunnel): unlocking takes it for not locked and leaves the
+    /// error to the next call
+    #[error(transparent)]
+    Unavailable(Box<dyn std::error::Error + Send + Sync>),
+    /// A step failed (a press, a swipe, a read): unlocking tries another round
+    #[error(transparent)]
+    Step(Box<dyn std::error::Error + Send + Sync>),
+    /// Anything else: unlocking stops with it
+    #[error(transparent)]
+    Other(Box<dyn std::error::Error + Send + Sync>),
+}
+
+pub type ScreenResult<T> = std::result::Result<T, ScreenError>;
+
+/// [`Screen::check_lock`]'s answer
+#[derive(Debug)]
+pub struct LockCheck {
+    pub locked: bool,
+    /// Can't tell: a lock-screen-like screen the phone says isn't locked (the notification center, or a Touch ID
+    /// phone's lock screen with notifications). `locked` is false; a caller that can unlock treats it as maybe locked
+    pub uncertain: bool,
+    /// The tree read for the check (none when it wasn't read), so unlocking needn't read it again
+    pub tree: Option<elements::Source>,
+}
+
+/// What unlocking needs of the phone. WebDriverAgent implements it (`wda.rs`); the daemon's native path (iOS 27
+/// without WDA: HID, remoteAXService, lockdown) implements it too. Each says what its errors are ([`ScreenError`])
 #[allow(async_fn_in_trait)]
 pub trait Screen {
-    /// Whether the phone says it is locked, cheaply ([`WdaClient::wda_reports_locked`])
-    async fn reports_locked(&mut self) -> std::result::Result<bool, WdaError>;
+    /// The waits [`Self::quick_waits`] changed, to restore
+    type Waits;
+    /// Whether the phone says it is locked, cheaply (WDA: `/wda/locked`)
+    async fn reports_locked(&mut self) -> ScreenResult<bool>;
     /// Whether a "not locked" from [`Self::reports_locked`] can be believed without a look at the screen
     fn lock_state_trusted(&self) -> bool;
-    /// The lock state checked against the screen, with the element tree it read ([`WdaClient::check_lock`])
-    async fn check_lock(&mut self, reported: Option<bool>, strict: bool) -> std::result::Result<LockCheck, WdaError>;
+    /// The lock state checked against the screen, with the element tree it read (WDA: `WdaClient::check_lock`)
+    async fn check_lock(&mut self, reported: Option<bool>, strict: bool) -> ScreenResult<LockCheck>;
     /// Shorter waits for the duration of unlocking; returns what to restore
-    async fn quick_waits(&mut self) -> std::result::Result<Option<IdleSettings>, WdaError>;
-    async fn restore_waits(&mut self, to: IdleSettings) -> std::result::Result<(), WdaError>;
+    async fn quick_waits(&mut self) -> ScreenResult<Option<Self::Waits>>;
+    async fn restore_waits(&mut self, to: Self::Waits) -> ScreenResult<()>;
     /// Home, to wake the screen. `round` counts the attempts: WDA alternates two ways of pressing it
-    async fn press_home(&mut self, round: u32) -> std::result::Result<(), WdaError>;
-    async fn view(&mut self) -> std::result::Result<elements::View, WdaError>;
-    async fn swipe(&mut self, from: (f64, f64), to: (f64, f64), ms: u64) -> std::result::Result<(), WdaError>;
-    async fn tap(&mut self, x: f64, y: f64, press_ms: u64) -> std::result::Result<(), WdaError>;
-    async fn elements(&mut self) -> std::result::Result<Vec<elements::Element>, WdaError>;
-    /// The passcode field's (total, entered) digits ([`WdaClient::passcode_field`])
-    async fn passcode_field(&mut self) -> std::result::Result<Option<(u32, u32)>, WdaError>;
+    async fn press_home(&mut self, round: u32) -> ScreenResult<()>;
+    async fn view(&mut self) -> ScreenResult<elements::View>;
+    async fn swipe(&mut self, from: (f64, f64), to: (f64, f64), ms: u64) -> ScreenResult<()>;
+    async fn tap(&mut self, x: f64, y: f64, press_ms: u64) -> ScreenResult<()>;
+    async fn elements(&mut self) -> ScreenResult<Vec<elements::Element>>;
+    /// The passcode field's (total, entered) digits
+    async fn passcode_field(&mut self) -> ScreenResult<Option<(u32, u32)>>;
     /// Reading the screen is cheap even while it animates: after the swipe up the keypad is looked for every 0.2 s
     /// instead of waiting [`Timing::swipe_settle`] out. Not through WDA, whose queries wait for the animations (#3)
     fn reads_cheaply(&self) -> bool {
         false
-    }
-}
-
-impl<T: Transport> Screen for WdaClient<T> {
-    async fn reports_locked(&mut self) -> std::result::Result<bool, WdaError> {
-        self.wda_reports_locked().await
-    }
-    fn lock_state_trusted(&self) -> bool {
-        WdaClient::lock_state_trusted(self)
-    }
-    async fn check_lock(&mut self, reported: Option<bool>, strict: bool) -> std::result::Result<LockCheck, WdaError> {
-        WdaClient::check_lock(self, reported, strict).await
-    }
-    async fn quick_waits(&mut self) -> std::result::Result<Option<IdleSettings>, WdaError> {
-        // 解锁期间等待上限调小（不能是 0：唤醒会失败），做完恢复成平时的值。
-        // 上次异常退出没恢复的话读到的是调小的值，baseline 会按 WDA 默认值算
-        let restore = self.baseline().await?;
-        self.set_idle_settings(IdleSettings::QUICK).await?;
-        Ok(Some(restore))
-    }
-    async fn restore_waits(&mut self, to: IdleSettings) -> std::result::Result<(), WdaError> {
-        self.set_idle_settings(to).await
-    }
-    async fn press_home(&mut self, round: u32) -> std::result::Result<(), WdaError> {
-        // XCTest 的 home 和 IOHID 的 Home 轮流用：iPhone 12 mini（iOS 26.4.1）上 XCTest 的 home 点不亮熄灭的屏幕，
-        // IOHID 的能；iOS 27 上一直用的是 XCTest 的，第一轮还是它
-        if round.is_multiple_of(2) { self.press_button("home").await } else { self.press_home_hid().await }
-    }
-    async fn view(&mut self) -> std::result::Result<elements::View, WdaError> {
-        WdaClient::view(self).await
-    }
-    async fn swipe(&mut self, from: (f64, f64), to: (f64, f64), ms: u64) -> std::result::Result<(), WdaError> {
-        self.actions(&swipe_steps(from, to, ms)).await
-    }
-    async fn tap(&mut self, x: f64, y: f64, press_ms: u64) -> std::result::Result<(), WdaError> {
-        self.actions(&tap_steps(x, y, press_ms)).await
-    }
-    async fn elements(&mut self) -> std::result::Result<Vec<elements::Element>, WdaError> {
-        WdaClient::elements(self).await
-    }
-    async fn passcode_field(&mut self) -> std::result::Result<Option<(u32, u32)>, WdaError> {
-        WdaClient::passcode_field(self).await
     }
 }
 
@@ -115,7 +103,7 @@ pub enum UnlockError {
     #[error("{}", ictl_l10n::trf!("输入密码途中出错（{0}），无法确认是否已提交，自动解锁已停用（防止输错次数累计）", "Error while entering the passcode ({0}); can't tell whether it was submitted, so auto-unlock is now disabled (so wrong attempts don't pile up)", .0))]
     Uncertain(String),
     #[error(transparent)]
-    Wda(#[from] WdaError),
+    Screen(#[from] ScreenError),
     #[error("{0}")]
     Io(#[from] std::io::Error),
 }
@@ -176,7 +164,7 @@ pub async fn ensure_unlocked<D: Screen>(wda: &mut D, cfg: &UnlockConfig) -> Resu
     // 先只问 WDA：确定没锁就直接返回，日常操作不多发请求
     let reported = match wda.reports_locked().await {
         Ok(v) => v,
-        Err(WdaError::Unavailable(_)) => return Ok(Outcome::NotLocked),
+        Err(ScreenError::Unavailable(_)) => return Ok(Outcome::NotLocked),
         Err(e) => return Err(e.into()),
     };
     if !reported && wda.lock_state_trusted() {
@@ -191,7 +179,7 @@ pub async fn ensure_unlocked<D: Screen>(wda: &mut D, cfg: &UnlockConfig) -> Resu
         match wda.check_lock(Some(reported), false).await {
             Ok(c) if !c.locked && !(c.uncertain && code.is_ok()) => return Ok(Outcome::NotLocked),
             Ok(_) => {}
-            Err(WdaError::Unavailable(_)) => return Ok(Outcome::NotLocked),
+            Err(ScreenError::Unavailable(_)) => return Ok(Outcome::NotLocked),
             Err(e) => return Err(e.into()),
         }
     }
@@ -283,12 +271,12 @@ async fn unlock<D: Screen>(wda: &mut D, cfg: &UnlockConfig, code: &[u8]) -> Resu
             let view = wda.view().await?;
             let (cx, h) = (view.screen.width / 2.0, view.screen.height);
             wda.swipe((cx, h - 8.0), (cx, h * 0.45), 250).await?;
-            Ok::<_, WdaError>(view)
+            Ok::<_, ScreenError>(view)
         }
         .await;
         let view = match woke {
             Ok(v) => v,
-            Err(e @ WdaError::Remote { .. }) => {
+            Err(e @ ScreenError::Step(_)) => {
                 tracing::info!(
                     "{}",
                     ictl_l10n::log_trf!(
@@ -480,6 +468,7 @@ mod fake;
 mod tests {
     use super::*;
     use fake::FakeLockScreen;
+    use ictl_wda::{IdleSettings, WdaClient, http::Transport};
 
     fn cfg(passcode: Option<&str>) -> (UnlockConfig, PathBuf) {
         let dir = std::env::temp_dir().join(format!("ictl-unlock-{}", uuid::Uuid::new_v4()));
@@ -503,37 +492,38 @@ mod tests {
         /// The fake WDA, read as cheaply as natively (`reads_cheaply`)
         struct Cheap<'a, T: Transport>(&'a mut WdaClient<T>);
         impl<T: Transport> Screen for Cheap<'_, T> {
-            async fn reports_locked(&mut self) -> std::result::Result<bool, WdaError> {
+            type Waits = IdleSettings;
+            async fn reports_locked(&mut self) -> ScreenResult<bool> {
                 Screen::reports_locked(self.0).await
             }
             fn lock_state_trusted(&self) -> bool {
                 Screen::lock_state_trusted(self.0)
             }
-            async fn check_lock(&mut self, r: Option<bool>, s: bool) -> std::result::Result<LockCheck, WdaError> {
+            async fn check_lock(&mut self, r: Option<bool>, s: bool) -> ScreenResult<LockCheck> {
                 Screen::check_lock(self.0, r, s).await
             }
-            async fn quick_waits(&mut self) -> std::result::Result<Option<IdleSettings>, WdaError> {
+            async fn quick_waits(&mut self) -> ScreenResult<Option<IdleSettings>> {
                 Screen::quick_waits(self.0).await
             }
-            async fn restore_waits(&mut self, to: IdleSettings) -> std::result::Result<(), WdaError> {
+            async fn restore_waits(&mut self, to: IdleSettings) -> ScreenResult<()> {
                 Screen::restore_waits(self.0, to).await
             }
-            async fn press_home(&mut self, round: u32) -> std::result::Result<(), WdaError> {
+            async fn press_home(&mut self, round: u32) -> ScreenResult<()> {
                 Screen::press_home(self.0, round).await
             }
-            async fn view(&mut self) -> std::result::Result<elements::View, WdaError> {
+            async fn view(&mut self) -> ScreenResult<elements::View> {
                 Screen::view(self.0).await
             }
-            async fn swipe(&mut self, f: (f64, f64), t: (f64, f64), ms: u64) -> std::result::Result<(), WdaError> {
+            async fn swipe(&mut self, f: (f64, f64), t: (f64, f64), ms: u64) -> ScreenResult<()> {
                 Screen::swipe(self.0, f, t, ms).await
             }
-            async fn tap(&mut self, x: f64, y: f64, ms: u64) -> std::result::Result<(), WdaError> {
+            async fn tap(&mut self, x: f64, y: f64, ms: u64) -> ScreenResult<()> {
                 Screen::tap(self.0, x, y, ms).await
             }
-            async fn elements(&mut self) -> std::result::Result<Vec<elements::Element>, WdaError> {
+            async fn elements(&mut self) -> ScreenResult<Vec<elements::Element>> {
                 Screen::elements(self.0).await
             }
-            async fn passcode_field(&mut self) -> std::result::Result<Option<(u32, u32)>, WdaError> {
+            async fn passcode_field(&mut self) -> ScreenResult<Option<(u32, u32)>> {
                 Screen::passcode_field(self.0).await
             }
             fn reads_cheaply(&self) -> bool {

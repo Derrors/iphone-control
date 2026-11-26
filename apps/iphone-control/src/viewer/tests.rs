@@ -1178,3 +1178,60 @@ fn a_system_alert_with_its_own_buttons() {
     );
     assert_eq!(alert_parts(&els[..1]), (Value::Null, Vec::new()), "no alert in the tree: no box, no buttons");
 }
+
+/// Real browsers send `Origin: null` on a same-origin `<form method="post">` when the login page carries
+/// `Referrer-Policy: no-referrer`. The login page therefore sends `Referrer-Policy: same-origin` (still never
+/// leaking a `Referer` cross-origin) while every other response keeps `no-referrer`; and as defense-in-depth
+/// (e.g. behind a reverse proxy forcing `no-referrer`), `POST /login` accepts `Origin: null` only together with
+/// `Sec-Fetch-Site: same-origin`.
+#[tokio::test]
+async fn login_form_referrer_policy_and_null_origin_checks() {
+    let temp = tempfile::tempdir_in("/tmp").unwrap();
+    let mut ctx = test_ctx(temp.path(), &temp.path().join("none.sock"));
+    ctx.port = 8202;
+    let token = "t".repeat(64);
+    ctx.auth = Some(auth::Auth::fixed(
+        vec![auth::Entry { name: "owner".into(), role: auth::Role::Operate, token: token.clone(), created: 0 }],
+        8202,
+    ));
+    let ctx = Arc::new(ctx);
+    let status = |r: &str| r.split(' ').nth(1).unwrap_or_default().to_owned();
+    let head_lines = |r: &str| -> Vec<String> {
+        r.split("\r\n\r\n").next().unwrap_or_default().lines().map(|l| l.to_ascii_lowercase()).collect()
+    };
+
+    // Login page uses a single `Referrer-Policy: same-origin` header (not duplicated with `no-referrer`).
+    let r = exchange(&ctx, "GET / HTTP/1.1\r\nHost: 127.0.0.1:8202\r\n\r\n".into()).await;
+    assert_eq!(status(&r), "401", "{r}");
+    let rp: Vec<_> = head_lines(&r).into_iter().filter(|l| l.starts_with("referrer-policy:")).collect();
+    assert_eq!(rp, ["referrer-policy: same-origin"], "{r}");
+
+    // 303 redirect after login and the logged-in page itself both keep `Referrer-Policy: no-referrer`.
+    let r = exchange(&ctx, format!("GET /?token={token} HTTP/1.1\r\nHost: 127.0.0.1:8202\r\n\r\n")).await;
+    assert_eq!(status(&r), "303", "{r}");
+    let rp: Vec<_> = head_lines(&r).into_iter().filter(|l| l.starts_with("referrer-policy:")).collect();
+    assert_eq!(rp, ["referrer-policy: no-referrer"], "{r}");
+    let cookie = r.lines().find_map(|l| l.strip_prefix("Set-Cookie: ")).unwrap().split(';').next().unwrap().to_owned();
+    let r = exchange(&ctx, format!("GET / HTTP/1.1\r\nHost: 127.0.0.1:8202\r\nCookie: {cookie}\r\n\r\n")).await;
+    assert_eq!(status(&r), "200", "{r}");
+    let rp: Vec<_> = head_lines(&r).into_iter().filter(|l| l.starts_with("referrer-policy:")).collect();
+    assert_eq!(rp, ["referrer-policy: no-referrer"], "{r}");
+
+    // `POST /login` with `Origin: null` succeeds ONLY when `Sec-Fetch-Site: same-origin` is present.
+    let form = |extra: &str| {
+        let body = format!("token={token}");
+        format!(
+            "POST /login HTTP/1.1\r\nHost: 127.0.0.1:8202\r\nContent-Type: application/x-www-form-urlencoded\r\n\
+             Origin: null\r\n{extra}Content-Length: {}\r\n\r\n{body}",
+            body.len()
+        )
+    };
+    let r = exchange(&ctx, form("Sec-Fetch-Site: same-origin\r\n")).await;
+    assert_eq!(status(&r), "303", "same-origin form POST with Origin: null must succeed: {r}");
+    let r = exchange(&ctx, form("")).await;
+    assert_eq!(status(&r), "403", "Origin: null without Sec-Fetch-Site must be refused: {r}");
+    let r = exchange(&ctx, form("Sec-Fetch-Site: cross-site\r\n")).await;
+    assert_eq!(status(&r), "403", "cross-site Origin: null must be refused: {r}");
+    let r = exchange(&ctx, form("Sec-Fetch-Site: same-site\r\n")).await;
+    assert_eq!(status(&r), "403", "same-site Origin: null must be refused: {r}");
+}

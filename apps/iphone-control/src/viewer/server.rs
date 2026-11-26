@@ -65,8 +65,10 @@ fn with_headers(status: u16, kind: &str, body: Body, extra: &[(&str, &str)]) -> 
         .header("Content-Type", kind)
         .header("Cache-Control", "no-store")
         .header("X-Content-Type-Options", "nosniff")
-        .header("X-Frame-Options", "DENY")
-        .header("Referrer-Policy", "no-referrer");
+        .header("X-Frame-Options", "DENY");
+    if !extra.iter().any(|(k, _)| k.eq_ignore_ascii_case("referrer-policy")) {
+        b = b.header("Referrer-Policy", "no-referrer");
+    }
     for (k, v) in extra {
         b = b.header(*k, *v);
     }
@@ -370,7 +372,14 @@ async fn login_gate(
     }
     // the login page's form
     if head.method == "POST" && head.path == "/login" {
-        if head.origin.as_deref().is_some_and(|o| !ctx.access.origin_allowed(o, ctx.port, ctx.tls.is_some())) {
+        let origin_ok = match head.origin.as_deref() {
+            None => true,
+            // Under `Referrer-Policy: no-referrer` (e.g. forced by a reverse proxy), browsers send `Origin: null`
+            // on same-origin form POSTs together with `Sec-Fetch-Site: same-origin`.
+            Some("null") => head.fetch_site.as_deref() == Some("same-origin"),
+            Some(o) => ctx.access.origin_allowed(o, ctx.port, ctx.tls.is_some()),
+        };
+        if !origin_ok {
             return Err(Box::new(reply(403, "text/plain", "forbidden")));
         }
         if head.content_length.unwrap_or(0) > 4096 {
@@ -426,7 +435,10 @@ fn logged_in(a: &auth::Auth, name: &str, secure: bool) -> Reply {
     reply_with(303, "text/plain", "", &[("Location", "/"), ("Set-Cookie", &a.set_cookie(name, secure))])
 }
 
-/// The login page, saying why the last try failed
+/// The login page, saying why the last try failed.
+/// Uses `Referrer-Policy: same-origin` (instead of `no-referrer`) so browsers send the real `Origin` header on
+/// same-origin `<form method="post" action="/login">` submissions (including plain HTTP LAN `--tls off` where
+/// `Sec-Fetch-Site` is omitted), while still never leaking a `Referer` to any other origin.
 fn login_page(v: auth::Verdict) -> Reply {
     let (status, why) = match v {
         auth::Verdict::Wrong => (401, Some(auth::LoginError::Wrong)),
@@ -435,7 +447,12 @@ fn login_page(v: auth::Verdict) -> Reply {
     };
     let page = auth::login_page(why);
     let csp = super::csp_for(&page);
-    reply_with(status, "text/html; charset=utf-8", page, &[("Content-Security-Policy", &csp)])
+    reply_with(
+        status,
+        "text/html; charset=utf-8",
+        page,
+        &[("Content-Security-Policy", &csp), ("Referrer-Policy", "same-origin")],
+    )
 }
 
 /// A stream's handler, in the request's language (its token going ends it with the answer, [`checked`])

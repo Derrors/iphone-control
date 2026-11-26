@@ -191,12 +191,12 @@ impl<T: Transport> WdaClient<T> {
     }
 
     /// 前台是 SpringBoard 时看元素树是锁屏、通知中心还是普通界面，并带回元素树；前台是别的 App 就是普通界面
-    pub(super) async fn cover_tree(&mut self) -> Result<(elements::CoverSheet, Option<String>)> {
+    pub(super) async fn cover_tree(&mut self) -> Result<(elements::CoverSheet, Option<elements::Source>)> {
         if self.active_app().await? != SPRINGBOARD {
             return Ok((elements::CoverSheet::None, None));
         }
-        let xml = self.source_xml().await?;
-        Ok((elements::cover_sheet(&xml), Some(xml)))
+        let src = elements::Source::from_xml(&self.source_xml().await?);
+        Ok((elements::cover_sheet(&src), Some(src)))
     }
 
     pub async fn active_app(&self) -> Result<String> {

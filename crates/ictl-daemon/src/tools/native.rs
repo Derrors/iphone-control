@@ -111,7 +111,7 @@ fn append_seen(field: Option<&ictl_ax::Element>, object: ictl_ax::ObjectRef, old
 }
 
 /// The on-screen keyboard is up: a Keyboard element, or its keys (the keyboard's process reads as the app's own
-/// elements at times, then no Keyboard is made of them, `ictl_ax::xml`)
+/// elements at times, then no Keyboard is made of them, `ictl_ax::node`)
 fn keyboard_up(tree: &Tree) -> bool {
     tree.elements.iter().any(|e| e.kind == "Keyboard") || tree.elements.iter().filter(|e| e.kind == "Key").count() >= 8
 }
@@ -131,14 +131,14 @@ impl Daemon {
         native_for(self.cfg.ios_backend, g.info.as_ref())
     }
 
-    /// One read of the screen through remoteAXService, as WDA-style XML: the frontmost app's tree as it is now and
-    /// SpringBoard's elements over the app. Returns the XML, the screen (as turned now) and the frontmost app's
-    /// process
+    /// One read of the screen through remoteAXService, as an element tree like WDA's `/source`: the frontmost app's
+    /// tree as it is now and SpringBoard's elements over the app. Returns the tree, the screen (as turned now) and the
+    /// frontmost app's process
     pub(crate) async fn ax_read(
         &self,
         g: &mut Inner,
         wait: Duration,
-    ) -> crate::error::Result<(String, ScreenSize, i64)> {
+    ) -> crate::error::Result<(elements::Source, ScreenSize, i64)> {
         self.ax_read_with(g, wait, true).await
     }
 
@@ -149,12 +149,12 @@ impl Daemon {
         g: &mut Inner,
         wait: Duration,
         overlays: bool,
-    ) -> crate::error::Result<(String, ScreenSize, i64)> {
+    ) -> crate::error::Result<(elements::Source, ScreenSize, i64)> {
         let s = self.ax_snapshot(g, wait, overlays).await?;
         self.ax_render(g, &s).await
     }
 
-    /// One read of the screen as the phone gives it ([`Self::ax_read_with`] before it becomes XML)
+    /// One read of the screen as the phone gives it ([`Self::ax_read_with`] before it becomes a tree)
     async fn ax_snapshot(
         &self,
         g: &mut Inner,
@@ -224,7 +224,7 @@ impl Daemon {
         &self,
         g: &mut Inner,
         s: &ictl_device::ax::AxScreen,
-    ) -> crate::error::Result<(String, ScreenSize, i64)> {
+    ) -> crate::error::Result<(elements::Source, ScreenSize, i64)> {
         // the application element covers the screen: its frame is the screen in points, as turned now
         let root = s.app.first().and_then(|e| e.frame).map(|f| ScreenSize { width: f.2, height: f.3 });
         let size = match root.filter(|r| r.width > 1.0 && r.height > 1.0) {
@@ -249,7 +249,7 @@ impl Daemon {
         );
         let web = self.web_processes(g, &s.app).await;
         Ok((
-            ictl_ax::xml::to_xml(&s.app, &s.overlays, size.width, size.height, &web, s.springboard_front),
+            ictl_ax::node::to_node(&s.app, &s.overlays, size.width, size.height, &web, s.springboard_front),
             size,
             s.app_pid,
         ))
@@ -450,8 +450,8 @@ impl Daemon {
     }
 
     async fn snapshot_tree(&self, g: &mut Inner, s: &ictl_device::ax::AxScreen) -> crate::error::Result<Tree> {
-        let (xml, size, _) = self.ax_render(g, s).await?;
-        let mut tree = elements::parse_tree(&xml, size);
+        let (src, size, _) = self.ax_render(g, s).await?;
+        let mut tree = Tree::of(&src, size);
         tree.incomplete |= !s.app_complete || !s.overlays_complete;
         Ok(tree)
     }
@@ -471,8 +471,8 @@ impl Daemon {
     /// The frontmost app's elements alone, as a read and as a tree
     async fn ax_app_read(&self, g: &mut Inner) -> crate::error::Result<(ictl_device::ax::AxScreen, Tree)> {
         let s = self.ax_snapshot(g, AX_WAIT, false).await?;
-        let (xml, size, _) = self.ax_render(g, &s).await?;
-        Ok((s, elements::parse_tree(&xml, size)))
+        let (src, size, _) = self.ax_render(g, &s).await?;
+        Ok((s, Tree::of(&src, size)))
     }
 
     /// After a swipe, waits for the list to stop (at most [`SCROLL_SETTLE`]): two reads in a row with the elements
@@ -528,8 +528,8 @@ impl Daemon {
         let mut lock: Option<(Instant, Option<bool>)> = None;
         loop {
             let screen = self.ax_snapshot(g, AX_WAIT, true).await?;
-            let (xml, size, _) = self.ax_render(g, &screen).await?;
-            let mut tree = elements::parse_tree(&xml, size);
+            let (src, size, _) = self.ax_render(g, &screen).await?;
+            let mut tree = Tree::of(&src, size);
             tree.incomplete |= !screen.app_complete || !screen.overlays_complete;
             let why = match super::observe::wait_match(&tree, text, disappeared, t0.elapsed()) {
                 Some(result) if !disappeared => return Ok(result),
@@ -537,7 +537,7 @@ impl Daemon {
                     // the read first (costs nothing more), then lockdown: it says locked before the read shows the
                     // lock screen, but only on a phone with a passcode, so it can't be the only check. Asked at most
                     // every LOCK_ASK_EVERY (a new connection each time); a failure leaves it unknown, not the wait
-                    let cover = native_cover(&xml, &screen, &tree);
+                    let cover = native_cover(&src, &screen, &tree);
                     if cover == Cover::Locked {
                         return Err(super::observe::wait_locked());
                     }
@@ -913,8 +913,8 @@ impl Daemon {
         self.ensure_tunnel(g, &device).await?.launch_foreground(bundle_id, url).await?;
         loop {
             tokio::time::sleep(Duration::from_millis(300)).await;
-            let (xml, size, pid) = self.ax_read(g, AX_WAIT).await?;
-            let tree = elements::parse_tree(&xml, size);
+            let (src, size, pid) = self.ax_read(g, AX_WAIT).await?;
+            let tree = Tree::of(&src, size);
             if let Some(a) = tree.alert().filter(|a| !a.label.is_empty()) {
                 return Ok(ictl_wda::Launch::Blocked(a.label.clone()));
             }
@@ -1004,8 +1004,8 @@ enum Cover {
     Other,
 }
 
-fn native_cover(xml: &str, screen: &ictl_device::ax::AxScreen, tree: &Tree) -> Cover {
-    match elements::cover_sheet(xml) {
+fn native_cover(src: &elements::Source, screen: &ictl_device::ax::AxScreen, tree: &Tree) -> Cover {
+    match elements::cover_sheet(src) {
         elements::CoverSheet::Locked => Cover::Locked,
         elements::CoverSheet::NotificationCenter => Cover::Other,
         elements::CoverSheet::None if screen.springboard_front && !unlocked_springboard(tree) => Cover::Other,
@@ -1032,10 +1032,10 @@ fn unlocked_springboard(tree: &Tree) -> bool {
 fn focused_text_field(screen: &ictl_device::ax::AxScreen) -> Option<&ictl_ax::Element> {
     let mut fields = screen.app.iter().filter(|e| {
         // Raw AX retains focus and exact text, including whitespace. The shared XML has been normalized for display.
-        e.focused && matches!(ictl_ax::xml::kind(e), "TextField" | "TextView" | "SearchField" | "SecureTextField")
+        e.focused && matches!(ictl_ax::node::kind(e), "TextField" | "TextView" | "SearchField" | "SecureTextField")
     });
     let f = fields.next()?;
-    (fields.next().is_none() && f.enabled && f.visible && ictl_ax::xml::kind(f) != "SecureTextField").then_some(f)
+    (fields.next().is_none() && f.enabled && f.visible && ictl_ax::node::kind(f) != "SecureTextField").then_some(f)
 }
 
 /// What a field holds: an empty field reads its placeholder as its value natively (Spotlight's empty field reads
@@ -1063,7 +1063,7 @@ struct NativeScreen<'a> {
 /// passcode keypad from accessibility (one element, the app's, for every session; iPhone 15 Pro Max, iOS 27.2.1), so
 /// the session is closed first, and the elements come back a moment after. The next tap opens it again (about 0.5 s).
 /// Not before the last touch has landed ([`TOUCH_LANDS`])
-async fn read_lock_screen(d: &Daemon, g: &mut Inner) -> crate::error::Result<(String, ScreenSize, i64)> {
+async fn read_lock_screen(d: &Daemon, g: &mut Inner) -> crate::error::Result<(elements::Source, ScreenSize, i64)> {
     let was_open = g.tunnel.as_ref().is_some_and(ictl_device::Tunnel::hid_open);
     if was_open && let Some(left) = touch_lands_in(g.hid_used.map(|t| t.elapsed())) {
         tokio::time::sleep(left).await;
@@ -1072,7 +1072,7 @@ async fn read_lock_screen(d: &Daemon, g: &mut Inner) -> crate::error::Result<(St
     let t0 = Instant::now();
     loop {
         let read = Box::pin(d.ax_read(g, Duration::from_secs(3))).await?;
-        let shown = read.0.matches("<XCUIElementType").count() > 1;
+        let shown = read.0.nodes().nth(1).is_some();
         if shown || !was_open || t0.elapsed() >= LOCK_SCREEN_BACK {
             tracing::debug!(
                 "lock screen read {:.0} ms after closing HID, elements shown: {shown}",
@@ -1117,7 +1117,7 @@ impl Screen for NativeScreen<'_> {
 
     async fn check_lock(&mut self, _reported: Option<bool>, _strict: bool) -> std::result::Result<LockCheck, WdaError> {
         let locked = self.d.native_locked(self.g).await.map_err(|e| WdaError::Unavailable(e.to_string().into()))?;
-        let tree = if locked { read_lock_screen(self.d, self.g).await.ok().map(|(x, _, _)| x) } else { None };
+        let tree = if locked { read_lock_screen(self.d, self.g).await.ok().map(|(src, _, _)| src) } else { None };
         Ok(LockCheck { locked, uncertain: false, tree })
     }
 
@@ -1156,8 +1156,8 @@ impl Screen for NativeScreen<'_> {
     }
 
     async fn elements(&mut self) -> std::result::Result<Vec<elements::Element>, WdaError> {
-        let (xml, size, _) = read_lock_screen(self.d, self.g).await.map_err(step)?;
-        Ok(elements::parse(&xml, size))
+        let (src, size, _) = read_lock_screen(self.d, self.g).await.map_err(step)?;
+        Ok(Tree::of(&src, size).elements)
     }
 
     async fn passcode_field(&mut self) -> std::result::Result<Option<(u32, u32)>, WdaError> {
@@ -1220,8 +1220,9 @@ mod tests {
         };
         let cover = |markers: &str, springboard_front| {
             let xml = format!(r#"<App>{markers}</App>"#);
-            let tree = elements::parse_tree(&xml, ScreenSize { width: 390.0, height: 844.0 });
-            native_cover(&xml, &screen(springboard_front), &tree)
+            let src = elements::Source::from_xml(&xml);
+            let tree = Tree::of(&src, ScreenSize { width: 390.0, height: 844.0 });
+            native_cover(&src, &screen(springboard_front), &tree)
         };
         let icon = r#"<XCUIElementTypeIcon type="Icon" label="Clock" x="10" y="10" width="54" height="54"/>"#;
         // the home screen

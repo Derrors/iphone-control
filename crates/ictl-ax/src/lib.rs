@@ -12,9 +12,9 @@
 
 pub mod archive;
 pub mod dtx;
+pub mod node;
 pub mod session;
 pub mod tree;
-pub mod xml;
 
 pub use archive::{Obj, ObjectRef};
 pub use session::{PushedAt, Response, Session};

@@ -323,7 +323,7 @@ async fn unlock<D: Screen>(wda: &mut D, cfg: &UnlockConfig, code: &[u8]) -> Resu
         // 核对时已取到元素树就直接用，密码栏也从树里读。那棵树是上滑后马上取的，键盘有时还没进树：
         // 缺键盘或密码栏时再取一次（真机上这样省掉一整轮，约 4.5 秒）
         let mut els = match &check.tree {
-            Some(xml) => elements::parse(xml, view),
+            Some(src) => elements::Tree::of(src, view).elements,
             None => wda.elements().await?,
         };
         if check.tree.is_some() && (elements::keypad(&els).is_none() || elements::passcode_field(&els).is_none()) {

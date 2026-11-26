@@ -11,11 +11,15 @@
 //!
 //! 屏幕尺寸和方向（[`ScreenSize`]、[`Rotation`]）也在这里：解析要用，HID 和画面也用。
 //!
-//! 分在几个文件里：`geometry`（矩形、方向、坐标换算）、`parse`（解析 XML）、`query`（在树里找、点哪里）、`lock`（锁屏的
+//! 读到的树先是 [`Source`]（[`Node`] 组成的原样的树：WDA 的 `/source` 从 XML 读来，原生控制由无障碍元素直接拼成），
+//! 再由 [`Tree::of`] 算出留下哪些元素、在哪、谁盖住谁。
+//!
+//! 分在几个文件里：`geometry`（矩形、方向、坐标换算）、`node`（读写 XML）、`parse`（从节点算出 [`Tree`]）、`query`（在树里找、点哪里）、`lock`（锁屏的
 //! 键盘、密码栏、封面）。类型都在这里，各文件里是它们的实现
 
 mod geometry;
 mod lock;
+mod node;
 mod parse;
 mod query;
 #[cfg(test)]
@@ -39,6 +43,27 @@ fn regex(pattern: &str) -> Regex {
 /// `/source?format=xml&excluded_attributes=` 要排除的属性
 pub const SOURCE_EXCLUDED: &str =
     "visible,accessible,focused,enabled,selected,index,traits,placeholderValue,hittable,customActions,nativeFrame";
+
+/// 元素树里的一个节点，读到时的样子：类型、文字和元素树里的坐标，还没算在不在屏幕上、谁盖住谁（[`Tree::of`]）。
+/// 文字已去掉首尾空白
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Node {
+    /// 不带 `XCUIElementType`：`Button`、`StaticText`…
+    pub kind: String,
+    pub label: String,
+    pub name: String,
+    pub value: String,
+    /// 元素树坐标：小组件里的相对小组件，iPad 横屏时 SpringBoard 的是竖屏坐标
+    pub frame: Rect,
+    pub children: Vec<Node>,
+}
+
+/// 读到的一棵树：根（一般只有 Application 一个），和读没读完。没读完（XML 断了、出错）时，没找到的东西不能当成没有
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Source {
+    pub roots: Vec<Node>,
+    pub incomplete: bool,
+}
 
 /// 屏幕坐标下的矩形（点）
 #[derive(Debug, Clone, Copy, PartialEq, Default)]

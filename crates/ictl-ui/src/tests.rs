@@ -1,8 +1,14 @@
+use super::parse::{is_percentage, is_scroll_bar};
 use super::*;
-use super::{
-    lock::touch_id_prompt,
-    parse::{is_percentage, is_scroll_bar},
-};
+
+/// [`super::cover_sheet`] on WDA's XML, as the client reads it
+fn cover_sheet(xml: &str) -> CoverSheet {
+    super::cover_sheet(&Source::from_xml(xml))
+}
+
+fn touch_id_prompt(xml: &str) -> bool {
+    super::lock::touch_id_prompt(&Source::from_xml(xml))
+}
 
 const SCREEN: ScreenSize = ScreenSize { width: 430.0, height: 932.0 };
 const HOME: &str = include_str!("../../ictl-wda/tests/fixtures/home.xml");
@@ -732,4 +738,56 @@ fn a_list_that_stopped_is_still_though_cells_came_and_went() {
     // too little in common to tell
     let d = tree(&[("墙纸", 200), ("x", 400), ("y", 450), ("z", 500), ("w", 550), ("v", 600)]);
     assert!(!d.still_along_common(&a, true, 3));
+}
+
+/// Every device sample, read, written out and read again, is the same tree
+#[test]
+fn a_source_written_as_xml_reads_back_the_same() {
+    for xml in [
+        HOME,
+        LOCK,
+        LOCK_IOS27,
+        PIN_IOS27,
+        NC_IOS27,
+        PARTIAL_IOS27,
+        SETTINGS_IOS27,
+        HOME_WIDGETS_IOS27,
+        WALLET_IOS27,
+        IPAD_TOUCHID,
+        CLOCK_DE_IOS27,
+        IPAD_PIN,
+        IPAD_LOCK_P,
+        IPAD_TOUCHID_P,
+        IPAD_PIN_P,
+        IPAD_TOUCHID_LEFT,
+        IPAD_PIN_LEFT,
+    ] {
+        let src = Source::from_xml(xml);
+        assert!(!src.incomplete && src.roots.len() == 1);
+        assert_eq!(Source::from_xml(&src.to_xml()), src);
+    }
+}
+
+/// XML cut off keeps what came, nested as it was, and says it is incomplete; a node's kind is its `type`, or its tag
+#[test]
+fn a_cut_source_keeps_what_came() {
+    let src = Source::from_xml(
+        r#"<App label=" a "><XCUIElementTypeButton type="XCUIElementTypeCell" label="b"/><Text label="c">"#,
+    );
+    assert!(src.incomplete);
+    let kinds: Vec<(&str, &str)> = src.nodes().map(|n| (n.kind.as_str(), n.label.as_str())).collect();
+    assert_eq!(kinds, [("App", "a"), ("Cell", "b"), ("Text", "c")]);
+    assert_eq!(src.roots[0].children.len(), 2);
+    assert!(!Source::from_xml("<App><B/></App>").incomplete);
+}
+
+/// Deeper than any real tree: not read (and said so), so a hostile one can't run the stack out
+#[test]
+fn a_source_too_deep_is_cut() {
+    let xml = "<A>".repeat(2000) + "<B label=\"deep\"/>" + &"</A>".repeat(2000) + "<C label=\"after\"/>";
+    let src = Source::from_xml(&xml);
+    assert!(src.incomplete);
+    assert_eq!(src.nodes().count(), 513);
+    assert!(src.nodes().all(|n| n.label != "deep"));
+    assert_eq!(src.roots.last().map(|n| n.label.as_str()), Some("after"));
 }

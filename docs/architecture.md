@@ -132,8 +132,8 @@
 |---|---|---|
 | `ictl-device` | `Device` 句柄：usbmux 发现与监听、lockdown、配对状态、开发者模式状态、隧道（`Tunnel`，持有 HID 会话和显示媒体流）、开发者镜像（含下载缓存）、截图、剪贴板（HID 粘贴中文等非 ASCII 文字）、App 列表/启动/结束、安装 IPA、卸载、崩溃报告、系统日志流（`oslog`，开发者工具用）、打开 Web Inspector；所有设备调用都有时限 | `idevice`（锁上游 git 提交） |
 | `ictl-wda` | `WdaRunner`（经 XCTest 启动/停止，只剩 `debug` 子命令用）、后台启动 WDA（DVT processcontrol，不持 XCTest 会话，带 `USE_IP=127.0.0.1`）、`WdaClient`（会话、点击、W3C actions、keys、source、screenshot、appium settings、锁屏核对）、经 usbmuxd 直连设备 8100 端口的 HTTP 传输（区分连不上和请求超时）；`ictl_wda::elements` 是 `ictl-ui` 的别名 | `idevice`（`xctest`） |
-| `ictl-ui` | 界面元素树（纯函数，可单测）：解析 WDA `/source` 风格的 XML（`parse.rs`）、按文字找元素和点哪里（`query.rs`）、锁屏的键盘和密码栏（`lock.rs`）、竖屏坐标换算（`geometry.rs`）；屏幕尺寸 `ScreenSize` 和方向 `Rotation`（WDA 的 `/rotation`、`/orientation`，SpringBoard 和 HID 用的都是它，`ictl-device` 再导出） | `quick-xml`、`regex` |
-| `ictl-ax` | remoteAXService 的 DTX 会话：握手、读帧、按层读前台 App 和 SpringBoard 的元素，拼成树再转成 WDA `/source` 风格的 XML（iOS 27 及以上原生控制读界面用） | `idevice`、`plist` |
+| `ictl-ui` | 界面元素树（纯函数，可单测）：读到的树 `Source`（`node.rs`：读写 WDA `/source` 的 XML；原生控制由 `ictl-ax` 直接拼成，不经 XML），由它算出留下的元素和谁盖住谁（`parse.rs`）、按文字找元素和点哪里（`query.rs`）、锁屏的键盘和密码栏（`lock.rs`）、竖屏坐标换算（`geometry.rs`）；屏幕尺寸 `ScreenSize` 和方向 `Rotation`（WDA 的 `/rotation`、`/orientation`，SpringBoard 和 HID 用的都是它，`ictl-device` 再导出） | `quick-xml`、`regex` |
+| `ictl-ax` | remoteAXService 的 DTX 会话：握手、读帧、按层读前台 App 和 SpringBoard 的元素，直接拼成和 WDA `/source` 一样的元素树（`node.rs`，`ictl_ui::Source`，iOS 27 及以上原生控制读界面用） | `idevice`、`plist`、`ictl-ui` |
 | `ictl-webinspector` | Web Inspector 服务（`com.apple.webinspector`，经 lockdown）的客户端：列出可检查的网页和 WebView、在页面里执行 JavaScript（`Target` 域和旧版直接收命令两种都支持，Promise 用 `Runtime.awaitPromise` 等待）。纯协议，消息解析可单测 | `idevice`、`plist` |
 | `ictl-l10n` | 界面文字的语言：取当前语言，`tr!` / `trf!` / `log_tr!` / `log_trf!` 宏（每条文字在代码里原地写成中英一对，见 D12） | 无 |
 | `ictl-protocol` | 控制接口的 `Request`/`Response` 类型和客户端 `call(socket, req, timeout)`、任务的流式请求；`Response::Text` 除了给人和 agent 看的文字，还可以带 `data`（状态、元素、App 列表、系统弹窗的结构化字段，给控制台这类程序用，文字措辞改了也不影响它们）；默认的数据目录、socket 路径和 root 判断 | `serde`、`serde_json`、`tokio`、`libc`、`ictl-l10n` |

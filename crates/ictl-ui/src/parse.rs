@@ -1,8 +1,7 @@
-//! 解析 WDA 的元素树（XML）：留下哪些元素、在哪一层、谁能盖住谁
+//! 从读到的树（[`Source`]）算出 [`Tree`]：留下哪些元素、在哪一层、谁能盖住谁
 
 use super::query::clip;
 use super::*;
-use quick_xml::{XmlVersion, events::Event};
 
 /// 底部悬浮工具栏/标签栏（iOS 26 起的玻璃栏）实际接收点击的范围比元素树给的框往外多约 20 点。
 /// 真机：设置首页搜索栏底板顶边 856，点 834 还能进下面那一行，838 就被栏吞掉（什么都不发生）；
@@ -64,7 +63,35 @@ pub fn parse(xml: &str, view: impl Into<View>) -> Vec<Element> {
     parse_tree(xml, view).elements
 }
 
-/// 解析时每个还没闭合的节点
+/// WDA `/source` 的 XML 解析成 [`Tree`]（[`Source::from_xml`]，再 [`Tree::of`]）
+pub fn parse_tree(xml: &str, view: impl Into<View>) -> Tree {
+    Tree::of(&Source::from_xml(xml), view)
+}
+
+impl Tree {
+    /// 读到的树放在 `view` 这样的屏幕上：留下的元素，和能盖住它们的东西（见 crate 的文档）
+    pub fn of(source: &Source, view: impl Into<View>) -> Tree {
+        let view = view.into();
+        let mut w = Walk {
+            view,
+            screen: view.screen,
+            // 竖屏坐标往哪边转，看树里第一个状态栏（原始坐标）
+            status_bar: source.nodes().find(|n| n.kind == "StatusBar").map(|n| n.frame),
+            rotate: None,
+            seen: std::collections::HashSet::new(),
+            tree: Tree::default(),
+            stack: Vec::new(),
+            n: 0,
+        };
+        for r in &source.roots {
+            w.walk(r);
+        }
+        w.tree.incomplete = source.incomplete;
+        w.tree
+    }
+}
+
+/// 走树时每个还没走完的节点
 struct Open {
     /// 元素树坐标（小组件偏移已加上，还没换算到屏幕）
     abs: Rect,
@@ -89,69 +116,47 @@ struct Open {
     blocker: Option<usize>,
 }
 
-pub fn parse_tree(xml: &str, view: impl Into<View>) -> Tree {
-    let view = view.into();
-    let screen = view.screen;
-    let (sw, sh) = (screen.width, screen.height);
-    // 看到 Application 下第一个窗口时定下来
-    let mut rotate: Option<Rotation> = None;
-    let mut reader = quick_xml::Reader::from_str(xml);
-    let mut seen = std::collections::HashSet::new();
-    let mut tree = Tree::default();
-    let mut stack: Vec<Open> = Vec::new();
-    // 节点序号（文档顺序）
-    let mut n = 0usize;
-    let close = |tree: &mut Tree, o: &Open, end: usize| {
+/// 一次走树
+struct Walk {
+    view: View,
+    screen: ScreenSize,
+    status_bar: Option<Rect>,
+    /// 看到 Application 下第一个窗口时定下来
+    rotate: Option<Rotation>,
+    /// 已留下的（文字, 位置）：父子重复的去掉
+    seen: std::collections::HashSet<(String, i64, i64, i64, i64)>,
+    tree: Tree,
+    stack: Vec<Open>,
+    /// 节点序号（先序，从 1 起）
+    n: usize,
+}
+
+impl Walk {
+    fn walk(&mut self, node: &Node) {
+        let o = self.open(node);
+        self.stack.push(o);
+        for c in &node.children {
+            self.walk(c);
+        }
+        let o = self.stack.pop().expect("pushed above");
+        // 后代都走完了：它们的序号到这里为止
         if let Some(i) = o.kept {
-            tree.elements[i].span.1 = end;
+            self.tree.elements[i].span.1 = self.n;
         }
         if let Some(i) = o.blocker {
-            tree.blockers[i].span.1 = end;
+            self.tree.blockers[i].span.1 = self.n;
         }
-    };
-    loop {
-        let (e, empty) = match reader.read_event() {
-            Ok(Event::Start(e)) => (e, false),
-            Ok(Event::Empty(e)) => (e, true),
-            Ok(Event::End(_)) => {
-                if let Some(o) = stack.pop() {
-                    close(&mut tree, &o, n);
-                }
-                continue;
-            }
-            Ok(Event::Eof) => {
-                tree.incomplete = !stack.is_empty();
-                break;
-            }
-            Err(e) => {
-                // 解析到一半出错：已解析的照常返回，但要留痕，否则「没找到元素」看起来像真结果
-                tracing::warn!(
-                    "{}",
-                    ictl_l10n::log_trf!(
-                        "元素树 XML 解析出错（位置 {}），只用了前面的部分：{e}",
-                        "Error parsing the element tree XML (at {}), only the part before it is used: {e}",
-                        reader.buffer_position()
-                    )
-                );
-                tree.incomplete = true;
-                break;
-            }
-            Ok(_) => continue,
-        };
-        n += 1;
-        let tag = e.name().as_ref().to_owned();
-        let mut attr = std::collections::HashMap::new();
-        for a in e.attributes().flatten() {
-            let k = a.key.as_ref().to_owned();
-            let v = a.normalized_value(XmlVersion::Implicit1_0).map(|c| c.into_owned()).unwrap_or_default();
-            attr.insert(k, v);
-        }
-        let get = |k: &str| attr.get(k).map(|s| s.trim().to_owned()).unwrap_or_default();
-        let (label, name, value) = (get("label"), get("name"), get("value"));
-        let num = |k: &str| attr.get(k).and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.0);
-        let raw = Rect { x: num("x"), y: num("y"), w: num("width"), h: num("height") };
-        let full_kind = attr.get("type").cloned().unwrap_or(tag);
-        let kind = full_kind.strip_prefix("XCUIElementType").unwrap_or(&full_kind).to_owned();
+    }
+
+    /// 一个节点：留不留、挡不挡别人，以及它的子节点要知道的
+    fn open(&mut self, node: &Node) -> Open {
+        let Walk { view, screen, status_bar, rotate, seen, tree, stack, n } = self;
+        let (sw, sh) = (screen.width, screen.height);
+        *n += 1;
+        let n = *n;
+        let (label, name, value) = (node.label.clone(), node.name.clone(), node.value.clone());
+        let raw = node.frame;
+        let kind = node.kind.clone();
 
         // 小组件的内容：某个节点在 (0,0) 且和父节点一样大，而父节点不在 (0,0)——从它开始坐标是相对父节点的。
         // 网页里不算：WKWebView 内部有一层节点也报 (0,0)、和 WebView 一样大，但网页元素用的是屏幕坐标，
@@ -171,10 +176,10 @@ pub fn parse_tree(xml: &str, view: impl Into<View>) -> Tree {
         }
         let abs = Rect { x: raw.x + offset.0, y: raw.y + offset.1, ..raw };
         if rotate.is_none() && kind == "Window" && stack.len() == 1 && abs.w > 0.0 && abs.h > 0.0 {
-            rotate = Some(Rotation::of_tree(abs, view, Rotation::tree_status_bar(xml)));
+            *rotate = Some(Rotation::of_tree(abs, *view, *status_bar));
         }
         // 下面判断在不在屏幕内、挡没挡住、点哪里，都用屏幕坐标
-        let scr = rotate.unwrap_or_default().tree_rect(abs, screen);
+        let scr = rotate.unwrap_or_default().tree_rect(abs, *screen);
         let in_status_bar = kind == "StatusBar" || parent.is_some_and(|p| p.in_status_bar);
         // 原生控制读到的树是扁平的：设置首页底部悬浮的搜索栏只是一个直接挂在 Application 下的 SearchField，外面没有
         // WDA 树里那层 Toolbar。屏幕下部的这种搜索框也按悬浮栏算：盖得住下面的行，接收点击的范围也多算 BAR_SLOP。
@@ -231,7 +236,7 @@ pub fn parse_tree(xml: &str, view: impl Into<View>) -> Tree {
                 tree.blockers.len() - 1
             });
         if let Some(t) = &text {
-            for o in &stack {
+            for o in stack.iter() {
                 if let Some(i) = o.blocker
                     && tree.blockers[i].name.is_empty()
                 {
@@ -282,7 +287,7 @@ pub fn parse_tree(xml: &str, view: impl Into<View>) -> Tree {
             });
             tree.elements.len() - 1
         });
-        let o = Open {
+        Open {
             abs,
             in_bar,
             on_bar,
@@ -296,12 +301,6 @@ pub fn parse_tree(xml: &str, view: impl Into<View>) -> Tree {
             in_status_bar,
             kept,
             blocker,
-        };
-        if empty {
-            close(&mut tree, &o, n);
-        } else {
-            stack.push(o);
         }
     }
-    tree
 }

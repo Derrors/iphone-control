@@ -1944,6 +1944,7 @@ dependencies = [
 name = "ictl-ax"
 version = "0.2.14"
 dependencies = [
+ "ictl-ui",
  "idevice",
  "plist",
  "thiserror 2.0.21",

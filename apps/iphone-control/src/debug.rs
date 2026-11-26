@@ -355,14 +355,15 @@ pub async fn run(udid: Option<&str>, args: DebugArgs) -> anyhow::Result<()> {
                         }
                         None => t.ax_screen(Duration::from_secs(5), true).await?,
                     };
-                    let xml = ictl_ax::xml::to_xml(
+                    let xml = ictl_ax::node::to_node(
                         &s.app,
                         &s.overlays,
                         args.width,
                         args.height,
                         &Default::default(),
                         s.springboard_front,
-                    );
+                    )
+                    .to_xml();
                     let labelled: Vec<&str> =
                         s.app.iter().filter(|e| !e.label.is_empty()).map(|e| e.label.as_str()).take(6).collect();
                     println!(

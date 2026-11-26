@@ -123,15 +123,6 @@ impl Rotation {
         }
     }
 
-    /// 树里第一个 StatusBar 的原始坐标（不管嵌在哪层，状态栏都是整屏坐标）
-    pub(super) fn tree_status_bar(xml: &str) -> Option<Rect> {
-        static TAG: LazyLock<Regex> = LazyLock::new(|| regex(r"<XCUIElementTypeStatusBar\b[^>]*>"));
-        static ATTR: LazyLock<Regex> = LazyLock::new(|| regex(r#"\b(x|y|width|height)="([^"]*)""#));
-        let tag = TAG.find(xml)?.as_str();
-        let attr = |k: &str| -> Option<f64> { ATTR.captures_iter(tag).find(|c| &c[1] == k)?[2].parse().ok() };
-        Some(Rect { x: attr("x")?, y: attr("y")?, w: attr("width")?, h: attr("height")? })
-    }
-
     /// 竖屏坐标的 `r` 在屏幕上的位置（`s`：屏幕，横的）。只换算两个横屏方向，其余原样：
     /// 顶边在左 (x, y) → (y, 屏幕高 - x)，顶边在右 (x, y) → (屏幕宽 - y, x)
     pub(super) fn tree_rect(self, r: Rect, s: ScreenSize) -> Rect {

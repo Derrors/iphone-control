@@ -6,10 +6,17 @@
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-26
+
+全面架构、安全、稳定性与性能升级：控制台切换 hyper、iOS 27 无障碍树直读、usbmuxd 实时 USB 热插拔、异常重启告警以及数十项可靠性与性能修复。
+
+### 新功能
+
+- 守护进程重启时会检测上一次是否异常退出（崩溃、`SIGKILL`、断电或看门狗重启），写入日志并通过新增的 `daemon` 通知事件（`iphone-control notify-test daemon`）告警，崩溃循环下自动合并抑制（#219）。
+
 ### 改进
 
-- 守护进程现在订阅 `usbmuxd` 的 `Listen` 事件流，收到 USB 设备接入/断开事件时立即唤醒巡检（在保留 10 秒定期巡检兜底的前提下，将热插拔发现延迟从最多 10 秒降至毫秒级）；自动过滤非 USB（网络）事件噪音，并在 usbmuxd 未运行或重启时以静默指数退避重连（#221）。
-- 守护进程现在通过持久化的 `run-state.json` 自感知上一次是否异常退出（崩溃、`SIGKILL`、断电）或由看门狗判定卡死重启，每次均写入 `daemon.log`，并通过新增的 `daemon` 通知事件（`iphone-control notify-test daemon`）告警；告警带持久化 30 分钟防风暴冷却，崩溃循环下自动合并并在冷却结束后汇总抑制次数与近 1 小时重启数（#219）。
+- 经 usbmuxd 的 `Listen` 事件流实时感知 USB 插拔，不再最多等 10 秒才开始准备或更新离线状态，同时保留每 10 秒一次的定期巡检兜底（#221）。
 - macOS 上向本机控制台 HTTP 接口发出的控制请求现在也能识别调用方进程（经 `libproc`），本机上的 agent 不能再借控制台 HTTP 接口暂停、继续或批准自己的任务（#215）。
 - iOS 27 上读界面不再绕一道 WebDriverAgent 样式的 XML：无障碍树直接变成元素树，和 WDA 读到的是同一种。这类手机上自动解锁出错时，提示里不再说「WDA 不可用」（#211）。
 - 不需要手机的慢操作不再挡住点击和读界面：`doctor` 先查本机（usbmuxd、Apple ID、ffmpeg）再占用手机，崩溃报告和卸载 App 完全不占用，接着的第二台设备的信息改在后台读（#207）。
@@ -23,8 +30,7 @@
 
 ### 修复
 
-- 修复在真实浏览器里经控制台登录页表单（`POST /login`）提交令牌会返回 `403 forbidden` 的问题：登录页携带 `Referrer-Policy: no-referrer` 时浏览器在同源表单 POST 会发送 `Origin: null`。现在登录页改用 `Referrer-Policy: same-origin`（对跨站依然不发 `Referer`），其余响应照旧保持 `no-referrer`，且 `POST /login` 仅在同时带有 `Sec-Fetch-Site: same-origin` 时放行 `Origin: null`（#220）。
-- 单个 AI 任务的事件日志（`tasks/<id>.jsonl`）现在设有上限（16,384 条 / 16 MiB，满额后停写普通事件但始终保留 `task` 与终态 `done`）；订阅和慢消费者重追时不再在主循环里持锁同步读盘，改为拍下文件长度与序号后异步读精确前缀（#218）。
+- 长时间运行的 AI 任务不再无限撑大单任务事件日志（上限 16,384 条 / 16 MiB，始终保留开始和结束记录），订阅或重追历史事件也不再阻塞守护进程的其他操作（#218）。
 - iOS 27 起：往网页输入框（Safari）输入文字可以用了：「允许粘贴」的提示不用读网页就能找到并点掉，网页在提示回答之前读不出来。以前在这里输入会失败，或者字进去了却报没输进去（#213）。
 - iOS 27 起：系统是任何语言都会点「允许粘贴」：按钮文字认不出时，点提示框两个按钮里的前一个（#213）。
 - 带 `scroll` 的 `iphone_tap_element` 不再在列表还在慢慢停下时就点：那样点下去只让列表停住，却照样报「已点击」。现在等找到的元素停在原处（最多 2 秒）再点（#213）。
@@ -43,7 +49,7 @@
 - 手机原生视频转成 H.264 时，ffmpeg 崩溃算作失败，换下一个编码器，不再无休止地重启（#201）。
 - `task run --url` 在控制台不应答时，按 Ctrl-C 后 10 秒内也能停下；事件流长时间没动静或发来没有结尾的事件时会放弃（#201）。
 - 一个 socket 只会有一个守护进程在跑，两个同时启动也一样；socket 从创建那一刻起就只有自己能访问；根本拿不到锁时如实报错，不再说成已有守护进程（#201）。
-- 控制台和登录页只运行它们自己的脚本（带脚本哈希的 Content-Security-Policy），也不再发送 Referer；客户端不读数据时不会一直占着连接（#202）。
+- 控制台和登录页只运行它们自己的脚本（带脚本哈希的 Content-Security-Policy），也不会向外部站点发送 Referer（反向代理剥离 `Origin` 时登录表单同样可用）；客户端不读数据时不会一直占着连接（#202、#220）。
 - 开着 HTTPS 时，控制台只接受以它实际提供的方式打开的页面发来的操作（HTTPS，或本机的明文 HTTP）（#202）。
 - 控制台在生成证书的中途被停掉，下次启动会重新生成，不再因为私钥和证书对不上而起不来（#202）。
 - 用 `viewer token remove` 删掉的令牌，即使在同一秒内也会立刻失效；同时运行的几个 `viewer token` 命令不会再互相覆盖改动（#202）。
@@ -457,7 +463,8 @@
 - `setup`、`doctor`、`status`、`mcp-config`。
 - Docker 镜像和预编译的 Linux 二进制。
 
-[Unreleased]: https://github.com/Derrors/iphone-control/compare/v0.2.14...HEAD
+[Unreleased]: https://github.com/Derrors/iphone-control/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/Derrors/iphone-control/compare/v0.2.14...v0.3.0
 [0.2.14]: https://github.com/Derrors/iphone-control/compare/v0.2.13...v0.2.14
 [0.2.13]: https://github.com/Derrors/iphone-control/compare/v0.2.12...v0.2.13
 [0.2.12]: https://github.com/Derrors/iphone-control/compare/v0.2.11...v0.2.12

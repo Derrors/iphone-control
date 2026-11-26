@@ -427,7 +427,7 @@ pub struct ActionFailure {
     pub stage: FailureStage,
 }
 
-/// Facts about a [`Response::Text`] that clients act on (see [`tapped_nothing`], [`alert_reported`])
+/// Facts about a [`Response::Text`] that clients act on
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Outcome {
     /// `iphone_tap_element` tapped nothing: no match, index out of range, or the element is covered
@@ -584,9 +584,7 @@ impl Response {
     /// For callers reporting a device action. Older daemons have no error classification.
     pub fn delivery(&self, req: &Request) -> Delivery {
         match self {
-            Self::Text { text, outcome, .. }
-                if matches!(req, Request::TapElement { .. }) && tapped_nothing(text, *outcome) =>
-            {
+            Self::Text { outcome: Some(o), .. } if matches!(req, Request::TapElement { .. }) && o.tapped_nothing => {
                 Delivery::NotSent
             }
             Self::Text { .. } if matches!(req, Request::TypeText { text, submit: false } if text.is_empty()) => {
@@ -821,36 +819,6 @@ pub async fn open_screen_stream(
         Response::Error { message, .. } => Err(message),
         _ => Ok((r, w)),
     })
-}
-
-/// 工具结果里报告系统弹窗挡着屏幕的固定写法（后面接「弹窗文字」）。MCP 端据此判断结果里是否已经报过弹窗，
-/// 不能只找「系统弹窗」几个字：按名字点到的元素文字里也可能有
-pub const ALERT_BLOCKING: &str = "屏幕上有系统弹窗";
-
-/// `iphone_tap_element` 没点到时结果开头的几种写法（不算出错，单独调用时是普通结果；批量里要停下）
-pub const TAP_MISSED: [&str; 3] = ["没找到", "只匹配到", "被挡住"];
-
-/// The version from which clients and daemons no longer read results by their wording, only by [`Outcome`]
-/// (every one since 0.1.5 sends it): remove the text fallbacks then
-pub const TEXT_FALLBACK_UNTIL: (u64, u64) = (0, 3);
-
-/// Did `iphone_tap_element` tap nothing? Daemons that send [`Outcome`] say so there; older ones only write
-/// Chinese text, recognised by its [`TAP_MISSED`] prefix. [`Outcome`] came with 0.1.5: the text fallback (here,
-/// in [`alert_reported`], and the fixed Chinese prefixes the daemon keeps for older MCP servers) goes in 0.3.0
-/// ([`TEXT_FALLBACK_UNTIL`])
-pub fn tapped_nothing(text: &str, outcome: Option<Outcome>) -> bool {
-    match outcome {
-        Some(o) => o.tapped_nothing,
-        None => TAP_MISSED.iter().any(|p| text.starts_with(p)),
-    }
-}
-
-/// Does the result already report a blocking system alert? As [`tapped_nothing`], with [`ALERT_BLOCKING`]
-pub fn alert_reported(text: &str, outcome: Option<Outcome>) -> bool {
-    match outcome {
-        Some(o) => o.alert_reported,
-        None => text.contains(ALERT_BLOCKING),
-    }
 }
 
 /// 请求里带上这个键（值为 true）：客户端发完请求不半关闭连接，守护进程据此把「读到 EOF」当成调用方已经走了，
@@ -1264,27 +1232,16 @@ mod tests {
         assert!(!serde_json::to_string(&Response::text_with("x", Outcome::default())).unwrap().contains("data"));
     }
 
-    /// A reminder that fails on time: from [`TEXT_FALLBACK_UNTIL`] on, delete the text fallbacks (`tapped_nothing`,
-    /// `alert_reported`, the daemon's fixed Chinese prefixes) and this test
+    /// Delivery follows [`Outcome::tapped_nothing`], never the human-readable wording
     #[test]
-    fn the_text_fallback_is_removed_in_time() {
-        let v: Vec<u64> = env!("CARGO_PKG_VERSION").split('.').map(|n| n.parse().unwrap()).collect();
-        assert!((v[0], v[1]) < TEXT_FALLBACK_UNTIL, "remove the text fallbacks: every supported version sends Outcome");
-    }
-
-    /// The field decides; without it (older daemon) the Chinese text is read
-    #[test]
-    fn outcome_wins_over_text() {
-        let missed = Outcome { tapped_nothing: true, ..Default::default() };
-        assert!(tapped_nothing("Not found: no element contains \"x\"", Some(missed)));
-        assert!(!tapped_nothing("没找到包含 \"x\" 的元素", Some(Outcome::default())));
-        assert!(tapped_nothing("没找到包含 \"x\" 的元素", None));
-        assert!(tapped_nothing("被挡住:Button \"x\" 整个被「浮层」盖住,没有点", None));
-        assert!(!tapped_nothing("Not found: no element contains \"x\"", None));
-        let alert = Outcome { alert_reported: true, ..Default::default() };
-        assert!(alert_reported("Launched x, but a system alert is on screen: “Allow?”", Some(alert)));
-        assert!(alert_reported("已启动 x,但屏幕上有系统弹窗「允许?」挡着", None));
-        assert!(!alert_reported("Launched x", Some(Outcome::default())));
+    fn outcome_decides_delivery_not_text() {
+        let tap = Request::TapElement { text: "x".into(), index: 0, max_age_ms: 0, scroll: None };
+        let missed = Response::text_with("Not found", Outcome { tapped_nothing: true, ..Default::default() });
+        assert_eq!(missed.delivery(&tap), Delivery::NotSent);
+        let sent_cn = Response::text_with("没找到包含 \"x\" 的元素", Outcome::default());
+        assert_eq!(sent_cn.delivery(&tap), Delivery::Sent);
+        let no_outcome = Response::Text { text: "没找到包含 \"x\" 的元素".into(), outcome: None, data: None };
+        assert_eq!(no_outcome.delivery(&tap), Delivery::Sent);
     }
 
     /// 旧版本守护进程直接反序列化请求：多出来的 cancel_on_close、lang 键不能让它报错（含没有字段的请求）

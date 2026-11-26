@@ -651,9 +651,9 @@ pub(super) const TAP_ALERT: &str = "先用 iphone_tap_element 点弹窗上的按
 
 pub(super) const TAP_ALERT_EN: &str = "first tap a button on the alert with iphone_tap_element";
 
-/// 「屏幕上有系统弹窗「…」挡着」：旧版本 MCP 端靠固定的开头认出结果里已经报过弹窗（新版本看 Outcome）
+/// 「屏幕上有系统弹窗「…」挡着」（客户端据 [`crate::protocol::Outcome::alert_reported`] 判断）
 pub(super) fn blocking(text: &str) -> String {
-    ictl_l10n::trf!("{ALERT_BLOCKING}「{text}」挡着", "a system alert is on screen: “{text}”")
+    ictl_l10n::trf!("屏幕上有系统弹窗「{text}」挡着", "a system alert is on screen: “{text}”")
 }
 
 /// 树里有弹窗就返回提醒

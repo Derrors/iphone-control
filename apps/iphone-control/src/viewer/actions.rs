@@ -186,7 +186,7 @@ pub(super) fn action_result(req: &Request, result: Result<Response, impl std::fm
     match result {
         // tapping by text that found nothing is an ordinary answer for the agent, a failure for the page
         Ok(Response::Text { text, outcome, .. }) => {
-            let missed = matches!(req, Request::TapElement { .. }) && protocol::tapped_nothing(&text, outcome);
+            let missed = matches!(req, Request::TapElement { .. }) && outcome.is_some_and(|o| o.tapped_nothing);
             json!({"ok": !missed, "message": text})
         }
         Ok(Response::Image { caption, .. }) => json!({"ok": true, "message": caption}),

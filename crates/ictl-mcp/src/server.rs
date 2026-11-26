@@ -200,9 +200,9 @@ impl McpServer {
             }
             (Response::Text { text, outcome, .. }, input) if req.is_device_action() => {
                 // 结果里已经说了有弹窗（启动 App 被挡）就不再查
-                let check = wants_alert_check(&req) && !protocol::alert_reported(&text, outcome);
+                let check = wants_alert_check(&req) && !outcome.is_some_and(|o| o.alert_reported);
                 // 按名字没点到东西：界面没动过，不用等它稳定，直接给界面（按名字点击刚读过的树）
-                let settle = !tap_missed(&text, outcome);
+                let settle = !tap_missed(outcome);
                 self.finish(text, false, then, check, settle, input).await
             }
             (resp, _) => to_result(resp),
@@ -384,9 +384,7 @@ impl McpServer {
                 }
                 Step::Request { tool, req } => match self.call_on(&req, udid.as_deref()).await {
                     // 按名字没点到（toolkit 兼容：单独调用时是普通结果）在批量里要停下：后面的步骤都建立在它点中的前提上
-                    Response::Text { text, outcome, .. }
-                        if tool == "iphone_tap_element" && tap_missed(&text, outcome) =>
-                    {
+                    Response::Text { text, outcome, .. } if tool == "iphone_tap_element" && tap_missed(outcome) => {
                         lines.push(format!("{n}. {tool} → {text}"));
                         if n < total {
                             lines.push(ictl_l10n::trf!(
@@ -398,7 +396,7 @@ impl McpServer {
                         return self.finish(lines.join("\n"), true, then, false, true, None).await;
                     }
                     Response::Text { text, outcome, .. } => {
-                        check = wants_alert_check(&req) && !protocol::alert_reported(&text, outcome);
+                        check = wants_alert_check(&req) && !outcome.is_some_and(|o| o.alert_reported);
                         lines.push(format!("{n}. {tool} → {text}"));
                     }
                     Response::Image { caption, .. } => lines.push(format!("{n}. {tool} → {caption}")),

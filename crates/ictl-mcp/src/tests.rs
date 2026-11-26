@@ -520,17 +520,11 @@ fn reuse_elements_only_affects_tap_element_steps() {
 }
 
 #[test]
-fn missed_tap_texts_are_recognised() {
-    // 旧版本守护进程：没有 outcome，只能认中文开头
-    assert!(tap_missed("没找到包含 \"x\" 的元素,先用 iphone_list_elements 或截图看看屏幕", None));
-    assert!(tap_missed("只匹配到 1 个:\nButton \"x\"", None));
-    assert!(!tap_missed("已点击 Button \"x\"", None));
-    assert!(tap_missed("被挡住:Button \"x\" 整个被「浮层」盖住,没有点", None));
-    assert!(!tap_missed("已点击 Button \"x\";它的中心被「搜索」盖住,改点没被盖住的 (215,848)", None));
-    // 新版本：看 outcome，与语言无关
+fn missed_tap_is_read_from_outcome() {
     let missed = protocol::Outcome { tapped_nothing: true, ..Default::default() };
-    assert!(tap_missed("Covered: Button \"x\" is completely covered", Some(missed)));
-    assert!(!tap_missed("Tapped Button \"Not found\"", Some(protocol::Outcome::default())));
+    assert!(tap_missed(Some(missed)));
+    assert!(!tap_missed(Some(protocol::Outcome::default())));
+    assert!(!tap_missed(None));
 }
 
 #[test]

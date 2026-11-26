@@ -6,10 +6,17 @@ What changed in each release, one line per change. Versions follow [Semantic Ver
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-26
+
+A major architecture, security, stability and performance release: hyper-based control page, direct iOS 27 accessibility tree, instant USB hotplug discovery, abnormal-restart alerting and dozens of reliability fixes.
+
+### New
+
+- Abnormal daemon restarts (crash, `SIGKILL`, power loss or watchdog restart) are detected on the next start, logged and reported through a new `daemon` notification (`iphone-control notify-test daemon`) with crash-loop throttling (#219).
+
 ### Improvements
 
-- The daemon now subscribes to usbmuxd's `Listen` event stream and wakes the supervision loop immediately on USB attach/detach events (cutting hotplug discovery from up to 10 s to milliseconds while keeping the 10-second periodic poll as fallback), filtering out non-USB network chatter and reconnecting with quiet exponential backoff when usbmuxd is absent or restarts (#221).
-- The daemon now detects when the previous instance exited unexpectedly (crash, `SIGKILL`, power loss) or was restarted by the watchdog via a persisted `run-state.json` marker, logs every incident to `daemon.log`, and sends a `daemon` notification (`iphone-control notify-test daemon`) throttled by a persisted 30-minute anti-storm cooldown that summarizes suppressed restarts in crash loops (#219).
+- USB plug and unplug events wake the daemon right away via usbmuxd's `Listen` stream instead of waiting up to 10 seconds for the next poll, while keeping the periodic poll as a fallback (#221).
 - On macOS, control requests sent to the viewer's local HTTP API now also identify the calling process (via `libproc`), so an agent on the same machine can no longer pause, resume or approve its own task through the HTTP API either (#215).
 - On iOS 27 the screen is read without the detour through WebDriverAgent-style XML: the accessibility tree becomes the element tree directly, the same one WDA's source gives. When auto-unlock fails on such a phone, its message no longer says "WDA unavailable" (#211).
 - Slow work that doesn't need the phone no longer holds up taps and reads: `doctor` checks this machine (usbmuxd, the Apple ID, ffmpeg) before it takes the phone, crash reports and uninstalling an app don't take it at all, and the details of a second connected device are read in the background (#207).
@@ -23,8 +30,7 @@ What changed in each release, one line per change. Versions follow [Semantic Ver
 
 ### Fixes
 
-- Fixed submitting the control page's login form (`POST /login`) returning `403 forbidden` in real browsers: `Referrer-Policy: no-referrer` caused browsers to send `Origin: null` on same-origin form POSTs. The login page now sends `Referrer-Policy: same-origin` (still never leaking a `Referer` cross-origin) while all other responses keep `no-referrer`, and `POST /login` accepts `Origin: null` when accompanied by `Sec-Fetch-Site: same-origin` (#220).
-- Task event logs (`tasks/<id>.jsonl`) are now bounded per task (16,384 events / 16 MiB, always keeping `task` and terminal `done`), and replaying them on subscribe or after broadcast lag now reads the exact file prefix asynchronously off the daemon's `LocalSet` without holding the task mutex (#218).
+- Long-running AI tasks can no longer grow their event logs without bound (capped at 16,384 events / 16 MiB while keeping start and completion records), and replaying task history no longer holds up other daemon operations (#218).
 - iOS 27+: typing into a web page's field (Safari) works: the paste prompt is found and answered without reading the page, which can't be read until it is answered. Before, typing there failed, or the text went in but was reported missing (#213).
 - iOS 27+: "Allow Paste" is tapped whatever the phone's language: when its text isn't known, the first of the prompt's two buttons (#213).
 - `iphone_tap_element` with `scroll` no longer taps a list that is still creeping to a stop: such a tap only stopped the list, yet was reported as done. It now waits until the element it found stays in place (at most 2 s) before tapping it (#213).
@@ -43,7 +49,7 @@ What changed in each release, one line per change. Versions follow [Semantic Ver
 - The H.264 copy of the phone's own video counts a crashed ffmpeg as a failure and moves on to the next encoder, instead of restarting it for ever (#201).
 - `task run --url` stops within 10 seconds of Ctrl-C even if the viewer doesn't answer, and gives up an event stream that goes silent or sends an endless event (#201).
 - Only one daemon runs per socket, even when two start at once, and the socket is private from the moment it is created; a lock that can't be taken at all is reported as such instead of as another daemon (#201).
-- The control page and the login page only run their own scripts (a Content-Security-Policy with their hashes) and send no referrer; a client that stops reading no longer holds a connection for good (#202).
+- The control page and the login page only run their own scripts (a Content-Security-Policy with their hashes) and never send a referrer to other sites (the login form still works behind a reverse proxy that strips `Origin`); a client that stops reading no longer holds a connection for good (#202, #220).
 - With HTTPS on, the viewer takes actions only from a page served the way it serves it (HTTPS, or plain HTTP from this machine) (#202).
 - A viewer stopped while it made its certificate makes a new one on the next start, instead of failing to load a key that doesn't match (#202).
 - A token removed with `viewer token remove` is refused at once also within the same second, and `viewer token` commands run at the same time no longer lose each other's changes (#202).
@@ -457,7 +463,8 @@ First public release.
 - `setup`, `doctor`, `status` and `mcp-config`.
 - Docker image and prebuilt Linux binaries.
 
-[Unreleased]: https://github.com/Derrors/iphone-control/compare/v0.2.14...HEAD
+[Unreleased]: https://github.com/Derrors/iphone-control/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/Derrors/iphone-control/compare/v0.2.14...v0.3.0
 [0.2.14]: https://github.com/Derrors/iphone-control/compare/v0.2.13...v0.2.14
 [0.2.13]: https://github.com/Derrors/iphone-control/compare/v0.2.12...v0.2.13
 [0.2.12]: https://github.com/Derrors/iphone-control/compare/v0.2.11...v0.2.12

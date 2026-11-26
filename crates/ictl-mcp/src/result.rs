@@ -1,8 +1,8 @@
 use super::*;
 
 /// tap_element 的结果是不是「没点到」（没找到、index 超出匹配个数、或整个被别的东西盖住）
-pub fn tap_missed(text: &str, outcome: Option<protocol::Outcome>) -> bool {
-    protocol::tapped_nothing(text, outcome)
+pub fn tap_missed(outcome: Option<protocol::Outcome>) -> bool {
+    outcome.is_some_and(|o| o.tapped_nothing)
 }
 
 /// 不带 then 的操作做完后要不要查系统弹窗（弹窗挡着时操作都落在弹窗上，WDA 照样报成功）。

@@ -259,9 +259,12 @@ mod tests {
         /// 5. Aborts cleanly on shutdown, immediately closing the usbmuxd socket.
         #[tokio::test]
         async fn usbmuxd_watcher_wakes_daemon_reconnects_after_drop_and_aborts_cleanly() {
-            let dir = std::env::temp_dir().join(format!("ictl-daemon-watch-{}", uuid::Uuid::new_v4()));
+            // Short path under `/tmp` so Unix socket paths stay well below macOS's 104-byte `SUN_LEN`.
+            let mut hex = uuid::Uuid::new_v4().simple().to_string();
+            hex.truncate(12);
+            let dir = std::path::Path::new("/tmp").join(format!("ictl-dw-{hex}"));
             std::fs::create_dir_all(&dir).unwrap();
-            let sock = dir.join("usbmuxd.sock");
+            let sock = dir.join("s.sock");
             let addr = UsbmuxdAddr::UnixSocket(sock.to_string_lossy().into_owned());
 
             let daemon = Daemon::new(Config::from_env(&dir));

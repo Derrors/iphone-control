@@ -6,7 +6,7 @@
 //! events are filtered out with a bounded per-session set so Wi-Fi churn does not wake the
 //! daemon, while unseen `Detached` IDs are still forwarded so real USB unplugs are never missed.
 
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, VecDeque};
 use std::future::{Future, poll_fn};
 use std::time::Duration;
 
@@ -81,14 +81,15 @@ async fn limit_until<T>(
 /// keeping memory strictly bounded.
 #[derive(Debug)]
 struct UsbEventFilter {
-    non_usb: HashSet<u64>,
-    order: VecDeque<u64>,
+    non_usb: HashMap<u64, u64>,
+    order: VecDeque<(u64, u64)>,
+    next_seq: u64,
     cap: usize,
 }
 
 impl UsbEventFilter {
     fn new(cap: usize) -> Self {
-        Self { non_usb: HashSet::new(), order: VecDeque::new(), cap }
+        Self { non_usb: HashMap::new(), order: VecDeque::new(), next_seq: 0, cap }
     }
 
     fn filter(&mut self, event: UsbmuxdListenEvent) -> Option<UsbEvent> {
@@ -105,7 +106,7 @@ impl UsbEventFilter {
                 }
             }
             UsbmuxdListenEvent::Disconnected(id) => {
-                if self.non_usb.remove(&id) {
+                if self.non_usb.remove(&id).is_some() {
                     None
                 } else {
                     Some(UsbEvent::Detached { device_id: id })
@@ -118,17 +119,20 @@ impl UsbEventFilter {
         if self.cap == 0 {
             return;
         }
-        if self.non_usb.insert(id) {
-            self.order.push_back(id);
-        }
+        let seq = self.next_seq;
+        self.next_seq = self.next_seq.wrapping_add(1);
+        self.non_usb.insert(id, seq);
+        self.order.push_back((seq, id));
         while self.non_usb.len() > self.cap {
-            let Some(oldest) = self.order.pop_front() else {
+            let Some((old_seq, old_id)) = self.order.pop_front() else {
                 break;
             };
-            self.non_usb.remove(&oldest);
+            if self.non_usb.get(&old_id) == Some(&old_seq) {
+                self.non_usb.remove(&old_id);
+            }
         }
         if self.order.len() > self.cap.saturating_mul(2) {
-            self.order.retain(|id| self.non_usb.contains(id));
+            self.order.retain(|&(s, id)| self.non_usb.get(&id) == Some(&s));
         }
     }
 }
@@ -233,6 +237,18 @@ mod tests {
         assert_eq!(f.filter(UsbmuxdListenEvent::Disconnected(102)), None);
         assert_eq!(f.filter(UsbmuxdListenEvent::Disconnected(103)), None);
         assert_eq!(f.filter(UsbmuxdListenEvent::Disconnected(104)), None);
+
+        // Removing and re-inserting an ID before compaction must not let the stale queue entry evict the fresh one.
+        let net =
+            |id| UsbmuxdListenEvent::Connected(dev(id, "WIFI", Connection::Network(IpAddr::V4(Ipv4Addr::LOCALHOST))));
+        assert_eq!(f.filter(net(200)), None);
+        assert_eq!(f.filter(UsbmuxdListenEvent::Disconnected(200)), None);
+        assert_eq!(f.filter(net(201)), None);
+        assert_eq!(f.filter(net(202)), None);
+        assert_eq!(f.filter(net(200)), None);
+        assert_eq!(f.filter(net(203)), None); // evicts 201, NOT the fresh 200
+        assert_eq!(f.filter(UsbmuxdListenEvent::Disconnected(201)), Some(UsbEvent::Detached { device_id: 201 }));
+        assert_eq!(f.filter(UsbmuxdListenEvent::Disconnected(200)), None);
     }
 
     #[cfg(unix)]
@@ -310,11 +326,19 @@ mod tests {
             d
         }
 
+        /// Short directory under `/tmp` so Unix socket paths stay well below macOS's 104-byte `SUN_LEN`.
+        fn short_temp_dir(tag: &str) -> std::path::PathBuf {
+            let mut hex = uuid::Uuid::new_v4().simple().to_string();
+            hex.truncate(12);
+            let dir = std::path::Path::new("/tmp").join(format!("ictl-{tag}-{hex}"));
+            std::fs::create_dir_all(&dir).unwrap();
+            dir
+        }
+
         #[tokio::test]
         async fn watch_devices_at_streams_usb_and_filters_network_over_usbmuxd_plist_protocol() {
-            let dir = std::env::temp_dir().join(format!("ictl-mux-watch-{}", uuid::Uuid::new_v4()));
-            std::fs::create_dir_all(&dir).unwrap();
-            let sock = dir.join("usbmuxd.sock");
+            let dir = short_temp_dir("mw");
+            let sock = dir.join("s.sock");
             let listener = UnixListener::bind(&sock).unwrap();
 
             let server = tokio::spawn(async move {
@@ -365,9 +389,8 @@ mod tests {
 
         #[tokio::test]
         async fn watch_devices_at_times_out_when_handshake_stalls() {
-            let dir = std::env::temp_dir().join(format!("ictl-mux-stall-{}", uuid::Uuid::new_v4()));
-            std::fs::create_dir_all(&dir).unwrap();
-            let sock = dir.join("usbmuxd.sock");
+            let dir = short_temp_dir("ms");
+            let sock = dir.join("s.sock");
             let listener = UnixListener::bind(&sock).unwrap();
 
             let (hold_tx, hold_rx) = tokio::sync::oneshot::channel::<()>();
@@ -391,9 +414,8 @@ mod tests {
 
         #[tokio::test]
         async fn watch_devices_at_errors_when_listen_rejected() {
-            let dir = std::env::temp_dir().join(format!("ictl-mux-reject-{}", uuid::Uuid::new_v4()));
-            std::fs::create_dir_all(&dir).unwrap();
-            let sock = dir.join("usbmuxd.sock");
+            let dir = short_temp_dir("mr");
+            let sock = dir.join("s.sock");
             let listener = UnixListener::bind(&sock).unwrap();
 
             let server = tokio::spawn(async move {

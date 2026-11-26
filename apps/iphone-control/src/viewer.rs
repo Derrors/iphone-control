@@ -64,6 +64,8 @@ struct Ctx {
     page: String,
     /// The page's `Content-Security-Policy` ([`csp_for`])
     page_csp: String,
+    /// The page gzipped, for browsers that take it: about 90 KB instead of 290 ([`gzip`])
+    page_gz: Vec<u8>,
     socket: PathBuf,
     port: u16,
     /// The device the page shows and acts on
@@ -73,7 +75,7 @@ struct Ctx {
     checking: Arc<tokio::sync::Mutex<()>>,
     check_error: Arc<Mutex<Option<String>>>,
     /// Bundle id → display name, for the foreground app
-    names: tokio::sync::Mutex<HashMap<String, String>>,
+    names: tokio::sync::Mutex<api::AppNames>,
     device_video_allowed: bool,
     /// H.264 for the picture; `None`: MJPEG only
     video: Option<Arc<crate::video::Encoders>>,
@@ -286,6 +288,7 @@ pub async fn run(
         check_error: Arc::default(),
         names: tokio::sync::Mutex::default(),
         page_csp: csp_for(&page),
+        page_gz: gzip(page.as_bytes()),
         page,
         device_video_allowed,
         video,
@@ -676,7 +679,12 @@ async fn route(
     let path = req.path.as_str();
     match (req.method.as_str(), path) {
         ("GET", "/") => {
-            let csp = format!("Content-Security-Policy: {}\r\n", ctx.page_csp);
+            let csp = format!("Content-Security-Policy: {}\r\nVary: Accept-Encoding\r\n", ctx.page_csp);
+            // compressed once at start; a page loaded over a slow link (the LAN, a remote viewer) comes 3 times faster
+            if req.gzip && !ctx.page_gz.is_empty() {
+                let extra = format!("{csp}Content-Encoding: gzip\r\n");
+                return reply_with(client, 200, "text/html; charset=utf-8", &ctx.page_gz, &extra).await;
+            }
             reply_with(client, 200, "text/html; charset=utf-8", ctx.page.as_bytes(), &csp).await
         }
         ("GET", "/stream" | "/video") => {
@@ -1252,6 +1260,37 @@ async fn reply_with(client: &mut Conn, status: u16, kind: &str, body: &[u8], ext
 /// connection's place for good (there are [`MAX_CONNECTIONS`])
 const WRITE_TIMEOUT: Duration = if cfg!(test) { Duration::from_millis(300) } else { Duration::from_secs(30) };
 
+/// `data` gzipped (empty if that fails: the page then goes out as it is)
+fn gzip(data: &[u8]) -> Vec<u8> {
+    use std::io::Write;
+    let mut e = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::best());
+    e.write_all(data).and_then(|()| e.finish()).unwrap_or_default()
+}
+
+/// Whether an `Accept-Encoding` list takes gzip (RFC 9110 §12.5.3): `gzip` named, or else `*`; either with a `q` that
+/// isn't a number above 0 (`q=0`, `q=NaN`) refuses it. `*` stands only for the codings not named, so `gzip;q=0, *`
+/// refuses gzip
+fn accepts_gzip(v: &str) -> bool {
+    let (mut named, mut star) = (None::<bool>, None::<bool>);
+    for c in v.split(',') {
+        let mut parts = c.split(';').map(str::trim);
+        let name = parts.next().unwrap_or("");
+        let taken = parts.filter_map(|p| p.split_once('=')).filter(|(k, _)| k.trim().eq_ignore_ascii_case("q")).all(
+            |(_, q)| q.trim().parse::<f32>().is_ok_and(|q| q > 0.0), // NaN isn't above 0 either
+        );
+        // named twice: refused if either refuses
+        let slot = if name.eq_ignore_ascii_case("gzip") {
+            &mut named
+        } else if name == "*" {
+            &mut star
+        } else {
+            continue;
+        };
+        *slot = Some(slot.unwrap_or(true) && taken);
+    }
+    named.or(star).unwrap_or(false)
+}
+
 /// Writes and flushes `bytes` within [`WRITE_TIMEOUT`]
 pub(crate) async fn write_timed<W: tokio::io::AsyncWrite + Unpin>(w: &mut W, bytes: &[u8]) -> anyhow::Result<()> {
     tokio::time::timeout(WRITE_TIMEOUT, async {
@@ -1448,6 +1487,8 @@ struct Head {
     chunked: bool,
     /// … and it is just `chunked`
     transfer_chunked_only: bool,
+    /// `Accept-Encoding` takes gzip ([`accepts_gzip`])
+    gzip: bool,
 }
 
 impl Head {
@@ -1496,8 +1537,11 @@ impl Head {
             close,
             chunked: false,
             transfer_chunked_only: false,
+            gzip: false,
         };
         let mut hosts = 0;
+        // every `Accept-Encoding` line together: they make one list (RFC 9110 §5.3)
+        let mut accept = String::new();
         for l in lines {
             // a line without a colon (a folded continuation, garbage) or a name with blanks (`Content-Length : 1`,
             // which some proxies read and others don't): 400, as RFC 9112 §5.1 asks
@@ -1516,6 +1560,10 @@ impl Head {
                 "content-length" => h.content_length = Some(v.parse().ok()?),
                 "sec-fetch-site" => h.fetch_site = Some(v.to_ascii_lowercase()),
                 "x-ictl-lang" => h.lang = ictl_l10n::parse(v),
+                "accept-encoding" => {
+                    accept.push_str(v);
+                    accept.push(',');
+                }
                 "x-ictl-device" if !v.is_empty() => h.device = Some(v.to_owned()),
                 "connection" => h.close |= v.split(',').any(|t| t.trim().eq_ignore_ascii_case("close")),
                 "transfer-encoding" => {
@@ -1530,6 +1578,7 @@ impl Head {
         if hosts > 1 || (h.chunked && h.content_length.is_some()) {
             return None;
         }
+        h.gzip = accepts_gzip(&accept);
         Some(h)
     }
 
@@ -1686,6 +1735,7 @@ mod tests {
             port: 0,
             page: String::new(),
             page_csp: String::new(),
+            page_gz: Vec::new(),
             checking: Arc::default(),
             check_error: Arc::default(),
             names: Default::default(),
@@ -2158,6 +2208,43 @@ mod tests {
         let r = tokio::time::timeout(Duration::from_secs(10), reply(&mut conn, 200, "text/plain", &big)).await;
         assert!(matches!(r, Ok(Err(_))), "gave up with an error");
         assert!(t0.elapsed() < Duration::from_secs(5), "{:?}", t0.elapsed());
+    }
+
+    /// The page goes out gzipped to a browser that takes it (about a third of the size), as it is otherwise
+    #[test]
+    fn the_page_is_gzipped_for_browsers_that_take_it() {
+        for (v, want) in [
+            ("gzip, deflate, br, zstd", true),
+            ("GZIP", true),
+            ("br;q=1.0, gzip;q=0.8", true),
+            ("*", true),
+            ("gzip;q=0", false),
+            ("gzip; q=0.0, br", false),
+            ("deflate, br", false),
+            ("", false),
+            ("x-gzip", false),
+            ("gzip;q=0, *", false),
+            ("*;q=0, gzip", true),
+            ("gzip;q=NaN", false),
+            ("gzip;q=abc", false),
+            ("gzip, gzip;q=0", false),
+        ] {
+            assert_eq!(accepts_gzip(v), want, "{v}");
+        }
+        let page = page_in(ictl_l10n::Lang::En);
+        let gz = gzip(page.as_bytes());
+        assert!(gz.len() * 2 < page.len(), "{} of {}", gz.len(), page.len());
+        let mut back = String::new();
+        std::io::Read::read_to_string(&mut flate2::read::GzDecoder::new(&gz[..]), &mut back).unwrap();
+        assert_eq!(back, page);
+        let head = |accept: &str| {
+            Head::parse(format!("GET / HTTP/1.1\r\nHost: a\r\nAccept-Encoding: {accept}\r\n").as_bytes()).unwrap()
+        };
+        assert!(head("gzip").gzip && !head("identity").gzip);
+        // two lines make one list: the explicit refusal on the second wins over the first line's `*`
+        let two =
+            Head::parse(b"GET / HTTP/1.1\r\nHost: a\r\nAccept-Encoding: *\r\nAccept-Encoding: gzip;q=0\r\n").unwrap();
+        assert!(!two.gzip);
     }
 
     /// The pages run their own inline scripts only: the policy names each by its hash, and a script changed or added

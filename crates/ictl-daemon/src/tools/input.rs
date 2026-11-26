@@ -283,7 +283,25 @@ impl Daemon {
             (from.0, to.0) = (x, x);
         }
         Box::pin(self.swipe(g, Stroke { from, to, seconds: SEARCH_SWIPE_SECONDS, hold: 0.0 }, None, false)).await?;
+        // the read that saw the list stop is the screen now: not read again (about 0.3 s a swipe, 8 to 15 a search)
+        if let Some(tree) = self.swiped(g).await {
+            g.elements_cache = Some((Instant::now(), tree.clone()));
+            g.dev.seen.saw_tree(&tree);
+            return Ok(tree);
+        }
         self.tree(g, Duration::ZERO).await
+    }
+
+    /// The tree read as the last swipe's list stopped, if still fresh ([`SWIPED_TREE_FRESH`]) and confirmed still by
+    /// two reads (a screen with few elements isn't); taken. Under native control that read was of the app alone: what
+    /// SpringBoard shows over it (an alert) is read now
+    async fn swiped(&self, g: &mut Inner) -> Option<Tree> {
+        let usable = |at: &Instant, still: bool| still && at.elapsed() < SWIPED_TREE_FRESH;
+        if let Some(s) = g.swiped_tree.take().filter(|s| usable(&s.at, s.still)) {
+            return Some(s.read);
+        }
+        let s = g.swiped_snap.take().filter(|s| usable(&s.at, s.still))?;
+        Box::pin(self.with_overlays(g, s.read)).await.ok()
     }
 
     pub(crate) async fn tap_element(
@@ -502,12 +520,14 @@ impl Daemon {
                 Ok(()) if watched => {
                     w.end_polling().await;
                     g.swiped_tree = None;
+                    g.swiped_snap = None;
                     return Ok(ictl_l10n::trf!("已滑动 {desc}", "Swiped {desc}"));
                 }
                 Ok(()) => {
                     let vertical = (to.1 - from.1).abs() >= (to.0 - from.0).abs();
                     let (note, tree) = wait_scrolled(w, vertical).await;
-                    g.swiped_tree = tree.map(|t| (Instant::now(), t));
+                    g.swiped_tree = tree.map(|(t, still)| crate::core::Swiped::now(t, still));
+                    g.swiped_snap = None;
                     return Ok(ictl_l10n::trf!("已滑动 {desc}{note}", "Swiped {desc}{note}"));
                 }
                 Err(WdaError::Unavailable(_)) if view.is_none() => {}
@@ -531,11 +551,14 @@ impl Daemon {
         }
         // as through WDA: a list still scrolling only stops at the next tap; someone watching sees when it stops
         g.swiped_tree = None;
+        g.swiped_snap = None;
         let note = if watched {
             String::new()
         } else {
             let vertical = (to.1 - from.1).abs() >= (to.0 - from.0).abs();
-            Box::pin(self.native_scrolled(g, vertical)).await
+            let (note, snap) = Box::pin(self.native_scrolled(g, vertical)).await;
+            g.swiped_snap = snap.map(|(s, still)| crate::core::Swiped::now(s, still));
+            note
         };
         Ok(ictl_l10n::trf!("已滑动 {desc}{note}", "Swiped {desc}{note}"))
     }
@@ -759,28 +782,34 @@ impl Daemon {
 /// 没停下返回提醒；元素很少（游戏、地图）看不出来，不等。
 /// 同时返回停下时读到的树，紧接着的 settle（then=…）从它开始比较，少读一次（[`Daemon::settle`]）。
 /// 调用前已在轮询模式（[`WdaClient::swipe_into_polling`]）
-pub(super) async fn wait_scrolled(w: &mut WdaClient<DeviceTransport>, vertical: bool) -> (String, Option<Tree>) {
+/// Also returns the last read, with whether two reads agreed it stood still (a screen with few elements isn't waited
+/// for: its one read comes back unconfirmed)
+pub(super) async fn wait_scrolled(
+    w: &mut WdaClient<DeviceTransport>,
+    vertical: bool,
+) -> (String, Option<(Tree, bool)>) {
     let t0 = Instant::now();
-    let r: Result<(bool, Tree), WdaError> = async {
+    // (stopped, confirmed by two reads, the last read)
+    let r: Result<(bool, bool, Tree), WdaError> = async {
         let mut prev = w.tree().await?;
         if prev.elements.len() < VISUAL_SETTLE_BELOW {
-            return Ok((true, prev));
+            return Ok((true, false, prev));
         }
         while t0.elapsed() < SCROLL_SETTLE {
             tokio::time::sleep(Duration::from_millis(30)).await;
             let cur = w.tree().await?;
             if cur.still_along(&prev, vertical, STILL_TOLERANCE) {
-                return Ok((true, cur));
+                return Ok((true, true, cur));
             }
             prev = cur;
         }
-        Ok((false, prev))
+        Ok((false, false, prev))
     }
     .await;
     w.end_polling().await;
     match r {
-        Ok((true, tree)) => (String::new(), Some(tree)),
-        Ok((false, _)) => (
+        Ok((true, still, tree)) => (String::new(), Some((tree, still))),
+        Ok((false, _, _)) => (
             ictl_l10n::trf!(
                 "({:.1} 秒后列表还在动,可能还在滚动)",
                 " (the list was still moving after {:.1} s, it may still be scrolling)",

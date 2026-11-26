@@ -90,10 +90,12 @@ impl Daemon {
     pub(crate) async fn settle(&self, g: &mut Inner, max: Duration) -> crate::error::Result<String> {
         let t0 = Instant::now();
         // 刚滑完读到的树：只作比较的起点，是不是真稳定还要看下一次读到的
-        let seed = g.swiped_tree.take().filter(|(at, _)| at.elapsed() < SWIPED_TREE_FRESH).map(|(_, t)| t);
+        // a starting point only, confirmed or not: it still has to be read the same again
+        let seed = g.swiped_tree.take().filter(|s| s.at.elapsed() < SWIPED_TREE_FRESH).map(|s| s.read);
+        let native_seed = g.swiped_snap.take().filter(|s| s.at.elapsed() < SWIPED_TREE_FRESH).map(|s| s.read);
         let w = match self.route(g) {
             Route::Wda(w) => w,
-            Route::Native => return Box::pin(self.settle_native(g, t0, max)).await,
+            Route::Native => return Box::pin(self.settle_native(g, t0, max, native_seed)).await,
             Route::Hid | Route::Unavailable => {
                 tokio::time::sleep(max.min(Duration::from_millis(500))).await;
                 return Ok(ictl_l10n::tr!("WDA 不可用,等了 0.5 秒", "WDA unavailable, waited 0.5 s").into());
@@ -126,8 +128,14 @@ impl Daemon {
 
     /// [`Self::settle`] without WDA: the trees the phone pushes say when the screen has settled; a screen with few
     /// elements (a game, a map) is judged by its picture, as through WDA
-    async fn settle_native(&self, g: &mut Inner, t0: Instant, max: Duration) -> crate::error::Result<String> {
-        let (msg, tree) = Box::pin(self.native_settle(g, max)).await?;
+    async fn settle_native(
+        &self,
+        g: &mut Inner,
+        t0: Instant,
+        max: Duration,
+        seed: Option<ictl_device::ax::AxScreen>,
+    ) -> crate::error::Result<String> {
+        let (msg, tree) = Box::pin(self.native_settle(g, max, seed)).await?;
         let note = alert_note(&tree);
         // no word from it: a screen with few elements that stay the same (a game, a map), judged by the picture
         if msg.is_empty() {

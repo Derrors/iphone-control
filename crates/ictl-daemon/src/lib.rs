@@ -1,6 +1,6 @@
 //! 守护进程：唯一持有设备的进程。替代 toolkit 的 supervisor.sh + 重签定时器 + notify.sh。
 //!
-//! - 状态机（[`machine::DeviceState`]，docs/architecture.md §3）每 10 秒推进一次（`supervise`）
+//! - 状态机（[`machine::DeviceState`]，docs/architecture.md §3）每 10 秒巡检一次（`supervise`），并经 `usbmuxd` `Listen` 事件流在 USB 插拔时立即唤醒（`watch`）
 //! - usbmuxd 用系统的（macOS 自带，Linux 是 usbmuxd 包，插上手机时由 udev 拉起）
 //! - 控制接口：Unix socket，每行一个 JSON（[`protocol`]），MCP 和 CLI 都通过它访问设备
 //! - 并发模型见 [`core`]
@@ -25,6 +25,7 @@ mod screen;
 mod supervise;
 pub mod tasks;
 mod tools;
+mod watch;
 mod watchdog;
 mod wda_pkg;
 mod web;
@@ -135,6 +136,7 @@ async fn serve(cfg: Config, listener: tokio::net::UnixListener) -> anyhow::Resul
         report_abnormal_restart(&daemon, incident).await;
     }
     watchdog::spawn(daemon.heartbeat.clone(), daemon.log.clone(), run_state.clone());
+    let watcher = watch::spawn(daemon.wake.clone());
 
     let mut tick = tokio::time::interval(core::TICK);
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -200,8 +202,10 @@ async fn serve(cfg: Config, listener: tokio::net::UnixListener) -> anyhow::Resul
     let _ = std::fs::write(protocol::stopping_marker(&daemon.cfg.socket), b"");
     drop(listener);
     let _ = std::fs::remove_file(&daemon.cfg.socket);
-    // 先取消排队和执行中的请求、巡检（放掉设备锁），再停 HID 媒体流、runner、usbmuxd。
+    // 先取消事件监听、排队和执行中的请求、巡检（放掉设备锁），再停 HID 媒体流、runner、usbmuxd。
     // 自动解锁被打断时停用标记会留着（ictl-unlock），不会因此输错第二次
+    watcher.abort();
+    let _ = watcher.await;
     conns.abort_all();
     while conns.join_next().await.is_some() {}
     if let Some((t, _)) = ticking {

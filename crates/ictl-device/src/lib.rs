@@ -1,6 +1,6 @@
 //! 设备层：一台 iPhone 的全部底层能力，基于 `idevice`。
 //!
-//! - 发现：usbmuxd `get_devices`；`doctor` 另用 sysfs（Linux）或 IORegistry（macOS）看 USB 上有没有 iPhone/iPad
+//! - 发现：usbmuxd `get_devices` 与 `Listen` 热插拔事件流（[`watch_devices`]）；`doctor` 另用 sysfs（Linux）或 IORegistry（macOS）看 USB 上有没有 iPhone/iPad
 //! - 配对、设备信息、开发者模式：lockdown / amfi
 //! - 隧道：CoreDeviceProxy + jktcp 用户态 TCP 栈（免 root、不建网卡），RSD 握手（[`Tunnel`]）
 //! - 开发者镜像：`cryptexd::installed_ddi` / `install_ddi`（个性化 + TSS）；DDI 下载见 [`ddi`]
@@ -20,6 +20,7 @@ mod media;
 mod models;
 pub mod oslog;
 mod pasteboard;
+mod watch;
 
 use std::future::Future;
 use std::path::Path;
@@ -41,13 +42,15 @@ use idevice::{
     rsd::RsdHandshake,
     springboardservices::{InterfaceOrientation, SpringBoardServicesClient},
     tcp::handle::AdapterHandle,
-    usbmuxd::{Connection, UsbmuxdAddr},
+    usbmuxd::Connection,
 };
 
 pub use apps::AppInfo;
 pub use hid::{Button, HidSession};
 pub use ictl_ui::{Rotation, ScreenSize};
+pub use idevice::usbmuxd::UsbmuxdAddr;
 pub use media::{FULL_BITRATE, LOW_BANDWIDTH_BITRATE, ScreenFeed, ScreenFrame, hevc_codec};
+pub use watch::{UsbEvent, watch_devices, watch_devices_at};
 
 /// A running log stream from the phone; see [`Device::log_stream`]
 pub struct LogStream(oslog::OsLogStream);

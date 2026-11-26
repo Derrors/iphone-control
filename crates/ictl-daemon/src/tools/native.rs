@@ -1,5 +1,5 @@
 //! Native control of iOS 27 and later, without WebDriverAgent (`ICTL_IOS_BACKEND`, docs/dev/ios27-native.md):
-//! the screen through remoteAXService (`ictl_ax`, turned into WDA's XML so `ictl_wda::elements` reads it), touches,
+//! the screen through remoteAXService (`ictl_ax`, made into the element tree WDA's `/source` gives), touches,
 //! keys and Home through HID, text through the pasteboard, apps and links through CoreDevice AppService, the lock
 //! state through lockdown.
 //!
@@ -218,7 +218,7 @@ impl Daemon {
         }
     }
 
-    /// A read as WDA-style XML, the screen (as turned now) and the frontmost app's process
+    /// A read as an element tree like WDA's, the screen (as turned now) and the frontmost app's process
     async fn ax_render(
         &self,
         g: &mut Inner,
@@ -1030,7 +1030,7 @@ fn unlocked_springboard(tree: &Tree) -> bool {
 
 fn focused_text_field(screen: &ictl_device::ax::AxScreen) -> Option<&ictl_ax::Element> {
     let mut fields = screen.app.iter().filter(|e| {
-        // Raw AX retains focus and exact text, including whitespace. The shared XML has been normalized for display.
+        // Raw AX retains focus and exact text, including whitespace. The element tree has been normalized for display.
         e.focused && matches!(ictl_ax::node::kind(e), "TextField" | "TextView" | "SearchField" | "SecureTextField")
     });
     let f = fields.next()?;

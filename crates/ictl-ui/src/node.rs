@@ -135,7 +135,8 @@ fn write_node(out: &mut String, n: &Node, depth: usize) {
     }
     let f = n.frame;
     let _ = write!(out, " x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\"", f.x, f.y, f.w, f.h);
-    if n.children.is_empty() || depth >= MAX_DEPTH {
+    // no deeper than `from_xml` reads
+    if n.children.is_empty() || depth + 1 >= MAX_DEPTH {
         out.push_str("/>");
         return;
     }

@@ -5,7 +5,8 @@
 //! - [`dtx`]: the DTX messages the service speaks
 //! - [`session`]: the handshake, the trees the phone pushes after every change, requests
 //! - [`tree`]: elements and their attributes
-//! - [`xml`]: a tree as WebDriverAgent's `/source` XML, so `ictl_wda::elements` reads it unchanged
+//! - [`node`]: a read as the element tree WebDriverAgent's `/source` gives (`ictl_ui::Source`), so `ictl_ui::Tree::of`
+//!   reads it as it reads WDA's
 //!
 //! No device I/O of its own: `ictl-device` opens the connection through its tunnel and hands it to
 //! [`session::Session::connect`]. Protocol details: `docs/dev/ios27-native.md`.

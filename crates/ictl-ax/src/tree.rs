@@ -81,7 +81,7 @@ pub struct Element {
     pub placeholder: String,
     pub identifier: String,
     /// x, y, width, height in screen points (for another process's elements: relative to their host, see
-    /// [`crate::xml`])
+    /// [`crate::node`])
     pub frame: Option<(f64, f64, f64, f64)>,
     pub activation: Option<(f64, f64)>,
     /// XCUIElementType; 0 in the first tree pushed after a change

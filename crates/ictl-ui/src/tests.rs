@@ -791,3 +791,19 @@ fn a_source_too_deep_is_cut() {
     assert!(src.nodes().all(|n| n.label != "deep"));
     assert_eq!(src.roots.last().map(|n| n.label.as_str()), Some("after"));
 }
+
+/// A cut-off read can't show the Touch ID prompt: it needs exactly two buttons and no lock screen date, which only
+/// the whole window can tell. The notification center cut after its first two buttons isn't taken for it
+#[test]
+fn a_cut_read_is_no_touch_id_prompt() {
+    let window = NC_IOS27.find("SBCoverSheetWindow").expect("the cover sheet window");
+    let mut at = window;
+    for _ in 0..3 {
+        at += NC_IOS27[at..].find("<XCUIElementTypeButton ").expect("three buttons") + 1;
+    }
+    let cut = &NC_IOS27[..at - 1];
+    assert!(!cut.contains("lockscreen-date-view"));
+    assert!(Source::from_xml(cut).incomplete);
+    assert!(!touch_id_prompt(cut));
+    assert_ne!(cover_sheet(cut), CoverSheet::Locked);
+}

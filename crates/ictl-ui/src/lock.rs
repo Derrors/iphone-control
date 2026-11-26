@@ -89,6 +89,10 @@ pub fn use_passcode_button(elements: &[Element]) -> Option<(i64, i64)> {
 /// 也不是通知中心），只有两个按钮。按钮上的字只认得中文和英文（[`USE_PASSCODE_LABELS`]），繁中、日、德、法……
 /// 的系统上靠这个认出锁屏：认不出时把锁着的 iPad 当成了解锁的，之后不再查锁屏
 pub(super) fn touch_id_prompt(src: &Source) -> bool {
+    // two buttons exactly and no lock screen date: a read cut off may have lost the rest of either
+    if src.incomplete {
+        return false;
+    }
     // the first element by that name: another kind of element called so isn't the window
     let Some(window) = src.nodes().find(|n| n.name == "SBCoverSheetWindow") else { return false };
     window.kind == "Window"

@@ -690,8 +690,8 @@ pub struct Tunnel {
     hid: Option<HidSession>,
     /// remoteAXService（[`ax`]），用时才开
     ax: Option<ax::AxSession>,
-    /// SpringBoard 的进程号（[`ax`] 读盖在 App 上的弹窗用），每条隧道查一次
-    springboard: Option<i64>,
+    /// SpringBoard 的进程号和查到的时间（[`ax`] 读盖在 App 上的弹窗用）；SpringBoard 重启过就换了，过一会儿或读不出来时重查
+    springboard: Option<(std::time::Instant, i64)>,
     /// SpringBoard 的应用元素，每个无障碍会话问一次（每次读界面省一个请求）
     springboard_app: Option<ictl_ax::ObjectRef>,
     /// 截屏服务的连接，留着复用（[`Tunnel::screenshot_png`]）

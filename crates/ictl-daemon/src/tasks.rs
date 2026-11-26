@@ -31,7 +31,7 @@ use tokio::sync::{Notify, broadcast, oneshot};
 
 use crate::protocol::{Request, Response, TaskEvent, TaskInfo, TouchPhase};
 
-/// Task logs kept on disk (and in memory: a task's events are text only, a few KB)
+/// Task logs kept on disk, and the tasks listed (their events are read from the logs, see `TaskState::on_disk`)
 const KEEP: usize = 50;
 /// A thought sent this soon after a step started belongs to that step (it comes from the agent's output, which
 /// reaches its opener slightly after the tool call reached the daemon)
@@ -88,7 +88,12 @@ impl Status {
 
 struct TaskState {
     status: Status,
+    /// The events so far, kept here only while they aren't all in the task's file ([`Self::on_disk`]): the daemon
+    /// keeps the last [`KEEP`] tasks, and their logs have no bound of their own
     log: Vec<TaskEvent>,
+    /// Every event is in [`Task::file`]: read from there when wanted, not held in memory. Off without a file, and from
+    /// the first write to it that fails (the events so far are read into [`Self::log`] then)
+    on_disk: bool,
     next_step: u64,
     /// What the agent said it is about to do, for the next step
     thought: Option<String>,
@@ -386,10 +391,15 @@ impl Task {
             return;
         }
         let e = TaskEvent { event: name.into(), data };
-        if let Some(f) = &self.file {
-            append(f, &e);
+        let saved = self.file.as_deref().is_some_and(|f| append(f, &e));
+        if st.on_disk && !saved {
+            // what the file has so far, here from now on
+            st.log = self.file.as_deref().map(read_events).unwrap_or_default();
+            st.on_disk = false;
         }
-        st.log.push(e.clone());
+        if !st.on_disk {
+            st.log.push(e.clone());
+        }
         let _ = self.tx.send(e);
     }
 
@@ -406,7 +416,15 @@ impl Task {
     /// The whole task so far and the events after it (taken together, so nothing falls between), and whether it ended
     pub fn subscribe(&self) -> (Vec<TaskEvent>, broadcast::Receiver<TaskEvent>, bool) {
         let st = self.lock();
-        (st.log.clone(), self.tx.subscribe(), !st.status.active())
+        (self.events(&st), self.tx.subscribe(), !st.status.active())
+    }
+
+    /// Every event so far, in order (under `st`'s lock, which every event is written under)
+    fn events(&self, st: &TaskState) -> Vec<TaskEvent> {
+        match self.file.as_deref() {
+            Some(f) if st.on_disk => read_events(f),
+            _ => st.log.clone(),
+        }
     }
 
     /// Ends the task unless it already ended. Returns whether it did
@@ -852,8 +870,10 @@ impl Tasks {
             .into());
         }
         let id = uuid::Uuid::new_v4().simple().to_string()[..12].to_owned();
+        let file = self.dir.as_ref().map(|d| d.join(format!("{id}.jsonl")));
+        let on_disk = file.is_some();
         let task = Arc::new(Task {
-            file: self.dir.as_ref().map(|d| d.join(format!("{id}.jsonl"))),
+            file,
             id,
             token: uuid::Uuid::new_v4().simple().to_string(),
             title: title.chars().take(4000).collect(),
@@ -865,6 +885,7 @@ impl Tasks {
             st: Mutex::new(TaskState {
                 status: Status::Running,
                 log: Vec::new(),
+                on_disk,
                 next_step: 1,
                 thought: None,
                 last: None,
@@ -1106,13 +1127,22 @@ fn from_agent(task: &Task, token: Option<&str>, pids: [Option<u32>; 2]) -> bool 
     pids.into_iter().flatten().any(|p| p != opener && crate::procs::descends_from(p, opener))
 }
 
-fn append(file: &Path, e: &TaskEvent) {
-    use std::io::Write;
-    let line = json!({"t": now_ms(), "event": e.event, "data": e.data});
-    let r = std::fs::OpenOptions::new().create(true).append(true).open(file).and_then(|mut f| writeln!(f, "{line}"));
-    if let Err(err) = r {
+/// Whether the event was written
+fn append(file: &Path, e: &TaskEvent) -> bool {
+    use std::io::{Seek, Write};
+    let line = format!("{}\n", json!({"t": now_ms(), "event": e.event, "data": e.data}));
+    let r = std::fs::OpenOptions::new().create(true).append(true).open(file).and_then(|mut f| {
+        let end = f.seek(std::io::SeekFrom::End(0))?;
+        // all of the line or none of it: a write cut short (a full disk) is taken back, or the file would end in half
+        // a line, read as no event or as this one (which is then also kept in memory) and glued to the next
+        f.write_all(line.as_bytes()).inspect_err(|_| {
+            let _ = f.set_len(end);
+        })
+    });
+    if let Err(err) = &r {
         tracing::warn!("{}", ictl_l10n::log_trf!("写任务日志失败：{err}", "Writing the task log failed: {err}"));
     }
+    r.is_ok()
 }
 
 fn drop_unreadable(file: &Path) {
@@ -1128,8 +1158,34 @@ fn drop_unreadable(file: &Path) {
 }
 
 fn read_events(file: &Path) -> Vec<TaskEvent> {
-    let Ok(text) = std::fs::read_to_string(file) else { return Vec::new() };
+    let text = match std::fs::read_to_string(file) {
+        Ok(t) => t,
+        Err(e) => {
+            tracing::warn!(
+                "{}",
+                ictl_l10n::log_trf!("读任务日志失败（{}）：{e}", "Reading a task log failed ({}): {e}", file.display())
+            );
+            return Vec::new();
+        }
+    };
     text.lines().filter_map(|l| serde_json::from_str::<TaskEvent>(l).ok()).collect()
+}
+
+/// A log whose last line was cut short (a power cut while it was written) ends at its last whole line again: what is
+/// written next (`done`, as the task is interrupted) would otherwise be glued to the half line and lost with it
+fn drop_partial_line(file: &Path) {
+    let Ok(bytes) = std::fs::read(file) else { return };
+    if bytes.last().is_none_or(|&b| b == b'\n') {
+        return;
+    }
+    let keep = bytes.iter().rposition(|&b| b == b'\n').map_or(0, |i| i + 1);
+    let r = std::fs::OpenOptions::new().write(true).open(file).and_then(|f| f.set_len(keep as u64));
+    if let Err(e) = r {
+        tracing::warn!(
+            "{}",
+            ictl_l10n::log_trf!("截不掉任务日志的半行：{e}", "Couldn't cut a task log's half line: {e}")
+        );
+    }
 }
 
 fn first_started(file: &Path) -> Option<u64> {
@@ -1141,6 +1197,7 @@ fn first_started(file: &Path) -> Option<u64> {
 
 /// A task from its log; one that hadn't ended is interrupted now
 fn restore(file: &Path) -> Option<Task> {
+    drop_partial_line(file);
     let log = read_events(file);
     let first = log.first().filter(|e| e.event == "task")?.data.clone();
     let s = |k: &str| first[k].as_str().unwrap_or_default().to_owned();
@@ -1167,7 +1224,9 @@ fn restore(file: &Path) -> Option<Task> {
         file: Some(file.to_owned()),
         st: Mutex::new(TaskState {
             status: Status::Running,
-            log,
+            // read again from the file when wanted
+            log: Vec::new(),
+            on_disk: true,
             next_step: steps.unwrap_or(0) + 1,
             thought: None,
             last: None,
@@ -1703,6 +1762,67 @@ mod tests {
         assert!(t.is_active(), "unplugged, or the same phone: the task waits");
         ts.device_is(Some("00008150-000B"));
         assert_eq!(t.info().state, "interrupted");
+    }
+
+    /// A task with a file holds none of its events in memory (the daemon keeps 50 tasks, each log of any size): they
+    /// are read from the file, the same and in the same order as they were sent. Once writing the file fails, the
+    /// events are kept in memory from then on, those before included
+    #[test]
+    fn a_task_s_events_are_kept_on_disk_not_in_memory() {
+        use std::os::unix::fs::PermissionsExt;
+        // root writes a read-only file all the same
+        if crate::protocol::running_as_root() {
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("ictl-tasks-disk-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let ts = Tasks::load(Some(dir.clone()));
+        let t = open(&ts);
+        let (_, mut rx, _) = t.subscribe();
+        t.thought("看一下");
+        t.step_done(1, true, 5, "ok", None);
+        assert!(t.lock().log.is_empty() && t.lock().on_disk);
+        let mut sent = Vec::new();
+        while let Ok(e) = rx.try_recv() {
+            sent.push(e);
+        }
+        let (log, _, _) = t.subscribe();
+        assert_eq!(log.first().map(|e| e.event.as_str()), Some("task"));
+        assert_eq!(log[1..], sent[..], "what was sent, from the file");
+
+        // the file can't be written any more: from here on in memory, with what came before
+        let file = t.file.clone().unwrap();
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o444)).unwrap();
+        t.end(End::Completed, "好了");
+        let (after, _, ended) = t.subscribe();
+        assert!(ended && !t.lock().on_disk);
+        assert_eq!(after[..log.len()], log[..]);
+        assert_eq!(after.last().map(|e| e.event.as_str()), Some("done"));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// A log cut short in the middle of its last line (a power cut) loses that half line when it is loaded: the task,
+    /// interrupted then, ends with its `done`, read back like every other event, instead of glued to the half line
+    #[test]
+    fn a_log_cut_short_still_ends_with_its_end() {
+        let dir = std::env::temp_dir().join(format!("ictl-tasks-cut-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let ts = Tasks::load(Some(dir.clone()));
+        let t = open(&ts);
+        t.step_done(1, true, 5, "ok", None);
+        let file = t.file.clone().unwrap();
+        drop(ts);
+        let mut f = std::fs::OpenOptions::new().append(true).open(&file).unwrap();
+        std::io::Write::write_all(&mut f, br#"{"t":1,"event":"step","data":{"id":2,"sta"#).unwrap();
+        drop(f);
+        let ts = Tasks::load(Some(dir.clone()));
+        let (log, _, ended) = ts.get(&t.id).unwrap().subscribe();
+        assert!(ended);
+        let names: Vec<&str> = log.iter().map(|e| e.event.as_str()).collect();
+        assert_eq!(names, ["task", "step", "done"], "{log:?}");
+        assert_eq!(log[2].data["outcome"], "interrupted");
+        assert!(std::fs::read_to_string(&file).unwrap().ends_with('\n'));
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

@@ -176,7 +176,7 @@ impl Daemon {
 
     /// remoteAXService didn't answer: unless that was already tried within [`AX_RESTART_EVERY`], end axauditd on the
     /// phone ([`ictl_device::Tunnel::restart_ax_daemon`]). Whether it was ended, so the read is worth repeating
-    async fn restart_stuck_ax(&self, g: &mut Inner, device: &ictl_device::Device, why: &str) -> bool {
+    pub(crate) async fn restart_stuck_ax(&self, g: &mut Inner, device: &ictl_device::Device, why: &str) -> bool {
         // a background check (the page's alert and status polls) doesn't restart it: it may be dropped halfway for an
         // action, and the next action finds out for itself
         if crate::core::in_background() {
@@ -246,21 +246,18 @@ impl Daemon {
         let mut pids: Vec<i64> = app.iter().map(ictl_ax::Element::pid).filter(|p| *p != app_pid).collect();
         pids.sort_unstable();
         pids.dedup();
-        if pids.iter().any(|p| !g.dev.web_pids.contains_key(p))
+        if pids.iter().any(|p| g.dev.web_pids.get(*p).is_none())
             && let Some(device) = g.device.clone()
             && let Ok(t) = self.ensure_tunnel(g, &device).await
             && let Ok(procs) = t.processes().await
         {
-            if g.dev.web_pids.len() > 200 {
-                g.dev.web_pids.clear();
-            }
             for p in &pids {
                 let exe = procs.iter().find(|(q, _)| *q as i64 == *p).map(|(_, e)| e.as_str()).unwrap_or("");
                 let name = exe.rsplit('/').next().unwrap_or("");
                 g.dev.web_pids.insert(*p, name.starts_with("com.apple.WebKit.WebContent"));
             }
         }
-        pids.into_iter().filter(|p| g.dev.web_pids.get(p) == Some(&true)).collect()
+        pids.into_iter().filter(|p| g.dev.web_pids.get(*p) == Some(&true)).collect()
     }
 
     /// The screen's elements through remoteAXService (see [`Self::ax_read`])
@@ -300,7 +297,7 @@ impl Daemon {
     }
 
     async fn bundle_of_pid(&self, g: &mut Inner, pid: i64) -> crate::error::Result<String> {
-        if let Some(b) = g.dev.bundles.get(&pid) {
+        if let Some(b) = g.dev.bundles.get(pid) {
             return Ok(b.clone());
         }
         let device = g.device.clone().ok_or(ictl_l10n::tr!("手机未连接", "Phone not connected"))?;
@@ -315,9 +312,6 @@ impl Daemon {
             let mut apps = self.list_apps(g, false).await?;
             apps.extend(self.list_apps(g, true).await?);
             if let Some(b) = apps::bundle_of_process(&exe, &apps) {
-                if g.dev.bundles.len() > 200 {
-                    g.dev.bundles.clear();
-                }
                 g.dev.bundles.insert(pid, b.clone());
                 return Ok(b);
             }
@@ -917,7 +911,7 @@ impl Daemon {
         for pid in &pids {
             self.ensure_tunnel(g, &device).await?.signal(*pid, 9).await?;
             // the frontmost-app cache must not name a pid that may be reused
-            g.dev.bundles.remove(&(*pid as i64));
+            g.dev.bundles.remove(*pid as i64);
         }
         // gone before this says so: a launch right after one killed failed with «The process identifier of the
         // launched application could not be determined. It may have already terminated.»

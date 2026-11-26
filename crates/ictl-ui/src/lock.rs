@@ -123,7 +123,7 @@ pub fn parse_passcode_value(value: &str) -> Option<(u32, u32)> {
     }
 }
 
-/// SpringBoard 元素树看到的是哪种「封面」界面。用来纠正 `/wda/locked`（见 [`crate::WdaClient::locked`]）。
+/// SpringBoard 元素树看到的是哪种「封面」界面。用来纠正 `/wda/locked`（见 `ictl_wda::WdaClient::locked`）。
 /// 锁屏的标识（iOS 27 iPhone 和 iPadOS 26.6.1 iPad mini 5 真机样本）：
 /// - Face ID 机型锁屏有锁图标 `proud-lock`（灵动岛里还有 `systemApertureElementIdentifierLock`），上滑后的密码键盘有 `passcode-view`
 /// - Touch ID 机型没有锁图标，锁屏有 `call-to-action-label`（「按下主屏幕按钮以解锁」）；上滑后的「触控 ID」提示和数字键盘

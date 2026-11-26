@@ -9,6 +9,8 @@
 //! - 点击中心取元素在屏幕内的部分；中心被后面（上层）的东西盖住时另找没被盖住的点（[`Tree::tap_point`]）
 //! - 锁屏密码键盘的 `Key` 元素不显示时也在树里，**不能**据此判断键盘已出现
 //!
+//! 屏幕尺寸和方向（[`ScreenSize`]、[`Rotation`]）也在这里：解析要用，HID 和画面也用。
+//!
 //! 分在几个文件里：`geometry`（矩形、方向、坐标换算）、`parse`（解析 XML）、`query`（在树里找、点哪里）、`lock`（锁屏的
 //! 键盘、密码栏、封面）。类型都在这里，各文件里是它们的实现
 
@@ -27,7 +29,6 @@ pub use query::{field_values, filter, find, find_shown};
 
 use std::sync::LazyLock;
 
-use ictl_device::ScreenSize;
 use regex::Regex;
 
 /// The patterns are compile-time constants, only checked by the tests that use them
@@ -48,35 +49,33 @@ pub struct Rect {
     pub h: f64,
 }
 
-/// 界面方向，来自 WDA 的 `GET /session/:id/orientation`
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Orientation {
+/// 屏幕逻辑尺寸（点）
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ScreenSize {
+    pub width: f64,
+    pub height: f64,
+}
+
+/// 界面相对设备竖放转了多少（WDA `GET /rotation` 的 z；`/orientation`、SpringBoard 报的方向也换成它）。HID 触摸始终按设备竖放的坐标解释，
+/// 横屏时要把界面上的点换算回去。真机：iPhone 15 Pro Max 摄像头在左 z=270、在右 z=90；
+/// iPad mini 5 Home 键在左 z=90。两个横屏方向 WDA 的 `/orientation` 都报 `LANDSCAPE`，分不出来
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Rotation {
+    #[default]
     Portrait,
-    PortraitUpsideDown,
-    /// WDA 报 `LANDSCAPE`
-    LandscapeLeft,
-    /// WDA 报 `UIA_DEVICE_ORIENTATION_LANDSCAPERIGHT`
-    LandscapeRight,
+    /// z=90：竖放的顶边转到了屏幕右边（iPad：Home 键在左）
+    TopToRight,
+    /// z=180
+    UpsideDown,
+    /// z=270：竖放的顶边转到了屏幕左边（iPad：Home 键在右）
+    TopToLeft,
 }
 
 /// 解析元素树要知道的：当前方向下的屏幕尺寸，和方向（不知道时为 None，不做坐标换算）
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct View {
     pub screen: ScreenSize,
-    pub orientation: Option<Orientation>,
-}
-
-/// 元素树坐标到屏幕坐标的换算。iPad 横屏时 SpringBoard（主屏、长按菜单、锁屏）给的是竖屏坐标：
-/// 窗口 768x1024，屏幕 1024x768；App 里给的是屏幕坐标（iPadOS 26.6.1 真机）。点击用的是屏幕坐标。
-/// 往哪边转看状态栏：它在竖屏坐标里是一条贴边的竖条，贴哪边，哪边就是屏幕顶边。
-/// WDA 报的方向靠不住：iPad mini 5 两个横屏方向在主屏上都报 `LANDSCAPE`（rotation z=90）
-#[derive(Debug, Clone, Copy, PartialEq)]
-enum Rotate {
-    None,
-    /// 竖屏的顶边转到了屏幕左边（Home 键在右）：(x, y) → (y, 屏幕高 - x)
-    TopToLeft,
-    /// 竖屏的顶边转到了屏幕右边（Home 键在左）：(x, y) → (屏幕宽 - y, x)
-    TopToRight,
+    pub rotation: Option<Rotation>,
 }
 
 #[derive(Debug, Clone, Default)]

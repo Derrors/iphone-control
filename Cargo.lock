@@ -1983,6 +1983,7 @@ version = "0.2.14"
 dependencies = [
  "ictl-ax",
  "ictl-l10n",
+ "ictl-ui",
  "ictl-webinspector",
  "idevice",
  "plist",
@@ -2042,6 +2043,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "ictl-ui"
+version = "0.2.14"
+dependencies = [
+ "ictl-l10n",
+ "quick-xml",
+ "regex",
+ "serde",
+ "tracing",
+]
+
+[[package]]
 name = "ictl-unlock"
 version = "0.2.14"
 dependencies = [
@@ -2061,10 +2073,9 @@ dependencies = [
  "base64 0.23.1",
  "ictl-device",
  "ictl-l10n",
+ "ictl-ui",
  "idevice",
  "plist",
- "quick-xml",
- "regex",
  "serde_json",
  "thiserror 2.0.21",
  "tokio",

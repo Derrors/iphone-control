@@ -1,0 +1,17 @@
+[package]
+name = "ictl-ui"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "界面元素树：解析、查找、锁屏判断；屏幕尺寸和方向"
+
+[dependencies]
+ictl-l10n.workspace = true
+quick-xml.workspace = true
+regex.workspace = true
+serde.workspace = true
+tracing.workspace = true

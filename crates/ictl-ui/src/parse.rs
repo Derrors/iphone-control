@@ -94,7 +94,7 @@ pub fn parse_tree(xml: &str, view: impl Into<View>) -> Tree {
     let screen = view.screen;
     let (sw, sh) = (screen.width, screen.height);
     // 看到 Application 下第一个窗口时定下来
-    let mut rotate: Option<Rotate> = None;
+    let mut rotate: Option<Rotation> = None;
     let mut reader = quick_xml::Reader::from_str(xml);
     let mut seen = std::collections::HashSet::new();
     let mut tree = Tree::default();
@@ -171,10 +171,10 @@ pub fn parse_tree(xml: &str, view: impl Into<View>) -> Tree {
         }
         let abs = Rect { x: raw.x + offset.0, y: raw.y + offset.1, ..raw };
         if rotate.is_none() && kind == "Window" && stack.len() == 1 && abs.w > 0.0 && abs.h > 0.0 {
-            rotate = Some(Rotate::detect(abs, view, Rotate::status_bar(xml)));
+            rotate = Some(Rotation::of_tree(abs, view, Rotation::tree_status_bar(xml)));
         }
         // 下面判断在不在屏幕内、挡没挡住、点哪里，都用屏幕坐标
-        let scr = rotate.unwrap_or(Rotate::None).apply(abs, screen);
+        let scr = rotate.unwrap_or_default().tree_rect(abs, screen);
         let in_status_bar = kind == "StatusBar" || parent.is_some_and(|p| p.in_status_bar);
         // 原生控制读到的树是扁平的：设置首页底部悬浮的搜索栏只是一个直接挂在 Application 下的 SearchField，外面没有
         // WDA 树里那层 Toolbar。屏幕下部的这种搜索框也按悬浮栏算：盖得住下面的行，接收点击的范围也多算 BAR_SLOP。

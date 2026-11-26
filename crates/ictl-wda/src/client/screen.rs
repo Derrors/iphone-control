@@ -35,7 +35,7 @@ impl<T: Transport> WdaClient<T> {
     pub async fn view(&mut self) -> Result<elements::View> {
         let base = self.base_screen_size().await?;
         Ok(match self.orientation().await {
-            Ok(o) => elements::View { screen: o.orient(base), orientation: Some(o) },
+            Ok(o) => elements::View { screen: o.orient(base), rotation: Some(o) },
             Err(e) => {
                 tracing::debug!(
                     "{}",
@@ -44,7 +44,7 @@ impl<T: Transport> WdaClient<T> {
                         "Reading the screen orientation failed, using the cached screen size: {e}"
                     )
                 );
-                elements::View { screen: base, orientation: None }
+                elements::View { screen: base, rotation: None }
             }
         })
     }
@@ -102,9 +102,9 @@ impl<T: Transport> WdaClient<T> {
     }
 
     /// 前台界面的方向
-    pub async fn orientation(&mut self) -> Result<elements::Orientation> {
+    pub async fn orientation(&mut self) -> Result<ictl_device::Rotation> {
         let v = self.in_session("GET", "/orientation", None, Duration::from_secs(10)).await?;
-        v.as_str().and_then(elements::Orientation::from_wda).ok_or_else(|| {
+        v.as_str().and_then(ictl_device::Rotation::from_wda_orientation).ok_or_else(|| {
             WdaError::Unavailable(ictl_l10n::textf!(
                 "看不懂 WDA 给的方向：{v}",
                 "Can't make sense of the orientation WDA reported: {v}"

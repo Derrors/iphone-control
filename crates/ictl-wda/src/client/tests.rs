@@ -514,8 +514,8 @@ async fn screen_size_follows_orientation_after_rotation() {
     let mut c = WdaClient::new(&m);
     let v = c.view().await.unwrap();
     assert_eq!(
-        (v.screen, v.orientation),
-        (ScreenSize { width: 1024.0, height: 768.0 }, Some(elements::Orientation::LandscapeLeft))
+        (v.screen, v.rotation),
+        (ScreenSize { width: 1024.0, height: 768.0 }, Some(ictl_device::Rotation::TopToLeft))
     );
     assert_eq!(c.screen_size().await.unwrap(), ScreenSize { width: 768.0, height: 1024.0 });
     assert_eq!(m.seen.lock().unwrap()[2].1, "/session/S/orientation");

@@ -5,28 +5,28 @@ use super::{
 };
 
 const SCREEN: ScreenSize = ScreenSize { width: 430.0, height: 932.0 };
-const HOME: &str = include_str!("../../tests/fixtures/home.xml");
-const LOCK: &str = include_str!("../../tests/fixtures/lockscreen.xml");
-const LOCK_IOS27: &str = include_str!("../../tests/fixtures/lockscreen-ios27.xml");
-const PIN_IOS27: &str = include_str!("../../tests/fixtures/passcode-view-ios27.xml");
-const NC_IOS27: &str = include_str!("../../tests/fixtures/notification-center-ios27.xml");
-const PARTIAL_IOS27: &str = include_str!("../../tests/fixtures/passcode-partial-ios27.xml");
-const SETTINGS_IOS27: &str = include_str!("../../tests/fixtures/settings-floating-search-ios27.xml");
-const HOME_WIDGETS_IOS27: &str = include_str!("../../tests/fixtures/home-widgets-ios27.xml");
-const WALLET_IOS27: &str = include_str!("../../tests/fixtures/settings-wallet-ios27.xml");
-const IPAD_TOUCHID: &str = include_str!("../../tests/fixtures/ipad-touchid-landscape.xml");
+const HOME: &str = include_str!("../../ictl-wda/tests/fixtures/home.xml");
+const LOCK: &str = include_str!("../../ictl-wda/tests/fixtures/lockscreen.xml");
+const LOCK_IOS27: &str = include_str!("../../ictl-wda/tests/fixtures/lockscreen-ios27.xml");
+const PIN_IOS27: &str = include_str!("../../ictl-wda/tests/fixtures/passcode-view-ios27.xml");
+const NC_IOS27: &str = include_str!("../../ictl-wda/tests/fixtures/notification-center-ios27.xml");
+const PARTIAL_IOS27: &str = include_str!("../../ictl-wda/tests/fixtures/passcode-partial-ios27.xml");
+const SETTINGS_IOS27: &str = include_str!("../../ictl-wda/tests/fixtures/settings-floating-search-ios27.xml");
+const HOME_WIDGETS_IOS27: &str = include_str!("../../ictl-wda/tests/fixtures/home-widgets-ios27.xml");
+const WALLET_IOS27: &str = include_str!("../../ictl-wda/tests/fixtures/settings-wallet-ios27.xml");
+const IPAD_TOUCHID: &str = include_str!("../../ictl-wda/tests/fixtures/ipad-touchid-landscape.xml");
 /// iPhone 15, iOS 27.2, German: Clock → Stopwatch, with four scroll bars labelled "… Rollbalken"
-const CLOCK_DE_IOS27: &str = include_str!("../../tests/fixtures/clock-stopwatch-de-ios27.xml");
-const IPAD_PIN: &str = include_str!("../../tests/fixtures/ipad-passcode-landscape.xml");
-const IPAD_LOCK_P: &str = include_str!("../../tests/fixtures/ipad-lockscreen-portrait.xml");
-const IPAD_TOUCHID_P: &str = include_str!("../../tests/fixtures/ipad-touchid-portrait.xml");
-const IPAD_PIN_P: &str = include_str!("../../tests/fixtures/ipad-passcode-portrait.xml");
-const IPAD_TOUCHID_LEFT: &str = include_str!("../../tests/fixtures/ipad-touchid-landscape-home-left.xml");
-const IPAD_PIN_LEFT: &str = include_str!("../../tests/fixtures/ipad-passcode-landscape-home-left.xml");
+const CLOCK_DE_IOS27: &str = include_str!("../../ictl-wda/tests/fixtures/clock-stopwatch-de-ios27.xml");
+const IPAD_PIN: &str = include_str!("../../ictl-wda/tests/fixtures/ipad-passcode-landscape.xml");
+const IPAD_LOCK_P: &str = include_str!("../../ictl-wda/tests/fixtures/ipad-lockscreen-portrait.xml");
+const IPAD_TOUCHID_P: &str = include_str!("../../ictl-wda/tests/fixtures/ipad-touchid-portrait.xml");
+const IPAD_PIN_P: &str = include_str!("../../ictl-wda/tests/fixtures/ipad-passcode-portrait.xml");
+const IPAD_TOUCHID_LEFT: &str = include_str!("../../ictl-wda/tests/fixtures/ipad-touchid-landscape-home-left.xml");
+const IPAD_PIN_LEFT: &str = include_str!("../../ictl-wda/tests/fixtures/ipad-passcode-landscape-home-left.xml");
 const IPAD_LAND: ScreenSize = ScreenSize { width: 1024.0, height: 768.0 };
 
-fn land(o: Option<Orientation>) -> View {
-    View { screen: IPAD_LAND, orientation: o }
+fn land(o: Option<Rotation>) -> View {
+    View { screen: IPAD_LAND, rotation: o }
 }
 
 /// iPad 横屏主屏：Application 是屏幕坐标，窗口是竖屏坐标
@@ -71,12 +71,11 @@ fn a_touch_id_prompt_in_any_language() {
             .replace("触控 ID", "Touch ID")
             .replace("触控ID", "Touch ID")
     };
-    let portrait =
-        View { screen: ScreenSize { width: 768.0, height: 1024.0 }, orientation: Some(Orientation::Portrait) };
+    let portrait = View { screen: ScreenSize { width: 768.0, height: 1024.0 }, rotation: Some(Rotation::Portrait) };
     let cases = [
         (IPAD_TOUCHID_P, portrait),
-        (IPAD_TOUCHID, land(Some(Orientation::LandscapeLeft))),
-        (IPAD_TOUCHID_LEFT, land(Some(Orientation::LandscapeLeft))),
+        (IPAD_TOUCHID, land(Some(Rotation::TopToLeft))),
+        (IPAD_TOUCHID_LEFT, land(Some(Rotation::TopToLeft))),
     ];
     for (xml, view) in cases {
         let de = german(xml);
@@ -246,7 +245,7 @@ fn alert_buttons_are_not_covered_by_their_own_alert() {
 /// 它们不是盖在列表上的东西，侧栏里的「通用」要点得到
 #[test]
 fn ipad_floating_sidebar_rows_are_not_covered_by_sidebar_backdrop() {
-    let xml = include_str!("../../tests/fixtures/ipad-settings-sidebar-landscape.xml");
+    let xml = include_str!("../../ictl-wda/tests/fixtures/ipad-settings-sidebar-landscape.xml");
     let tree = parse_tree(xml, IPAD_LAND);
     for text in ["通用", "电池", "辅助功能", "关于本机"] {
         let e = find(&tree.elements, text)[0];
@@ -314,7 +313,7 @@ fn web_contents_keep_screen_coordinates() {
 /// 也要像工具栏一样挡住下面的行。它吞掉输入框（866）往上 58 点以内的点击：806 还能进下面那一行，812 就不行
 #[test]
 fn a_native_floating_search_field_covers_the_rows_under_it() {
-    const XML: &str = include_str!("../../tests/fixtures/settings-floating-search-native-ios27.xml");
+    const XML: &str = include_str!("../../ictl-wda/tests/fixtures/settings-floating-search-native-ios27.xml");
     let row = |t: &Tree, label: &str| t.elements.iter().find(|e| e.label == label).cloned().unwrap();
     let t = parse_tree(XML, SCREEN);
     // 766..818: clear of it, tapped at its center
@@ -551,33 +550,54 @@ fn passcode_value_variants() {
 
 #[test]
 fn orientation_from_wda_and_screen_size() {
-    assert_eq!(Orientation::from_wda("LANDSCAPE"), Some(Orientation::LandscapeLeft));
-    assert_eq!(Orientation::from_wda("UIA_DEVICE_ORIENTATION_LANDSCAPERIGHT"), Some(Orientation::LandscapeRight));
+    assert_eq!(Rotation::from_wda_orientation("LANDSCAPE"), Some(Rotation::TopToLeft));
+    assert_eq!(Rotation::from_wda_orientation("UIA_DEVICE_ORIENTATION_LANDSCAPERIGHT"), Some(Rotation::TopToRight));
     assert_eq!(
-        Orientation::from_wda("UIA_DEVICE_ORIENTATION_PORTRAIT_UPSIDEDOWN"),
-        Some(Orientation::PortraitUpsideDown)
+        Rotation::from_wda_orientation("UIA_DEVICE_ORIENTATION_PORTRAIT_UPSIDEDOWN"),
+        Some(Rotation::UpsideDown)
     );
-    assert_eq!(Orientation::from_wda("PORTRAIT"), Some(Orientation::Portrait));
-    assert_eq!(Orientation::from_wda("UNKNOWN"), None);
+    assert_eq!(Rotation::from_wda_orientation("PORTRAIT"), Some(Rotation::Portrait));
+    assert_eq!(Rotation::from_wda_orientation("UNKNOWN"), None);
     let portrait = ScreenSize { width: 768.0, height: 1024.0 };
-    assert_eq!(Orientation::LandscapeRight.orient(portrait), IPAD_LAND);
-    assert_eq!(Orientation::Portrait.orient(IPAD_LAND), portrait);
-    assert_eq!(Orientation::PortraitUpsideDown.orient(portrait), portrait);
+    assert_eq!(Rotation::TopToRight.orient(portrait), IPAD_LAND);
+    assert_eq!(Rotation::Portrait.orient(IPAD_LAND), portrait);
+    assert_eq!(Rotation::UpsideDown.orient(portrait), portrait);
+}
+
+/// 真机：摄像头在左（z=270）时，HID 按竖放发 (265,314) 落在了界面的 (314,165)，反过来要换算回 (265,314)
+#[test]
+fn rotation_maps_screen_points_back_to_portrait() {
+    let p = ScreenSize { width: 932.0, height: 430.0 }.portrait();
+    assert_eq!(p, ScreenSize { width: 430.0, height: 932.0 });
+    assert_eq!(Rotation::from_degrees(270.0), Some(Rotation::TopToLeft));
+    assert_eq!(Rotation::from_degrees(90.0), Some(Rotation::TopToRight));
+    assert_eq!(Rotation::from_degrees(-90.0), Some(Rotation::TopToLeft));
+    assert_eq!(Rotation::from_degrees(0.0), Some(Rotation::Portrait));
+    assert_eq!(Rotation::from_degrees(45.0), None);
+    for z in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, 0.4, 90.1] {
+        assert_eq!(Rotation::from_degrees(z), None);
+    }
+    assert_eq!(Rotation::TopToLeft.to_portrait((314.0, 165.0), p), (265.0, 314.0));
+    // 顶边在右：界面左上角是竖放时的左下角
+    assert_eq!(Rotation::TopToRight.to_portrait((0.0, 0.0), p), (0.0, 932.0));
+    assert_eq!(Rotation::TopToRight.to_portrait((226.0, 97.0), p), (97.0, 706.0));
+    assert_eq!(Rotation::UpsideDown.to_portrait((0.0, 0.0), p), (430.0, 932.0));
+    assert_eq!(Rotation::Portrait.to_portrait((12.0, 34.0), p), (12.0, 34.0));
 }
 
 /// 真机：横屏主屏上「计算器」树里在 (434,582)，截图里在 (582,334) 附近
 #[test]
 fn ipad_landscape_springboard_is_rotated_to_screen_coordinates_by_orientation_without_status_bar() {
-    let left = parse(&ipad_home((768, 1024)), land(Some(Orientation::LandscapeLeft)));
+    let left = parse(&ipad_home((768, 1024)), land(Some(Rotation::TopToLeft)));
     assert_eq!((left[0].center, left[0].size), ((582, 334), (72, 96)));
-    let right = parse(&ipad_home((768, 1024)), land(Some(Orientation::LandscapeRight)));
+    let right = parse(&ipad_home((768, 1024)), land(Some(Rotation::TopToRight)));
     assert_eq!((right[0].center, right[0].size), ((442, 434), (72, 96)));
 }
 
 /// App 里（窗口和屏幕一样是横的）坐标本来就是屏幕坐标，不转
 #[test]
 fn ipad_landscape_app_tree_is_not_rotated() {
-    let els = parse(&ipad_home((1024, 768)), land(Some(Orientation::LandscapeLeft)));
+    let els = parse(&ipad_home((1024, 768)), land(Some(Rotation::TopToLeft)));
     assert_eq!((els[0].center, els[0].size), ((434, 582), (96, 72)));
 }
 
@@ -590,15 +610,14 @@ fn ipad_portrait_keeps_elements_below_768() {
 </XCUIElementTypeWindow>
 <XCUIElementTypeWindow type="XCUIElementTypeWindow" x="0" y="0" width="1024" height="768"/>
 </XCUIElementTypeApplication>"#;
-    let portrait =
-        View { screen: ScreenSize { width: 768.0, height: 1024.0 }, orientation: Some(Orientation::Portrait) };
+    let portrait = View { screen: ScreenSize { width: 768.0, height: 1024.0 }, rotation: Some(Rotation::Portrait) };
     assert_eq!(parse(xml, portrait)[0].center, (74, 974));
 }
 
 /// 横屏锁屏：转好之后键盘是电话键盘的样子，「取消/删除」和 0 同一行，「使用密码」在提示页中间（真机截图对得上）
 #[test]
 fn ipad_landscape_lock_screen_keypad_and_use_passcode() {
-    let els = parse(IPAD_PIN, land(Some(Orientation::LandscapeLeft)));
+    let els = parse(IPAD_PIN, land(Some(Rotation::TopToLeft)));
     let pad = keypad(&els).expect("转好坐标后应能认出键盘");
     let want = [
         (512, 586),
@@ -617,7 +636,7 @@ fn ipad_landscape_lock_screen_keypad_and_use_passcode() {
     assert_eq!(passcode_field(&els), Some((6, 0)));
     assert_eq!(use_passcode_button(&els), None);
 
-    let bouncer = parse(IPAD_TOUCHID, land(Some(Orientation::LandscapeLeft)));
+    let bouncer = parse(IPAD_TOUCHID, land(Some(Rotation::TopToLeft)));
     assert_eq!(use_passcode_button(&bouncer), Some((512, 430)));
     assert!(keypad(&bouncer).is_none());
     assert_eq!(passcode_field(&bouncer), None);
@@ -629,7 +648,7 @@ fn ipad_landscape_keypad_without_status_bar_or_orientation_is_not_used() {
     let no_bar = regex::Regex::new(r"<XCUIElementTypeStatusBar [^>]*/>").unwrap().replace(IPAD_PIN, "");
     assert!(!no_bar.contains("StatusBar"));
     assert!(keypad(&parse(&no_bar, land(None))).is_none());
-    assert!(keypad(&parse(&no_bar, land(Some(Orientation::Portrait)))).is_none());
+    assert!(keypad(&parse(&no_bar, land(Some(Rotation::Portrait)))).is_none());
     // 有状态栏就按它转，不用方向
     assert!(keypad(&parse(IPAD_PIN, land(None))).is_some());
 }
@@ -648,8 +667,7 @@ fn ipad_touch_id_lock_screens_are_locked() {
 /// 真机竖屏：提示页点「使用密码」，键盘页按键是电话键盘、「取消/删除」和 0 同一行
 #[test]
 fn ipad_portrait_touch_id_and_keypad_from_real_trees() {
-    let portrait =
-        View { screen: ScreenSize { width: 768.0, height: 1024.0 }, orientation: Some(Orientation::Portrait) };
+    let portrait = View { screen: ScreenSize { width: 768.0, height: 1024.0 }, rotation: Some(Rotation::Portrait) };
     let bouncer = parse(IPAD_TOUCHID_P, portrait);
     assert_eq!(use_passcode_button(&bouncer), Some((384, 533)));
     assert!(keypad(&bouncer).is_none());
@@ -664,13 +682,13 @@ fn ipad_portrait_touch_id_and_keypad_from_real_trees() {
 /// Home 键在右时原始框 (386,546)、状态栏贴树的右边；Home 键在左时原始框 (286,406)、状态栏贴树的左边（x=0）
 #[test]
 fn ipad_landscape_direction_comes_from_status_bar_not_orientation() {
-    let o = land(Some(Orientation::LandscapeLeft));
+    let o = land(Some(Rotation::TopToLeft));
     let home_right = parse(&ipad_home_at((768, 1024), (386, 546), Some(736)), o);
     assert_eq!((home_right[0].center, home_right[0].size), ((582, 334), (72, 96)));
     let home_left = parse(&ipad_home_at((768, 1024), (286, 406), Some(0)), o);
     assert_eq!((home_left[0].center, home_left[0].size), ((582, 334), (72, 96)));
     // 状态栏说了算，方向报反了也一样
-    let reported_right = land(Some(Orientation::LandscapeRight));
+    let reported_right = land(Some(Rotation::TopToRight));
     assert_eq!(parse(&ipad_home_at((768, 1024), (386, 546), Some(736)), reported_right)[0].center, (582, 334));
     // 状态栏不是贴边的竖条：按方向
     assert_eq!(parse(&ipad_home_at((768, 1024), (386, 546), Some(300)), o)[0].center, (582, 334));
@@ -679,7 +697,7 @@ fn ipad_landscape_direction_comes_from_status_bar_not_orientation() {
 /// Home 键在左的横屏锁屏：WDA 照样报 LandscapeLeft，按状态栏换算后键位、「使用密码」和 Home 键在右时一样
 #[test]
 fn ipad_landscape_home_left_lock_screen_matches_home_right() {
-    let o = land(Some(Orientation::LandscapeLeft));
+    let o = land(Some(Rotation::TopToLeft));
     let right = parse(IPAD_PIN, o);
     let left = parse(IPAD_PIN_LEFT, o);
     let pad = keypad(&left).expect("Home 键在左也应认出键盘");
@@ -700,7 +718,7 @@ fn a_list_that_stopped_is_still_though_cells_came_and_went() {
             &format!(
                 r#"<XCUIElementTypeApplication type="XCUIElementTypeApplication" label="A" x="0" y="0" width="430" height="932">{cells}</XCUIElementTypeApplication>"#
             ),
-            View { screen: ScreenSize { width: 430.0, height: 932.0 }, orientation: None },
+            View { screen: ScreenSize { width: 430.0, height: 932.0 }, rotation: None },
         )
     };
     let a = tree(&[("通用", 100), ("辅助功能", 150), ("墙纸", 200), ("相机", 250), ("搜索", 300)]);

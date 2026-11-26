@@ -29,6 +29,18 @@ const CLEAR_WAIT: Duration = Duration::from_millis(1500);
 /// How often a wait for text to disappear asks lockdown whether the phone is locked (a new connection each time)
 const LOCK_ASK_EVERY: Duration = Duration::from_secs(1);
 const PASTE_SAME_SETTLE: Duration = Duration::from_millis(1500);
+/// After Cmd-V, how long only SpringBoard is looked at for the paste prompt before the app is read too: an app pasting
+/// into a web page waits for the prompt's answer, and reading it meanwhile times out and can leave remoteAXService
+/// stuck for a while (Safari, iOS 27.2.1: the prompt came 1.2 s after Cmd-V; read at 1 s, the read timed out and
+/// the next session's handshake took 16 s). iOS asks for every paste of ours, so this is rarely waited out
+const PROMPT_GRACE: Duration = Duration::from_millis(2500);
+/// After the paste prompt was answered, at least this long for the text to show in the field (the 5 s of
+/// [`PASTE_WAIT`] may be mostly gone by then)
+const PASTE_AFTER_ANSWER: Duration = Duration::from_millis(2500);
+/// The paste prompt takes taps only about a second after it can be read (Safari, iOS 27.2.1: read 0.27 s after Cmd-V,
+/// taps at 0.27 and 0.76 s did nothing, the one at 1.23 s answered it): tapped once it was seen this long ago. One that
+/// is still there after a tap is tapped again
+const PROMPT_SHOWN: Duration = Duration::from_millis(800);
 /// How long an app may take to come to the front
 const LAUNCH_WAIT: Duration = Duration::from_secs(8);
 /// How long a killed app's processes may take to be gone
@@ -115,13 +127,24 @@ fn keyboard_up(tree: &Tree) -> bool {
     tree.elements.iter().any(|e| e.kind == "Keyboard") || tree.elements.iter().filter(|e| e.kind == "Key").count() >= 8
 }
 
-/// The paste prompt's "Allow Paste" button ("“Notes” would like to paste from “dtpasteboardd”"), when it is up
+/// The paste prompt's "Allow Paste" button ("“Notes” would like to paste from “dtpasteboardd”"), when it is up. Known
+/// by its text in Chinese and English; in any other language by its place: the prompt's two buttons are Allow and
+/// Don't Allow, Allow first (on the left side by side, on top stacked). The prompt is known by the process name in it
 fn paste_allow(tree: &Tree) -> Option<(f64, f64)> {
-    tree.alert().filter(|a| a.label.contains("dtpasteboardd"))?;
-    tree.elements
-        .iter()
-        .find(|e| e.kind == "Button" && matches!(e.label.as_str(), "允许粘贴" | "Allow Paste" | "允許貼上"))
-        .map(|e| (e.center.0 as f64, e.center.1 as f64))
+    let at = tree.elements.iter().position(|e| e.kind == "Alert")?;
+    let alert = &tree.elements[at];
+    if !alert.label.contains("dtpasteboardd") {
+        return None;
+    }
+    let r = alert.visible;
+    let inside = |e: &&elements::Element| {
+        let (x, y) = (e.center.0 as f64, e.center.1 as f64);
+        x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h
+    };
+    let buttons: Vec<_> = tree.elements[at + 1..].iter().filter(|e| e.kind == "Button").filter(inside).collect();
+    let named = buttons.iter().find(|e| matches!(e.label.as_str(), "允许粘贴" | "Allow Paste" | "允許貼上"));
+    let first = || (buttons.len() == 2).then(|| *buttons.iter().min_by_key(|e| (e.center.1, e.center.0)).unwrap());
+    named.copied().or_else(first).map(|e| (e.center.0 as f64, e.center.1 as f64))
 }
 
 impl Daemon {
@@ -160,6 +183,19 @@ impl Daemon {
         wait: Duration,
         overlays: bool,
     ) -> crate::error::Result<ictl_device::ax::AxScreen> {
+        self.ax_snapshot_with(g, wait, overlays, true).await
+    }
+
+    /// [`Self::ax_snapshot`]; `restart_stuck`: an unanswered read may restart axauditd ([`Self::restart_stuck_ax`]).
+    /// Not while pasting: an app waiting for the paste prompt's answer doesn't answer either, and a restarted
+    /// axauditd gives the elements new references, so the field typed into isn't found again
+    async fn ax_snapshot_with(
+        &self,
+        g: &mut Inner,
+        wait: Duration,
+        overlays: bool,
+        restart_stuck: bool,
+    ) -> crate::error::Result<ictl_device::ax::AxScreen> {
         let device = g.device.clone().ok_or(ictl_l10n::tr!("手机未连接", "Phone not connected"))?;
         let (mut restarted, mut rebuilt) = (false, false);
         loop {
@@ -179,6 +215,7 @@ impl Daemon {
                 }
             }
             if let Err(ictl_device::DeviceError::AxUnanswered(e)) = &r
+                && restart_stuck
                 && !restarted
                 && Box::pin(self.restart_stuck_ax(g, &device, &e.to_string())).await
             {
@@ -706,7 +743,7 @@ impl Daemon {
         let old = focused_text_field(&before).and_then(|f| Some((f.object?, shown_text(f))));
         let mut note = String::new();
         if !text.is_empty() {
-            let (typed, prompt) = self.native_paste(g, text, PasteTarget::Append(old)).await?;
+            let (typed, prompt) = self.native_paste(g, text, &before, PasteTarget::Append(old)).await?;
             if prompt {
                 note += ictl_l10n::tr!("(已替你点了「允许粘贴」)", " (“Allow Paste” was tapped for you)");
             }
@@ -786,7 +823,7 @@ impl Daemon {
                     self.hid_do(g, |h| Box::pin(h.delete_backward())).await?;
                     self.native_field_emptied(g, target).await.map_err(Error::readback)?
                 } else {
-                    self.native_paste(g, text, PasteTarget::Replace(target)).await?.0
+                    self.native_paste(g, text, &before, PasteTarget::Replace(target)).await?.0
                 };
                 if seen != Pasted::Typed {
                     return Err(Error::readback(ictl_l10n::tr!(
@@ -841,10 +878,13 @@ impl Daemon {
     }
 
     /// Answer the system paste prompt and verify the requested edit before restoring the clipboard.
+    /// `before`: the screen read before pasting (its app, which SpringBoard's elements are put over when looking for
+    /// the prompt alone: [`Self::paste_prompt`])
     async fn native_paste(
         &self,
         g: &mut Inner,
         text: &str,
+        before: &ictl_device::ax::AxScreen,
         target: PasteTarget<'_>,
     ) -> crate::error::Result<(Pasted, bool)> {
         // a paste through the WDA-down path may still wait to be put back
@@ -866,26 +906,78 @@ impl Daemon {
         };
         g.dev.pending_paste = pending.map(|p| (Instant::now(), p));
         let result = async {
-            let deadline = Instant::now() + PASTE_WAIT;
-            // when the paste prompt was last answered
+            let pasted = Instant::now();
+            let mut deadline = pasted + PASTE_WAIT;
+            // when the paste prompt was last answered, and when it was first seen
             let mut answered: Option<Instant> = None;
+            let mut seen: Option<Instant> = None;
+            // axauditd was restarted meanwhile: the elements have new references, the field is the focused one
+            let mut renewed = false;
             let typed = loop {
-                let screen = self.ax_snapshot(g, AX_WAIT, true).await.map_err(Error::readback)?;
-                let tree = self.snapshot_tree(g, &screen).await.map_err(Error::readback)?;
-                if let Some((x, y)) = paste_allow(&tree) {
+                let late = Instant::now() >= deadline;
+                // the prompt is SpringBoard's: looked for there first. Until it is answered, an app pasting into a web
+                // page waits and doesn't answer reads (they timed out, and the prompt was never reached)
+                let mut prompt = match self.paste_prompt(g, before).await {
+                    Ok(p) => p,
+                    Err(e) => {
+                        if !self.unstick_ax_while_pasting(g, &mut renewed, &e).await && late {
+                            return Err(Error::readback(e));
+                        }
+                        continue;
+                    }
+                };
+                if prompt.is_none() && answered.is_none() && pasted.elapsed() < PROMPT_GRACE && !late {
+                    tokio::time::sleep(Duration::from_millis(150)).await;
+                    continue;
+                }
+                let mut screen = None;
+                if prompt.is_none() {
+                    match self.ax_snapshot_with(g, AX_WAIT, true, false).await {
+                        Ok(s) => {
+                            let tree = self.snapshot_tree(g, &s).await.map_err(Error::readback)?;
+                            prompt = paste_allow(&tree);
+                            screen = Some(s);
+                        }
+                        // still waiting for the prompt, or it is gone and the app catches up: look again
+                        Err(e) => {
+                            tracing::debug!("reading the field after pasting: {e}");
+                            if !self.unstick_ax_while_pasting(g, &mut renewed, &e.to_string()).await && late {
+                                return Err(Error::readback(e));
+                            }
+                            continue;
+                        }
+                    }
+                }
+                if prompt.is_some() && seen.get_or_insert_with(Instant::now).elapsed() < PROMPT_SHOWN && !late {
+                    tokio::time::sleep(Duration::from_millis(150)).await;
+                    continue;
+                }
+                if let Some((x, y)) = prompt {
+                    tracing::debug!("paste prompt answered {:.2} s after pasting", pasted.elapsed().as_secs_f64());
                     self.native_tap(g, x, y).await.map_err(|e| Error::action(Delivery::Sent, FailureStage::Send, e))?;
                     answered = Some(Instant::now());
+                    // pushed back once at most: a prompt that comes back each time it is answered can't hold it forever
+                    let latest = pasted + PASTE_WAIT + PASTE_AFTER_ANSWER;
+                    deadline = deadline.max((Instant::now() + PASTE_AFTER_ANSWER).min(latest));
                     tokio::time::sleep(Duration::from_millis(300)).await;
                     if Instant::now() >= deadline {
                         break Pasted::Missing;
                     }
                     continue;
                 }
+                let Some(screen) = screen else { continue };
+                let focused = focused_text_field(&screen);
                 let seen = match target {
-                    PasteTarget::Append(Some((object, old))) => {
-                        append_seen(focused_text_field(&screen), object, old, text)
-                    }
+                    PasteTarget::Append(Some((_, old))) if renewed => paste_seen(focused.map(shown_text), old, text),
+                    PasteTarget::Append(Some((object, old))) => append_seen(focused, object, old, text),
                     PasteTarget::Append(None) => Pasted::Unreadable,
+                    PasteTarget::Replace(_) if renewed => {
+                        if focused.is_some_and(|f| shown_text(f) == text) {
+                            Pasted::Typed
+                        } else {
+                            Pasted::Missing
+                        }
+                    }
                     PasteTarget::Replace(object) => replacement_seen(&screen, object, text),
                 };
                 if let Some(done) = paste_outcome(seen, answered.map(|t| t.elapsed()), Instant::now() >= deadline) {
@@ -898,6 +990,52 @@ impl Daemon {
         .await;
         self.restore_pasteboard(g, false).await;
         result
+    }
+
+    /// The paste prompt's "Allow Paste" ([`paste_allow`]) without reading the app pasted into, which may be stuck
+    /// waiting for the answer (a web page). Another app in front (Safari: the prompt puts SpringBoard there) is read
+    /// as the app, the only way SpringBoard's question reads as an alert; with the same app in front, SpringBoard's
+    /// elements over it, put over `before`'s (Notes: the prompt is one of them). `Err`: remoteAXService didn't answer
+    async fn paste_prompt(
+        &self,
+        g: &mut Inner,
+        before: &ictl_device::ax::AxScreen,
+    ) -> Result<Option<(f64, f64)>, String> {
+        let Some(t) = g.tunnel.as_mut() else { return Ok(None) };
+        let s = match t.ax_frontmost_pid(Duration::from_secs(1)).await {
+            Ok(pid) if pid != before.app_pid => {
+                self.ax_snapshot_with(g, AX_WAIT, false, false).await.map_err(|e| e.to_string())?
+            }
+            Ok(_) => {
+                let mut s = before.clone();
+                (s.overlays, s.overlays_complete) = t.ax_overlays(before.app_pid).await;
+                s
+            }
+            Err(e @ (DeviceError::AxUnanswered(_) | DeviceError::Timeout(_))) => {
+                t.close_ax().await;
+                return Err(e.to_string());
+            }
+            Err(e) => {
+                tracing::debug!("paste prompt: the app in front: {e}");
+                return Ok(None);
+            }
+        };
+        Ok(self.snapshot_tree(g, &s).await.ok().as_ref().and_then(paste_allow))
+    }
+
+    /// remoteAXService stopped answering after a paste (Safari, iOS 27.2.1, the first paste after the phone sat idle
+    /// for minutes: from Cmd-V on, not even the app in front is answered, so the prompt can't be found and the paste
+    /// never goes in). axauditd is restarted once ([`Self::restart_stuck_ax`]), after which the prompt reads at once;
+    /// its elements get new references, so the field is then known as the focused one (`renewed`). Whether it was
+    /// restarted now
+    async fn unstick_ax_while_pasting(&self, g: &mut Inner, renewed: &mut bool, why: &str) -> bool {
+        tracing::debug!("reading the screen after pasting: {why}");
+        if *renewed {
+            return false;
+        }
+        let Some(device) = g.device.clone() else { return false };
+        *renewed = Box::pin(self.restart_stuck_ax(g, &device, why)).await;
+        *renewed
     }
 
     /// Launches `bundle_id` in front (with `url`, the link for it to open) and waits for it to be there
@@ -1352,6 +1490,30 @@ mod tests {
         assert_eq!(paste_allow(&ours), Some((141.0, 526.0)));
         let other = elements::parse_tree(&xml("“备忘录”想从“微信”粘贴"), screen);
         assert_eq!(paste_allow(&other), None);
+    }
+
+    /// In a language whose button text isn't known, "Allow Paste" is the first of the prompt's two buttons: on the
+    /// left side by side, on top stacked; never a button of the app under it, and nothing with more buttons
+    #[test]
+    fn the_paste_prompt_is_answered_in_any_language() {
+        let button = |label: &str, (x, y, w, h): (i32, i32, i32, i32)| {
+            format!(
+                r#"<XCUIElementTypeButton type="XCUIElementTypeButton" label="{label}" x="{x}" y="{y}" width="{w}" height="{h}"/>"#
+            )
+        };
+        let xml = |app: &str, buttons: &str| {
+            format!(
+                r#"<XCUIElementTypeApplication type="XCUIElementTypeApplication" label="Notizen" x="0" y="0" width="430" height="932">{app}<XCUIElementTypeAlert type="XCUIElementTypeAlert" label="„Notizen“ möchte aus „dtpasteboardd“ einsetzen" x="55" y="390" width="320" height="175">{buttons}</XCUIElementTypeAlert></XCUIElementTypeApplication>"#
+            )
+        };
+        let screen = ScreenSize { width: 430.0, height: 932.0 };
+        let app = button("Fertig", (340, 60, 80, 40));
+        let side = button("Einsetzen erlauben", (71, 501, 140, 49)) + &button("Nicht erlauben", (219, 501, 140, 49));
+        assert_eq!(paste_allow(&elements::parse_tree(&xml(&app, &side), screen)), Some((141.0, 526.0)));
+        let stacked = button("Einsetzen erlauben", (71, 470, 288, 44)) + &button("Nicht erlauben", (71, 514, 288, 44));
+        assert_eq!(paste_allow(&elements::parse_tree(&xml(&app, &stacked), screen)), Some((215.0, 492.0)));
+        let three = side.clone() + &button("Mehr", (71, 450, 288, 40));
+        assert_eq!(paste_allow(&elements::parse_tree(&xml(&app, &three), screen)), None);
     }
 
     #[test]

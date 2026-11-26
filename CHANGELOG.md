@@ -23,6 +23,8 @@ What changed in each release, one line per change. Versions follow [Semantic Ver
 ### Fixes
 
 - Task event logs (`tasks/<id>.jsonl`) are now bounded per task (16,384 events / 16 MiB, always keeping `task` and terminal `done`), and replaying them on subscribe or after broadcast lag now reads the exact file prefix asynchronously off the daemon's `LocalSet` without holding the task mutex (#218).
+- iOS 27+: typing into a web page's field (Safari) works: the paste prompt is found and answered without reading the page, which can't be read until it is answered. Before, typing there failed, or the text went in but was reported missing (#213).
+- iOS 27+: "Allow Paste" is tapped whatever the phone's language: when its text isn't known, the first of the prompt's two buttons (#213).
 - `iphone_tap_element` with `scroll` no longer taps a list that is still creeping to a stop: such a tap only stopped the list, yet was reported as done. It now waits until the element it found stays in place (at most 2 s) before tapping it (#213).
 - iOS 27+ on a Mac without ffmpeg: the control page's H.264 route for a browser that can't decode the phone's HEVC is refused instead of answering an empty stream the page kept retrying, and `doctor` says that this picture needs ffmpeg (`brew install ffmpeg`) instead of "no ffmpeg needed" (#213).
 - The daemon's log no longer mixes languages when a client uses another language than the daemon: what timed out, and the reasons WDA was unavailable or didn't start, are kept in both languages and shown in the reader's (#208).

@@ -81,7 +81,7 @@ fn gone(e: &std::io::Error) -> String {
     )
 }
 
-/// The text blocks joined, cut to [`MAX_TEXT`]. Screenshots stay with the agent: the page shows a sentence per step
+/// The text blocks joined, cut to `MAX_TEXT`. Screenshots stay with the agent: the page shows a sentence per step
 pub fn summarize(result: &Value) -> String {
     let mut text = String::new();
     for c in result["content"].as_array().into_iter().flatten() {

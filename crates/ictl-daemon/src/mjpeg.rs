@@ -1,4 +1,4 @@
-//! WDA's MJPEG picture for the control page ([`protocol::Request::MjpegStream`], iOS 17–26).
+//! WDA's MJPEG picture for the control page ([`crate::protocol::Request::MjpegStream`], iOS 17–26).
 //!
 //! The viewer used to connect to the phone's port 9100 itself, the one place besides `wda-bridge` where something
 //! other than the daemon reached for the phone (D2), and one that only worked over USB. Now it asks the daemon, which
@@ -20,7 +20,7 @@ use crate::protocol::Response;
 /// Connecting to WDA's port and sending the request, at most
 const OPEN_TIMEOUT: Duration = Duration::from_secs(8);
 
-/// Serves one [`protocol::Request::MjpegStream`] connection until either side closes it
+/// Serves one [`crate::protocol::Request::MjpegStream`] connection until either side closes it
 pub(crate) async fn stream(
     d: &Daemon,
     reader: BufReader<OwnedReadHalf>,

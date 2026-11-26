@@ -260,7 +260,7 @@ fn node(kind: &str, e: &Element, (x, y, w, h): Frame) -> Node {
 /// The tree for `app` (the frontmost application's tree, its element first) with `overlays` (what SpringBoard
 /// draws over it: alerts, banners; in screen points) after it, on a `width`×`height` screen. `web`: the processes
 /// that are WebKit's web content (a page's elements), placed as they come. `springboard_front`: SpringBoard is the
-/// app in front, as when it asks something over an app (see [`looks_like_dialog`])
+/// app in front, as when it asks something over an app (see `looks_like_dialog`)
 pub fn to_node(
     app: &[Element],
     overlays: &[Element],

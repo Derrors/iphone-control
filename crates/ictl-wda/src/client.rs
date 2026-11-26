@@ -205,7 +205,7 @@ pub fn next_snapshot_level(level: usize, took: Option<Duration>) -> usize {
     }
 }
 
-/// WDA 判断前台 App 用的点（见 [`WdaClient::move_detection_point`]）：横竖屏都在屏幕里、在通知横幅和灵动岛底下。
+/// WDA 判断前台 App 用的点（见 `WdaClient::move_detection_point`）：横竖屏都在屏幕里、在通知横幅和灵动岛底下。
 /// 取短边的一半，横竖都一样：竖屏在屏幕上部偏中间（430×932 的 iPhone 上是 (215, 215)，横幅最低到 125 左右），
 /// 横屏在中间偏左
 pub fn detection_point(screen: ScreenSize) -> (u32, u32) {
@@ -328,7 +328,7 @@ pub struct WdaClient<T> {
     snapshot_applied: Option<usize>,
     /// 上一次读到的元素树用的上限（[`Self::snapshot_note`]）
     snapshot_read: usize,
-    /// WDA 判断前台 App 的点已经挪过（[`Self::detection_point`]）。这个值在 WDA 进程里一直有效，换会话也不重置
+    /// WDA 判断前台 App 的点已经挪过（[`detection_point`]）。这个值在 WDA 进程里一直有效，换会话也不重置
     detection_point_set: bool,
 }
 

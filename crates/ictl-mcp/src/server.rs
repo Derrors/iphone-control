@@ -4,7 +4,7 @@ use super::*;
 pub struct McpServer {
     pub socket: PathBuf,
     /// This process works for a task (`IPHONE_CONTROL_TASK_TOKEN`, see [`task`]); over HTTP a request may instead
-    /// carry a task's token in [`protocol::TASK_TOKEN_HEADER`] ([`request_token`])
+    /// carry a task's token in [`protocol::TASK_TOKEN_HEADER`] (`request_token`)
     pub task: bool,
     /// Held for the length of each tool call ([`serve_stdio`]); `None` where the process holds one of its own
     pub lease: Option<Lease>,

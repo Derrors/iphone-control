@@ -5,7 +5,7 @@
 //!   frames dropped), `GET /video` the same frames as H.264 when ffmpeg can encode them ([`crate::video`]), about
 //!   1/15 of the traffic.
 //! - `GET /api/{info,daemon,status,devices,apps,elements}`: the daemon's answers as JSON for the page; `GET /api/alert`
-//!   a system alert on the phone with its buttons (the phone's own video can leave it out, see [`alert`]).
+//!   a system alert on the phone with its buttons (the phone's own video can leave it out, see [`api::alert`]).
 //! - `POST /api/{tap,swipe,long_press,type,button,launch_app,terminate_app,open_url,tap_element,wait_for,select}`
 //!   turn into ordinary daemon requests, so they queue with an agent's calls, get auto-unlock and follow the
 //!   controlled device, exactly like an MCP tool call.
@@ -680,7 +680,7 @@ fn accepts_gzip(v: &str) -> bool {
     named.or(star).unwrap_or(false)
 }
 
-/// Who a request is, once [`login_gate`] let it in
+/// Who a request is, once `server::login_gate` let it in
 #[derive(Default)]
 struct Pass {
     /// Logged in with this token; `None` when the viewer has no login (tests), or came in by a task's token

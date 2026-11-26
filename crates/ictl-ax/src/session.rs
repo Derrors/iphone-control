@@ -315,7 +315,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> Session<S> {
         }
     }
 
-    /// One request, answered within [`REQUEST_TIMEOUT`]. An answer to another request (one that came too late
+    /// One request, answered within `REQUEST_TIMEOUT`. An answer to another request (one that came too late
     /// for it) is passed over
     pub async fn request(
         &self,

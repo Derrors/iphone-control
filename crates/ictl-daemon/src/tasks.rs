@@ -17,7 +17,7 @@
 //! ([`Tasks::handle`]): refused with a task's token, and from the processes the opener starts as its agent
 //! ([`crate::procs`]). Stopping is always allowed: an agent may give up. Who controlled it goes into the log.
 //!
-//! Steps: a tool call announces itself ([`Tasks::step`]); the requests it makes carry the step number. An action
+//! Steps: a tool call announces itself (`Task::step`); the requests it makes carry the step number. An action
 //! with the token but no step (a client that doesn't announce) becomes a step of its own, so nothing the task does
 //! is missing from it. Every event goes to `tasks/<id>.jsonl` too; tasks that hadn't ended when the daemon stopped
 //! are marked interrupted when it starts again.
@@ -461,7 +461,7 @@ impl Task {
         );
     }
 
-    /// The agent saw the screen (an observation that succeeded): it may act again ([`TaskState::recheck`])
+    /// The agent saw the screen (an observation that succeeded): it may act again (`TaskState::recheck`)
     pub fn observed(&self) {
         self.lock().recheck = false;
     }
@@ -660,7 +660,7 @@ impl Task {
 
     /// Before an action of a scoped task: within its scope it goes on; outside it waits for the user. Approving lets
     /// the task into that app for the rest of it; rejecting refuses this action only, so the agent can go back
-    /// (unlike a rejected [`Self::confirm`], the task doesn't end as rejected). `step`: the tool call the action
+    /// (unlike a rejected `Self::confirm`, the task doesn't end as rejected). `step`: the tool call the action
     /// belongs to, shown as rejected when the user says no. Returns whether it waited
     pub async fn check_scope(
         &self,

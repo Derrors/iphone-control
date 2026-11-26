@@ -148,7 +148,7 @@ pub(crate) struct PerDevice {
     pub last_rotation: Option<(Instant, Rotation)>,
     /// 开发者镜像连续挂载失败次数，到 3 次清缓存重新下载
     pub ddi_failures: u32,
-    /// 原生控制就绪后，上次查开发者镜像和无障碍服务还在不在的时间，和接连几次没查成（[`crate::supervise::Liveness`]）
+    /// 原生控制就绪后，上次查开发者镜像和无障碍服务还在不在的时间，和接连几次没查成（[`crate::supervise::native::Liveness`]）
     pub alive_checked: Option<Instant>,
     pub alive_misses: u32,
     /// 最近一次经本进程锁屏的时间（自动解锁要等锁屏过渡走完，见 [`crate::tools::LOCK_SETTLE`]）
@@ -298,7 +298,7 @@ pub(crate) struct Inner {
     /// shows over it (that is read once by whoever uses it)
     pub swiped_snap: Option<Swiped<ictl_device::ax::AxScreen>>,
     pub dedup: Dedup,
-    /// 各设备最近一次因为证书自动重签的时间（按 UDID，换设备、重插也记着）：[`crate::supervise::CERT_HEAL_EVERY`] 内
+    /// 各设备最近一次因为证书自动重签的时间（按 UDID，换设备、重插也记着）：[`crate::supervise::resign::CERT_HEAL_EVERY`] 内
     /// 不再自动重签同一台，免得重签也治不好时反复签
     pub cert_heals: HashMap<String, Instant>,
     /// 本机的签名证书还在不在团队里，和查的时间（会话检查、自动重签前联网查；doctor 显示它，不在持锁时联网）

@@ -15,7 +15,14 @@ Don't run two copies of iphone-control, or other usbmuxd-based tools (go-ios, py
 
 ## 1. Install {#install}
 
-Pick one of the three. Install as your regular user; don't run `iphone-control` as root or with sudo.
+Pick one method and install as your regular user (never run `iphone-control` as root or with `sudo`):
+
+| Method | Platform | Background service | `usbmuxd` | Upgrades |
+|---|---|---|---|---|
+| **One command (recommended)** | macOS / Linux (Python 3 + OpenSSL 3) | Sets up launchd / systemd user service | Install on Linux | `iphone-control update` (supports signed `auto-patch`) |
+| **Homebrew** | macOS / Linux | `brew services` | Install on Linux | `iphone-control update` (via Homebrew tap) |
+| **`.deb` package** | Debian 12+ / Ubuntu 22.04+ | Ships systemd user unit | **Installed automatically** | `iphone-control update` (verifies signature, runs `apt`) |
+| **Build from source** | Rust 1.89+ ([source guide](../deploy/source)) | `service install` | Install on Linux | `git pull && cargo install` |
 
 **One command** (macOS or Linux, with Python 3 and OpenSSL 3 on PATH)
 
@@ -23,7 +30,7 @@ Pick one of the three. Install as your regular user; don't run `iphone-control` 
 curl -fsSLo iphone-control-install.sh https://github.com/Derrors/iphone-control/releases/latest/download/install.sh && sh iphone-control-install.sh
 ```
 
-It installs the program into `~/.local/bin` and the daemon as a per-user service (launchd on macOS, a systemd user service on Linux) that starts when you log in. Run `iphone-control update` to check for and install an upgrade, or `iphone-control update check` to check versions only. Pass `--version vX.Y.Z` for a specific signed release, `--prefix DIR` to install into `DIR/bin`, or `--no-service` to install only the program. For upstream v0.2.0, use the [legacy script instructions](#legacy-script).
+It installs the program into `~/.local/bin` and the daemon as a per-user service (launchd on macOS, a systemd user service on Linux) that starts when you log in. Run `iphone-control update` to check for and install an upgrade, or `iphone-control update check` to check versions only. Pass `--version vX.Y.Z` for a specific signed release, `--prefix DIR` to install into `DIR/bin`, or `--no-service` to install only the program.
 
 **Homebrew** (macOS, Linux):
 
@@ -51,23 +58,28 @@ On Linux with ffmpeg installed, the control page's picture is H.264, about 1/15 
 
 The one-line installer and Homebrew work on Apple Silicon and Intel Macs (Intel packages from 0.2.14). Development runs from source; see [Build from Source](../deploy/source).
 
-### Upstream v0.2.0 script installation and migration {#legacy-script}
+<a id="legacy-script"></a>
 
-The v0.2.0 release uses archive checksums and has no signed installer asset. To install this version, use its tagged script and specify the same release for the binary.
+::: details Upstream v0.2.0 legacy script installation and migration
+The v0.2.0 release uses archive checksums and has no signed installer asset. To install this version, use its tagged script and specify the same release:
 
 ```sh
 curl -fsSLo iphone-control-v0.2.0-install.sh https://raw.githubusercontent.com/Derrors/iphone-control/v0.2.0/install.sh && sh iphone-control-v0.2.0-install.sh --version v0.2.0
 ```
 
-To migrate an existing v0.2.0 script installation, first confirm the signed release includes `install.sh`, your platform's manifest and its signature. Close Viewer and MCP clients, stop the daemon, then remove the old binary and service with the v0.2.0 script. This keeps your settings and device data.
+To migrate an existing v0.2.0 script installation, close Viewer and MCP clients, stop the daemon, then remove the old binary and service with the v0.2.0 script (settings and device data are kept):
 
 ```sh
 curl -fsSLo iphone-control-v0.2.0-install.sh https://raw.githubusercontent.com/Derrors/iphone-control/v0.2.0/install.sh && sh iphone-control-v0.2.0-install.sh --uninstall
 ```
 
-Then run the [signed installer](#install). If your old installation used `--prefix DIR`, pass the same option to both the uninstall and the new installation.
+Then run the [signed installer](#install). If your old installation used `--prefix DIR`, pass the same option to both commands.
+:::
 
 ## 2. Plug in the phone and run iphone-control {#first-run}
+
+![First-time setup paths: install the binary, pair and enable Developer Mode, branch automatically to iOS 27+ native control or iOS 17–26 WebDriverAgent, then register MCP with your AI client](/diagrams/setup-flow-en-light.svg){.light-only}
+![First-time setup paths: install the binary, pair and enable Developer Mode, branch automatically to iOS 27+ native control or iOS 17–26 WebDriverAgent, then register MCP with your AI client](/diagrams/setup-flow-en-dark.svg){.dark-only}
 
 Plug in the phone with a cable, unlock it, then run in a terminal:
 

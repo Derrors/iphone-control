@@ -1,0 +1,135 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 720" width="1200" height="720" role="img" aria-label="iphone-control 多进程架构：MCP、控制台、task run 与命令行客户端经 Unix socket 汇入单线程 LocalSet 守护进程，守护进程经系统 usbmuxd 与 CoreDeviceProxy 用户态隧道独占管理 iPhone/iPad">
+  <title>系统进程模型与通信架构</title>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#9198a1"/>
+    </marker>
+    <marker id="arrow-brand" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#22d3ee"/>
+    </marker>
+    <marker id="arrow-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#22c55e"/>
+    </marker>
+    <marker id="arrow-amber" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#d4a72c"/>
+    </marker>
+    <marker id="arrow-red" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#f87171"/>
+    </marker>
+    <marker id="arrow-purple" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#a78bfa"/>
+    </marker>
+    <linearGradient id="screen" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0e7490"/>
+      <stop offset="1" stop-color="#083344"/>
+    </linearGradient>
+    <style>
+      text { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans CJK SC', 'Source Han Sans SC', 'WenQuanYi Zen Hei', Helvetica, Arial, sans-serif; fill: #e6edf3; }
+      .h1 { font-size: 22px; font-weight: 700; }
+      .h2 { font-size: 20px; font-weight: 700; }
+      .h3 { font-size: 16px; font-weight: 700; }
+      .sub { font-size: 13px; fill: #9198a1; }
+      .label { font-size: 13px; fill: #9198a1; font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace; }
+      .frame { font-size: 15px; fill: #9198a1; }
+    </style>
+  </defs>
+  <text x="28" y="38" class="h1">系统进程模型与通信架构</text>
+  <text x="28" y="62" class="sub">单进程守护进程独占设备，客户端均为薄适配层；默认零网络监听端口，按需开启控制台与远程 HTTP MCP</text>
+  <rect x="20" y="80" width="888" height="620" rx="20" fill="none" stroke="#3d444d" stroke-width="2" stroke-dasharray="8 6"/>
+  <text x="40" y="108" style="font-size:14px;font-weight:700;fill:#9198a1">Linux / macOS 主机（普通用户权限，无需 root）</text>
+  <rect x="38" y="128" width="250" height="114" rx="14" fill="#151b23" stroke="#3d444d" stroke-width="1.5"/>
+  <text x="54" y="157" style="font-size:15px;font-weight:700;fill:#e6edf3">iphone-control mcp</text>
+  <rect x="202" y="138" width="72" height="24" rx="12.0" fill="#3d444d"/>
+  <text x="238.0" y="154.32" text-anchor="middle" style="font-size:12px;font-weight:600;fill:#e6edf3">ictl-mcp</text>
+  <text x="54" y="182" style="font-size:12px;fill:#9198a1">每会话一个，stdio JSON-RPC</text>
+  <text x="54" y="201" style="font-size:12px;fill:#9198a1">18 核心工具 + 6 开发者工具</text>
+  <text x="54" y="220" style="font-size:12px;fill:#9198a1">--url 模式桥接远端 /mcp</text>
+  <rect x="38" y="258" width="250" height="140" rx="14" fill="#1d1533" stroke="#a78bfa" stroke-width="1.5"/>
+  <text x="54" y="287" style="font-size:15px;font-weight:700;fill:#c4b5fd">iphone-control viewer</text>
+  <rect x="228" y="268" width="46" height="24" rx="12.0" fill="#6d28d9"/>
+  <text x="251.0" y="284.32" text-anchor="middle" style="font-size:12px;font-weight:600;fill:#ffffff">可选</text>
+  <text x="54" y="312" style="font-size:12px;fill:#9198a1">hyper HTTP/1.1 + 首字节 TLS 分流</text>
+  <text x="54" y="331" style="font-size:12px;fill:#9198a1">令牌登录（操作 / 只读 / 任务口令）</text>
+  <text x="54" y="350" style="font-size:12px;fill:#9198a1">实时视频编码/转码 · SSE 任务流</text>
+  <text x="54" y="369" style="font-size:12px;fill:#9198a1">同端口提供 Streamable HTTP /mcp</text>
+  <rect x="38" y="414" width="250" height="102" rx="14" fill="#151b23" stroke="#3d444d" stroke-width="1.5"/>
+  <text x="54" y="443" style="font-size:15px;font-weight:700;fill:#e6edf3">iphone-control task run</text>
+  <text x="54" y="468" style="font-size:12px;fill:#9198a1">开任务并持有连接租约</text>
+  <text x="54" y="487" style="font-size:12px;fill:#9198a1">独立进程组（停止时整组回收）</text>
+  <text x="54" y="506" style="font-size:12px;fill:#9198a1">外部 Agent 平台接入入口</text>
+  <rect x="38" y="532" width="250" height="96" rx="14" fill="#151b23" stroke="#3d444d" stroke-width="1.5"/>
+  <text x="54" y="561" style="font-size:15px;font-weight:700;fill:#e6edf3">CLI 运维命令</text>
+  <text x="54" y="586" style="font-size:12px;fill:#9198a1">setup / doctor / status / select</text>
+  <text x="54" y="605" style="font-size:12px;fill:#9198a1">sign / resign / passcode / update</text>
+  <text x="54" y="624" style="font-size:12px;fill:#9198a1">读取 ~/.config/iphone-control/env</text>
+  <text x="38" y="656" style="font-size:12px;font-weight:600;fill:#c4b5fd">↑ 浏览器 / 远端 Agent / 外部平台</text>
+  <text x="38" y="676" style="font-size:12px;fill:#9198a1">  经 127.0.0.1 或 --lan (HTTPS) 访问 viewer</text>
+  <rect x="318" y="152" width="48" height="456" rx="10" fill="#151b23" stroke="#22d3ee" stroke-width="1.5"/>
+  <text x="342" y="380" text-anchor="middle" transform="rotate(-90 342 380)" style="font-size:13px;font-weight:700;fill:#22d3ee;font-family:ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace">Unix Socket · ctl.sock (0600) · JSON Lines + Stream</text>
+  <line x1="288" y1="185" x2="316" y2="185" stroke="#22d3ee" stroke-width="2" marker-end="url(#arrow)"/>
+  <line x1="288" y1="328" x2="316" y2="328" stroke="#22d3ee" stroke-width="2" marker-end="url(#arrow)"/>
+  <line x1="288" y1="465" x2="316" y2="465" stroke="#22d3ee" stroke-width="2" marker-end="url(#arrow)"/>
+  <line x1="288" y1="580" x2="316" y2="580" stroke="#22d3ee" stroke-width="2" marker-end="url(#arrow)"/>
+  <line x1="366" y1="260" x2="404" y2="260" stroke="#22d3ee" stroke-width="2.5" marker-end="url(#arrow)"/>
+  <line x1="366" y1="460" x2="404" y2="460" stroke="#22d3ee" stroke-width="2.5" marker-end="url(#arrow)"/>
+  <rect x="408" y="128" width="480" height="552" rx="18" fill="#0b2a33" stroke="#22d3ee" stroke-width="2"/>
+  <text x="430" y="160" style="font-size:21px;font-weight:700;fill:#22d3ee">iphone-control daemon</text>
+  <rect x="718" y="139" width="150" height="26" rx="13.0" fill="#0e7490"/>
+  <text x="793.0" y="156.32" text-anchor="middle" style="font-size:12px;font-weight:600;fill:#ffffff">唯一设备持有者</text>
+  <text x="430" y="184" style="font-size:12px;fill:#9198a1">主循环：单线程 LocalSet 协作调度 + 阻塞/签名任务 spawn_blocking</text>
+  <rect x="428" y="200" width="440" height="104" rx="14" fill="#0d1117" stroke="#155e75" stroke-width="1.5"/>
+  <text x="444" y="226" style="font-size:14px;font-weight:700;fill:#e6edf3">1. 准入、任务与请求分流（core/dispatch.rs · tasks/）</text>
+  <text x="444" y="248" style="font-size:12px;fill:#9198a1">• Tasks::admit：租约、状态等待、App 范围校验、SO_PEERCRED 拦截自控</text>
+  <text x="444" y="266" style="font-size:12px;fill:#9198a1">• 车道隔离：快照免锁 · Web/安装/卸载/崩溃独立锁 · 手机动作串行设备锁</text>
+  <text x="444" y="284" style="font-size:12px;fill:#9198a1">• 30s 排队放弃 + 断连取消，避免动作落到已变化的屏幕上</text>
+  <rect x="428" y="318" width="214" height="152" rx="14" fill="#0d1117" stroke="#22d3ee" stroke-width="1.5"/>
+  <text x="442" y="344" style="font-size:14px;font-weight:700;fill:#22d3ee">2A. 原生后端（iOS 27+）</text>
+  <text x="442" y="368" style="font-size:12px;fill:#9198a1">ictl-ax：remoteAXService</text>
+  <text x="442" y="387" style="font-size:12px;fill:#9198a1">按层走树 → ictl_ui::Source</text>
+  <text x="442" y="406" style="font-size:12px;fill:#9198a1">HID 触控/按键 + 剪贴板粘贴</text>
+  <text x="442" y="425" style="font-size:12px;fill:#9198a1">AppService 启停 / 截图服务</text>
+  <text x="442" y="444" style="font-size:12px;fill:#9198a1">HEVC 屏幕流转发给 viewer</text>
+  <rect x="654" y="318" width="214" height="152" rx="14" fill="#0d1117" stroke="#3d444d" stroke-width="1.5"/>
+  <text x="668" y="344" style="font-size:14px;font-weight:700;fill:#e6edf3">2B. WDA 后端（iOS 17–26）</text>
+  <text x="668" y="368" style="font-size:12px;fill:#9198a1">ictl-wda：后台启动/接管</text>
+  <text x="668" y="387" style="font-size:12px;fill:#9198a1">USE_IP=127.0.0.1 仅听回环</text>
+  <text x="668" y="406" style="font-size:12px;fill:#9198a1">WDA HTTP 8100 读写控制</text>
+  <text x="668" y="425" style="font-size:12px;fill:#9198a1">9100 MJPEG 转发（不占锁）</text>
+  <text x="668" y="444" style="font-size:12px;fill:#9198a1">XCTest 卡死探测自动重启</text>
+  <rect x="428" y="484" width="440" height="102" rx="14" fill="#0d1117" stroke="#155e75" stroke-width="1.5"/>
+  <text x="444" y="510" style="font-size:14px;font-weight:700;fill:#e6edf3">3. 状态机巡检与可靠性保障（supervise/ · watch · watchdog）</text>
+  <text x="444" y="532" style="font-size:12px;fill:#9198a1">• usbmuxd Listen 毫秒级热插拔唤醒 + 10s 定时巡检兜底</text>
+  <text x="444" y="550" style="font-size:12px;fill:#9198a1">• 600s 独立 Watchdog 线程 + run-state.json 异常重启自感知防风暴告警</text>
+  <text x="444" y="568" style="font-size:12px;fill:#9198a1">• 自动解锁（ictl-unlock）· 7天自动重签 · 证书自愈 · Anisette 瞬断重试</text>
+  <rect x="428" y="600" width="440" height="62" rx="10" fill="#151b23" stroke="#3d444d" stroke-width="1.2"/>
+  <text x="444" y="624" style="font-size:13px;font-weight:700">持久化目录 ~/.local/share/iphone-control (0700)</text>
+  <text x="444" y="646" style="font-size:11px;fill:#9198a1">state.json · run-state.json · tasks/ · account/ · secrets/ · ddi/ · logs/</text>
+  <rect x="936" y="128" width="244" height="114" rx="14" fill="#151b23" stroke="#3d444d" stroke-width="1.5"/>
+  <text x="952" y="157" style="font-size:15px;font-weight:700;fill:#e6edf3">系统 usbmuxd</text>
+  <rect x="1098" y="138" width="68" height="24" rx="12.0" fill="#3d444d"/>
+  <text x="1132.0" y="154.32" text-anchor="middle" style="font-size:12px;font-weight:600;fill:#e6edf3">系统服务</text>
+  <text x="952" y="182" style="font-size:12px;fill:#9198a1">独立进程（GPL-3.0，不链接）</text>
+  <text x="952" y="201" style="font-size:12px;fill:#9198a1">Linux 发行版包 / macOS 内置</text>
+  <text x="952" y="220" style="font-size:12px;fill:#9198a1">Listen 事件流 + TCP 端口复用</text>
+  <line x1="888" y1="185" x2="934" y2="185" stroke="#9198a1" stroke-width="2.5" marker-start="url(#arrow)" marker-end="url(#arrow)"/>
+  <line x1="1058" y1="242" x2="1058" y2="286" stroke="#9198a1" stroke-width="2.5" marker-start="url(#arrow)" marker-end="url(#arrow)"/>
+  <text x="1070" y="270" style="font-size:12px;font-weight:600;fill:#9198a1">USB 数据线</text>
+  <rect x="936" y="290" width="244" height="242" rx="22" fill="#0d1117"/>
+  <rect x="946" y="300" width="224" height="222" rx="16" fill="url(#screen)"/>
+  <rect x="1028" y="310" width="60" height="10" rx="5" fill="#0b1220"/>
+  <text x="1058" y="344" text-anchor="middle" style="font-size:18px;font-weight:700;fill:#ffffff">iPhone / iPad</text>
+  <text x="1058" y="365" text-anchor="middle" style="font-size:12px;fill:#c4ecf7">已配对 · 开发者模式</text>
+  <rect x="960" y="380" width="196" height="56" rx="10" fill="#ffffff" fill-opacity="0.14"/>
+  <text x="1058" y="402" text-anchor="middle" style="font-size:12px;font-weight:700;fill:#ffffff">CoreDeviceProxy 用户态隧道</text>
+  <text x="1058" y="422" text-anchor="middle" style="font-size:11px;fill:#e0f7fe">RSD · AX · HID · 截图 · App · HEVC</text>
+  <rect x="960" y="448" width="196" height="56" rx="10" fill="#ffffff" fill-opacity="0.1"/>
+  <text x="1058" y="470" text-anchor="middle" style="font-size:12px;font-weight:700;fill:#ffffff">Lockdown · WDA (iOS 17–26)</text>
+  <text x="1058" y="490" text-anchor="middle" style="font-size:11px;fill:#d5f3fb">127.0.0.1:8100 / 9100 回环监听</text>
+  <path d="M888 536 C 912 536, 916 610, 934 610" fill="none" stroke="#d4a72c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="6 5" marker-end="url(#arrow-amber)"/>
+  <rect x="936" y="556" width="244" height="124" rx="14" fill="#2b2111" stroke="#d4a72c" stroke-width="1.5"/>
+  <text x="950" y="584" style="font-size:14px;font-weight:700;fill:#f0c869">出站 HTTPS（按需）</text>
+  <text x="950" y="608" style="font-size:12px;fill:#9198a1">• Apple Developer &amp; Anisette v3</text>
+  <text x="950" y="627" style="font-size:12px;fill:#9198a1">  （仅 WDA 签名，瞬断自动重试）</text>
+  <text x="950" y="646" style="font-size:12px;fill:#9198a1">• 开发者镜像 DDI（可离线目录）</text>
+  <text x="950" y="665" style="font-size:12px;fill:#9198a1">• Bark / Telegram 告警推送</text>
+</svg>

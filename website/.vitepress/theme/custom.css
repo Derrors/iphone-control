@@ -36,3 +36,11 @@
 html:not(.dark) .dark-only {
   display: none;
 }
+
+.vp-doc img.light-only,
+.vp-doc img.dark-only {
+  display: block;
+  margin: 1.25rem auto;
+  max-width: 100%;
+  height: auto;
+}

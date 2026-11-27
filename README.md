@@ -79,7 +79,7 @@ Device control has two routes, picked by iOS version:
 - **A person stays in charge**: AI tasks can be paused, taken over or stopped at any time; paying, deleting or sending waits for your OK, and an agent can't approve its own task
 - **Several devices**: connect several iPhones and iPads and switch which one is controlled
 - **Optional auto-unlock**: every passcode digit is verified, and a wrong passcode disables auto-unlock after one attempt
-- **Alerts**: Telegram or Bark notifications when the phone goes offline, a passcode is needed after a reboot, or re-signing fails
+- **Alerts**: Telegram or Bark notifications when the phone goes offline, a passcode is needed after a reboot, re-signing fails, or the daemon restarts unexpectedly
 - **Diagnostics**: `doctor` checks every layer from USB up and tells you how to fix each failure
 
 **Access**

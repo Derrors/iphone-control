@@ -1,0 +1,118 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 680" width="1200" height="680" role="img" aria-label="两条实时画面链路：iOS 27+ 手机硬件 HEVC 经 Daemon ScreenStream 转发至浏览器 WebCodecs 或 ffmpeg 转码 H.264；iOS 17-26 WDA MJPEG 经 Daemon 转发与 MjpegHub 单路共享去重后由 VideoToolbox 或 ffmpeg 编为 H.264，并基于 POST /api/video/ack 实现端到端流控">
+  <title>控制台实时视频管线与自适应流控原理</title>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#9198a1"/>
+    </marker>
+    <marker id="arrow-brand" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#22d3ee"/>
+    </marker>
+    <marker id="arrow-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#22c55e"/>
+    </marker>
+    <marker id="arrow-amber" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#d4a72c"/>
+    </marker>
+    <marker id="arrow-red" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#f87171"/>
+    </marker>
+    <marker id="arrow-purple" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#a78bfa"/>
+    </marker>
+    <linearGradient id="screen" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0e7490"/>
+      <stop offset="1" stop-color="#083344"/>
+    </linearGradient>
+    <style>
+      text { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans CJK SC', 'Source Han Sans SC', 'WenQuanYi Zen Hei', Helvetica, Arial, sans-serif; fill: #e6edf3; }
+      .h1 { font-size: 22px; font-weight: 700; }
+      .h2 { font-size: 20px; font-weight: 700; }
+      .h3 { font-size: 16px; font-weight: 700; }
+      .sub { font-size: 13px; fill: #9198a1; }
+      .label { font-size: 13px; fill: #9198a1; font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace; }
+      .frame { font-size: 15px; fill: #9198a1; }
+    </style>
+  </defs>
+  <text x="28" y="38" class="h1">控制台实时视频管线与端到端流控</text>
+  <text x="28" y="62" class="sub">仅守护进程直连手机；多标签页共享上游画面防 WDA 超 CPU 被杀，各页面按自身带宽独立流控不互相拖累</text>
+  <rect x="28" y="82" width="224" height="32" rx="8" fill="#151b23" stroke="#3d444d" stroke-width="1.2"/>
+  <text x="140.0" y="103" text-anchor="middle" style="font-size:13px;font-weight:700">① iPhone / iPad</text>
+  <rect x="276" y="82" width="250" height="32" rx="8" fill="#151b23" stroke="#3d444d" stroke-width="1.2"/>
+  <text x="401.0" y="103" text-anchor="middle" style="font-size:13px;font-weight:700">② Daemon（唯一连手机）</text>
+  <rect x="550" y="82" width="344" height="32" rx="8" fill="#151b23" stroke="#3d444d" stroke-width="1.2"/>
+  <text x="722.0" y="103" text-anchor="middle" style="font-size:13px;font-weight:700">③ Viewer（共享枢纽 + 编码/转码）</text>
+  <rect x="918" y="82" width="254" height="32" rx="8" fill="#151b23" stroke="#3d444d" stroke-width="1.2"/>
+  <text x="1045.0" y="103" text-anchor="middle" style="font-size:13px;font-weight:700">④ 浏览器控制台</text>
+  <rect x="20" y="126" width="1160" height="214" rx="16" fill="#0b2a33" stroke="#22d3ee" stroke-width="1.5"/>
+  <rect x="36" y="138" width="252" height="24" rx="12.0" fill="#0e7490"/>
+  <text x="162.0" y="154.32" text-anchor="middle" style="font-size:12px;font-weight:600;fill:#ffffff">路线 A · iOS 27+ 优先：手机硬件 HEVC</text>
+  <rect x="36" y="174" width="210" height="148" rx="14" fill="#0d1117" stroke="#155e75" stroke-width="1.5"/>
+  <text x="50" y="202" style="font-size:14px;font-weight:700;fill:#e6edf3">CoreDevice 媒体流</text>
+  <text x="50" y="228" style="font-size:12px;fill:#9198a1">HID 会话附带屏幕视频</text>
+  <text x="50" y="248" style="font-size:12px;fill:#9198a1">硬件编码 HEVC (~60fps)</text>
+  <text x="50" y="268" style="font-size:12px;fill:#9198a1">原生分辨率（16px 对齐）</text>
+  <text x="50" y="288" style="font-size:12px;fill:#9198a1">按需响应 PLI+FIR 关键帧</text>
+  <line x1="246" y1="248" x2="278" y2="248" stroke="#22d3ee" stroke-width="2" marker-end="url(#arrow)"/>
+  <rect x="280" y="174" width="242" height="148" rx="14" fill="#0d1117" stroke="#155e75" stroke-width="1.5"/>
+  <text x="294" y="202" style="font-size:14px;font-weight:700;fill:#e6edf3">media.rs + screen.rs</text>
+  <text x="294" y="226" style="font-size:12px;fill:#9198a1">HevcDepacketizer 还原 Annex-B</text>
+  <text x="294" y="244" style="font-size:12px;fill:#9198a1">缓存并补发 VPS/SPS/PPS</text>
+  <text x="294" y="262" style="font-size:12px;fill:#9198a1">回传 RTCP 确认与 RCTL 心跳</text>
+  <text x="294" y="280" style="font-size:12px;fill:#9198a1">ScreenStream 多页共享广播</text>
+  <text x="294" y="298" style="font-size:12px;fill:#9198a1">每秒共享采样界面方向</text>
+  <line x1="522" y1="216" x2="554" y2="216" stroke="#22d3ee" stroke-width="2" marker-end="url(#arrow)"/>
+  <line x1="522" y1="282" x2="554" y2="282" stroke="#22d3ee" stroke-width="2" marker-end="url(#arrow)"/>
+  <rect x="556" y="174" width="332" height="70" rx="12" fill="#0d1117" stroke="#22c55e" stroke-width="1.5"/>
+  <text x="570" y="200" style="font-size:14px;font-weight:700;fill:#4ade80">直通转发（video/device.rs）</text>
+  <rect x="826" y="181" width="48" height="24" rx="12.0" fill="#15803d"/>
+  <text x="850.0" y="197.32" text-anchor="middle" style="font-size:12px;font-weight:600;fill:#ffffff">首选</text>
+  <text x="570" y="224" style="font-size:12px;fill:#9198a1">零编码开销；落后时丢非关键帧并请求新关键帧</text>
+  <rect x="556" y="254" width="332" height="68" rx="12" fill="#0d1117" stroke="#155e75" stroke-width="1.5"/>
+  <text x="570" y="280" style="font-size:14px;font-weight:700;fill:#e6edf3">按需转码 H.264（video/transcode.rs）</text>
+  <text x="570" y="304" style="font-size:12px;fill:#9198a1">浏览器解不了 HEVC 时由 ffmpeg 转码（并发上限 4 路）</text>
+  <line x1="888" y1="209" x2="920" y2="209" stroke="#22c55e" stroke-width="2" marker-end="url(#arrow-green)"/>
+  <line x1="888" y1="288" x2="920" y2="288" stroke="#22d3ee" stroke-width="2" marker-end="url(#arrow-brand)"/>
+  <rect x="922" y="174" width="242" height="148" rx="14" fill="#0d1117" stroke="#155e75" stroke-width="1.5"/>
+  <text x="936" y="202" style="font-size:14px;font-weight:700;fill:#e6edf3">WebCodecs 解码渲染</text>
+  <text x="936" y="226" style="font-size:12px;fill:#9198a1">• HEVC（macOS Chrome/Safari）</text>
+  <text x="936" y="244" style="font-size:12px;fill:#9198a1">  Annex-B 解码 + 裁齐 16px 边</text>
+  <text x="936" y="262" style="font-size:12px;fill:#9198a1">• 或 H.264 转码流（Firefox/Linux）</text>
+  <text x="936" y="280" style="font-size:12px;fill:#9198a1">• 按界面方向旋转绘入 Canvas</text>
+  <text x="936" y="298" style="font-size:12px;fill:#9198a1">• 弱网：HEVC 6M→2M（同机共享）</text>
+  <rect x="20" y="356" width="1160" height="214" rx="16" fill="#151b23" stroke="#3d444d" stroke-width="1.5"/>
+  <rect x="36" y="368" width="290" height="24" rx="12.0" fill="#3d444d"/>
+  <text x="181.0" y="384.32" text-anchor="middle" style="font-size:12px;font-weight:600;fill:#e6edf3">路线 B · iOS 17–26（WDA）或指定编码器</text>
+  <rect x="36" y="404" width="210" height="148" rx="14" fill="#0d1117" stroke="#3d444d" stroke-width="1.5"/>
+  <text x="50" y="432" style="font-size:14px;font-weight:700;fill:#e6edf3">WDA MJPEG :9100</text>
+  <text x="50" y="458" style="font-size:12px;fill:#9198a1">原尺寸转发硬件 JPEG</text>
+  <text x="50" y="478" style="font-size:12px;fill:#9198a1">（不缩放/不旋转防超 CPU）</text>
+  <text x="50" y="498" style="font-size:12px;fill:#9198a1">仅监听手机回环 127.0.0.1</text>
+  <text x="50" y="518" style="font-size:12px;fill:#9198a1">静止时重复发送约 25 fps</text>
+  <line x1="246" y1="478" x2="278" y2="478" stroke="#9198a1" stroke-width="2" marker-end="url(#arrow)"/>
+  <rect x="280" y="404" width="242" height="148" rx="14" fill="#0d1117" stroke="#3d444d" stroke-width="1.5"/>
+  <text x="294" y="432" style="font-size:14px;font-weight:700;fill:#e6edf3">mjpeg.rs 透传转发</text>
+  <text x="294" y="456" style="font-size:12px;fill:#9198a1">响应 Request::MjpegStream</text>
+  <text x="294" y="474" style="font-size:12px;fill:#9198a1">经 usbmuxd 直连手机 9100</text>
+  <text x="294" y="492" style="font-size:12px;fill:#9198a1">全程不拿设备锁</text>
+  <text x="294" y="510" style="font-size:12px;fill:#9198a1">（长操作/点击不阻塞画面）</text>
+  <text x="294" y="528" style="font-size:12px;fill:#9198a1">由 Viewer MjpegHub 单路复用</text>
+  <line x1="522" y1="478" x2="554" y2="478" stroke="#9198a1" stroke-width="2" marker-end="url(#arrow)"/>
+  <rect x="556" y="404" width="332" height="148" rx="14" fill="#0d1117" stroke="#3d444d" stroke-width="1.5"/>
+  <text x="570" y="430" style="font-size:14px;font-weight:700;fill:#e6edf3">MjpegHub 单路去重 → 每页独立编码</text>
+  <text x="570" y="454" style="font-size:11px;fill:#9198a1">• 每台手机只拉 1 路 MJPEG，丢弃完全相同的静止帧</text>
+  <text x="570" y="472" style="font-size:11px;fill:#9198a1">• macOS：直调 VideoToolbox（vt.rs，免 ffmpeg）</text>
+  <text x="570" y="490" style="font-size:11px;fill:#9198a1">• Linux：ffmpeg 探测 NVENC/VAAPI/QSV/V4L2/x264</text>
+  <text x="570" y="508" style="font-size:11px;fill:#9198a1">• FLV 封装即时出帧 + K 帧补刷 + sps.rs 改写零重排</text>
+  <text x="570" y="526" style="font-size:11px;fill:#9198a1">• 无编码器 / 不支持 WebCodecs → /stream MJPEG 兜底</text>
+  <line x1="888" y1="478" x2="920" y2="478" stroke="#9198a1" stroke-width="2" marker-end="url(#arrow)"/>
+  <rect x="922" y="404" width="242" height="148" rx="14" fill="#0d1117" stroke="#3d444d" stroke-width="1.5"/>
+  <text x="936" y="432" style="font-size:14px;font-weight:700;fill:#e6edf3">WebCodecs H.264 / MJPEG</text>
+  <text x="936" y="456" style="font-size:12px;fill:#9198a1">• 带宽约为 MJPEG 的 1/15</text>
+  <text x="936" y="474" style="font-size:12px;fill:#9198a1">  （静止近零，滚动 300–450 KB/s）</text>
+  <text x="936" y="492" style="font-size:12px;fill:#9198a1">• avcC 零缓冲直接出帧</text>
+  <text x="936" y="510" style="font-size:12px;fill:#9198a1">• 弱网：QP 20→26（仅当前页）</text>
+  <text x="936" y="528" style="font-size:12px;fill:#9198a1">• 自动降级：HEVC → H.264 → MJPEG</text>
+  <rect x="20" y="586" width="1160" height="76" rx="14" fill="#2b2111" stroke="#d4a72c" stroke-width="1.5"/>
+  <text x="40" y="614" style="font-size:14px;font-weight:700;fill:#f0c869">端到端自适应背压流控（克服内核与 SSH 隧道数 MB 缓冲导致的几十秒延迟）</text>
+  <text x="40" y="642" style="font-size:12px;fill:#e6edf3">浏览器每 100 ms 上报 POST /api/video/ack {stream, bytes}  ──▶  Viewer 实时估算 RTT、P90 抖动与吞吐速率  ──▶  落后超 300 ms + 抖动时暂缓送帧（追上后只送最新帧，保持帧链完整）</text>
+</svg>

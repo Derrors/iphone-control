@@ -24,7 +24,7 @@ Coordinates are in **points**, the same unit as the pixels of a full-screen `iph
 | `iphone_long_press` | `x`, `y`, `seconds` (default 1, max 10) | Holds one finger still, then lifts: context menus, home-screen quick actions, text selection |
 | `iphone_swipe` | `from_x`, `from_y`, `to_x`, `to_y`, `seconds` (default 0.3, max 10), `hold` (default 0) | Returns after the list has stopped scrolling (up to 2.5 s). Swipe up (`from_y` > `to_y`) to see content further down. `hold` holds the finger still at the start for that many seconds before moving, to drag things that have to be long-pressed first (home-screen icons, reorderable rows); about 0.6 works, under 0.5 usually doesn't pick anything up. `seconds` + `hold` is at most 10 |
 | `iphone_type_text` | `text`, `replace` (default false), `submit` (default false) | Types into the focused field (Chinese supported); fails if no keyboard is shown. Reads the field back afterwards: dropped trailing characters are typed again; if the field still doesn't match, it reports an error and does not press Return. `replace: true` replaces the whole text of a readable focused field (not a password field), and empty `text` empties it; Return is pressed only once the field reads back as exactly the text. Natively the old text is selected and pasted over, and a failure leaves it there; through WDA the field is cleared first, so after a failure the old text is gone |
-| `iphone_press_button` | `button`: `home`, `volume_up`, `volume_down`, `lock` | `home` refuses to act while a system alert is on screen (it would have no effect). `home` is sent as an IOHID AC Home event and waits until the home screen is in front; `lock` presses the power key over IOHID. Each falls back to the XCTest/WebDriverAgent way if it had no effect |
+| `iphone_press_button` | `button`: `home`, `volume_up`, `volume_down`, `lock` | `home` refuses to act while a system alert is on screen (it would have no effect). Under native control (iOS 27+), buttons go through HID (`home` falls back to swiping up from the bottom if needed). Under WDA, `home` is sent as an IOHID AC Home event and waits until the home screen is in front, `lock` presses the power key over IOHID, and each falls back to the XCTest/WebDriverAgent way if it had no effect |
 | `iphone_launch_app` | `app` (bundle id or display name, e.g. `设置`) | Cold-launches the app, or brings it back to where it was if it is already running. Waits until it is in the foreground; returns early and says so if a system alert is blocking it |
 | `iphone_terminate_app` | `app` | Force-quits, like swiping it away in the app switcher; unsaved input is lost. No error if it wasn't running |
 | `iphone_open_url` | `url` | Web pages open in the default browser; URL schemes open their app |
@@ -38,7 +38,7 @@ Only one device is controlled at a time; every other tool acts on it. With one d
 | Tool | Parameters | Notes |
 |---|---|---|
 | `iphone_list_devices` | — | Every iPhone/iPad on USB: name, model, iOS version, UDID; marks the one being controlled and whether it has an auto-unlock passcode |
-| `iphone_select_device` | `device`: UDID, device name, or `auto` | Switches to that device and keeps controlling it, also after a restart. A unique substring of the name works too. `auto` goes back to automatic choice: the controlled device is kept until it disconnects. WDA has to start on the new device (10–60 s). Refused when `IPHONE_UDID` is set |
+| `iphone_select_device` | `device`: UDID, device name, or `auto` | Switches to that device and keeps controlling it, also after a restart. A unique substring of the name works too. `auto` goes back to automatic choice: the controlled device is kept until it disconnects. Ready in seconds under native control (iOS 27+) or when re-attaching a running background WDA; a cold WDA start takes 10–60 s. Refused when `IPHONE_UDID` is set |
 
 ## Developer tools (opt-in)
 
@@ -80,7 +80,7 @@ Every tool carries MCP annotations: the six read-only tools (`iphone_status`, `i
 
 ## Returning the screen after an action: `then`
 
-The input tools under *Acting* and `iphone_batch` accept the following options. `iphone_scroll_collect` returns its own collection and final match. `iphone_select_device` does not: use `iphone_status` after switching to check that WDA is ready.
+The input tools under *Acting* and `iphone_batch` accept the following options. `iphone_scroll_collect` returns its own collection and final match. `iphone_select_device` does not: use `iphone_status` after switching to check that the new device is ready.
 
 | Parameter | Meaning |
 |---|---|

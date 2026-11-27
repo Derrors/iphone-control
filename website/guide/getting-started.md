@@ -15,7 +15,14 @@
 
 ## 1. 安装 {#install}
 
-三种方式任选一种，都以普通用户安装，不要用 root 或 sudo 运行 `iphone-control`。
+三种方式任选一种，均以普通用户安装（不要用 root 或 `sudo` 运行 `iphone-control`）。不知道选哪种时可先看下表：
+
+| 安装方式 | 适用系统 | 后台服务 | `usbmuxd` | 升级方式 |
+|---|---|---|---|---|
+| **一行命令（推荐）** | macOS / Linux（需 Python 3 + OpenSSL 3） | 自动安装 launchd / systemd 用户服务 | Linux 需另装 | `iphone-control update`（支持签名自动补丁 `auto-patch`） |
+| **Homebrew** | macOS / Linux | `brew services` | Linux 需另装 | `iphone-control update`（走 Homebrew tap） |
+| **`.deb` 软件包** | Debian 12+ / Ubuntu 22.04+ | 自带 systemd 用户 unit | **自动安装** | `iphone-control update`（验证签名后走 `apt`） |
+| **从源码编译** | 需 Rust 1.89+（[源码指南](../deploy/source)） | `service install` | Linux 需另装 | `git pull && cargo install` |
 
 **一行命令**（macOS 或 Linux，需在 PATH 中提供 Python 3 和 OpenSSL 3）
 
@@ -23,7 +30,7 @@
 curl -fsSLo iphone-control-install.sh https://github.com/Derrors/iphone-control/releases/latest/download/install.sh && sh iphone-control-install.sh
 ```
 
-程序装到 `~/.local/bin`，守护进程装成用户服务（macOS 用 launchd，Linux 用 systemd），登录后自动启动。运行 `iphone-control update` 检查并升级。只想查看版本可用 `iphone-control update check`。给脚本传入 `--version vX.Y.Z` 可装指定的签名版本，`--prefix DIR` 可装到 `DIR/bin`，`--no-service` 可只装程序。上游 v0.2.0 请按[旧版脚本说明](#legacy-script)操作。
+程序装到 `~/.local/bin`，守护进程装成用户服务（macOS 用 launchd，Linux 用 systemd），登录后自动启动。运行 `iphone-control update` 检查并升级；只想查看版本可用 `iphone-control update check`。给脚本传入 `--version vX.Y.Z` 可装指定的签名版本，`--prefix DIR` 可装到 `DIR/bin`，`--no-service` 可只装程序。
 
 **Homebrew**（macOS、Linux）：
 
@@ -51,23 +58,28 @@ Linux 上装了 ffmpeg，控制台的画面改用 H.264，流量约为原来的 
 
 一行命令和 Homebrew 在 Apple Silicon 和 Intel 的 Mac 上都能用（Intel 的包从 0.2.14 起提供）。参与开发从源码运行，见[从源码编译](../deploy/source)。
 
-### 上游 v0.2.0 脚本安装与迁移 {#legacy-script}
+<a id="legacy-script"></a>
 
-v0.2.0 使用安装包校验和，发行附件中没有签名安装器。要安装该版本，请下载 v0.2.0 标签里的脚本，并指定同一版本的程序。
+::: details 上游 v0.2.0 旧版脚本安装与迁移
+v0.2.0 使用安装包校验和，发行附件中没有签名安装器。要安装该版本，请下载 v0.2.0 标签里的脚本并指定同一版本：
 
 ```sh
 curl -fsSLo iphone-control-v0.2.0-install.sh https://raw.githubusercontent.com/Derrors/iphone-control/v0.2.0/install.sh && sh iphone-control-v0.2.0-install.sh --version v0.2.0
 ```
 
-要迁移已有的 v0.2.0 脚本安装，先确认新发行版已提供 `install.sh`、当前平台的清单及其签名。退出 Viewer 和 MCP 客户端，停止守护进程，再用 v0.2.0 的脚本卸载旧程序和服务。设置和设备数据会保留。
+要迁移已有的 v0.2.0 脚本安装，先退出 Viewer 和 MCP 客户端、停止守护进程，再用 v0.2.0 脚本卸载旧程序和服务（设置和设备数据会保留）：
 
 ```sh
 curl -fsSLo iphone-control-v0.2.0-install.sh https://raw.githubusercontent.com/Derrors/iphone-control/v0.2.0/install.sh && sh iphone-control-v0.2.0-install.sh --uninstall
 ```
 
-然后运行上面的[签名安装器](#install)。如果旧版本装在自定义前缀，卸载和重新安装时都要传入原来的 `--prefix DIR`。
+然后运行上面的[签名安装器](#install)。如旧版本装在自定义前缀，卸载与重装时均传入相同的 `--prefix DIR`。
+:::
 
 ## 2. 接上手机，运行 iphone-control {#first-run}
+
+![首次设置流程：安装程序、接手机配对与开发者模式，按 iOS 版本分流至 iOS 27+ 原生控制或 iOS 17–26 WebDriverAgent，最后注册 MCP 到 AI 客户端](/diagrams/setup-flow-zh-light.svg){.light-only}
+![首次设置流程：安装程序、接手机配对与开发者模式，按 iOS 版本分流至 iOS 27+ 原生控制或 iOS 17–26 WebDriverAgent，最后注册 MCP 到 AI 客户端](/diagrams/setup-flow-zh-dark.svg){.dark-only}
 
 用数据线接上手机并解锁，然后在终端里运行：
 

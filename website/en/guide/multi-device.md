@@ -15,7 +15,7 @@ iphone-control select auto              # back to automatic choice
 Agents use `iphone_list_devices` and `iphone_select_device`, which do the same.
 
 - Only devices connected over USB can be selected. It tries the UDID, then the device name, then a part of the name that matches exactly one device. If it matches several, you get an error and need the UDID.
-- After switching, wait for the device to be ready: seconds with native control (iOS 27 and later), 10–60 seconds with WDA. Check with `status` (or `iphone_status`). A device on iOS 26 or earlier that has never had WDA needs [installing](#install-on-a-new-device) first.
+- After switching, wait for the device to be ready: a few seconds with native control (iOS 27 and later) or when re-attaching to a device whose WDA is still running in the background, and 10–60 seconds for a WDA cold start. Check with `status` (or `iphone_status`). A device on iOS 26 or earlier that has never had WDA needs [installing](#install-on-a-new-device) first.
 - The control page, `iphone-control viewer`, can switch too; see [Switching on the control page](#control-page).
 
 ## Switching on the control page {#control-page}
@@ -82,4 +82,4 @@ A notification's title names the device (the name set on the phone), so the titl
 - **No HID fallback on iOS 26:** actions fail while WDA restarts, the same as on an iPhone.
 - **The screen isn't 430×932:** an iPad mini 5 is 768×1024 in portrait. Go by the screenshot and `iphone_status`.
 
-Verified on: iPad mini 5, iOS 26.6.1 (Linux).
+Verified on: iPad mini 5, iOS 26.6.1 / 26.7.3 (Linux).

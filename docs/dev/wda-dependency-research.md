@@ -1,5 +1,9 @@
 # WDA 依赖调研
 
+> **历史调研记录（2026-11-06 ～ 2026-11-12）**：下文保留当时的实验过程与原始结论。此后两项结论已演进：
+> - **第 1 条「WDA 去不掉」已在 iOS 27+ 上突破**：按 Xcode 方式响应 `remoteAXService` DTX 握手并配合剪贴板粘贴输入后，自 `v0.2.7`（#123）起 iOS 27+ 默认采用**原生控制**（零安装、免 Apple ID），详见 [ios27-native.md](ios27-native.md)；iOS 17–26 仍维持 WDA 路线。
+> - **第 4 条 `ICTL_WDA_DETACHED` 实验开关已转正并移除**：自 `v0.2.8` 起守护进程总在后台启动 WDA，详见 [D18](../decisions.md#d18守护进程总在后台启动-wda去掉-ictl_wda_detached2026-11-15)。
+
 2026-11-06 ～ 2026-11-12。问题：项目依赖的 WebDriverAgent（WDA）是不是必需的，能不能去掉？顺带看了能不能少依赖一点。
 
 真机：iPhone 15 Pro Max（iPhone16,2）iOS 27.0.1；部分对照用了 iPad mini 5（iPad11,1）iPadOS 26.6.1。下面每条结论都只对这两台、这两个系统版本验证过。

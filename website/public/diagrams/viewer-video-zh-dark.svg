@@ -1,0 +1,81 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 540" width="1200" height="540" role="img" aria-label="控制台实时画面自动选择流程：iOS 27 及以上优先直出手机硬件 HEVC（浏览器不支持时经 ffmpeg 转码为 H.264，最多 4 路）；iOS 17–26 在 macOS 上直调 VideoToolbox、在 Linux 上经 ffmpeg 硬件或软件编码为 H.264，无编码器时自动回退 MJPEG">
+  <title>控制台实时画面自动选路与回退</title>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#9198a1"/>
+    </marker>
+    <marker id="arrow-brand" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#22d3ee"/>
+    </marker>
+    <marker id="arrow-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#22c55e"/>
+    </marker>
+    <marker id="arrow-amber" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#d4a72c"/>
+    </marker>
+    <marker id="arrow-red" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#f87171"/>
+    </marker>
+    <marker id="arrow-purple" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#a78bfa"/>
+    </marker>
+    <linearGradient id="screen" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0e7490"/>
+      <stop offset="1" stop-color="#083344"/>
+    </linearGradient>
+    <style>
+      text { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans CJK SC', 'Source Han Sans SC', 'WenQuanYi Zen Hei', Helvetica, Arial, sans-serif; fill: #e6edf3; }
+      .h1 { font-size: 22px; font-weight: 700; }
+      .h2 { font-size: 20px; font-weight: 700; }
+      .h3 { font-size: 16px; font-weight: 700; }
+      .sub { font-size: 13px; fill: #9198a1; }
+      .label { font-size: 13px; fill: #9198a1; font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace; }
+      .frame { font-size: 15px; fill: #9198a1; }
+    </style>
+  </defs>
+  <text x="28" y="38" class="h1">控制台实时画面：自动选路与降级决策</text>
+  <text x="28" y="62" class="sub">默认 IPHONE_CONTROL_VIEWER_CODEC=auto：自动选择画质最好、延迟最低且最省带宽的方案，出错自动向下回退</text>
+  <rect x="24" y="198" width="194" height="108" rx="14" fill="#0b2a33" stroke="#22d3ee" stroke-width="2"/>
+  <text x="121" y="236" text-anchor="middle" style="font-size:15px;font-weight:700;fill:#22d3ee">手机系统与配置</text>
+  <text x="121" y="262" text-anchor="middle" style="font-size:12px;fill:#9198a1">iOS 27+ 且未禁用</text>
+  <text x="121" y="282" text-anchor="middle" style="font-size:12px;fill:#9198a1">手机原生视频？</text>
+  <path d="M218 228 L 268 228 L 268 158 L 306 158" fill="none" stroke="#22d3ee" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-brand)"/>
+  <text x="244" y="148" style="font-size:12px;font-weight:700;fill:#22d3ee">是</text>
+  <path d="M218 276 L 268 276 L 268 358 L 306 358" fill="none" stroke="#9198a1" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)"/>
+  <text x="240" y="382" style="font-size:12px;font-weight:700;fill:#9198a1">否</text>
+  <rect x="308" y="114" width="210" height="88" rx="12" fill="#0b2a33" stroke="#22d3ee" stroke-width="1.5"/>
+  <text x="413" y="148" text-anchor="middle" style="font-size:13px;font-weight:700;fill:#22d3ee">浏览器支持 WebCodecs</text>
+  <text x="413" y="170" text-anchor="middle" style="font-size:13px;font-weight:700;fill:#22d3ee">HEVC 解码？</text>
+  <text x="413" y="190" text-anchor="middle" style="font-size:11px;fill:#9198a1">macOS Chrome / Safari</text>
+  <path d="M518 140 L 598 140" fill="none" stroke="#22c55e" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-green)"/>
+  <text x="558" y="132" text-anchor="middle" style="font-size:11px;font-weight:700;fill:#4ade80">支持</text>
+  <path d="M518 178 L 558 178 L 558 232 L 598 232" fill="none" stroke="#22d3ee" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-brand)"/>
+  <text x="558" y="250" text-anchor="middle" style="font-size:11px;font-weight:700;fill:#22d3ee">不支持</text>
+  <rect x="600" y="92" width="574" height="88" rx="12" fill="#0d261a" stroke="#22c55e" stroke-width="1.5"/>
+  <text x="616" y="120" style="font-size:14px;font-weight:700;fill:#4ade80">方案 1：HEVC iPhone（手机硬件直出）</text>
+  <rect x="1086" y="101" width="74" height="24" rx="12.0" fill="#15803d"/>
+  <text x="1123.0" y="117.32" text-anchor="middle" style="font-size:12px;font-weight:600;fill:#ffffff">最佳体验</text>
+  <text x="616" y="144" style="font-size:12px;fill:#9198a1">• 约 60 fps 原生分辨率，本机零编码 CPU，滚动约 150–600 KB/s</text>
+  <text x="616" y="164" style="font-size:12px;fill:#9198a1">• 弱网模式：与手机重新协商码率上限 6 Mbit/s → 2 Mbit/s（同机所有页面共享）</text>
+  <rect x="600" y="192" width="574" height="86" rx="12" fill="#0b2a33" stroke="#22d3ee" stroke-width="1.5"/>
+  <text x="616" y="220" style="font-size:14px;font-weight:700;fill:#22d3ee">方案 2：HEVC → H.264 实时转码（Firefox / 多数 Linux Chrome）</text>
+  <text x="616" y="244" style="font-size:12px;fill:#9198a1">• 本机 ffmpeg 将手机 HEVC 转为 H.264（同机最多 4 路并发，超限返回 503 自动重试）</text>
+  <text x="616" y="264" style="font-size:12px;fill:#9198a1">• 落后时暂停送帧，追上后请求关键帧重新对齐；弱网模式独立提高 QP 至 26</text>
+  <rect x="308" y="312" width="210" height="92" rx="12" fill="#151b23" stroke="#3d444d" stroke-width="1.5"/>
+  <text x="413" y="344" text-anchor="middle" style="font-size:13px;font-weight:700">WDA 9100 MJPEG</text>
+  <text x="413" y="366" text-anchor="middle" style="font-size:12px;fill:#9198a1">本机有编码器且浏览器</text>
+  <text x="413" y="386" text-anchor="middle" style="font-size:12px;fill:#9198a1">支持 WebCodecs？</text>
+  <path d="M518 338 L 598 338" fill="none" stroke="#22d3ee" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-brand)"/>
+  <text x="558" y="330" text-anchor="middle" style="font-size:11px;font-weight:700;fill:#22d3ee">支持</text>
+  <path d="M518 378 L 558 378 L 558 424 L 598 424" fill="none" stroke="#d4a72c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-amber)"/>
+  <text x="558" y="442" text-anchor="middle" style="font-size:11px;font-weight:700;fill:#f0c869">不支持</text>
+  <rect x="600" y="290" width="574" height="88" rx="12" fill="#151b23" stroke="#3d444d" stroke-width="1.5"/>
+  <text x="616" y="318" style="font-size:14px;font-weight:700;fill:#e6edf3">方案 3：本机编码 H.264（macOS VideoToolbox 免 ffmpeg / Linux ffmpeg）</text>
+  <text x="616" y="342" style="font-size:12px;fill:#9198a1">• 流量约为 MJPEG 的 1/15（静止近零，滚动 300–450 KB/s）；多页共享 1 路 WDA 上游防过载</text>
+  <text x="616" y="362" style="font-size:12px;fill:#9198a1">• Linux 探测顺序：NVENC → VAAPI → QSV → V4L2 → x264；弱网模式单页 QP 20→26</text>
+  <rect x="600" y="390" width="574" height="72" rx="12" fill="#2b2111" stroke="#d4a72c" stroke-width="1.5"/>
+  <text x="616" y="416" style="font-size:14px;font-weight:700;fill:#f0c869">方案 4：MJPEG 兜底（/stream · 无 ffmpeg 或旧浏览器）</text>
+  <text x="616" y="440" style="font-size:12px;fill:#9198a1">• 仍自动丢弃静止重复帧、慢链只发最新一帧；滚动带宽约 4–10 MB/s（建议 Linux 安装 ffmpeg）</text>
+  <rect x="24" y="478" width="1150" height="44" rx="10" fill="#151b23" stroke="#3d444d" stroke-width="1.2"/>
+  <text x="599" y="505" text-anchor="middle" style="font-size:12px;font-weight:600;fill:#9198a1">全链路共用 100 ms 端到端流量反馈（POST /api/video/ack）：慢网下自动降帧保实时，不会越看越滞后 · 画面下方实时显示当前编码与码率</text>
+</svg>

@@ -29,6 +29,9 @@ Older versions kept a single passcode (`secrets/passcode`) without knowing which
 
 ## Safeguards
 
+![Auto-unlock safety guardrail flow: check UNLOCK-DISABLED and BFU first, load per-UDID passcode, write global UNLOCK-DISABLED before digit 2, verify every digit, and lock out permanently on failure or crash](/diagrams/auto-unlock-en-light.svg){.light-only}
+![Auto-unlock safety guardrail flow: check UNLOCK-DISABLED and BFU first, load per-UDID passcode, write global UNLOCK-DISABLED before digit 2, verify every digit, and lock out permanently on failure or crash](/diagrams/auto-unlock-en-dark.svg){.dark-only}
+
 - After every digit it checks how many digits the passcode field shows and stops at once if they don't match (an incomplete entry is not a wrong attempt); only a first digit that didn't register is retried, up to 3 rounds.
 - If the phone is still locked after the full passcode, auto-unlock is **disabled immediately** and you are notified. It never tries a second time, so it can't pile up wrong attempts and trigger data erasure.
 - From the second digit on, a stop marker is written first (`logs/UNLOCK-DISABLED` in the data directory) and removed only once the phone is confirmed unlocked or the entry is confirmed incomplete. So an error during entry, or the process being killed, also leaves auto-unlock disabled.

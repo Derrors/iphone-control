@@ -31,7 +31,7 @@ Messages are in Simplified Chinese by default, and in English with `IPHONE_CONTR
 - **The daemon isn't running:** check with `iphone-control service status` and start it with `iphone-control service start`. Running `iphone-control` also starts the service when it isn't running.
 - **Another tool holds the phone:** go-ios, pymobiledevice3 and similar tools conflict.
 - **Cable:** some cables only charge. If `lsusb` shows no Apple device (`05ac`), try another cable or port.
-- **After re-plugging:** it recovers within about a minute.
+- **After re-plugging:** USB hotplug wakes supervision immediately via `usbmuxd Listen`; native control (iOS 27+) and re-attaching a running background WDA usually recover in a few seconds, while a WDA cold start takes 10–60 seconds.
 - **Drops about once a minute while charging:** with *Settings → Battery → Charging → 80% Limit* on, the phone keeps starting and stopping charging near 80%, and each switch renegotiates USB-C power, which drops USB for 3–5 seconds. Set the limit to 100% on a phone used for automation.
 - **On a Mac:** usbmuxd is part of macOS; if `doctor` can't reach it, run `sudo launchctl kickstart -k system/com.apple.usbmuxd`. See [macOS](../deploy/macos).
 
@@ -60,7 +60,7 @@ For devices on WDA only: iOS 26 and earlier, or with `ICTL_IOS_BACKEND=wda`.
 ## Login
 
 - **Can't type the code:** `login`, `setup` and the first run of `iphone-control` are interactive; run them in a terminal, not from a script or a pipe.
-- **Anisette errors:** the default public anisette server may be down; retry later or run your own and set `ICTL_ANISETTE_URL`.
+- **Anisette errors:** when the default public anisette server has a transient hiccup or timeout, the daemon backs off and retries automatically (up to 3 attempts), and the daily session check re-checks in 1 hour rather than raising a false "session expired" alert. If it stays unreachable, retry later or run your own and set `ICTL_ANISETTE_URL`.
 
 ## AI clients
 
@@ -102,6 +102,14 @@ If it still happens on a newer version, look on the phone under Settings → Pri
 ## "Paired computer" icon stays and the phone won't auto-lock
 
 The HID fallback, taps, swipes and buttons under native control on iOS 27 and later (they go through HID too), and the control page while it shows the phone's own video (iOS 27 and later) open a screen mirroring session; it closes 30 seconds after it was last used (after the page closes). If the icon doesn't go away, restart the daemon (`iphone-control service restart`).
+
+## Received an unexpected daemon restart alert (`daemon`)
+
+The daemon records a running marker in `run-state.json` and clears it on a normal exit, `service restart`, or upgrade. If the process crashes, is killed with `SIGKILL`, or exits via the watchdog after a device call hangs for 10 minutes, the next instance restarted by launchd or systemd records the incident and sends a `daemon` alert (with a 30-minute cooldown to prevent floods in a crash loop). Inspect `iphone-control status`, `~/.local/share/iphone-control/logs/daemon.log`, and the service log (`journalctl --user -u iphone-control` on Linux, `~/Library/Logs/iphone-control/daemon.log` on macOS).
+
+## `doctor` warns about removed settings
+
+If `~/.config/iphone-control/env` or the environment still has a non-empty value for a setting removed in an earlier release (such as retired experiment flags or deprecated variables), daemon startup logs and `iphone-control doctor` print a gentle `⚠️` warning without failing or affecting operation. Remove the obsolete line from `~/.config/iphone-control/env` and run `iphone-control service restart` to clear the warning.
 
 ## Reporting a problem
 

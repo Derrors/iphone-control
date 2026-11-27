@@ -29,6 +29,9 @@ iphone-control passcode clear --all     # 所有设备
 
 ## 保护规则
 
+![自动解锁安全保护流程：前置检查 UNLOCK-DISABLED 与 BFU、按 UDID 读独立密码、第 2 位前落盘全局停用标记、逐位核对并在失败或崩溃时永久停用](/diagrams/auto-unlock-zh-light.svg){.light-only}
+![自动解锁安全保护流程：前置检查 UNLOCK-DISABLED 与 BFU、按 UDID 读独立密码、第 2 位前落盘全局停用标记、逐位核对并在失败或崩溃时永久停用](/diagrams/auto-unlock-zh-dark.svg){.dark-only}
+
 - 每按一位都核对密码栏的位数，对不上立即停止（没输完不算输错）；只有第一位没生效时会重来，最多 3 轮。
 - 整串输完手机仍然锁着，就**立即停用**自动解锁并推送通知，不会第二次再试，因此不会累计输错触发抹掉数据。
 - 从第 2 位起先写停用标记（数据目录的 `logs/UNLOCK-DISABLED`），确认解开或确认没输满才撤掉。所以输入中途出错、进程被杀，也会保持停用。

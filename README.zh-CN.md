@@ -59,8 +59,8 @@ iphone-control 在 Linux 或 macOS 上用**一个 Rust 二进制**把这些事�
 
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="website/public/architecture-dark.svg">
-    <img src="website/public/architecture-light.svg" alt="架构：AI 客户端经 stdio 调用 iphone-control mcp，可选的控制台经 HTTPS 服务浏览器和远程 agent，两者都经 Unix socket 交给守护进程。守护进程是核心：经 USB 操作 iPhone 或 iPad，iOS 27 起用原生控制，iOS 17–26 用 WebDriverAgent，控制台关着也照常运行" width="900">
+    <source media="(prefers-color-scheme: dark)" srcset="website/public/architecture-zh-dark.svg">
+    <img src="website/public/architecture-zh-light.svg" alt="架构：AI 客户端经 stdio 调用 iphone-control mcp，可选的控制台经 HTTPS 服务浏览器和远程 agent，两者都经 Unix socket 交给守护进程。守护进程是核心：经 USB 操作 iPhone 或 iPad，iOS 27 起用原生控制，iOS 17–26 用 WebDriverAgent，控制台关着也照常运行" width="900">
   </picture>
 </p>
 
@@ -79,7 +79,7 @@ iphone-control 在 Linux 或 macOS 上用**一个 Rust 二进制**把这些事�
 - **人工把关**：AI 任务可以随时暂停、接管、停止；付款、删除、发消息之前要你确认，Agent 不能批准自己的任务
 - **多台设备**：接多台 iPhone / iPad，随时切换控制哪一台
 - **可选的自动解锁**：每输一位都核对，密码错了只试一次就停用
-- **告警通知**：手机离线、重启后需要输密码、重签失败时，经 Telegram 或 Bark 推送
+- **告警通知**：手机离线、重启后需要输密码、重签失败、守护进程异常重启时，经 Telegram 或 Bark 推送
 - **诊断**：`doctor` 从 USB 起逐层检查，每项失败都告诉你怎么修
 
 **接入**

@@ -2,6 +2,9 @@
 
 `iphone-control viewer` is the control page in a browser: watch the live picture, tap, swipe and type on it, see the device panel, hand tasks to a local Claude Code or Codex, and pause, take over or confirm each step. This page covers opening it, using it from the local network and other machines, and how other agent platforms connect. Every command and option is listed in [CLI](./cli).
 
+![Viewer, LAN HTTPS, and remote task topology: four roles connect with operate, read-only, Bearer, and task tokens, all enforced by the daemon](/diagrams/remote-topology-en-light.svg){.light-only}
+![Viewer, LAN HTTPS, and remote task topology: four roles connect with operate, read-only, Bearer, and task tokens, all enforced by the daemon](/diagrams/remote-topology-en-dark.svg){.dark-only}
+
 ## Opening the viewer
 
 ```bash
@@ -33,6 +36,14 @@ iphone-control viewer token remove living-room-tv            # browsers that use
 - The task log records which token controlled a task, e.g. `viewer:alex`.
 - Adding, replacing and removing tokens **takes effect at once**, without restarting the viewer; a browser that used a removed or replaced token is back at the login page on its next request, and the picture, task events, `/mcp` streams and task leases opened with it end within 5 s.
 - The last token that may operate can't be removed; replace it with `show <name> --new`.
+
+### Credential permissions at a glance
+
+| Credential | Watch picture / status / task events | Tap / type / switch device | Open, pause or approve tasks | Access `/mcp` | Trigger auto-unlock |
+|---|---|---|---|---|---|
+| **Operating token** (`owner` / named) | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **Read-only token** (`--read-only`) | ✅ | ❌ (403) | ❌ (403) | ❌ (403) | ❌ |
+| **Task token** (`Iphone-Control-Task-Token`) | ❌ | Only via `/mcp` for its task | ❌ (`/tasks/finish` only) | ✅ (scoped to task) | ✅ (for its task actions) |
 
 ## The local network and HTTPS
 

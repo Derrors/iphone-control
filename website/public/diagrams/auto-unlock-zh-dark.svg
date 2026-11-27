@@ -1,0 +1,76 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 440" width="1200" height="440" role="img" aria-label="自动解锁安全保护流程：先检查全局停用标记和重启后首次解锁 BFU，按 UDID 读取对应设备密码，在输入第 2 位密码前先写入全局停用标记 UNLOCK-DISABLED，逐位点击并核对密码栏位数，确认解开后撤掉标记，失败或中断则永久停用并推送通知">
+  <title>自动解锁安全保护流程</title>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#9198a1"/>
+    </marker>
+    <marker id="arrow-brand" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#22d3ee"/>
+    </marker>
+    <marker id="arrow-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#22c55e"/>
+    </marker>
+    <marker id="arrow-amber" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#d4a72c"/>
+    </marker>
+    <marker id="arrow-red" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#f87171"/>
+    </marker>
+    <marker id="arrow-purple" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#a78bfa"/>
+    </marker>
+    <linearGradient id="screen" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0e7490"/>
+      <stop offset="1" stop-color="#083344"/>
+    </linearGradient>
+    <style>
+      text { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans CJK SC', 'Source Han Sans SC', 'WenQuanYi Zen Hei', Helvetica, Arial, sans-serif; fill: #e6edf3; }
+      .h1 { font-size: 22px; font-weight: 700; }
+      .h2 { font-size: 20px; font-weight: 700; }
+      .h3 { font-size: 16px; font-weight: 700; }
+      .sub { font-size: 13px; fill: #9198a1; }
+      .label { font-size: 13px; fill: #9198a1; font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace; }
+      .frame { font-size: 15px; fill: #9198a1; }
+    </style>
+  </defs>
+  <text x="28" y="38" class="h1">自动解锁安全护栏：宁可停用，绝不累计输错</text>
+  <text x="28" y="62" class="sub">默认关闭；原生控制与 WDA 共用 ictl-unlock 同一套保护逻辑，杜绝因密码错误或中途崩溃触发 iOS 抹掉数据</text>
+  <rect x="24" y="92" width="252" height="152" rx="12" fill="#151b23" stroke="#3d444d" stroke-width="1.5"/>
+  <text x="38" y="120" style="font-size:14px;font-weight:700;fill:#e6edf3">1. 前置安全门禁</text>
+  <text x="38" y="148" style="font-size:12px;fill:#9198a1">• 检查 logs/UNLOCK-DISABLED</text>
+  <text x="38" y="169" style="font-size:12px;fill:#9198a1">• 检查重启首次解锁（BFU）</text>
+  <text x="38" y="190" style="font-size:12px;fill:#9198a1">• 按 UDID 读独立密码文件</text>
+  <text x="38" y="211" style="font-size:12px;fill:#9198a1">  （绝不跨设备混用）</text>
+  <line x1="276" y1="168" x2="304" y2="168" stroke="#22d3ee" stroke-width="2" marker-end="url(#arrow-brand)"/>
+  <rect x="306" y="92" width="268" height="152" rx="12" fill="#0b2a33" stroke="#22d3ee" stroke-width="1.5"/>
+  <text x="320" y="120" style="font-size:14px;font-weight:700;fill:#22d3ee">2. 唤醒并输入第 1 位</text>
+  <text x="320" y="148" style="font-size:12px;fill:#9198a1">• 原生先关 HID 使锁屏元素可见</text>
+  <text x="320" y="169" style="font-size:12px;fill:#9198a1">• Touch ID 机先点「使用密码」</text>
+  <text x="320" y="190" style="font-size:12px;fill:#9198a1">• 输入第 1 位并核对位数 = 1</text>
+  <text x="320" y="211" style="font-size:12px;fill:#9198a1">• 仅第 1 位未生效可重试 ≤3 轮</text>
+  <line x1="574" y1="168" x2="602" y2="168" stroke="#22d3ee" stroke-width="2" marker-end="url(#arrow-brand)"/>
+  <rect x="604" y="92" width="278" height="152" rx="12" fill="#2b2111" stroke="#d4a72c" stroke-width="1.5"/>
+  <text x="618" y="120" style="font-size:14px;font-weight:700;fill:#f0c869">3. 写停用标记 → 逐位核对</text>
+  <text x="618" y="148" style="font-size:12px;fill:#9198a1">★ 第 2 位前先落盘 UNLOCK-DISABLED</text>
+  <text x="618" y="169" style="font-size:12px;fill:#9198a1">• 中途崩溃/被杀也自动保持停用</text>
+  <text x="618" y="190" style="font-size:12px;fill:#9198a1">• 每按一位核对密码栏位数</text>
+  <text x="618" y="211" style="font-size:12px;fill:#9198a1">• 位数不对立刻停止（不算输错）</text>
+  <line x1="882" y1="168" x2="910" y2="168" stroke="#22d3ee" stroke-width="2" marker-end="url(#arrow-brand)"/>
+  <rect x="912" y="92" width="264" height="152" rx="12" fill="#0d261a" stroke="#22c55e" stroke-width="1.5"/>
+  <text x="926" y="120" style="font-size:14px;font-weight:700;fill:#4ade80">4. 核对解锁结果</text>
+  <text x="926" y="148" style="font-size:12px;fill:#9198a1">• 确认锁屏已解除：</text>
+  <text x="926" y="169" style="font-size:12px;fill:#9198a1">  ✓ 撤销 UNLOCK-DISABLED 标记</text>
+  <text x="926" y="190" style="font-size:12px;fill:#9198a1">  ✓ 原生等 0.7s 动画走完</text>
+  <text x="926" y="211" style="font-size:12px;fill:#9198a1">  ✓ 继续执行原 MCP 操作</text>
+  <line x1="150" y1="244" x2="150" y2="294" stroke="#f87171" stroke-width="2" marker-end="url(#arrow-red)"/>
+  <text x="160" y="275" style="font-size:11px;font-weight:600;fill:#fca5a5">已有标记 / BFU</text>
+  <line x1="743" y1="244" x2="743" y2="294" stroke="#f87171" stroke-width="2" marker-end="url(#arrow-red)"/>
+  <text x="754" y="275" style="font-size:11px;font-weight:600;fill:#fca5a5">中途出错 / 进程被杀</text>
+  <line x1="1044" y1="244" x2="1044" y2="294" stroke="#f87171" stroke-width="2" marker-end="url(#arrow-red)"/>
+  <text x="1054" y="275" style="font-size:11px;font-weight:600;fill:#fca5a5">输完仍锁屏</text>
+  <rect x="24" y="298" width="1152" height="118" rx="14" fill="#2d1216" stroke="#f87171" stroke-width="2"/>
+  <text x="44" y="328" style="font-size:15px;font-weight:700;fill:#fca5a5">触发安全停用（全局生效，所有设备停止自动解锁）</text>
+  <text x="44" y="356" style="font-size:13px;fill:#e6edf3">• 保留 logs/UNLOCK-DISABLED 并立刻推送 Bark / Telegram 通知；绝不再次尝试可能错误的密码（只试 1 次）</text>
+  <text x="44" y="382" style="font-size:13px;fill:#9198a1">• 恢复步骤：先人工解锁手机 → 若改过密码先运行 iphone-control passcode set → 确认无误后显式运行 iphone-control unlock-reset</text>
+  <text x="44" y="405" style="font-size:11px;fill:#9198a1">注意：待机显示（横放充电）界面调不出密码键盘，开启自动解锁时请关闭手机「设置 → 待机显示」。</text>
+</svg>

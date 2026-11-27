@@ -4,105 +4,97 @@
     <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
       <path d="M0 0 L10 5 L0 10 Z" fill="#59636e"/>
     </marker>
+    <marker id="arrow-brand" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#0891b2"/>
+    </marker>
+    <marker id="arrow-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#16a34a"/>
+    </marker>
+    <marker id="arrow-amber" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#d4a72c"/>
+    </marker>
+    <marker id="arrow-red" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#dc2626"/>
+    </marker>
+    <marker id="arrow-purple" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#7c3aed"/>
+    </marker>
     <linearGradient id="screen" x1="0" y1="0" x2="0" y2="1">
       <stop offset="0" stop-color="#0e7490"/>
       <stop offset="1" stop-color="#164e63"/>
     </linearGradient>
     <style>
-      text { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif; fill: #1f2328; }
-      .h2 { font-size: 24px; font-weight: 700; }
-      .h3 { font-size: 19px; font-weight: 600; }
-      .sub { font-size: 15px; fill: #59636e; }
-      .label { font-size: 15px; fill: #59636e; font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace; }
-      .pill { font-size: 14px; font-weight: 600; }
-      .frame { font-size: 16px; fill: #59636e; }
+      text { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans CJK SC', 'Source Han Sans SC', 'WenQuanYi Zen Hei', Helvetica, Arial, sans-serif; fill: #1f2328; }
+      .h1 { font-size: 22px; font-weight: 700; }
+      .h2 { font-size: 20px; font-weight: 700; }
+      .h3 { font-size: 16px; font-weight: 700; }
+      .sub { font-size: 13px; fill: #59636e; }
+      .label { font-size: 13px; fill: #59636e; font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace; }
+      .frame { font-size: 15px; fill: #59636e; }
     </style>
   </defs>
-
-  <!-- host -->
   <rect x="16" y="16" width="900" height="628" rx="24" fill="none" stroke="#d0d7de" stroke-width="2" stroke-dasharray="8 6"/>
   <text x="44" y="54" class="frame"><tspan style="font-weight:700;fill:#1f2328">Linux or macOS host</tspan>  ·  launchd, systemd user service or a terminal</text>
-
-  <!-- access: AI client -->
   <rect x="48" y="88" width="260" height="112" rx="16" fill="#f6f8fa" stroke="#d0d7de" stroke-width="1.5"/>
-  <text x="72" y="130" class="h3">AI client</text>
-  <text x="72" y="160" class="sub">Claude Code · Codex ·</text>
-  <text x="72" y="182" class="sub">any MCP client</text>
-
+  <text x="72" y="130" style="font-size:19px;font-weight:700;fill:#1f2328">AI client</text>
+  <text x="72" y="160" style="font-size:15px;fill:#59636e">Claude Code · Codex ·</text>
+  <text x="72" y="182" style="font-size:15px;fill:#59636e">any MCP client</text>
   <line x1="178" y1="202" x2="178" y2="258" stroke="#59636e" stroke-width="2" marker-end="url(#arrow)"/>
-  <text x="194" y="236" class="label">MCP · stdio</text>
-
-  <!-- access: MCP server -->
+  <text x="194" y="236" class="label" style="font-size:14px">MCP · stdio</text>
   <rect x="48" y="262" width="260" height="112" rx="16" fill="#f6f8fa" stroke="#d0d7de" stroke-width="1.5"/>
-  <text x="72" y="304" class="h3">iphone-control mcp</text>
-  <text x="72" y="334" class="sub">one per agent session,</text>
-  <text x="72" y="356" class="sub">a thin client</text>
-
+  <text x="72" y="304" style="font-size:18px;font-weight:700;fill:#1f2328">iphone-control mcp</text>
+  <text x="72" y="334" style="font-size:15px;fill:#59636e">one per agent session,</text>
+  <text x="72" y="356" style="font-size:15px;fill:#59636e">a thin client</text>
   <line x1="310" y1="318" x2="388" y2="318" stroke="#59636e" stroke-width="2" marker-end="url(#arrow)"/>
-  <text x="349" y="302" class="label" text-anchor="middle">Unix</text>
-  <text x="349" y="344" class="label" text-anchor="middle">socket</text>
-
-  <!-- optional control page -->
+  <text x="349" y="302" class="label" text-anchor="middle" style="font-size:14px">Unix</text>
+  <text x="349" y="344" class="label" text-anchor="middle" style="font-size:14px">socket</text>
   <rect x="48" y="420" width="260" height="156" rx="16" fill="#f6f8fa" stroke="#d0d7de" stroke-width="1.5" stroke-dasharray="6 5"/>
-  <text x="72" y="462" class="h3">Control page</text>
-  <rect x="210" y="442" width="82" height="28" rx="14" fill="#d0d7de"/>
-  <text x="251" y="461" class="pill" text-anchor="middle">optional</text>
-  <text x="72" y="492" class="label">iphone-control viewer</text>
-  <text x="72" y="522" class="sub">live picture · AI tasks</text>
-  <text x="72" y="546" class="sub">HTTP MCP at /mcp</text>
-
+  <text x="72" y="462" style="font-size:19px;font-weight:700">Control page</text>
+  <rect x="210" y="442" width="82" height="26" rx="13.0" fill="#d0d7de"/>
+  <text x="251.0" y="459.68" text-anchor="middle" style="font-size:13px;font-weight:600;fill:#1f2328">optional</text>
+  <text x="72" y="492" class="label" style="font-size:14px">iphone-control viewer</text>
+  <text x="72" y="522" style="font-size:14px;fill:#59636e">live picture · AI tasks</text>
+  <text x="72" y="546" style="font-size:14px;fill:#59636e">HTTP MCP at /mcp</text>
   <line x1="310" y1="498" x2="388" y2="498" stroke="#59636e" stroke-width="2" marker-end="url(#arrow)"/>
-  <text x="349" y="482" class="label" text-anchor="middle">Unix</text>
-  <text x="349" y="524" class="label" text-anchor="middle">socket</text>
-
+  <text x="349" y="482" class="label" text-anchor="middle" style="font-size:14px">Unix</text>
+  <text x="349" y="524" class="label" text-anchor="middle" style="font-size:14px">socket</text>
   <line x1="178" y1="632" x2="178" y2="580" stroke="#59636e" stroke-width="2" stroke-dasharray="6 5" marker-end="url(#arrow)"/>
-  <text x="194" y="616" class="sub">browsers, remote agents · HTTPS, login</text>
-
-  <!-- daemon: the core -->
+  <text x="194" y="616" style="font-size:14px;fill:#59636e">browsers, remote agents · HTTPS, login</text>
   <rect x="392" y="88" width="496" height="512" rx="20" fill="#ecfeff" stroke="#0891b2" stroke-width="2"/>
-  <text x="420" y="130" class="h2" style="fill:#0e7490">iphone-control daemon</text>
-  <text x="420" y="160" class="sub">the core: owns the phone, runs with the page closed</text>
-
+  <text x="420" y="130" style="font-size:24px;font-weight:700;fill:#0e7490">iphone-control daemon</text>
+  <text x="420" y="160" style="font-size:15px;fill:#59636e">the core: owns the phone, runs with the page closed</text>
   <rect x="420" y="186" width="440" height="116" rx="14" fill="#ffffff" stroke="#a5f3fc" stroke-width="1.5"/>
-  <text x="444" y="228" class="h3">Native control</text>
-  <rect x="704" y="208" width="136" height="30" rx="15" fill="#0e7490"/>
-  <text x="772" y="229" class="pill" style="fill:#ffffff" text-anchor="middle">iOS 27+ · default</text>
-  <text x="444" y="260" class="sub">accessibility service · HID · CoreDevice</text>
-  <text x="444" y="284" class="sub">nothing installed, no Apple ID</text>
-
+  <text x="444" y="226" style="font-size:18px;font-weight:700;fill:#1f2328">Native control</text>
+  <rect x="710" y="207" width="136" height="24" rx="12.0" fill="#0e7490"/>
+  <text x="778.0" y="223.32" text-anchor="middle" style="font-size:12px;font-weight:600;fill:#ffffff">iOS 27+ · default</text>
+  <text x="444" y="258" style="font-size:14px;fill:#59636e">accessibility service · HID · CoreDevice</text>
+  <text x="444" y="282" style="font-size:14px;fill:#59636e">nothing installed, no Apple ID</text>
   <rect x="420" y="322" width="440" height="116" rx="14" fill="#ffffff" stroke="#a5f3fc" stroke-width="1.5"/>
-  <text x="444" y="364" class="h3">WebDriverAgent</text>
-  <rect x="740" y="344" width="100" height="30" rx="15" fill="#d0d7de"/>
-  <text x="790" y="365" class="pill" text-anchor="middle">iOS 17–26</text>
-  <text x="444" y="396" class="sub">runs on the phone, signed with a free Apple ID</text>
-  <text x="444" y="420" class="sub">re-signed before the 7-day profile expires</text>
-
+  <text x="444" y="362" style="font-size:18px;font-weight:700;fill:#1f2328">WebDriverAgent</text>
+  <rect x="748" y="343" width="98" height="24" rx="12.0" fill="#d0d7de"/>
+  <text x="797.0" y="359.32" text-anchor="middle" style="font-size:12px;font-weight:600;fill:#1f2328">iOS 17–26</text>
+  <text x="444" y="394" style="font-size:14px;fill:#59636e">runs on the phone, signed with a free Apple ID</text>
+  <text x="444" y="418" style="font-size:14px;fill:#59636e">re-signed before the 7-day profile expires</text>
   <rect x="420" y="458" width="440" height="116" rx="14" fill="#ffffff" stroke="#a5f3fc" stroke-width="1.5"/>
-  <text x="444" y="500" class="h3">Tasks and supervisor</text>
-  <text x="444" y="532" class="sub">pause · take over · confirm before risky steps</text>
-  <text x="444" y="556" class="sub">reconnect · disk image · unlock · notify</text>
-
-  <!-- USB -->
+  <text x="444" y="498" style="font-size:18px;font-weight:700;fill:#1f2328">Tasks and supervisor</text>
+  <text x="444" y="530" style="font-size:14px;fill:#59636e">pause · take over · confirm before risky steps</text>
+  <text x="444" y="554" style="font-size:14px;fill:#59636e">hotplug wake · disk image · unlock · notify</text>
   <line x1="890" y1="300" x2="984" y2="300" stroke="#59636e" stroke-width="2.5" marker-start="url(#arrow)" marker-end="url(#arrow)"/>
-  <text x="937" y="286" class="label" text-anchor="middle">USB</text>
-  <text x="937" y="326" class="label" text-anchor="middle">usbmuxd</text>
-
-  <!-- phone -->
+  <text x="937" y="284" class="label" text-anchor="middle" style="font-size:14px">USB</text>
+  <text x="937" y="324" class="label" text-anchor="middle" style="font-size:14px">usbmuxd</text>
   <rect x="990" y="88" width="180" height="360" rx="36" fill="#1f2328"/>
   <rect x="1002" y="100" width="156" height="336" rx="26" fill="url(#screen)"/>
   <rect x="1050" y="112" width="60" height="16" rx="8" fill="#0b1220"/>
-  <text x="1080" y="206" text-anchor="middle" style="fill:#ffffff;font-size:20px;font-weight:700">iPhone / iPad</text>
-  <text x="1080" y="232" text-anchor="middle" style="fill:#ffffff;font-size:15px;opacity:.8">iOS 17+</text>
-  <rect x="1012" y="268" width="136" height="64" rx="12" fill="#ffffff" fill-opacity="0.14"/>
-  <text x="1080" y="296" text-anchor="middle" style="fill:#ffffff;font-size:15px;font-weight:600">iOS 27+</text>
-  <text x="1080" y="318" text-anchor="middle" style="fill:#ffffff;font-size:15px;font-weight:600">nothing to install</text>
-  <text x="1080" y="394" text-anchor="middle" style="fill:#ffffff;font-size:13px;opacity:.8">iOS 17–26:</text>
-  <text x="1080" y="412" text-anchor="middle" style="fill:#ffffff;font-size:13px;opacity:.8">WebDriverAgent</text>
-
-  <!-- outbound internet -->
-  <path d="M862 516 C 904 516, 920 546, 944 546" fill="none" stroke="#59636e" stroke-width="2" stroke-dasharray="6 5" marker-end="url(#arrow)"/>
-  <rect x="948" y="496" width="236" height="100" rx="16" fill="#fff8e6" stroke="#d4a72c" stroke-width="1.5"/>
-  <text x="970" y="530" class="h3" style="font-size:17px">Outbound HTTPS</text>
-  <text x="970" y="556" class="sub">Apple ID (WDA only)</text>
-  <text x="970" y="578" class="sub">Bark · Telegram</text>
+  <text x="1080" y="206" text-anchor="middle" style="font-size:20px;font-weight:700;fill:#ffffff">iPhone / iPad</text>
+  <text x="1080" y="232" text-anchor="middle" style="font-size:15px;fill:#d5f3fb">iOS 17+</text>
+  <rect x="1012" y="268" width="136" height="64" rx="12" fill="#ffffff" fill-opacity="0.15"/>
+  <text x="1080" y="296" text-anchor="middle" style="font-size:15px;font-weight:600;fill:#ffffff">iOS 27+</text>
+  <text x="1080" y="318" text-anchor="middle" style="font-size:14px;font-weight:600;fill:#ffffff">nothing to install</text>
+  <text x="1080" y="392" text-anchor="middle" style="font-size:13px;fill:#c4ecf7">iOS 17–26:</text>
+  <text x="1080" y="412" text-anchor="middle" style="font-size:13px;fill:#c4ecf7">WebDriverAgent</text>
+  <path d="M862 516 C 904 516, 920 546, 944 546" fill="none" stroke="#59636e" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="6 5" marker-end="url(#arrow)"/>
+  <rect x="948" y="496" width="236" height="104" rx="16" fill="#fff8e6" stroke="#d4a72c" stroke-width="1.5"/>
+  <text x="968" y="530" style="font-size:16px;font-weight:700;fill:#1f2328">Outbound HTTPS</text>
+  <text x="968" y="558" style="font-size:14px;fill:#59636e">Apple ID (WDA) · DDI</text>
+  <text x="968" y="580" style="font-size:14px;fill:#59636e">Bark · Telegram alerts</text>
 </svg>

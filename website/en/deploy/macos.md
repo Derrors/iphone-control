@@ -143,5 +143,7 @@ If WDA was used, delete the WebDriverAgent app on the phone; its profile under *
 | Data directory | `~/.local/share/iphone-control` | Same (not the usual `~/Library/Application Support`) |
 | Control socket | `$XDG_RUNTIME_DIR/iphone-control/ctl.sock` | `~/.local/share/iphone-control/ctl.sock` |
 | Pairing records | `/var/lib/lockdown` | `/var/db/lockdown` (shared with Finder) |
+| Control page H.264 video | Requires `ffmpeg` (GPU encoding preferred) | Calls VideoToolbox directly, **no ffmpeg needed** (ffmpeg only needed for HEVC-to-H.264 transcoding) |
+| Local HTTP anti-self-control | Identifies caller process via `/proc` | Identifies caller process via `libproc` |
 
 Not yet verified on a Mac: whether Xcode's *Devices and Simulators* window competes for the connection, pairing a phone with the Mac for the first time, iPads, several devices, and a real Intel Mac (the Intel package was only tested under Rosetta). [Reports](https://github.com/Derrors/iphone-control/issues) are welcome.

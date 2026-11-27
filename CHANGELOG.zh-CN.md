@@ -10,6 +10,10 @@
 
 - `~/.config/iphone-control/env` 或守护进程环境中仍留有非空的已移除配置项（如 `ICTL_WDA_DETACHED`、`ICTL_MANAGE_USBMUXD`、`ICTL_USBMUXD_BIN`、`ICTL_AGENT_GATE`、`ICTL_AGENT_TOKEN`）时，守护进程启动日志与 `iphone-control doctor` 现在会给出温和提示（不计入失败项），不再完全静默忽略（#223）。
 
+### 修复
+
+- 公网 Anisette 节点或苹果开发者接口偶发抖动、超时或返回异常响应时，不再在 `omnisette` 内 `panic` 或立刻误报「Apple ID 会话已失效」通知：Anisette HTTP 请求现已设置明确超时，恢复会话与登录拉取 Anisette 遇到瞬断时自动短退避重试最多 3 次（2s → 5s），守护进程例行会话检查遇到瞬断或超时时仅记日志并在 1 小时后重试，不再误发 `Event::SessionExpired`（#224）。
+
 ## [0.3.0] - 2026-11-26
 
 全面架构、安全、稳定性与性能升级：控制台切换 hyper、iOS 27 无障碍树直读、usbmuxd 实时 USB 热插拔、异常重启告警以及数十项可靠性与性能修复。

@@ -11,7 +11,7 @@ CI 已经确认项目在 macOS（Apple Silicon）上能编译、链接，单元�
 | 1 | 系统自带的 `usbmuxd`、首次引导与 launchd 服务是否正常 | 装好 launchd 服务后 `iphone-control` / `setup` 顺利走完（iOS 27+ 自动跳过 Apple ID/WDA，iOS 26 及以下完成签名安装），`status` 就绪、`doctor` 全绿 |
 | 2 | iOS 27+ 原生控制（免 WDA）与 iOS 26 及以下 WDA 路径是否均正常 | 隧道、开发者镜像、截图、无障碍读树、HID 点击/输入/粘贴均正常；WDA 路径（如有 iOS 26 及以下设备或设 `ICTL_IOS_BACKEND=wda`）正常启动并响应 |
 | 3 | MCP 回归脚本与多设备切换是否正常 | `tests/device/run.py` 全部通过；多台设备下 `devices` / `select`、`iphone_list_devices` / `iphone_select_device` 及按设备存锁屏密码均正常 |
-| 4 | 控制台（`viewer`）、VideoToolbox / HEVC 画面与 `libproc` 进程识别是否正常 | 画面流畅、点击/操作正常；WDA 或 `IPHONE_CONTROL_VIEWER_CODEC=videotoolbox` 下不依赖 ffmpeg 直出 H.264；任务子进程通过本机回环 HTTP API 试图操控自身任务时被拒绝 |
+| 4 | 控制台（`viewer`）、VideoToolbox / HEVC 画面与 `libproc` 进程识别是否正常 | 画面流畅、点击/操作正常；WDA 设备上（iOS 26 及以下，或 iOS 27+ 同时设 `ICTL_IOS_BACKEND=wda` 与 `IPHONE_CONTROL_VIEWER_CODEC=videotoolbox`）不依赖 ffmpeg 直出 H.264；任务子进程经本机回环 HTTP API 试图暂停/继续/确认自身任务时被 `409` 拒绝 |
 | 5 | launchd 后台服务、自更新与异常重启自感知是否正常 | `service install` / `service viewer install` / `update check` / 受管更新（或本地签名包演练）通过；`kill -9` 守护进程后 launchd 拉起并写异常重启记录，正常 `service restart` 不误报 |
 | 6 | 和 macOS 自带的 `remoted` / `remotepairingd` 会不会抢连接，拔插能否即时唤醒 | 开着 Finder（及可选 Xcode）连续操作与 30 分钟 `soak` 不掉线；USB 拔插经 `usbmuxd Listen` 立即触发状态更新，锁屏/重启后自动恢复 |
 | 7 | （可选）Intel Mac 预编译包是否可用 | `macos-x86_64` 包在真实 Intel Mac 上直接启动、连机与 VideoToolbox 编码正常（目前仅 Rosetta 跑过单测） |
@@ -160,10 +160,11 @@ python3 -m venv .venv && .venv/bin/pip install -r tests/device/requirements.txt
 MCP_CMD="iphone-control mcp" .venv/bin/python tests/device/run.py
 ```
 
-默认步骤无害（Home、时钟标签页、Spotlight 搜索），跨语言跨分辨率校验每步结果；所有步骤均需通过，截图保存在 `./shots`。可选进一步运行针对性场景：
+默认步骤无害（Home、时钟标签页、Spotlight 搜索），跨语言跨分辨率校验每步结果；所有步骤均需通过，截图保存在 `./shots`。可选进一步查看或运行针对性场景（默认跑除 `lock` / `url` 外的全部场景，也可按名指定）：
 
 ```bash
-MCP_CMD="iphone-control mcp" .venv/bin/python tests/device/scenarios.py --list
+.venv/bin/python tests/device/scenarios.py --help
+MCP_CMD="iphone-control mcp" .venv/bin/python tests/device/scenarios.py
 ```
 
 可选验证英文界面与开发者工具：在临时环境跑 `IPHONE_CONTROL_LANG=en iphone-control status` / `doctor` 与 `IPHONE_CONTROL_DEV_TOOLS=1`，核对双语输出无异常。
@@ -196,30 +197,30 @@ iphone-control viewer                   # 或装成后台服务：iphone-control
 用浏览器打开回环地址并测试：
 1. **认证与表单登录**：未登录访问返回登录页；手动在登录页粘贴令牌提交表单可正常登录（无 403 / `Origin: null` 报错）；使用带 token 的一次性登录链接会自动去掉 URL query 并写入 Cookie。
 2. **画面与编码**：
-   - **iOS 27+**：默认走手机原生 HEVC；在 Safari（支持 HEVC）下流畅出图，点击/滑动/输入正常；在不支持 HEVC 的浏览器下确认若未装 `ffmpeg` 给出提示，装了 `ffmpeg` 后自动转 H.264。
-   - **WDA 设备（或临时设 `IPHONE_CONTROL_VIEWER_CODEC=videotoolbox`）**：观察控制台启动日志，确认直接调用 macOS **VideoToolbox** 硬件编 H.264（**不依赖 `ffmpeg`**），拖动滚动流畅、无明显延迟积压。
+   - **iOS 27+ 原生控制**：默认走手机原生 HEVC；在 Safari（支持 HEVC）下流畅出图，点击/滑动/输入正常；在不支持 HEVC 的浏览器下确认若未装 `ffmpeg` 给出提示，装了 `ffmpeg` 后自动转 H.264。
+   - **WDA 设备上的 VideoToolbox（不依赖 `ffmpeg`）**：仅在运行 WDA 的设备上适用——iOS 26 及以下直接满足；若只有 iOS 27+ 设备，需先在 `~/.config/iphone-control/env` 设 `ICTL_IOS_BACKEND=wda`（重启守护进程让设备跑 WDA），再设 `IPHONE_CONTROL_VIEWER_CODEC=videotoolbox` 关闭手机原生 HEVC（切勿在未运行 WDA 的 iOS 27+ 原生设备上单独设 `videotoolbox`，否则关闭手机原生 HEVC 后又无 WDA MJPEG 源，会导致无画面）。观察控制台启动日志，确认直接调用 macOS **VideoToolbox** 硬件编 H.264（不依赖 `ffmpeg`），拖动滚动流畅、无明显延迟积压。
 3. **可选局域网 HTTPS 与 `/mcp`**：使用 `iphone-control viewer --lan` 启动，在同局域网另一台设备用 HTTPS 打开、核对自签证书指纹、测试只读令牌（`iphone-control viewer token add guest --read-only`）仅能查看不能操作。
 
 ### 4.2 `libproc` 回环 HTTP 客户端 PID 识别
 
-macOS 上 `viewer/peer.rs` 通过 Darwin `libproc` 反查回环 HTTP 请求的客户端 PID，防止任务子进程拿到控制台登录令牌后通过 `http://127.0.0.1:8200/api/tasks/...` 自批或停止自己的任务。
+macOS 上 `viewer/peer.rs` 通过 Darwin `libproc` 反查回环 HTTP 请求的客户端 PID，防止任务子进程拿到控制台登录令牌后通过 `http://127.0.0.1:8200/api/agent/tasks/<id>/<action>` 暂停、继续、接管、交还或自批自己的任务（注：`stop` 明确允许 Agent 主动放弃自己的任务，拦截范围为 `pause` / `resume` / `takeover` / `handback` / `confirm`，见 [docs/task-control.md](../task-control.md)）。
 
 验证步骤（控制台运行在 `127.0.0.1:8200`，先记下 owner 令牌 `$TOKEN`）：
 
 ```bash
-# 1. 在 task run 子进程内，用合法登录令牌经回环 HTTP 接口尝试暂停/停止当前任务（应被 403 / 拒绝，日志记入自控拦截）
+# 1. 在 task run 子进程内，用合法登录令牌经回环 HTTP 接口尝试暂停当前任务（应返回 409 Conflict）
 iphone-control task run --title "libproc-check" -- sh -c '
   curl --noproxy "127.0.0.1,localhost" -i -X POST \
     -H "Authorization: Bearer '"$TOKEN"'" \
     -H "Origin: http://127.0.0.1:8200" \
     -H "Content-Type: application/json" \
     -d "{}" \
-    "http://127.0.0.1:8200/api/tasks/${IPHONE_CONTROL_TASK_ID}/pause"
+    "http://127.0.0.1:8200/api/agent/tasks/${IPHONE_CONTROL_TASK_ID}/pause"
   sleep 2
 '
 ```
 
-期望结果：任务子进程发出的暂停请求被守护进程拒绝（不可自控自己的任务）；而同时在**另一个独立终端**执行 `iphone-control task pause <id>` 或在浏览器控制台点暂停/停止，可以正常控制该任务。
+期望结果：任务子进程发出的暂停请求返回 **`409 Conflict`**，响应体为 `{"ok": false, "message": "AI 任务不能自己暂停…"}`（若返回 `403` 说明被认证或 `Origin` 校验拦截，若返回 `400` 说明路由或请求体有误，均未走到 `libproc` 的 `for_pid` 拦截）；而同时在**另一个独立终端**执行 `iphone-control task pause <id>` 或在浏览器控制台点击暂停，可以正常控制该任务。
 
 ## 第 5 步：launchd 自更新与异常重启自感知
 
@@ -231,7 +232,7 @@ iphone-control update check --json
 ```
 
 在签名脚本安装或 Homebrew 安装环境上：
-- 若当前低于最新稳定版，直接跑 `iphone-control update` 验证实际升级（核对后台 `viewer` 服务自动暂停并在升级后恢复、空闲 MCP 不断、新守护进程 PID 切换且通过健康检查）。
+- 若当前低于最新稳定版，直接跑 `iphone-control update` 验证实际升级（签名脚本受管安装核对后台 `viewer` 服务自动暂停并在升级后恢复、空闲 MCP 不断、新守护进程 PID 切换且通过健康检查；Homebrew 安装路径则通过 `brew update` / `brew upgrade` 升级二进制并在运行 `brew services` 时重启 `iphone-control` 服务，不自动启停 `viewer` 服务）。
 - 若已在最新版，可按 [docs/dev/release-updates.md](release-updates.md) 中的临时密钥 + 本地 HTTPS 演练流程，用独立 `HOME` 和独立 launchd 标签演练一次正常升级与健康检查失败自动回滚。
 
 ### 5.2 异常重启自感知与防风暴
@@ -243,8 +244,8 @@ iphone-control update check --json
 iphone-control service restart
 tail -n 20 ~/.local/share/iphone-control/logs/daemon.log
 
-# 2. 强制 kill -9 守护进程，等待 launchd 自动拉起
-pkill -9 -f 'iphone-control daemon'
+# 2. 强制 kill -9 守护进程，等待 launchd 自动拉起（用 [i] 避免匹配包装 shell 自身）
+pkill -9 -f '[i]phone-control daemon'
 sleep 5
 iphone-control status
 tail -n 20 ~/.local/share/iphone-control/logs/daemon.log

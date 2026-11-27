@@ -338,8 +338,8 @@ fn format_removed_env_notices(removed: &[&crate::protocol::env::RemovedVar]) -> 
         .iter()
         .map(|v| {
             ictl_l10n::trf!(
-                "⚠️  已移除的配置项 {}（{}），可从 ~/.config/iphone-control/env 或环境中移除",
-                "⚠️  Removed setting {} ({}); you can remove it from ~/.config/iphone-control/env or your environment",
+                "⚠️  已移除的配置项 {}（{}），可从 ~/.config/iphone-control/env 或环境中移除，移除后重启守护进程生效",
+                "⚠️  Removed setting {} ({}); you can remove it from ~/.config/iphone-control/env or your environment and restart the daemon",
                 v.name,
                 v.reason()
             )

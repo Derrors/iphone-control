@@ -6,6 +6,10 @@
 
 ## [Unreleased]
 
+### 改进
+
+- `~/.config/iphone-control/env` 或守护进程环境中仍留有非空的已移除配置项（如 `ICTL_WDA_DETACHED`、`ICTL_MANAGE_USBMUXD`、`ICTL_USBMUXD_BIN`、`ICTL_AGENT_GATE`、`ICTL_AGENT_TOKEN`）时，守护进程启动日志与 `iphone-control doctor` 现在会给出温和提示（不计入失败项），不再完全静默忽略（#223）。
+
 ## [0.3.0] - 2026-11-26
 
 全面架构、安全、稳定性与性能升级：控制台切换 hyper、iOS 27 无障碍树直读、usbmuxd 实时 USB 热插拔、异常重启告警以及数十项可靠性与性能修复。

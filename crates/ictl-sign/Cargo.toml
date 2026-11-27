@@ -14,9 +14,14 @@ ictl-l10n.workspace = true
 plume_core.workspace = true
 plume_store.workspace = true
 thiserror.workspace = true
+tokio.workspace = true
 tracing.workspace = true
 plist.workspace = true
 rsa.workspace = true
 x509-certificate.workspace = true
 uuid.workspace = true
 zip.workspace = true
+
+[dev-dependencies]
+rustls.workspace = true
+serde_json.workspace = true

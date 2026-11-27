@@ -1,6 +1,6 @@
 // Implementing the SideStore Anisette v3 protocol
 
-use std::{collections::HashMap, fs, io::Cursor, path::PathBuf};
+use std::{collections::HashMap, fs, io::Cursor, path::PathBuf, time::Duration};
 
 use crate::adi_proxy::LOOKUP_CLIENT_INFO;
 use async_trait::async_trait;
@@ -58,7 +58,10 @@ where
 {
     let s: Data = Deserialize::deserialize(d)?;
     let s: Vec<u8> = s.into();
-    Ok(s.try_into().unwrap())
+    // iphone-control: return a deserialization error instead of panicking on a corrupt state.plist.
+    s.try_into().map_err(|v: Vec<u8>| {
+        serde::de::Error::invalid_length(v.len(), &"16-byte keychain identifier")
+    })
 }
 
 fn encode_hex(bytes: &[u8]) -> String {
@@ -72,8 +75,11 @@ fn base64_encode(data: &[u8]) -> String {
     general_purpose::STANDARD.encode(data)
 }
 
-fn base64_decode(data: &str) -> Vec<u8> {
-    general_purpose::STANDARD.decode(data.trim()).unwrap()
+// iphone-control: propagate invalid base64 from remote responses instead of panicking.
+fn base64_decode(data: &str) -> Result<Vec<u8>, AnisetteError> {
+    general_purpose::STANDARD
+        .decode(data.trim())
+        .map_err(|e| AnisetteError::Anyhow(anyhow::anyhow!("invalid base64 from anisette server: {e}")))
 }
 
 #[derive(Deserialize)]
@@ -177,21 +183,51 @@ impl AnisetteData {
     }
 }
 
-fn make_reqwest() -> Result<Client, AnisetteError> {
-    Ok(ClientBuilder::new()
+// iphone-control: bound Anisette HTTP requests so a hung public node fails fast enough to retry
+// instead of consuming the caller's entire timeout budget.
+const REQUEST_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+
+// iphone-control: bypass HTTP(S)_PROXY only for loopback self-hosted/mock Anisette servers;
+// public Anisette and Apple endpoints keep system-proxy passthrough.
+fn is_loopback_url(url: &str) -> bool {
+    let rest = url
+        .strip_prefix("http://")
+        .or_else(|| url.strip_prefix("https://"))
+        .unwrap_or(url);
+    let authority = rest.split('/').next().unwrap_or("");
+    let hostport = authority.rsplit('@').next().unwrap_or("");
+    let host = if let Some(h) = hostport.strip_prefix('[') {
+        h.split(']').next().unwrap_or("")
+    } else {
+        hostport.split(':').next().unwrap_or("")
+    };
+    host.eq_ignore_ascii_case("localhost") || host == "127.0.0.1" || host == "::1"
+}
+
+fn make_reqwest(no_proxy: bool) -> Result<Client, AnisetteError> {
+    let mut builder = ClientBuilder::new()
+        .connect_timeout(REQUEST_CONNECT_TIMEOUT)
+        .timeout(REQUEST_TIMEOUT)
         .http1_title_case_headers()
-        .danger_accept_invalid_certs(true) // TODO: pin the apple certificate
-        .build()?)
+        .danger_accept_invalid_certs(true); // TODO: pin the apple certificate
+    if no_proxy {
+        builder = builder.no_proxy();
+    }
+    Ok(builder.build()?)
 }
 
 impl AnisetteClient {
     pub async fn new(url: String) -> Result<AnisetteClient, AnisetteError> {
+        // iphone-control: normalize trailing slash and fail fast on non-2xx /v3/client_info responses.
+        let url = url.trim_end_matches('/').to_string();
         let path = format!("{}/v3/client_info", url);
-        let http_client = make_reqwest()?;
+        let http_client = make_reqwest(is_loopback_url(&url))?;
         let client_info = http_client
             .get(path)
             .send()
             .await?
+            .error_for_status()?
             .json::<AnisetteClientInfo>()
             .await?;
         Ok(AnisetteClient { client_info, url })
@@ -218,7 +254,7 @@ impl AnisetteClient {
 
     pub async fn get_headers(&self, state: &AnisetteState) -> Result<AnisetteData, AnisetteError> {
         let path = format!("{}/v3/get_headers", self.url);
-        let http_client = make_reqwest()?;
+        let http_client = make_reqwest(is_loopback_url(&self.url))?;
 
         #[derive(Serialize)]
         struct GetHeadersBody {
@@ -251,19 +287,36 @@ impl AnisetteClient {
             },
         }
 
-        let headers = http_client
-            .post(path)
-            .json(&body)
-            .send()
-            .await?
-            .json::<AnisetteHeaders>()
-            .await?;
+        // iphone-control: still parse JSON GetHeadersError on non-2xx responses (so -45061 keeps
+        // triggering re-provisioning), surface non-JSON HTTP errors cleanly, and never panic on
+        // unexpected server errors.
+        let resp = http_client.post(path).json(&body).send().await?;
+        let status = resp.status();
+        let bytes = resp.bytes().await?;
+        let headers: AnisetteHeaders = match serde_json::from_slice(&bytes) {
+            Ok(h) => h,
+            Err(e) => {
+                if !status.is_success() {
+                    let snippet: String =
+                        String::from_utf8_lossy(&bytes).chars().take(200).collect();
+                    return Err(AnisetteError::Anyhow(anyhow::anyhow!(
+                        "Anisette get_headers HTTP {}: {}",
+                        status,
+                        snippet.trim()
+                    )));
+                }
+                return Err(AnisetteError::SerdeError(e));
+            }
+        };
         match headers {
             AnisetteHeaders::GetHeadersError { message } => {
                 if message.contains("-45061") {
                     Err(AnisetteError::AnisetteNotProvisioned)
                 } else {
-                    panic!("Unknown error {}", message)
+                    Err(AnisetteError::Anyhow(anyhow::anyhow!(
+                        "Anisette get_headers error: {}",
+                        message
+                    )))
                 }
             }
             AnisetteHeaders::Headers {
@@ -283,7 +336,7 @@ impl AnisetteClient {
 
     pub async fn provision(&self, state: &mut AnisetteState) -> Result<(), AnisetteError> {
         debug!("Provisioning Anisette");
-        let http_client = make_reqwest()?;
+        let http_client = make_reqwest(false)?;
         let resp = self
             .build_apple_request(
                 &state,
@@ -291,35 +344,44 @@ impl AnisetteClient {
                 LOOKUP_CLIENT_INFO,
             )
             .send()
-            .await?;
+            .await?
+            .error_for_status()?;
         let text = resp.text().await?;
 
+        // iphone-control: return structured errors instead of panicking on malformed Apple/server responses.
         let protocol_val = plist::Value::from_reader(Cursor::new(text.as_str()))?;
         let urls = protocol_val
             .as_dictionary()
-            .unwrap()
-            .get("urls")
-            .unwrap()
-            .as_dictionary()
-            .unwrap();
+            .and_then(|d| d.get("urls"))
+            .and_then(|v| v.as_dictionary())
+            .ok_or_else(|| {
+                AnisetteError::Anyhow(anyhow::anyhow!("Apple lookup plist missing urls dictionary"))
+            })?;
 
         let start_provisioning_url = urls
             .get("midStartProvisioning")
-            .unwrap()
-            .as_string()
-            .unwrap();
+            .and_then(|v| v.as_string())
+            .ok_or_else(|| {
+                AnisetteError::Anyhow(anyhow::anyhow!("Apple lookup plist missing midStartProvisioning"))
+            })?;
         let end_provisioning_url = urls
             .get("midFinishProvisioning")
-            .unwrap()
-            .as_string()
-            .unwrap();
+            .and_then(|v| v.as_string())
+            .ok_or_else(|| {
+                AnisetteError::Anyhow(anyhow::anyhow!("Apple lookup plist missing midFinishProvisioning"))
+            })?;
         debug!(
             "Got provisioning urls: {} and {}",
             start_provisioning_url, end_provisioning_url
         );
 
-        let provision_ws_url =
-            format!("{}/v3/provisioning_session", self.url).replace("https://", "wss://");
+        let provision_ws_url = if let Some(rest) = self.url.strip_prefix("https://") {
+            format!("wss://{rest}/v3/provisioning_session")
+        } else if let Some(rest) = self.url.strip_prefix("http://") {
+            format!("ws://{rest}/v3/provisioning_session")
+        } else {
+            format!("{}/v3/provisioning_session", self.url)
+        };
         let (mut connection, _) = connect_async(&provision_ws_url).await?;
 
         #[derive(Deserialize)]
@@ -338,11 +400,19 @@ impl AnisetteClient {
         }
 
         loop {
-            let Some(Ok(data)) = connection.next().await else {
-                continue;
+            // iphone-control: fail out when the provisioning WebSocket drops or errors instead of
+            // spinning forever on None / Err.
+            let data = match connection.next().await {
+                Some(Ok(data)) => data,
+                Some(Err(e)) => return Err(AnisetteError::WsError(e)),
+                None => {
+                    return Err(AnisetteError::Anyhow(anyhow::anyhow!(
+                        "Anisette provisioning socket closed before completion"
+                    )));
+                }
             };
             if data.is_text() {
-                let txt = data.to_text().unwrap();
+                let txt = data.to_text()?;
                 let msg: ProvisionInput = serde_json::from_str(txt)?;
                 match msg {
                     ProvisionInput::GiveIdentifier => {
@@ -358,7 +428,7 @@ impl AnisetteClient {
                             .await?;
                     }
                     ProvisionInput::GiveStartProvisioningData => {
-                        let http_client = make_reqwest()?;
+                        let http_client = make_reqwest(false)?;
                         let body_data = ProvisionBodyData {
                             header: Dictionary::new(),
                             request: Dictionary::new(),
@@ -371,21 +441,22 @@ impl AnisetteClient {
                             )
                             .body(plist_to_string(&body_data)?)
                             .send()
-                            .await?;
+                            .await?
+                            .error_for_status()?;
                         let text = resp.text().await?;
 
                         let protocol_val = plist::Value::from_reader(Cursor::new(text.as_str()))?;
                         let spim = protocol_val
                             .as_dictionary()
-                            .unwrap()
-                            .get("Response")
-                            .unwrap()
-                            .as_dictionary()
-                            .unwrap()
-                            .get("spim")
-                            .unwrap()
-                            .as_string()
-                            .unwrap();
+                            .and_then(|d| d.get("Response"))
+                            .and_then(|v| v.as_dictionary())
+                            .and_then(|d| d.get("spim"))
+                            .and_then(|v| v.as_string())
+                            .ok_or_else(|| {
+                                AnisetteError::Anyhow(anyhow::anyhow!(
+                                    "Apple start provisioning response missing Response.spim"
+                                ))
+                            })?;
 
                         debug!("GiveStartProvisioningData");
                         #[derive(Serialize)]
@@ -400,7 +471,7 @@ impl AnisetteClient {
                             .await?;
                     }
                     ProvisionInput::GiveEndProvisioningData { cpim } => {
-                        let http_client = make_reqwest()?;
+                        let http_client = make_reqwest(false)?;
                         let body_data = ProvisionBodyData {
                             header: Dictionary::new(),
                             request: Dictionary::from_iter([("cpim", cpim)].into_iter()),
@@ -413,17 +484,20 @@ impl AnisetteClient {
                             )
                             .body(plist_to_string(&body_data)?)
                             .send()
-                            .await?;
+                            .await?
+                            .error_for_status()?;
                         let text = resp.text().await?;
 
                         let protocol_val = plist::Value::from_reader(Cursor::new(text.as_str()))?;
                         let response = protocol_val
                             .as_dictionary()
-                            .unwrap()
-                            .get("Response")
-                            .unwrap()
-                            .as_dictionary()
-                            .unwrap();
+                            .and_then(|d| d.get("Response"))
+                            .and_then(|v| v.as_dictionary())
+                            .ok_or_else(|| {
+                                AnisetteError::Anyhow(anyhow::anyhow!(
+                                    "Apple finish provisioning response missing Response dictionary"
+                                ))
+                            })?;
 
                         debug!("GiveEndProvisioningData");
 
@@ -432,10 +506,23 @@ impl AnisetteClient {
                             ptm: &'t str,
                             tk: &'t str,
                         }
-                        let end_provisioning = EndProvisioning {
-                            ptm: response.get("ptm").unwrap().as_string().unwrap(),
-                            tk: response.get("tk").unwrap().as_string().unwrap(),
-                        };
+                        let ptm = response
+                            .get("ptm")
+                            .and_then(|v| v.as_string())
+                            .ok_or_else(|| {
+                                AnisetteError::Anyhow(anyhow::anyhow!(
+                                    "Apple finish provisioning response missing Response.ptm"
+                                ))
+                            })?;
+                        let tk = response
+                            .get("tk")
+                            .and_then(|v| v.as_string())
+                            .ok_or_else(|| {
+                                AnisetteError::Anyhow(anyhow::anyhow!(
+                                    "Apple finish provisioning response missing Response.tk"
+                                ))
+                            })?;
+                        let end_provisioning = EndProvisioning { ptm, tk };
                         connection
                             .send(Message::Text(
                                 serde_json::to_string(&end_provisioning)?.into(),
@@ -444,14 +531,20 @@ impl AnisetteClient {
                     }
                     ProvisionInput::ProvisioningSuccess { adi_pb } => {
                         debug!("ProvisioningSuccess");
-                        state.adi_pb = Some(base64_decode(&adi_pb));
-                        connection.close(None).await?;
+                        state.adi_pb = Some(base64_decode(&adi_pb)?);
+                        let _ = connection.close(None).await;
                         break;
                     }
                 }
             } else if data.is_close() {
                 break;
             }
+        }
+
+        if !state.is_provisioned() {
+            return Err(AnisetteError::Anyhow(anyhow::anyhow!(
+                "Anisette provisioning closed before receiving adi_pb"
+            )));
         }
 
         Ok(())
@@ -518,7 +611,8 @@ impl AnisetteHeadersProvider for RemoteAnisetteProviderV3 {
                     plist::to_file_xml(config_path, state)?;
                     client.get_headers(&state).await?
                 } else {
-                    panic!()
+                    // iphone-control: propagate network/server errors instead of panicking the thread.
+                    return Err(err);
                 }
             }
         };

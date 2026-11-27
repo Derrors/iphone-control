@@ -6,13 +6,15 @@
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-11-28
+
 ### 改进
 
-- `~/.config/iphone-control/env` 或守护进程环境中仍留有非空的已移除配置项（如 `ICTL_WDA_DETACHED`、`ICTL_MANAGE_USBMUXD`、`ICTL_USBMUXD_BIN`、`ICTL_AGENT_GATE`、`ICTL_AGENT_TOKEN`）时，守护进程启动日志与 `iphone-control doctor` 现在会给出温和提示（不计入失败项），不再完全静默忽略（#223）。
+- `~/.config/iphone-control/env` 或守护进程环境中留有已移除的配置项（如 `ICTL_WDA_DETACHED`、`ICTL_AGENT_GATE`）时，守护进程启动日志和 `iphone-control doctor` 现在会给出非致命提示，不再静默忽略（#223）。
 
 ### 修复
 
-- 公网 Anisette 节点或苹果开发者接口偶发抖动、超时或返回异常响应时，不再在 `omnisette` 内 `panic` 或立刻误报「Apple ID 会话已失效」通知：Anisette HTTP 请求现已设置明确超时，恢复会话与登录拉取 Anisette 遇到瞬断时自动短退避重试最多 3 次（2s → 5s），守护进程例行会话检查遇到瞬断或超时时仅记日志并在 1 小时后重试，不再误发 `Event::SessionExpired`（#224）。
+- 公网 Anisette 服务或苹果开发者接口偶发抖动或超时时，不再导致崩溃或立刻误报「Apple ID 会话已失效」通知；请求会自动重试，例行会话检查也会延后复查（#224）。
 
 ## [0.3.0] - 2026-11-26
 
@@ -471,7 +473,8 @@
 - `setup`、`doctor`、`status`、`mcp-config`。
 - Docker 镜像和预编译的 Linux 二进制。
 
-[Unreleased]: https://github.com/Derrors/iphone-control/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/Derrors/iphone-control/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/Derrors/iphone-control/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/Derrors/iphone-control/compare/v0.2.14...v0.3.0
 [0.2.14]: https://github.com/Derrors/iphone-control/compare/v0.2.13...v0.2.14
 [0.2.13]: https://github.com/Derrors/iphone-control/compare/v0.2.12...v0.2.13

@@ -6,13 +6,15 @@ What changed in each release, one line per change. Versions follow [Semantic Ver
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-11-28
+
 ### Improvements
 
-- Removed settings left set to non-empty values in `~/.config/iphone-control/env` or the daemon's environment (such as `ICTL_WDA_DETACHED`, `ICTL_MANAGE_USBMUXD`, `ICTL_USBMUXD_BIN`, `ICTL_AGENT_GATE`, and `ICTL_AGENT_TOKEN`) now log a gentle startup notice and show a non-fatal warning in `iphone-control doctor` instead of being silently ignored (#223).
+- Removed settings left set in `~/.config/iphone-control/env` or the daemon's environment (such as `ICTL_WDA_DETACHED` or `ICTL_AGENT_GATE`) now log a startup notice and appear as a non-fatal warning in `iphone-control doctor` instead of being silently ignored (#223).
 
 ### Fixes
 
-- Transient failures or timeouts from the public Anisette server or Apple's developer endpoint no longer panic in `omnisette` or immediately fire a false "Apple ID session expired" alert: HTTP requests now have bounded timeouts, session recovery and login's Anisette fetch retry up to 3 times with short backoff (2 s → 5 s), and routine session checks log transient glitches and retry in an hour without triggering `Event::SessionExpired` (#224).
+- Transient failures or timeouts from the public Anisette server or Apple's developer service no longer crash the daemon or trigger a false "Apple ID session expired" notification; requests now retry automatically and routine session checks re-check later (#224).
 
 ## [0.3.0] - 2026-11-26
 
@@ -471,7 +473,8 @@ First public release.
 - `setup`, `doctor`, `status` and `mcp-config`.
 - Docker image and prebuilt Linux binaries.
 
-[Unreleased]: https://github.com/Derrors/iphone-control/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/Derrors/iphone-control/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/Derrors/iphone-control/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/Derrors/iphone-control/compare/v0.2.14...v0.3.0
 [0.2.14]: https://github.com/Derrors/iphone-control/compare/v0.2.13...v0.2.14
 [0.2.13]: https://github.com/Derrors/iphone-control/compare/v0.2.12...v0.2.13

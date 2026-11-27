@@ -1,0 +1,107 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 680" width="1200" height="680" role="img" aria-label="展示本机与跨主机两种场景下控制面与数据面的隔离：执行方仅持任务口令操作手机，控制方凭登录令牌或本机进程关系校验执行暂停、接管与人工确认，所有监管统一在守护进程执行点强制生效">
+  <title>AI 任务控制面与数据面分离架构</title>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#59636e"/>
+    </marker>
+    <marker id="arrow-brand" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#0891b2"/>
+    </marker>
+    <marker id="arrow-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#16a34a"/>
+    </marker>
+    <marker id="arrow-amber" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#d4a72c"/>
+    </marker>
+    <marker id="arrow-red" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#dc2626"/>
+    </marker>
+    <marker id="arrow-purple" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#7c3aed"/>
+    </marker>
+    <linearGradient id="screen" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0e7490"/>
+      <stop offset="1" stop-color="#164e63"/>
+    </linearGradient>
+    <style>
+      text { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans CJK SC', 'Source Han Sans SC', 'WenQuanYi Zen Hei', Helvetica, Arial, sans-serif; fill: #1f2328; }
+      .h1 { font-size: 22px; font-weight: 700; }
+      .h2 { font-size: 20px; font-weight: 700; }
+      .h3 { font-size: 16px; font-weight: 700; }
+      .sub { font-size: 13px; fill: #59636e; }
+      .label { font-size: 13px; fill: #59636e; font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace; }
+      .frame { font-size: 15px; fill: #59636e; }
+    </style>
+  </defs>
+  <text x="28" y="38" class="h1">AI 任务控制：控制面与数据面分离架构</text>
+  <text x="28" y="62" class="sub">核心原则：监管与执行在同一个地方（守护进程）；执行方与控制方分离，跨主机通过令牌边界强制隔离</text>
+  <rect x="24" y="84" width="540" height="238" rx="16" fill="#f6f8fa" stroke="#d0d7de" stroke-width="1.5"/>
+  <text x="44" y="114" style="font-size:15px;font-weight:700">本机调用方（同一台主机 · Unix Socket 0600）</text>
+  <rect x="42" y="130" width="246" height="86" rx="10" fill="#ecfdf5" stroke="#16a34a" stroke-width="1.5"/>
+  <text x="54" y="153" style="font-size:13px;font-weight:700;fill:#15803d">控制方（人 / 平台）</text>
+  <text x="54" y="173" style="font-size:11px;fill:#59636e">• 控制台页面 / CLI task pause|approve</text>
+  <text x="54" y="190" style="font-size:11px;fill:#59636e">• task run 开任务并持有连接租约</text>
+  <text x="54" y="207" style="font-size:11px;fill:#59636e">• 内建 Claude/Codex Runner 宿主</text>
+  <rect x="302" y="130" width="246" height="86" rx="10" fill="#f5f3ff" stroke="#7c3aed" stroke-width="1.5"/>
+  <text x="314" y="153" style="font-size:13px;font-weight:700;fill:#6d28d9">执行方（本机 Agent）</text>
+  <text x="314" y="173" style="font-size:11px;fill:#59636e">• 携带 IPHONE_CONTROL_TASK_TOKEN</text>
+  <text x="314" y="190" style="font-size:11px;fill:#59636e">• 调用设备动作 + iphone_confirm</text>
+  <text x="314" y="207" style="font-size:11px;fill:#59636e">• 只能放弃（stop），不能自批/恢复</text>
+  <rect x="42" y="230" width="506" height="76" rx="10" fill="#ffffff" stroke="#d0d7de" stroke-width="1.2"/>
+  <text x="56" y="254" style="font-size:13px;font-weight:700">本机防自控机制（SO_PEERCRED + 进程树追溯）</text>
+  <text x="56" y="276" style="font-size:11px;fill:#59636e">• 宿主启动 Agent 前发 task_agent 登记自身 PID；守护进程拒绝其子孙进程发来的控制请求</text>
+  <text x="56" y="294" style="font-size:11px;fill:#59636e">• 经本机 HTTP 调控制台时，Linux 查 /proc、macOS 调 libproc 识别源 PID 一并送守护进程校验</text>
+  <rect x="588" y="84" width="588" height="238" rx="16" fill="#f6f8fa" stroke="#7c3aed" stroke-width="1.5"/>
+  <text x="608" y="114" style="font-size:15px;font-weight:700;fill:#6d28d9">跨主机 / 局域网调用方（经 Viewer HTTPS 控制面）</text>
+  <rect x="606" y="130" width="270" height="86" rx="10" fill="#ecfdf5" stroke="#16a34a" stroke-width="1.5"/>
+  <text x="618" y="153" style="font-size:13px;font-weight:700;fill:#15803d">控制方（浏览器 / 远端平台）</text>
+  <text x="618" y="173" style="font-size:11px;fill:#59636e">• 凭登录令牌（operate / view）</text>
+  <text x="618" y="190" style="font-size:11px;fill:#59636e">• POST /api/agent/tasks/open 持租约</text>
+  <text x="618" y="207" style="font-size:11px;fill:#59636e">• pause / takeover / approve 控制任务</text>
+  <rect x="890" y="130" width="270" height="86" rx="10" fill="#f5f3ff" stroke="#7c3aed" stroke-width="1.5"/>
+  <text x="902" y="153" style="font-size:13px;font-weight:700;fill:#6d28d9">执行方（远端 Agent / mcp --url）</text>
+  <text x="902" y="173" style="font-size:11px;fill:#59636e">• 仅持 Iphone-Control-Task-Token</text>
+  <text x="902" y="190" style="font-size:11px;fill:#59636e">• 不下发登录令牌（真正物理隔离）</text>
+  <text x="902" y="207" style="font-size:11px;fill:#59636e">• 仅放行 /mcp 与 /tasks/finish</text>
+  <rect x="606" y="230" width="554" height="76" rx="10" fill="#ffffff" stroke="#7c3aed" stroke-width="1.2"/>
+  <text x="620" y="254" style="font-size:13px;font-weight:700;fill:#6d28d9">iphone-control viewer（hyper HTTP/1.1 + 首字节 TLS + 令牌鉴权）</text>
+  <text x="620" y="276" style="font-size:11px;fill:#59636e">• /mcp 支持 Content-Length 与 chunked（≤1 MiB）；错误令牌限速 20 次/分（不影响正确令牌）</text>
+  <text x="620" y="294" style="font-size:11px;fill:#59636e">• 只读令牌仅放行 GET + /api/video/ack，禁止操作、切设备、开任务与自动解锁</text>
+  <line x1="294" y1="322" x2="294" y2="368" stroke="#0891b2" stroke-width="2.5" marker-end="url(#arrow)"/>
+  <text x="308" y="350" class="label" style="font-size:12px">Unix Socket（控制面 + 数据面）</text>
+  <line x1="882" y1="322" x2="882" y2="368" stroke="#7c3aed" stroke-width="2.5" marker-end="url(#arrow-purple)"/>
+  <text x="896" y="350" class="label" style="font-size:12px">Viewer 转接至 Unix Socket</text>
+  <rect x="24" y="372" width="1152" height="288" rx="18" fill="#ecfeff" stroke="#0891b2" stroke-width="2"/>
+  <text x="46" y="404" style="font-size:19px;font-weight:700;fill:#0e7490">iphone-control daemon：唯一执行点与监管强制层</text>
+  <rect x="982" y="384" width="174" height="26" rx="13.0" fill="#0e7490"/>
+  <text x="1069.0" y="401.32" text-anchor="middle" style="font-size:12px;font-weight:600;fill:#ffffff">所有调用方均不可绕过</text>
+  <rect x="46" y="424" width="258" height="152" rx="14" fill="#ffffff" stroke="#a5f3fc" stroke-width="1.5"/>
+  <text x="60" y="452" style="font-size:13px;font-weight:700;fill:#1f2328">① 租约与准入（Tasks::admit）</text>
+  <text x="60" y="478" style="font-size:11px;fill:#59636e">• 绑死开任务时的设备 UDID</text>
+  <text x="60" y="498" style="font-size:11px;fill:#59636e">• 非 Running 时任务动作挂起等待</text>
+  <text x="60" y="518" style="font-size:11px;fill:#59636e">• 其余客户端只读，动作一律拒</text>
+  <text x="60" y="538" style="font-size:11px;fill:#59636e">• 人接管/操作后须先重新观察</text>
+  <line x1="304" y1="500" x2="322" y2="500" stroke="#0891b2" stroke-width="2" marker-end="url(#arrow-brand)"/>
+  <rect x="324" y="424" width="268" height="152" rx="14" fill="#ffffff" stroke="#a5f3fc" stroke-width="1.5"/>
+  <text x="338" y="452" style="font-size:13px;font-weight:700;fill:#1f2328">② 范围与确认（tasks/scope.rs）</text>
+  <text x="338" y="478" style="font-size:11px;fill:#59636e">• --app 白名单解析为 Bundle ID</text>
+  <text x="338" y="498" style="font-size:11px;fill:#59636e">• 动作前查前台 App（AX / WDA）</text>
+  <text x="338" y="518" style="font-size:11px;fill:#59636e">• 越界或敏感动作进入 Waiting</text>
+  <text x="338" y="538" style="font-size:11px;fill:#59636e">• 批处理每步之间重检暂停/接管</text>
+  <line x1="592" y1="500" x2="610" y2="500" stroke="#0891b2" stroke-width="2" marker-end="url(#arrow-brand)"/>
+  <rect x="612" y="424" width="268" height="152" rx="14" fill="#ffffff" stroke="#a5f3fc" stroke-width="1.5"/>
+  <text x="626" y="452" style="font-size:13px;font-weight:700;fill:#1f2328">③ 设备执行（双后端统一）</text>
+  <text x="626" y="478" style="font-size:11px;fill:#59636e">• 拿到设备锁后 Tasks::still 二次复核</text>
+  <text x="626" y="498" style="font-size:11px;fill:#59636e">• iOS 27+：原生 AX / HID / AppService</text>
+  <text x="626" y="518" style="font-size:11px;fill:#59636e">• iOS 17–26：WebDriverAgent</text>
+  <text x="626" y="538" style="font-size:11px;fill:#59636e">• 写操作区分 NotSent/Sent/Unknown</text>
+  <line x1="880" y1="500" x2="898" y2="500" stroke="#0891b2" stroke-width="2" marker-end="url(#arrow-brand)"/>
+  <rect x="900" y="424" width="256" height="152" rx="14" fill="#ffffff" stroke="#a5f3fc" stroke-width="1.5"/>
+  <text x="914" y="452" style="font-size:13px;font-weight:700;fill:#1f2328">④ 审计落盘与事件流</text>
+  <text x="914" y="478" style="font-size:11px;fill:#59636e">• 追加写 tasks/&lt;id&gt;.jsonl</text>
+  <text x="914" y="498" style="font-size:11px;fill:#59636e">• 最多 50 任务（16K条/16MiB上限）</text>
+  <text x="914" y="518" style="font-size:11px;fill:#59636e">• 异步读精确前缀回放，不阻塞主循环</text>
+  <text x="914" y="538" style="font-size:11px;fill:#59636e">• 重启将未完结任务补记 interrupted</text>
+  <rect x="46" y="592" width="1110" height="50" rx="10" fill="#ffffff" stroke="#a5f3fc" stroke-width="1.2"/>
+  <text x="601" y="622" text-anchor="middle" style="font-size:13px;font-weight:600;fill:#0e7490">连接即租约：开任务连接断开 → 立即转 abandoned，不再依赖心跳与超时误判  ·  无任务运行时，普通 MCP/CLI 与历史行为 100% 兼容</text>
+</svg>

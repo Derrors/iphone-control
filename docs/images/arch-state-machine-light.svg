@@ -1,0 +1,132 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 740" width="1200" height="740" role="img" aria-label="由 usbmuxd Listen 热插拔事件即时唤醒与 10 秒巡检驱动的 DeviceState 状态机，依次检查连接、配对、开发者模式，然后按 iOS 版本分叉至原生准备流程或 WDA 后台启动流程">
+  <title>守护进程设备状态机与双后端就绪流程</title>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#59636e"/>
+    </marker>
+    <marker id="arrow-brand" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#0891b2"/>
+    </marker>
+    <marker id="arrow-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#16a34a"/>
+    </marker>
+    <marker id="arrow-amber" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#d4a72c"/>
+    </marker>
+    <marker id="arrow-red" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#dc2626"/>
+    </marker>
+    <marker id="arrow-purple" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#7c3aed"/>
+    </marker>
+    <linearGradient id="screen" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0e7490"/>
+      <stop offset="1" stop-color="#164e63"/>
+    </linearGradient>
+    <style>
+      text { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans CJK SC', 'Source Han Sans SC', 'WenQuanYi Zen Hei', Helvetica, Arial, sans-serif; fill: #1f2328; }
+      .h1 { font-size: 22px; font-weight: 700; }
+      .h2 { font-size: 20px; font-weight: 700; }
+      .h3 { font-size: 16px; font-weight: 700; }
+      .sub { font-size: 13px; fill: #59636e; }
+      .label { font-size: 13px; fill: #59636e; font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace; }
+      .frame { font-size: 15px; fill: #59636e; }
+    </style>
+  </defs>
+  <text x="28" y="38" class="h1">守护进程设备状态机（DeviceState）</text>
+  <text x="28" y="62" class="sub">usbmuxd Listen 热插拔毫秒级唤醒 + 10 秒定时巡检兜底（try_lock 不抢设备锁），自顶向下判定首个未满足条件</text>
+  <rect x="28" y="80" width="1144" height="42" rx="10" fill="#ecfeff" stroke="#0891b2" stroke-width="1.5"/>
+  <text x="600" y="106" text-anchor="middle" style="font-size:13px;font-weight:600;fill:#0e7490">巡检触发：usbmuxd Listen 推送 USB 接入/断开（立即 wake）  |  10s 定时兜底  |  多设备选定策略：IPHONE_UDID &gt; select 持久选择 &gt; 自动选</text>
+  <rect x="36" y="148" width="290" height="52" rx="12" fill="#f6f8fa" stroke="#d0d7de" stroke-width="1.5"/>
+  <text x="181.0" y="179" text-anchor="middle" style="font-size:14px;font-weight:700">1. usbmuxd 看到目标手机？</text>
+  <line x1="181.0" y1="200" x2="181.0" y2="234" stroke="#d4a72c" stroke-width="2" marker-end="url(#arrow-amber)"/>
+  <text x="191.0" y="222" style="font-size:12px;font-weight:700;fill:#9a6700">否</text>
+  <rect x="61" y="236" width="240" height="52" rx="10" fill="#fff8e6" stroke="#d4a72c" stroke-width="1.5"/>
+  <text x="181.0" y="259" class="label" text-anchor="middle" style="font-size:13px;font-weight:700;fill:#9a6700">Absent</text>
+  <text x="181.0" y="278" text-anchor="middle" style="font-size:12px;fill:#59636e">离线超 10 分钟推通知</text>
+  <rect x="376" y="148" width="290" height="52" rx="12" fill="#f6f8fa" stroke="#d0d7de" stroke-width="1.5"/>
+  <text x="521.0" y="179" text-anchor="middle" style="font-size:14px;font-weight:700">2. 存在配对记录？</text>
+  <line x1="521.0" y1="200" x2="521.0" y2="234" stroke="#d4a72c" stroke-width="2" marker-end="url(#arrow-amber)"/>
+  <text x="531.0" y="222" style="font-size:12px;font-weight:700;fill:#9a6700">否</text>
+  <rect x="401" y="236" width="240" height="52" rx="10" fill="#fff8e6" stroke="#d4a72c" stroke-width="1.5"/>
+  <text x="521.0" y="259" class="label" text-anchor="middle" style="font-size:13px;font-weight:700;fill:#9a6700">NeedsTrust</text>
+  <text x="521.0" y="278" text-anchor="middle" style="font-size:12px;fill:#59636e">手机点「信任」（setup）</text>
+  <rect x="716" y="148" width="290" height="52" rx="12" fill="#f6f8fa" stroke="#d0d7de" stroke-width="1.5"/>
+  <text x="861.0" y="179" text-anchor="middle" style="font-size:14px;font-weight:700">3. 开发者模式已开启？</text>
+  <line x1="861.0" y1="200" x2="861.0" y2="234" stroke="#d4a72c" stroke-width="2" marker-end="url(#arrow-amber)"/>
+  <text x="871.0" y="222" style="font-size:12px;font-weight:700;fill:#9a6700">否</text>
+  <rect x="741" y="236" width="240" height="52" rx="10" fill="#fff8e6" stroke="#d4a72c" stroke-width="1.5"/>
+  <text x="861.0" y="259" class="label" text-anchor="middle" style="font-size:13px;font-weight:700;fill:#9a6700">DeveloperModeOff</text>
+  <text x="861.0" y="278" text-anchor="middle" style="font-size:12px;fill:#59636e">仅未就绪时检查</text>
+  <line x1="326" y1="174" x2="374" y2="174" stroke="#16a34a" stroke-width="2" marker-end="url(#arrow-green)"/>
+  <text x="350" y="166" text-anchor="middle" style="font-size:12px;font-weight:700;fill:#15803d">是</text>
+  <line x1="666" y1="174" x2="714" y2="174" stroke="#16a34a" stroke-width="2" marker-end="url(#arrow-green)"/>
+  <text x="690" y="166" text-anchor="middle" style="font-size:12px;font-weight:700;fill:#15803d">是</text>
+  <line x1="1006" y1="174" x2="1044" y2="174" stroke="#16a34a" stroke-width="2" marker-end="url(#arrow-green)"/>
+  <text x="1025" y="166" text-anchor="middle" style="font-size:12px;font-weight:700;fill:#15803d">是</text>
+  <rect x="1046" y="146" width="126" height="56" rx="12" fill="#ecfeff" stroke="#0891b2" stroke-width="2"/>
+  <text x="1109" y="171" text-anchor="middle" style="font-size:13px;font-weight:700;fill:#0e7490">按版本选路</text>
+  <text x="1109" y="190" class="label" text-anchor="middle" style="font-size:12px;fill:#59636e">iOS 27+ ?</text>
+  <path d="M1080 202 L 1080 310 L 300 310 L 300 330" fill="none" stroke="#0891b2" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-brand)"/>
+  <text x="440" y="302" style="font-size:12px;font-weight:700;fill:#0e7490">是（且未设 ICTL_IOS_BACKEND=wda）→ 原生控制</text>
+  <path d="M1135 202 L 1135 310 L 890 310 L 890 330" fill="none" stroke="#59636e" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)"/>
+  <text x="975" y="302" text-anchor="middle" style="font-size:12px;font-weight:700;fill:#59636e">否（iOS 17–26 或 wda）→ WDA</text>
+  <rect x="28" y="334" width="540" height="384" rx="16" fill="#ecfeff" stroke="#0891b2" stroke-width="2"/>
+  <text x="48" y="364" style="font-size:17px;font-weight:700;fill:#0e7490">路线 A：iOS 27+ 原生控制（默认）</text>
+  <rect x="448" y="344" width="102" height="24" rx="12.0" fill="#0e7490"/>
+  <text x="499.0" y="359.96" text-anchor="middle" style="font-size:11px;font-weight:600;fill:#ffffff">免签名 · 几秒就绪</text>
+  <rect x="48" y="382" width="500" height="100" rx="14" fill="#ffffff" stroke="#a5f3fc" stroke-width="1.5"/>
+  <text x="64" y="408" style="font-size:14px;font-weight:700;fill:#1f2328">Preparing（后台准备，不持设备锁）</text>
+  <text x="64" y="430" style="font-size:12px;fill:#59636e">1. 开 CoreDeviceProxy 隧道 → 查/挂载开发者镜像（DDI）</text>
+  <text x="64" y="448" style="font-size:12px;fill:#59636e">2. 若镜像刚挂载则重建隧道刷新 RSD 服务列表</text>
+  <text x="64" y="466" style="font-size:12px;fill:#59636e">3. 连接 remoteAXService 完成 DTX 握手并首读元素树</text>
+  <line x1="160" y1="482" x2="160" y2="514" stroke="#d4a72c" stroke-width="2" marker-end="url(#arrow-amber)"/>
+  <rect x="48" y="516" width="224" height="72" rx="10" fill="#fff8e6" stroke="#d4a72c" stroke-width="1.5"/>
+  <text x="60" y="540" style="font-size:13px;font-weight:700;fill:#9a6700">NeedsUnlock</text>
+  <text x="60" y="560" style="font-size:11px;fill:#59636e">BFU 锁屏建不起隧道</text>
+  <text x="60" y="576" style="font-size:11px;fill:#59636e">需人工解锁，每 20s 重试</text>
+  <line x1="420" y1="482" x2="420" y2="514" stroke="#dc2626" stroke-width="2" marker-end="url(#arrow-red)"/>
+  <rect x="292" y="516" width="256" height="72" rx="10" fill="#fef2f2" stroke="#dc2626" stroke-width="1.5"/>
+  <text x="304" y="540" style="font-size:13px;font-weight:700;fill:#b91c1c">Preparing { last_error }</text>
+  <text x="304" y="560" style="font-size:11px;fill:#59636e">镜像/无障碍失败，60s→300s 退避</text>
+  <text x="304" y="576" style="font-size:11px;fill:#59636e">连续 3 次挂载失败清缓存重下</text>
+  <path d="M280 482 L 280 614" fill="none" stroke="#16a34a" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-green)"/>
+  <rect x="48" y="616" width="500" height="84" rx="12" fill="#ecfdf5" stroke="#16a34a" stroke-width="1.5"/>
+  <text x="64" y="644" style="font-size:15px;font-weight:700;fill:#15803d">Ready（原生就绪）</text>
+  <text x="64" y="668" style="font-size:12px;fill:#59636e">• 持续活体检查：定期校验 DDI 完整挂载与无障碍可用</text>
+  <text x="64" y="687" style="font-size:12px;fill:#59636e">• 读屏超时/axauditd 卡死 → 自动重启手机端 axauditd 后重试（#152）</text>
+  <rect x="592" y="334" width="580" height="384" rx="16" fill="#f6f8fa" stroke="#d0d7de" stroke-width="2"/>
+  <text x="612" y="364" style="font-size:17px;font-weight:700">路线 B：iOS 17–26 WebDriverAgent（后台常驻）</text>
+  <rect x="1056" y="344" width="98" height="24" rx="12.0" fill="#d0d7de"/>
+  <text x="1105.0" y="359.96" text-anchor="middle" style="font-size:11px;font-weight:600;fill:#1f2328">7天自动重签</text>
+  <rect x="612" y="380" width="178" height="56" rx="10" fill="#fff8e6" stroke="#d4a72c" stroke-width="1.5"/>
+  <text x="701" y="404" class="label" text-anchor="middle" style="font-size:13px;font-weight:700;fill:#9a6700">NeedsSigning</text>
+  <text x="701" y="424" text-anchor="middle" style="font-size:11px;fill:#59636e">未签名时先 sign/setup</text>
+  <line x1="790" y1="408" x2="820" y2="408" stroke="#16a34a" stroke-width="2" marker-end="url(#arrow-green)"/>
+  <text x="805" y="396" text-anchor="middle" style="font-size:11px;font-weight:700;fill:#15803d">已签</text>
+  <rect x="822" y="378" width="330" height="108" rx="14" fill="#ffffff" stroke="#d0d7de" stroke-width="1.5"/>
+  <text x="836" y="403" style="font-size:14px;font-weight:700;fill:#1f2328">WdaStarting（后台启动 / 接管）</text>
+  <text x="836" y="426" style="font-size:12px;fill:#59636e">1. 优先接管已运行的后台 WDA（15s，秒级恢复）</text>
+  <text x="836" y="444" style="font-size:12px;fill:#59636e">2. 否则挂 DDI 后后台拉起（120s，USE_IP=127.0.0.1）</text>
+  <text x="836" y="462" style="font-size:12px;fill:#59636e">3. 同步监听系统日志识别 UI 自动化密码框</text>
+  <line x1="860" y1="486" x2="684" y2="514" stroke="#d4a72c" stroke-width="2" marker-end="url(#arrow-amber)"/>
+  <rect x="612" y="516" width="166" height="74" rx="10" fill="#fff8e6" stroke="#d4a72c" stroke-width="1.5"/>
+  <text x="622" y="540" style="font-size:13px;font-weight:700;fill:#9a6700">NeedsUnlock</text>
+  <text x="622" y="560" style="font-size:11px;fill:#59636e">BFU 锁屏，需解锁</text>
+  <text x="622" y="576" style="font-size:11px;fill:#59636e">每 20s 重试一次</text>
+  <line x1="932" y1="486" x2="874" y2="514" stroke="#d4a72c" stroke-width="2" marker-end="url(#arrow-amber)"/>
+  <rect x="788" y="516" width="174" height="74" rx="10" fill="#fff8e6" stroke="#d4a72c" stroke-width="1.5"/>
+  <text x="798" y="540" style="font-size:12px;font-weight:700;fill:#9a6700">NeedsAutomationPin</text>
+  <text x="798" y="560" style="font-size:11px;fill:#59636e">等手输自动化密码</text>
+  <text x="798" y="576" style="font-size:11px;fill:#59636e">每 5s 试/等 25s · 推通知</text>
+  <line x1="1068" y1="486" x2="1068" y2="514" stroke="#dc2626" stroke-width="2" marker-end="url(#arrow-red)"/>
+  <rect x="986" y="516" width="166" height="74" rx="10" fill="#fef2f2" stroke="#dc2626" stroke-width="1.5"/>
+  <text x="996" y="540" style="font-size:12px;font-weight:700;fill:#b91c1c">失败退避 / 证书自愈</text>
+  <text x="996" y="560" style="font-size:11px;fill:#59636e">拒绝启动→查证书自愈</text>
+  <text x="996" y="576" style="font-size:11px;fill:#59636e">其余 60s→300s 退避</text>
+  <path d="M974 486 L 974 614" fill="none" stroke="#16a34a" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-green)"/>
+  <rect x="612" y="616" width="540" height="84" rx="12" fill="#ecfdf5" stroke="#16a34a" stroke-width="1.5"/>
+  <text x="628" y="644" style="font-size:15px;font-weight:700;fill:#15803d">Ready（WDA 就绪）</text>
+  <text x="628" y="668" style="font-size:12px;fill:#59636e">• 活体检查：/status 连续 3 次失败或 xctest_stalled 探测超时 → 丢会话自动重启</text>
+  <text x="628" y="687" style="font-size:12px;fill:#59636e">• 后台维护：每 6h 检查 7 天续签；每 24h 校验 Apple ID 会话（瞬断重试，1h 复查不误报）</text>
+</svg>

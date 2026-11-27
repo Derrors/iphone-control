@@ -1,0 +1,103 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 580" width="1200" height="580" role="img" aria-label="iOS 27 及以上原生控制技术原理：守护进程经 CoreDeviceProxy 用户态隧道与 Lockdown 调用手机系统内置的 remoteAXService、dtuhidd、screencaptureservice、AppService 与 springboardservices，零安装、免签名并复用统一元素树与自动解锁">
+  <title>iOS 27+ 原生控制通道与读树原理</title>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#9198a1"/>
+    </marker>
+    <marker id="arrow-brand" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#22d3ee"/>
+    </marker>
+    <marker id="arrow-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#22c55e"/>
+    </marker>
+    <marker id="arrow-amber" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#d4a72c"/>
+    </marker>
+    <marker id="arrow-red" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#f87171"/>
+    </marker>
+    <marker id="arrow-purple" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#a78bfa"/>
+    </marker>
+    <linearGradient id="screen" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0e7490"/>
+      <stop offset="1" stop-color="#083344"/>
+    </linearGradient>
+    <style>
+      text { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans CJK SC', 'Source Han Sans SC', 'WenQuanYi Zen Hei', Helvetica, Arial, sans-serif; fill: #e6edf3; }
+      .h1 { font-size: 22px; font-weight: 700; }
+      .h2 { font-size: 20px; font-weight: 700; }
+      .h3 { font-size: 16px; font-weight: 700; }
+      .sub { font-size: 13px; fill: #9198a1; }
+      .label { font-size: 13px; fill: #9198a1; font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace; }
+      .frame { font-size: 15px; fill: #9198a1; }
+    </style>
+  </defs>
+  <text x="28" y="38" class="h1">iOS 27+ 原生控制原理：五条系统通道替代 WDA</text>
+  <text x="28" y="62" class="sub">手机端零安装、无需 Apple ID 与 7 天签名；通过 CoreDeviceProxy 用户态隧道与 Lockdown 复用统一元素树与自动解锁</text>
+  <rect x="24" y="88" width="252" height="392" rx="16" fill="#0b2a33" stroke="#22d3ee" stroke-width="2"/>
+  <text x="44" y="120" style="font-size:18px;font-weight:700;fill:#22d3ee">ictl-daemon</text>
+  <text x="44" y="142" class="label" style="font-size:12px">tools/native/ 子模块</text>
+  <rect x="40" y="160" width="220" height="52" rx="10" fill="#0d1117" stroke="#155e75" stroke-width="1.5"/>
+  <text x="52" y="182" style="font-size:13px;font-weight:700;fill:#e6edf3">native/ax.rs</text>
+  <text x="52" y="200" style="font-size:11px;fill:#9198a1">按层流水线走树 · 自愈</text>
+  <rect x="40" y="224" width="220" height="52" rx="10" fill="#0d1117" stroke="#155e75" stroke-width="1.5"/>
+  <text x="52" y="246" style="font-size:13px;font-weight:700;fill:#e6edf3">native/hid.rs</text>
+  <text x="52" y="264" style="font-size:11px;fill:#9198a1">触控 · 按键 · 剪贴板粘贴</text>
+  <rect x="40" y="288" width="220" height="52" rx="10" fill="#0d1117" stroke="#155e75" stroke-width="1.5"/>
+  <text x="52" y="310" style="font-size:13px;font-weight:700;fill:#e6edf3">native/app.rs</text>
+  <text x="52" y="328" style="font-size:11px;fill:#9198a1">启动 / 结束 App / URL</text>
+  <rect x="40" y="352" width="220" height="52" rx="10" fill="#0d1117" stroke="#155e75" stroke-width="1.5"/>
+  <text x="52" y="374" style="font-size:13px;font-weight:700;fill:#e6edf3">native/unlock.rs</text>
+  <text x="52" y="392" style="font-size:11px;fill:#9198a1">ictl_unlock::Screen 适配</text>
+  <rect x="40" y="416" width="220" height="52" rx="10" fill="#0d1117" stroke="#155e75" stroke-width="1.5"/>
+  <text x="52" y="438" style="font-size:13px;font-weight:700;fill:#e6edf3">ictl-ui::Tree</text>
+  <text x="52" y="456" style="font-size:11px;fill:#9198a1">统一查找 / 遮挡 / 弹窗</text>
+  <rect x="316" y="88" width="120" height="312" rx="14" fill="#151b23" stroke="#22d3ee" stroke-width="1.5"/>
+  <text x="376" y="124" text-anchor="middle" style="font-size:13px;font-weight:700;fill:#22d3ee">CoreDevice</text>
+  <text x="376" y="144" text-anchor="middle" style="font-size:13px;font-weight:700;fill:#22d3ee">Proxy 隧道</text>
+  <text x="376" y="174" text-anchor="middle" style="font-size:12px;fill:#9198a1">用户态 TCP</text>
+  <text x="376" y="194" class="label" text-anchor="middle" style="font-size:12px">(jktcp)</text>
+  <text x="376" y="232" text-anchor="middle" style="font-size:12px;font-weight:600">RSD 服务发现</text>
+  <text x="376" y="254" text-anchor="middle" style="font-size:11px;fill:#9198a1">需开发者镜像</text>
+  <text x="376" y="272" text-anchor="middle" style="font-size:11px;fill:#9198a1">(DDI 已挂载)</text>
+  <text x="376" y="326" text-anchor="middle" style="font-size:12px;font-weight:600;fill:#4ade80">常驻复用</text>
+  <text x="376" y="346" text-anchor="middle" style="font-size:11px;fill:#9198a1">免重复建连</text>
+  <rect x="316" y="412" width="120" height="68" rx="14" fill="#151b23" stroke="#3d444d" stroke-width="1.5"/>
+  <text x="376" y="442" text-anchor="middle" style="font-size:13px;font-weight:700">Lockdown</text>
+  <text x="376" y="464" text-anchor="middle" style="font-size:11px;fill:#9198a1">TLS 直连服务</text>
+  <line x1="276" y1="186" x2="314" y2="186" stroke="#22d3ee" stroke-width="2" marker-end="url(#arrow-brand)"/>
+  <line x1="276" y1="250" x2="314" y2="250" stroke="#22d3ee" stroke-width="2" marker-end="url(#arrow-brand)"/>
+  <line x1="276" y1="314" x2="314" y2="314" stroke="#22d3ee" stroke-width="2" marker-end="url(#arrow-brand)"/>
+  <line x1="276" y1="378" x2="314" y2="378" stroke="#22d3ee" stroke-width="2" marker-end="url(#arrow-brand)"/>
+  <line x1="276" y1="446" x2="314" y2="446" stroke="#9198a1" stroke-width="2" marker-end="url(#arrow)"/>
+  <rect x="476" y="88" width="700" height="86" rx="12" fill="#0b2a33" stroke="#22d3ee" stroke-width="1.5"/>
+  <text x="492" y="112" style="font-size:14px;font-weight:700;fill:#22d3ee">1. remoteAXService（读界面 · ictl-ax）</text>
+  <rect x="1068" y="93" width="94" height="24" rx="12.0" fill="#0e7490"/>
+  <text x="1115.0" y="109.32" text-anchor="middle" style="font-size:12px;font-weight:600;fill:#ffffff">空闲 60s 关闭</text>
+  <text x="492" y="133" style="font-size:12px;fill:#9198a1">• DTX 握手回答 hostAPIVersion=7；按层批量并发请求属性（≤400 元素 / 4s，0.45–1.2s/屏）</text>
+  <text x="492" y="153" style="font-size:12px;fill:#9198a1">• 叠加读取 SpringBoard 弹窗层（≤80 元素），零 XML 直转 ictl_ui::Source；axauditd 卡死自动重启</text>
+  <line x1="436" y1="131.0" x2="474" y2="131.0" stroke="#22d3ee" stroke-width="2" marker-end="url(#arrow-brand)"/>
+  <rect x="476" y="184" width="700" height="86" rx="12" fill="#1d1533" stroke="#a78bfa" stroke-width="1.5"/>
+  <text x="492" y="208" style="font-size:14px;font-weight:700;fill:#c4b5fd">2. dtuhidd / universalhidservice（触控 · 按键 · 粘贴 · 屏幕流）</text>
+  <rect x="1068" y="189" width="94" height="24" rx="12.0" fill="#6d28d9"/>
+  <text x="1115.0" y="205.32" text-anchor="middle" style="font-size:12px;font-weight:600;fill:#ffffff">空闲 30s 关闭</text>
+  <text x="492" y="229" style="font-size:12px;fill:#9198a1">• 归一化坐标 0..65535 注入点击/滑动/长按/按键；输入中文经剪贴板粘贴 + 自动点「允许粘贴」+ 还原</text>
+  <text x="492" y="249" style="font-size:12px;fill:#9198a1">• 同会话附带 CoreDevice HEVC 屏幕媒体流（~60fps）；读锁屏前先关 HID 会话防锁屏元素为空</text>
+  <line x1="436" y1="227.0" x2="474" y2="227.0" stroke="#22d3ee" stroke-width="2" marker-end="url(#arrow-brand)"/>
+  <rect x="476" y="280" width="700" height="58" rx="12" fill="#151b23" stroke="#3d444d" stroke-width="1.5"/>
+  <text x="492" y="304" style="font-size:14px;font-weight:700;fill:#e6edf3">3. screencaptureservice（截图）</text>
+  <text x="492" y="325" style="font-size:12px;fill:#9198a1">• CoreDevice 原生截屏（约 0.5 秒），按设备点尺寸缩放或裁切区域放大</text>
+  <line x1="436" y1="309.0" x2="474" y2="309.0" stroke="#22d3ee" stroke-width="2" marker-end="url(#arrow-brand)"/>
+  <rect x="476" y="348" width="700" height="58" rx="12" fill="#151b23" stroke="#3d444d" stroke-width="1.5"/>
+  <text x="492" y="372" style="font-size:14px;font-weight:700;fill:#e6edf3">4. CoreDevice AppService（App 启停与链接）</text>
+  <text x="492" y="393" style="font-size:12px;fill:#9198a1">• 启动 App、发 SIGKILL 强制结束并确认退出（≤2s）、带 payloadURL 打开链接</text>
+  <line x1="436" y1="377.0" x2="474" y2="377.0" stroke="#22d3ee" stroke-width="2" marker-end="url(#arrow-brand)"/>
+  <rect x="476" y="416" width="700" height="64" rx="12" fill="#151b23" stroke="#3d444d" stroke-width="1.5"/>
+  <text x="492" y="440" style="font-size:14px;font-weight:700;fill:#e6edf3">5. Lockdown：锁屏状态与界面方向（无需隧道）</text>
+  <text x="492" y="461" style="font-size:12px;fill:#9198a1">• 建会话后读取 PasswordProtected 判定锁屏；springboardservices 精确读取四向界面旋转角</text>
+  <line x1="436" y1="448.0" x2="474" y2="448.0" stroke="#9198a1" stroke-width="2" marker-end="url(#arrow)"/>
+  <rect x="24" y="496" width="1152" height="64" rx="12" fill="#0d261a" stroke="#22c55e" stroke-width="1.5"/>
+  <text x="44" y="522" style="font-size:14px;font-weight:700;fill:#4ade80">对上层 18 个 MCP 工具 100% 透明兼容（差异极小）</text>
+  <text x="44" y="546" style="font-size:12px;fill:#e6edf3">• 省去 Apple ID、7 天重签、证书吊销、UI 自动化密码与 WDA 卡死  ·  如需切回 WDA，仅需设置 ICTL_IOS_BACKEND=wda（iOS 26 及以下自动走 WDA）</text>
+</svg>

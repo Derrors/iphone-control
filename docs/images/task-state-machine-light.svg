@@ -1,0 +1,89 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 520" width="1200" height="520" role="img" aria-label="AI 任务在 Running、Paused、TakenOver、Waiting 之间流转，以及 completed、failed、cancelled、rejected、abandoned、interrupted 六个终态">
+  <title>AI 任务状态机与租约终态</title>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#59636e"/>
+    </marker>
+    <marker id="arrow-brand" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#0891b2"/>
+    </marker>
+    <marker id="arrow-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#16a34a"/>
+    </marker>
+    <marker id="arrow-amber" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#d4a72c"/>
+    </marker>
+    <marker id="arrow-red" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#dc2626"/>
+    </marker>
+    <marker id="arrow-purple" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#7c3aed"/>
+    </marker>
+    <linearGradient id="screen" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0e7490"/>
+      <stop offset="1" stop-color="#164e63"/>
+    </linearGradient>
+    <style>
+      text { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans CJK SC', 'Source Han Sans SC', 'WenQuanYi Zen Hei', Helvetica, Arial, sans-serif; fill: #1f2328; }
+      .h1 { font-size: 22px; font-weight: 700; }
+      .h2 { font-size: 20px; font-weight: 700; }
+      .h3 { font-size: 16px; font-weight: 700; }
+      .sub { font-size: 13px; fill: #59636e; }
+      .label { font-size: 13px; fill: #59636e; font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace; }
+      .frame { font-size: 15px; fill: #59636e; }
+    </style>
+  </defs>
+  <text x="28" y="38" class="h1">AI 任务状态机与终态流转</text>
+  <text x="28" y="62" class="sub">每次状态切换都会追加落盘到 tasks/&lt;id&gt;.jsonl，并在控制台与 task events 实时推送</text>
+  <rect x="36" y="224" width="110" height="34" rx="17.0" fill="#0e7490"/>
+  <text x="91.0" y="245.68" text-anchor="middle" style="font-size:13px;font-weight:600;fill:#ffffff">task_open</text>
+  <line x1="146" y1="241" x2="198" y2="241" stroke="#0891b2" stroke-width="2.5" marker-end="url(#arrow-brand)"/>
+  <rect x="200" y="192" width="220" height="98" rx="16" fill="#ecfdf5" stroke="#16a34a" stroke-width="2.5"/>
+  <text x="310" y="232" text-anchor="middle" style="font-size:20px;font-weight:700;fill:#15803d">Running</text>
+  <text x="310" y="256" text-anchor="middle" style="font-size:12px;fill:#59636e">Agent 凭任务口令执行动作</text>
+  <text x="310" y="274" text-anchor="middle" style="font-size:12px;fill:#59636e">其余客户端只读</text>
+  <rect x="520" y="94" width="220" height="82" rx="14" fill="#fff8e6" stroke="#d4a72c" stroke-width="2"/>
+  <text x="630" y="128" text-anchor="middle" style="font-size:18px;font-weight:700;fill:#9a6700">Paused</text>
+  <text x="630" y="152" text-anchor="middle" style="font-size:12px;fill:#59636e">人工暂停；Agent 动作挂起等待</text>
+  <path d="M350 192 C 380 128, 450 120, 518 120" fill="none" stroke="#d4a72c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-amber)"/>
+  <text x="440" y="114" class="label" text-anchor="middle" style="font-size:12px;fill:#9a6700">pause</text>
+  <path d="M520 156 C 455 156, 415 170, 390 190" fill="none" stroke="#16a34a" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-green)"/>
+  <text x="468" y="178" class="label" text-anchor="middle" style="font-size:12px;fill:#15803d">resume</text>
+  <rect x="520" y="214" width="220" height="92" rx="14" fill="#eff6ff" stroke="#2563eb" stroke-width="2"/>
+  <text x="630" y="248" text-anchor="middle" style="font-size:18px;font-weight:700;fill:#1d4ed8">TakenOver</text>
+  <text x="630" y="270" text-anchor="middle" style="font-size:12px;fill:#59636e">人工接管，直接操作手机</text>
+  <text x="630" y="288" text-anchor="middle" style="font-size:11px;fill:#1d4ed8">标记「交还后须先重新观察」</text>
+  <line x1="420" y1="232" x2="518" y2="232" stroke="#2563eb" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="469" y="224" class="label" text-anchor="middle" style="font-size:12px;fill:#1d4ed8">takeover</text>
+  <line x1="520" y1="272" x2="422" y2="272" stroke="#16a34a" stroke-width="2" marker-end="url(#arrow-green)"/>
+  <text x="469" y="290" class="label" text-anchor="middle" style="font-size:12px;fill:#15803d">handback</text>
+  <line x1="630" y1="176" x2="630" y2="212" stroke="#2563eb" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="642" y="199" class="label" style="font-size:11px;fill:#1d4ed8">takeover</text>
+  <rect x="520" y="356" width="220" height="96" rx="14" fill="#f5f3ff" stroke="#7c3aed" stroke-width="2"/>
+  <text x="630" y="390" text-anchor="middle" style="font-size:17px;font-weight:700;fill:#6d28d9">Waiting（等待确认）</text>
+  <text x="630" y="414" text-anchor="middle" style="font-size:12px;fill:#59636e">iphone_confirm 敏感步骤</text>
+  <text x="630" y="434" text-anchor="middle" style="font-size:12px;fill:#59636e">或超出 --app 白名单范围</text>
+  <path d="M310 290 C 310 385, 420 404, 518 404" fill="none" stroke="#7c3aed" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-purple)"/>
+  <text x="362" y="424" text-anchor="middle" style="font-size:12px;font-weight:600;fill:#6d28d9">请求确认 / 越界</text>
+  <path d="M520 374 C 445 368, 390 340, 360 292" fill="none" stroke="#16a34a" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-green)"/>
+  <text x="414" y="336" style="font-size:11px;font-weight:600;fill:#15803d">approve（越界拒绝仅拒本步）</text>
+  <rect x="816" y="94" width="356" height="394" rx="16" fill="#f6f8fa" stroke="#d0d7de" stroke-width="1.5"/>
+  <text x="838" y="126" style="font-size:15px;font-weight:700">终态（不可恢复，任务口令立即失效）</text>
+  <line x1="740" y1="136" x2="814" y2="136" stroke="#59636e" stroke-width="2" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
+  <line x1="740" y1="260" x2="814" y2="260" stroke="#59636e" stroke-width="2" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
+  <line x1="740" y1="404" x2="814" y2="404" stroke="#dc2626" stroke-width="2" stroke-dasharray="5 4" marker-end="url(#arrow-red)"/>
+  <text x="778" y="396" class="label" text-anchor="middle" style="font-size:11px;fill:#b91c1c">reject</text>
+  <rect x="836" y="146" width="316" height="84" rx="10" fill="#ecfdf5" stroke="#16a34a" stroke-width="1.5"/>
+  <text x="850" y="170" style="font-size:13px;font-weight:700;fill:#15803d">正常结束</text>
+  <text x="850" y="194" style="font-size:11px;fill:#59636e">completed  — 任务成功完成（task_finish / 退出码 0）</text>
+  <text x="850" y="214" style="font-size:11px;fill:#59636e">failed     — 任务执行失败（退出码非 0）</text>
+  <rect x="836" y="246" width="316" height="84" rx="10" fill="#fff8e6" stroke="#d4a72c" stroke-width="1.5"/>
+  <text x="850" y="270" style="font-size:13px;font-weight:700;fill:#9a6700">人工终止</text>
+  <text x="850" y="294" style="font-size:11px;fill:#59636e">cancelled  — 人工停止（控制台 / task stop / Ctrl-C）</text>
+  <text x="850" y="314" style="font-size:11px;fill:#59636e">rejected   — 人工拒绝 iphone_confirm 敏感操作</text>
+  <rect x="836" y="346" width="316" height="84" rx="10" fill="#fef2f2" stroke="#dc2626" stroke-width="1.5"/>
+  <text x="850" y="370" style="font-size:13px;font-weight:700;fill:#b91c1c">异常兜底（出错就停）</text>
+  <text x="850" y="394" style="font-size:11px;fill:#59636e">abandoned   — 开任务的租约连接断开 / 进程退出</text>
+  <text x="850" y="414" style="font-size:11px;fill:#59636e">interrupted — 切换控制设备或守护进程重启</text>
+  <text x="28" y="496" style="font-size:12px;fill:#59636e">注：任何非终态下遇到租约断连、人工 stop 或守护进程重启，都会直接转入对应终态并落盘终态事件 done。</text>
+</svg>

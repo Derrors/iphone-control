@@ -1,0 +1,83 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 480" width="1200" height="480" role="img" aria-label="First-time setup diagram: install the binary, run iphone-control to pair and enable Developer Mode; iOS 27+ skips Apple ID and signing and gets ready in seconds, while iOS 17–26 signs in to a free Apple ID and installs WDA; finally register MCP with your AI client">
+  <title>First-time setup paths</title>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#59636e"/>
+    </marker>
+    <marker id="arrow-brand" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#0891b2"/>
+    </marker>
+    <marker id="arrow-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#16a34a"/>
+    </marker>
+    <marker id="arrow-amber" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#d4a72c"/>
+    </marker>
+    <marker id="arrow-red" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#dc2626"/>
+    </marker>
+    <marker id="arrow-purple" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#7c3aed"/>
+    </marker>
+    <linearGradient id="screen" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0e7490"/>
+      <stop offset="1" stop-color="#164e63"/>
+    </linearGradient>
+    <style>
+      text { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans CJK SC', 'Source Han Sans SC', 'WenQuanYi Zen Hei', Helvetica, Arial, sans-serif; fill: #1f2328; }
+      .h1 { font-size: 22px; font-weight: 700; }
+      .h2 { font-size: 20px; font-weight: 700; }
+      .h3 { font-size: 16px; font-weight: 700; }
+      .sub { font-size: 13px; fill: #59636e; }
+      .label { font-size: 13px; fill: #59636e; font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace; }
+      .frame { font-size: 15px; fill: #59636e; }
+    </style>
+  </defs>
+  <text x="28" y="38" class="h1">First-Time Setup: Automatic Path by iOS Version</text>
+  <text x="28" y="62" class="sub">Run iphone-control once; the guide skips completed steps. iOS 27+ needs no Apple ID or signing</text>
+  <rect x="24" y="150" width="210" height="172" rx="14" fill="#f6f8fa" stroke="#d0d7de" stroke-width="1.5"/>
+  <text x="40" y="182" style="font-size:15px;font-weight:700;fill:#1f2328">1. Install binary</text>
+  <rect x="162" y="163" width="58" height="24" rx="12.0" fill="#d0d7de"/>
+  <text x="191.0" y="179.32" text-anchor="middle" style="font-size:12px;font-weight:600;fill:#1f2328">~1 min</text>
+  <text x="40" y="214" style="font-size:12px;fill:#59636e">• One-line installer</text>
+  <text x="40" y="236" style="font-size:12px;fill:#59636e">• Or Homebrew / .deb</text>
+  <text x="40" y="258" style="font-size:12px;fill:#59636e">• Linux: system usbmuxd</text>
+  <text x="40" y="280" style="font-size:12px;fill:#59636e">• Starts user service</text>
+  <line x1="234" y1="236" x2="264" y2="236" stroke="#59636e" stroke-width="2" marker-end="url(#arrow)"/>
+  <rect x="266" y="150" width="226" height="172" rx="14" fill="#f6f8fa" stroke="#d0d7de" stroke-width="1.5"/>
+  <text x="282" y="182" style="font-size:15px;font-weight:700;fill:#1f2328">2. Plug in &amp; Pair</text>
+  <text x="282" y="214" style="font-size:12px;fill:#59636e">Run iphone-control:</text>
+  <text x="282" y="236" style="font-size:12px;fill:#59636e">• Pick language &amp; proxy</text>
+  <text x="282" y="258" style="font-size:12px;fill:#59636e">• Tap “Trust” on phone</text>
+  <text x="282" y="280" style="font-size:12px;fill:#59636e">• Enable Developer Mode</text>
+  <path d="M492 204 C 520 204, 520 154, 550 154" fill="none" stroke="#0891b2" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-brand)"/>
+  <path d="M492 272 C 520 272, 520 342, 550 342" fill="none" stroke="#59636e" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)"/>
+  <rect x="552" y="86" width="390" height="156" rx="16" fill="#ecfeff" stroke="#0891b2" stroke-width="2"/>
+  <text x="572" y="118" style="font-size:16px;font-weight:700;fill:#0e7490">3A. iOS 27+ Native Control</text>
+  <rect x="830" y="98" width="96" height="24" rx="12.0" fill="#0e7490"/>
+  <text x="878.0" y="113.96" text-anchor="middle" style="font-size:11px;font-weight:600;fill:#ffffff">Recommended</text>
+  <text x="572" y="146" style="font-size:13px;font-weight:600;fill:#15803d">✓ Skips Apple ID sign-in &amp; WDA signing</text>
+  <text x="572" y="172" style="font-size:12px;fill:#59636e">• Downloads &amp; mounts Developer Disk Image</text>
+  <text x="572" y="194" style="font-size:12px;fill:#59636e">• Connects accessibility service (keep unlocked)</text>
+  <text x="572" y="222" style="font-size:12px;font-weight:700;fill:#0e7490">▸ Ready in a few seconds to ~30 s</text>
+  <rect x="552" y="262" width="390" height="176" rx="16" fill="#f6f8fa" stroke="#d0d7de" stroke-width="1.5"/>
+  <text x="572" y="294" style="font-size:16px;font-weight:700">3B. iOS 17–26（WebDriverAgent）</text>
+  <rect x="854" y="274" width="72" height="24" rx="12.0" fill="#d0d7de"/>
+  <text x="890.0" y="289.96" text-anchor="middle" style="font-size:11px;font-weight:600;fill:#1f2328">WDA path</text>
+  <text x="572" y="322" style="font-size:12px;fill:#59636e">• Sign in free Apple ID (password never stored)</text>
+  <text x="572" y="344" style="font-size:12px;fill:#59636e">• Signs &amp; installs WebDriverAgent automatically</text>
+  <text x="572" y="366" style="font-size:12px;fill:#59636e">• Trust developer cert in iOS Settings (online)</text>
+  <text x="572" y="388" style="font-size:12px;fill:#59636e">• Enter passcode if XCTest prompt appears</text>
+  <text x="572" y="418" style="font-size:12px;font-weight:600;fill:#9a6700">↺ Auto re-signs before the 7-day profile expires</text>
+  <path d="M942 164 C 966 164, 966 220, 988 220" fill="none" stroke="#16a34a" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-green)"/>
+  <path d="M942 350 C 966 350, 966 266, 988 266" fill="none" stroke="#16a34a" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-green)"/>
+  <rect x="990" y="140" width="186" height="200" rx="14" fill="#ecfdf5" stroke="#16a34a" stroke-width="1.5"/>
+  <text x="1006" y="172" style="font-size:15px;font-weight:700;fill:#15803d">4. Register &amp; Go</text>
+  <text x="1006" y="204" style="font-size:12px;fill:#59636e">• Auto-unlock (opt.)</text>
+  <text x="1006" y="226" style="font-size:12px;fill:#59636e">• Bark / TG (opt.)</text>
+  <text x="1006" y="248" style="font-size:12px;fill:#59636e">• Register MCP to</text>
+  <text x="1006" y="270" style="font-size:12px;fill:#59636e">  Claude / Codex</text>
+  <text x="1006" y="292" style="font-size:12px;fill:#59636e">• Open a new chat</text>
+  <text x="1006" y="314" style="font-size:12px;fill:#59636e">  &amp; drive the phone!</text>
+  <text x="28" y="462" style="font-size:12px;fill:#59636e">Tip: Run iphone-control setup --reconfigure anytime to redo a single step (language, proxy, phone, alerts, MCP).</text>
+</svg>

@@ -1,0 +1,106 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 560" width="1200" height="560" role="img" aria-label="展示本机浏览器、局域网 HTTPS 浏览器、远端 AI 客户端与外部 Agent 平台如何通过不同权限令牌访问控制台与守护进程，实现只读隔离与执行/控制分离">
+  <title>控制台、局域网 HTTPS 与跨主机任务拓扑</title>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#59636e"/>
+    </marker>
+    <marker id="arrow-brand" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#0891b2"/>
+    </marker>
+    <marker id="arrow-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#16a34a"/>
+    </marker>
+    <marker id="arrow-amber" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#d4a72c"/>
+    </marker>
+    <marker id="arrow-red" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#dc2626"/>
+    </marker>
+    <marker id="arrow-purple" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#7c3aed"/>
+    </marker>
+    <linearGradient id="screen" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0e7490"/>
+      <stop offset="1" stop-color="#164e63"/>
+    </linearGradient>
+    <style>
+      text { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans CJK SC', 'Source Han Sans SC', 'WenQuanYi Zen Hei', Helvetica, Arial, sans-serif; fill: #1f2328; }
+      .h1 { font-size: 22px; font-weight: 700; }
+      .h2 { font-size: 20px; font-weight: 700; }
+      .h3 { font-size: 16px; font-weight: 700; }
+      .sub { font-size: 13px; fill: #59636e; }
+      .label { font-size: 13px; fill: #59636e; font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace; }
+      .frame { font-size: 15px; fill: #59636e; }
+    </style>
+  </defs>
+  <text x="28" y="38" class="h1">控制台与远程访问：四种角色与权限隔离</text>
+  <text x="28" y="62" class="sub">默认仅监听 127.0.0.1；--lan 开启局域网 HTTPS（含 Tailscale 100.64/10）。所有 HTTP 访问均需登录令牌</text>
+  <rect x="24" y="88" width="420" height="92" rx="12" fill="#ecfdf5" stroke="#16a34a" stroke-width="1.5"/>
+  <text x="40" y="116" style="font-size:14px;font-weight:700;fill:#15803d">① 操作者浏览器（本机 / 局域网）</text>
+  <rect x="366" y="97" width="64" height="24" rx="12.0" fill="#16a34a"/>
+  <text x="398.0" y="113.32" text-anchor="middle" style="font-size:12px;font-weight:600;fill:#ffffff">operate</text>
+  <text x="40" y="142" style="font-size:12px;fill:#59636e">持有 operate 登录令牌（Cookie 30 天）</text>
+  <text x="40" y="162" style="font-size:12px;fill:#59636e">看画面 · 点按输入 · 开任务 · 暂停/接管/审批</text>
+  <rect x="24" y="196" width="420" height="92" rx="12" fill="#eff6ff" stroke="#2563eb" stroke-width="1.5"/>
+  <text x="40" y="224" style="font-size:14px;font-weight:700;fill:#1d4ed8">② 只读观察者（如大屏 / 同事）</text>
+  <rect x="378" y="205" width="52" height="24" rx="12.0" fill="#2563eb"/>
+  <text x="404.0" y="221.32" text-anchor="middle" style="font-size:12px;font-weight:600;fill:#ffffff">view</text>
+  <text x="40" y="250" style="font-size:12px;fill:#59636e">持有 --read-only 令牌（仅 GET + video/ack）</text>
+  <text x="40" y="270" style="font-size:12px;fill:#59636e">只能看画面/状态/步骤；禁止操作、解锁与 /mcp</text>
+  <rect x="24" y="304" width="420" height="92" rx="12" fill="#f6f8fa" stroke="#d0d7de" stroke-width="1.5"/>
+  <text x="40" y="332" style="font-size:14px;font-weight:700;fill:#1f2328">③ 远端 AI 客户端（另一台电脑）</text>
+  <rect x="372" y="313" width="58" height="24" rx="12.0" fill="#d0d7de"/>
+  <text x="401.0" y="329.32" text-anchor="middle" style="font-size:12px;font-weight:600;fill:#1f2328">Bearer</text>
+  <text x="40" y="358" style="font-size:12px;fill:#59636e">直连 HTTPS /mcp（Bearer 令牌）</text>
+  <text x="40" y="378" style="font-size:12px;fill:#59636e">或运行 iphone-control mcp --url 桥接 stdio</text>
+  <rect x="24" y="412" width="420" height="92" rx="12" fill="#f5f3ff" stroke="#7c3aed" stroke-width="1.5"/>
+  <text x="40" y="440" style="font-size:14px;font-weight:700;fill:#6d28d9">④ 跨主机 Agent 平台（task run --url）</text>
+  <rect x="382" y="421" width="48" height="24" rx="12.0" fill="#7c3aed"/>
+  <text x="406.0" y="437.32" text-anchor="middle" style="font-size:12px;font-weight:600;fill:#ffffff">隔离</text>
+  <text x="40" y="466" style="font-size:12px;fill:#59636e">平台保留登录令牌：开任务/持租约/暂停/确认</text>
+  <text x="40" y="486" style="font-size:12px;fill:#59636e">远端 Agent 仅获 Task Token：只放行 /mcp 与 finish</text>
+  <line x1="444" y1="134" x2="520" y2="134" stroke="#16a34a" stroke-width="2" marker-end="url(#arrow-green)"/>
+  <line x1="444" y1="242" x2="520" y2="242" stroke="#2563eb" stroke-width="2" marker-end="url(#arrow)"/>
+  <line x1="444" y1="350" x2="520" y2="350" stroke="#59636e" stroke-width="2" marker-end="url(#arrow)"/>
+  <line x1="444" y1="458" x2="520" y2="458" stroke="#7c3aed" stroke-width="2" marker-end="url(#arrow-purple)"/>
+  <text x="482" y="118" class="label" text-anchor="middle" style="font-size:11px">HTTPS</text>
+  <text x="482" y="226" class="label" text-anchor="middle" style="font-size:11px">HTTPS</text>
+  <text x="482" y="334" class="label" text-anchor="middle" style="font-size:11px">/mcp</text>
+  <text x="482" y="442" text-anchor="middle" style="font-size:11px;font-weight:600;fill:#6d28d9">双口令</text>
+  <rect x="522" y="88" width="316" height="416" rx="16" fill="#ecfeff" stroke="#0891b2" stroke-width="2"/>
+  <text x="542" y="122" style="font-size:18px;font-weight:700;fill:#0e7490">iphone-control viewer</text>
+  <text x="542" y="146" class="label" style="font-size:12px">127.0.0.1:8200 / --lan HTTPS</text>
+  <rect x="538" y="164" width="284" height="116" rx="10" fill="#ffffff" stroke="#a5f3fc" stroke-width="1.5"/>
+  <text x="550" y="188" style="font-size:13px;font-weight:700;fill:#1f2328">安全网关与限速</text>
+  <text x="550" y="210" style="font-size:11px;fill:#59636e">• 仅接受回环与局域网 IP（含 100.64/10）</text>
+  <text x="550" y="228" style="font-size:11px;fill:#59636e">• 校验 Host / Origin / Sec-Fetch-Site</text>
+  <text x="550" y="246" style="font-size:11px;fill:#59636e">• 错令牌限速 20 次/分（不挡正确令牌）</text>
+  <text x="550" y="264" style="font-size:11px;fill:#59636e">• 自签证书显示 SHA-256 或自定义 PEM</text>
+  <rect x="538" y="294" width="284" height="90" rx="10" fill="#ffffff" stroke="#a5f3fc" stroke-width="1.5"/>
+  <text x="550" y="318" style="font-size:13px;font-weight:700;fill:#1f2328">令牌即时热更新</text>
+  <text x="550" y="340" style="font-size:11px;fill:#59636e">• 存 viewer-tokens.json (0600)</text>
+  <text x="550" y="358" style="font-size:11px;fill:#59636e">• 增删/换令牌立即生效，无需重启</text>
+  <text x="550" y="376" style="font-size:11px;fill:#59636e">• 被吊销会话与视频流 5 秒内断开</text>
+  <rect x="538" y="398" width="284" height="84" rx="10" fill="#ffffff" stroke="#a5f3fc" stroke-width="1.5"/>
+  <text x="550" y="422" style="font-size:13px;font-weight:700;fill:#1f2328">跨主机任务租约与防自控</text>
+  <text x="550" y="444" style="font-size:11px;fill:#59636e">• /tasks/open 长连接即租约（15s 保活）</text>
+  <text x="550" y="462" style="font-size:11px;fill:#59636e">• Agent 仅凭 Task Token 无法调控制接口</text>
+  <line x1="838" y1="296" x2="896" y2="296" stroke="#0891b2" stroke-width="2.5" marker-end="url(#arrow-brand)"/>
+  <text x="867" y="282" class="label" text-anchor="middle" style="font-size:11px">Unix</text>
+  <text x="867" y="316" class="label" text-anchor="middle" style="font-size:11px">0600</text>
+  <rect x="898" y="126" width="278" height="174" rx="14" fill="#f6f8fa" stroke="#0891b2" stroke-width="1.5"/>
+  <text x="914" y="156" style="font-size:15px;font-weight:700;fill:#0e7490">iphone-control daemon</text>
+  <text x="914" y="184" style="font-size:12px;fill:#59636e">• 独占控制 USB 手机</text>
+  <text x="914" y="205" style="font-size:12px;fill:#59636e">• 任务准入、App 白名单与落盘</text>
+  <text x="914" y="226" style="font-size:12px;fill:#59636e">• 本机 PID 防自控（/proc · libproc）</text>
+  <text x="914" y="247" style="font-size:12px;fill:#59636e">• 转发 HEVC / MJPEG 视频流</text>
+  <text x="914" y="268" style="font-size:12px;fill:#59636e">• 不开 viewer 也独立服务本机 MCP</text>
+  <line x1="1037" y1="300" x2="1037" y2="356" stroke="#59636e" stroke-width="2.5" marker-start="url(#arrow)" marker-end="url(#arrow)"/>
+  <text x="1050" y="334" class="label" style="font-size:12px">USB · usbmuxd</text>
+  <rect x="926" y="360" width="222" height="144" rx="20" fill="#1f2328"/>
+  <rect x="936" y="370" width="202" height="124" rx="14" fill="url(#screen)"/>
+  <text x="1037" y="412" text-anchor="middle" style="font-size:17px;font-weight:700;fill:#ffffff">iPhone / iPad</text>
+  <text x="1037" y="440" text-anchor="middle" style="font-size:13px;font-weight:600;fill:#d5f3fb">iOS 27+ 原生控制</text>
+  <text x="1037" y="466" text-anchor="middle" style="font-size:12px;fill:#b7e7f5">iOS 17–26 WebDriverAgent</text>
+  <text x="28" y="538" style="font-size:12px;fill:#59636e">安全提示：若需从公网访问，推荐 Tailscale 专网；若经反向代理（frp / nginx / cloudflared），务必在代理侧开启 HTTPS。</text>
+</svg>

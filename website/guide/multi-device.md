@@ -15,7 +15,7 @@ iphone-control select auto                 # 改回自动选
 agent 用 `iphone_list_devices` 和 `iphone_select_device`，效果一样。
 
 - 只能选 USB 上接着的设备。先比 UDID，再比设备名；设备名包含这段文字且只有一台时也行，对上多台就报错，要用 UDID 指定。
-- 切换后要等新设备就绪：原生控制（iOS 27 及以上）几秒，WDA 要 10~60 秒。先用 `status`（或 `iphone_status`）确认。iOS 26 及以下没装过 WDA 的设备要先[安装](#给新设备安装)。
+- 切换后要等新设备就绪：原生控制（iOS 27 及以上）或切回仍在后台运行的 WDA 设备只需几秒，WDA 首次冷启动要 10~60 秒。先用 `status`（或 `iphone_status`）确认。iOS 26 及以下没装过 WDA 的设备要先[安装](#给新设备安装)。
 - 浏览器控制台 `iphone-control viewer` 也能切换，见[在控制台里切换](#control-page)。
 
 ## 在控制台里切换 {#control-page}
@@ -82,4 +82,4 @@ iphone-control passcode set --device <UDID 或设备名>     # 设备要接着
 - **iOS 26 没有 HID 后备：** WDA 重启期间操作会失败，iPhone 上也一样。
 - **屏幕尺寸不是 430×932：** iPad mini 5 竖放是 768×1024，以截图和 `iphone_status` 为准。
 
-已验证：iPad mini 5，iOS 26.6.1（Linux）。
+已验证：iPad mini 5，iOS 26.6.1 / 26.7.3（Linux）。

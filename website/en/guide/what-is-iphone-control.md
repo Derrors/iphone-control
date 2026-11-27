@@ -18,11 +18,19 @@ The core is device control: a long-running daemon owns the phone and keeps servi
 ![Architecture: AI clients use iphone-control mcp over stdio, and the optional control page serves browsers and remote agents over HTTPS; both talk to the daemon over a Unix socket. The daemon is the core: it drives the iPhone or iPad over USB, natively on iOS 27 and later and through WebDriverAgent on iOS 17–26, and keeps running with the control page closed](/architecture-light.svg){.light-only}
 ![Architecture: AI clients use iphone-control mcp over stdio, and the optional control page serves browsers and remote agents over HTTPS; both talk to the daemon over a Unix socket. The daemon is the core: it drives the iPhone or iPad over USB, natively on iOS 27 and later and through WebDriverAgent on iOS 17–26, and keeps running with the control page closed](/architecture-dark.svg){.dark-only}
 
-- A **daemon** runs all the time and owns the phone: it pairs, mounts the Developer Disk Image, opens a tunnel, and then drives the phone one of two ways, by iOS version:
-  - **iOS 27 and later: native control (default).** The screen is read through the system's accessibility service, taps, swipes and buttons go through CoreDevice HID, and apps launch through CoreDevice. Nothing is installed on the phone, no Apple ID is needed, and it's ready in seconds.
-  - **iOS 17–26: WebDriverAgent.** [WebDriverAgent](https://github.com/appium/WebDriverAgent) (WDA, an agent on top of Apple's XCTest automation) runs on the phone to read the screen, tap and type. It is signed with your **free Apple ID**; free signatures expire after 7 days and the daemon re-signs before that. This route stays maintained.
-- The **MCP server** is started by the AI client on demand and simply forwards tool calls to the daemon.
-- On iOS 27 and later set back to WDA (`ICTL_IOS_BACKEND=wda`), taps, swipes, buttons and screenshots go through CoreDevice HID while WDA is unavailable (for example while it restarts).
+- A **daemon** runs all the time and owns the phone: it pairs, mounts the Developer Disk Image, opens a tunnel, and picks the right control route by iOS version; USB plug and unplug events wake it immediately via `usbmuxd`.
+- The **MCP server** is started by the AI client on demand as a thin client that forwards tool calls to the daemon.
+
+### Comparing the two control routes
+
+| | iOS 27 and later: Native control (default, recommended) | iOS 17–26: WebDriverAgent |
+|---|---|---|
+| Installed on phone | **Nothing** — uses system accessibility, HID and CoreDevice directly | Signed [WebDriverAgent](https://github.com/appium/WebDriverAgent) installed on the phone |
+| Apple ID & signing | **None** | Free Apple ID; auto re-signed before the 7-day profile expires |
+| After a phone reboot | Unlock once by hand (BFU) | BFU unlock + one passcode prompt for UI Automation |
+| Time to ready | A few seconds to ~30 s | 10–60 s on cold start; seconds when re-attaching background WDA |
+| Control page video | Phone's hardware HEVC (~60 fps, zero host encoding) | WDA MJPEG → host H.264 (no ffmpeg needed on macOS) |
+| Switching routes | Set `ICTL_IOS_BACKEND=wda` to fall back to WDA (with HID fallback while WDA restarts) | Always uses WDA, actively maintained |
 
 ## Compatibility
 
@@ -30,7 +38,7 @@ The core is device control: a long-running daemon owns the phone and keeps servi
 |---|---|
 | Host | Linux, x86_64 or arm64: one-command install, Homebrew or a .deb (Debian 12+, Ubuntu 22.04+), with the system usbmuxd; or build from source with Rust 1.89+<br>macOS 11+, Apple Silicon or Intel (Intel packages from 0.2.14): one-command install or Homebrew, or build from source, see [macOS](../deploy/macos)<br>No Windows |
 | Phone | iPhone or iPad, iOS 17 or later. **iOS 27 or later recommended** (native control); iOS 17–26 through WebDriverAgent |
-| Verified on | iPhone 15 Pro Max, iOS 27.2.1, native control (Linux)<br>iPhone 15 Pro Max, iOS 27.0.1, WDA (Linux, macOS)<br>iPhone 12 mini, iOS 26.4.1 (Linux)<br>iPad mini 5, iOS 26.6.1 (Linux) |
+| Verified on | iPhone 15 Pro Max, iOS 27.2.1, native control (Linux)<br>iPhone 15 Pro Max, iOS 27.0.1, WDA (Linux, macOS)<br>iPhone 12 mini, iOS 26.4.1 (Linux)<br>iPad mini 5, iOS 26.6.1 / 26.7.3 (Linux) |
 | Account | None on iOS 27 and later (native control); on iOS 26 and earlier a free Apple ID, a dedicated one recommended |
 
 Other models and iOS versions should work but are untested — [reports](https://github.com/Derrors/iphone-control/issues) are welcome.

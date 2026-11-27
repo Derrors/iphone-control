@@ -15,7 +15,7 @@
 | 阶段 | 内容 |
 |---|---|
 | 第一版 | macOS；iOS 27 及以上、原生控制（不用 WDA）；系统 usbmuxd 列出的网络设备 |
-| 第二版 | iOS 17～26（经 WDA）走 Wi-Fi；控制台的 MJPEG 画面改经守护进程 |
+| 第二版 | iOS 17～26（经 WDA）走 Wi-Fi（控制台的 MJPEG 画面已在 #192 迁至守护进程，Wi-Fi 下复用该通道） |
 | 以后 | Linux 自己发现网络设备、自己保活；iOS 27 起完全不用线的首次配对 |
 
 不做：跨网段、经路由器或 VPN 连手机（手机只接受同一网段来的连接，发现也靠组播）；按 IP 地址直连没配对过的手机；第一次配对、打开开发者模式不用线（这两步手机只在 USB 上答应，第一版仍要接一次线）。
@@ -26,9 +26,9 @@
 
 - **只认 USB**：`ictl_device::list_devices` 把 usbmuxd 列出的网络设备过滤掉（`crates/ictl-device/src/lib.rs`，`Connection::Usb`）。`Device` 只持有 `UsbmuxdProvider`，`is_connection` 比 UDID 和 usbmuxd 编号。
 - **连接换了会自动重建**：巡检发现同一个 UDID 的 usbmuxd 编号变了，就丢掉旧会话、按新编号重建（`supervise.rs` 的 `online`）。USB 和 Wi-Fi 的编号不同，所以换线在守护进程看来就是一次重新接入，这条路已经有了。
-- **巡检 10 秒一次**，主循环另有 `Daemon::wake`，叫一声就马上巡检一轮。
+- **热插拔监听 + 10 秒巡检兜底**：守护进程已接入 `usbmuxd Listen` 长连接（#221，当前过滤非 USB 事件）实现 USB 毫秒级唤醒（`Daemon::wake`），并保留 10 秒定时巡检兜底；Wi-Fi 阶段只需放开已启用 Wi-Fi 设备的网络事件过滤。
 - **iOS 27 原生控制全走隧道**：读界面（remoteAXService）、点击按键（HID）、启动结束 App（AppService）、截图（screencaptureservice）、控制台画面（HEVC 媒体流）都在 CoreDeviceProxy 隧道里，隧道外只用 lockdown 的几个服务：设备信息、锁屏状态、开发者模式、方向（springboardservices）、App 列表和安装（installation_proxy）、描述文件（misagent）、崩溃报告、日志、Web Inspector。
-- **WDA 在后台启动、不带环境变量**（D18，`Tunnel::launch_in_background`）。WDA 不设 `USE_IP` 时监听手机的所有网卡：手机连着 Wi-Fi 时，8100（HTTP，没有认证）和 9100（MJPEG）**现在就能从局域网访问**，和用不用 Wi-Fi 控制无关。这违背 D3 的本意，见 4.2。
+- **WDA 回环绑定已落地（#180）**：后台启动 WDA 已带上 `USE_IP=127.0.0.1`（`ictl_wda::runner::WDA_BIND_IP`），8100（HTTP）和 9100（MJPEG）仅监听手机回环地址，手机连 Wi-Fi 时局域网已无法访问；后续第二版经 Wi-Fi 隧道访问 WDA 时按 5.5 节评估改听隧道地址。
 - **TLS 不校验手机**：idevice 的 lockdown TLS（`sni.rs`）对服务器证书和握手签名一律放行。USB 上无所谓；在 Wi-Fi 上，能冒充手机 IP 的人就能冒充手机，看到主机发出的内容（输入的文字、自动解锁的密码、上传的包）。见 4.1。
 - **控制台**：iOS 27 的画面经守护进程（`Request::ScreenStream`），不直连手机；低版本的 MJPEG 画面原来由 viewer 自己 `Device::find` 连手机 9100（只认 USB），2026-11 起改为向守护进程要（`Request::MjpegStream`，见 5.4），守护进程现在经 USB 连 9100。
 - **写操作不重放**已经有：WDA 请求开始写入后的失败归为 `WRITE_FAILED`/`AFTER_SENT`，不退到 HID 重做（`crates/ictl-wda/src/http.rs`、`client.rs`）。
@@ -173,8 +173,8 @@ pub fn watch() -> impl Stream<Item = MuxEvent>;           // usbmuxd Listen：�
 
 ### 8.1 安全前提（可以先发，和 Wi-Fi 无关）
 
-- idevice TLS 校验补丁 + 测试；USB 全部回归通过。
-- 后台启动 WDA 带 `USE_IP=127.0.0.1`；回归测试加一条：手机连着 Wi-Fi 时，从局域网访问它的 8100/9100 失败。
+- [ ] idevice TLS 校验补丁 + 测试；USB 全部回归通过。
+- [x] 后台启动 WDA 带 `USE_IP=127.0.0.1`（已在 #180 完成，手机连 Wi-Fi 时局域网访问 8100/9100 被拒）。
 
 ### 8.2 第一版：macOS、iOS 27
 

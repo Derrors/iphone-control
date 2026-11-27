@@ -14,10 +14,10 @@
 | jktcp 0.1.8 | 用户态 TCP（idevice 间接依赖） | MIT | 间接依赖 | 同上 |
 | plume_core（Impactor） | Apple ID、开发者 API、描述文件、证书 | **MPL-2.0**（目录内 LICENSE） | vendor 到 `vendor/plume_core`，源码只改了两处（`certificate.rs` 适配 rcgen 0.14；`anisette_data.rs` 取头时不再把值转小写，#171），另改了 Cargo.toml（workspace 继承、reqwest 不带 aws-lc-rs、omnisette 只开远程 anisette） | 以 MPL-2.0 随仓库提供源码；文件头保留 |
 | plume_store（Impactor） | 账号会话存储 | MIT（Impactor 根 LICENSE） | vendor 到 `vendor/plume_store`，源码未改 | 保留版权声明（`vendor/plume_store/LICENSE-MIT-Impactor`） |
-| omnisette（Impactor 3rdparty） | anisette 数据 | **MPL-2.0**（目录内 LICENSE；早期文档误写为 MIT，读源码后更正） | vendor 到 `vendor/omnisette`，`src/lib.rs` 加了 v3 服务地址的 getter/setter（自建 anisette 服务才能生效），其余源码未改；Cargo.toml 把本地 anisette 改成可选 feature `local-anisette`，本项目不启用，所以不编译没有许可证声明的 `android-loader`/`sysv64` 和 AGPL-3.0 的 `remove-async-await` | 同 plume_core |
+| omnisette（Impactor 3rdparty） | anisette 数据 | **MPL-2.0**（目录内 LICENSE；早期文档误写为 MIT，读源码后更正） | vendor 到 `vendor/omnisette`，`src/lib.rs` 加了 v3 服务地址的 getter/setter（自建 anisette 服务才能生效），`src/remote_anisette_v3.rs` 增加 15s 连接 / 30s 请求超时并消除服务端异常与断连时的 `panic!`/`.unwrap()` 和 WebSocket 死循环（#224，改动处均有 `// iphone-control:` 注释）；Cargo.toml 把本地 anisette 改成可选 feature `local-anisette`，本项目不启用，所以不编译没有许可证声明的 `android-loader`/`sysv64` 和 AGPL-3.0 的 `remove-async-await` | 同 plume_core |
 | plume_utils（Impactor） | Bundle、Signer | MIT（Impactor 根 LICENSE） | **未 vendor**：`ictl-sign/src/bundle.rs` 改写自它的 `bundle.rs`，签名流程在 `ictl-sign/src/lib.rs` 重写 | 文件头注明来源和版权 |
 | apple-codesign 0.29.0 | 代码签名 | **MPL-2.0** | vendor 到 `vendor/apple-codesign`（Impactor 打过 0o755 权限补丁的副本；去掉了上游的 tests/、docs/、src/testdata/），经 `[patch.crates-io]` 替换 | 以 MPL-2.0 随仓库提供源码 |
-| rmcp 3.8.0 | MCP SDK | Apache-2.0（部分历史代码 MIT） | crates.io 依赖 | 保留 NOTICE/版权声明 |
+| rmcp 3.11.0 | MCP SDK | Apache-2.0（部分历史代码 MIT） | crates.io 依赖 | 保留 NOTICE/版权声明 |
 | tokio、reqwest、quick-xml、image、clap、serde 等 | 通用 | MIT / Apache-2.0 | crates.io 依赖 | 保留声明：`THIRD_PARTY_LICENSES.html` 由 cargo-about 按 Cargo.lock 生成，含许可证全文，放在每个发布的压缩包里（.deb 里在 `/usr/share/doc/iphone-control/`），和 `LICENSE`、`THIRD_PARTY.md` 一起 |
 | WebDriverAgent（Appium） | 手机端代理 | BSD-3-Clause（Facebook 原始） | 第一次签名前在用户的机器上下载 Appium 官方的未签名真机包（v16.15.3，校验 sha256）打成 IPA，项目本身不分发；计划改为本项目 macOS CI 编译 | 不分发时没有义务；改为自己编译并分发时要保留 BSD 声明 |
 | usbmuxd | USB 守护进程 | **GPL-3.0**（以其 README 为准；GitHub 显示 GPL-2.0 有误） | 系统包（Linux 上用发行版的包，.deb 只声明依赖；macOS 自带），独立进程，不链接 | 不随项目分发，没有额外义务（以前的 Docker 镜像里带着它，要提供对应源码） |
@@ -27,7 +27,7 @@
 MPL-2.0 是按文件计算的弱 copyleft：
 
 - 我们自己新写的文件可以是 MIT，与 MPL 文件编译进同一个二进制没问题。
-- 我们修改过的 MPL 文件（例如 apple-codesign 的 `bundle_signing.rs`）必须继续是 MPL-2.0，并在分发二进制时让接收者能拿到这些文件的源码。仓库公开即可满足。
+- 我们修改过的 MPL 文件（例如 `vendor/plume_core/src/auth/anisette_data.rs`、`vendor/omnisette/src/remote_anisette_v3.rs` 及 Impactor 打补丁后的 `vendor/apple-codesign`）必须继续保持 MPL-2.0，并在分发二进制时让接收者能拿到这些文件的源码。仓库公开即可满足。
 - 做法：`vendor/` 下每个上游目录保留原 `LICENSE` 和文件头；`THIRD_PARTY.md` 列出每个文件的来源、上游提交号和改动摘要。
 
 ## 依赖许可证检查

@@ -147,15 +147,17 @@ Viewer 要用令牌登录（见下面的 `viewer`）。持有令牌的人（只�
 
 ## 控制台的画面 {#viewer-picture}
 
-**iOS 27 及以上**：画面直接用手机自己硬件编码的视频（CoreDevice 屏幕媒体流，HEVC），约每秒 60 帧、原生分辨率，本机不用编码，WDA 也不用截图。滚动时每秒 150～600 KB；画面静止时也一直有一点流量（白底页面约 15 KB/s，图多的页面约 250 KB/s）。转屏时页面按界面方向把画面转正，约 1～2 秒跟上。需要浏览器能解 HEVC：Mac 上的 Chrome、Safari 可以；Firefox 和多数 Linux 上的 Chrome 解不了，自动改用下面的 H.264 或 MJPEG。看画面期间手机不会自动锁屏，灵动岛显示屏幕正被查看，关掉页面 30 秒后恢复。
+![控制台实时画面自动选路与降级决策：iOS 27+ 优先手机硬件 HEVC 或按需转码 H.264，iOS 17–26 由 macOS VideoToolbox 或 Linux ffmpeg 编为 H.264，无编码器时回退去重 MJPEG](/diagrams/viewer-video-zh-light.svg){.light-only}
+![控制台实时画面自动选路与降级决策：iOS 27+ 优先手机硬件 HEVC 或按需转码 H.264，iOS 17–26 由 macOS VideoToolbox 或 Linux ffmpeg 编为 H.264，无编码器时回退去重 MJPEG](/diagrams/viewer-video-zh-dark.svg){.dark-only}
 
-**iOS 27 以下，或浏览器解不了 HEVC**：
-macOS 上，以及 Linux 上装了 ffmpeg 时，控制台的画面是 H.264，否则是 MJPEG。手机的画面先在本机编码（macOS 上本程序直接调 VideoToolbox，不需要 ffmpeg；Linux 上交给 ffmpeg），浏览器再用 WebCodecs 解码（浏览器自己选用硬件解码）。同样的画面，流量约为 MJPEG 的 1/15：画面静止时几乎为零，连续滚动时约 300～450 KB/s，MJPEG 要 4～10 MB/s。延迟和 MJPEG 相差不到一帧。
+| 画面方案 | 适用条件 | 帧率与带宽 | 本机 CPU | 弱网模式 |
+|---|---|---|---|---|
+| **HEVC iPhone**（手机硬件直出） | iOS 27+ 且浏览器支持 WebCodecs HEVC（macOS Chrome / Safari） | ~60 fps 原生分辨率；滚动约 150–600 KB/s，静止约 15–250 KB/s | 几乎为零 | 手机码率上限 6 → 2 Mbit/s（同机所有页面共享，切换时短暂断流约 0.5 秒） |
+| **HEVC → H.264 转码** | iOS 27+ 但浏览器不支持 HEVC（Firefox / 多数 Linux Chrome）且装了 ffmpeg | 流畅低延迟；每页独立 ffmpeg，同机最多 **4 路并发**（超限自动重试） | 视编码器而定 | 仅影响当前页（QP 提高至 26） |
+| **本机编码 H.264** | iOS 17–26（WDA），或手动指定编码器；macOS 直调 VideoToolbox（免 ffmpeg），Linux 需 ffmpeg | 约为 MJPEG 的 1/15（静止近零，滚动约 300–450 KB/s）；延迟与 MJPEG 相差不到一帧 | 显卡编码极低；x264 较高 | 仅影响当前页（QP 20 → 26） |
+| **MJPEG 兜底**（`/stream`） | Linux 未装 ffmpeg、无可用编码器或旧浏览器不支持 WebCodecs | 滚动约 4–10 MB/s；静止不重复发图，慢链只发最新一帧 | 极低 | 不适用 |
 
-- **编码器：** `viewer` 启动时按顺序试，第一个能用的就用，并在终端里显示：NVIDIA 用 NVENC；AMD、Intel 用 VAAPI（JPEG 也交给显卡解码）；Intel 还可以用 QSV；树莓派一类的 ARM 板用 V4L2；macOS 用 VideoToolbox（本程序直接调用，JPEG 也由硬件解码；装了 ffmpeg 时，它的 VideoToolbox 作备用）；都不行就用 x264 软件编码（占 CPU）。处理真实画面时出错，会换下一个。Linux 上要用显卡，用户得在 `render` 组里，`doctor` 会检查。
-- **链路慢时：** 页面每 100 毫秒告诉 viewer 收到了多少。链路跟不上时少编几帧，画面帧率下降，但不会越来越滞后。比如每秒 200 KB 的链路，滚动停下后约 0.6 秒画面追上。
-- **iOS 27 及以上转成 H.264：** 浏览器解不了 HEVC 时，手机的视频由本机的 ffmpeg 转成 H.264，每个页面一个 ffmpeg 进程。同时最多 4 个页面这样看，再多的页面显示「画面断开 · 自动重试中」，等有页面关掉再接上。
-- **自动改用 MJPEG：** Linux 上没有 ffmpeg、没有能用的编码器、浏览器不支持 WebCodecs（较旧的浏览器）时自动改用 MJPEG；画面静止时不再重复发同一张图，链路慢时只发最新的一张。
-- **弱网模式：** 控制台「设置」里的开关，适合外网或信号差时用。画面流量减少约一半，帧率不变；画面静止时看不出区别，动起来时边缘会有些糊块，停下约半秒后恢复。手机自己的视频（HEVC）每台手机只有一路，码率上限在开始时和手机协商，所以开着时所有在看这台手机的页面都会一起降（约 6 Mbit/s 上限降到 2 Mbit/s），第一个开它和最后一个关它的页面会让所有人的画面断开半秒左右再接上，进行中的触摸也会中断。H.264 只影响开它的那个页面（qp 提到 26）。开着时画面下方会写「弱网模式」。
-- **看现在用的是哪种：** 画面下方写着，例如「实时画面 · 原生 · HEVC iPhone 312 KB/s」（原生控制，手机自己的视频）、「实时画面 · WDA · HEVC iPhone 312 KB/s」或「实时画面 · WDA · H.264 VAAPI 254 KB/s」。
-- **设置：** `IPHONE_CONTROL_VIEWER_CODEC`（`device` 只用手机自己的视频，`mjpeg` 只用 MJPEG）、`IPHONE_CONTROL_VIEWER_QP`、`ICTL_FFMPEG`，见[配置](./configuration)。Linux 上安装 ffmpeg：`sudo apt install ffmpeg`，deb 包会推荐安装它；macOS 上不用装。
+- **编码器探测顺序（H.264）：** `viewer` 启动时按序自动探测并在终端打印当前编码器：NVIDIA 用 NVENC；AMD / Intel 用 VAAPI（JPEG 也交显卡解码）；Intel 另支持 QSV；ARM 板支持 V4L2；macOS 直调原生 VideoToolbox（硬件解 JPEG，装了 ffmpeg 时作备用）；均不可用时退回 x264。Linux 用显卡硬编须将用户加入 `render` 组，`doctor` 会检查。
+- **链路慢时不滞后：** 页面每 100 毫秒上报已读字节，链路跟不上时自动降帧而非堆积缓冲（例如 200 KB/s 链路在滚动停下约 0.6 秒内追平）。
+- **查看当前编码与说明：** 画面下方实时标注，如 `实时画面 · 原生 · HEVC iPhone 312 KB/s` 或 `实时画面 · WDA · H.264 VAAPI 254 KB/s`。使用手机原生 HEVC 时，看画面期间手机不自动锁屏、灵动岛显示「正在被查看」，关掉页面 30 秒后自动恢复。
+- **配置项：** `IPHONE_CONTROL_VIEWER_CODEC`（`auto` / `device` / `mjpeg` 或具体编码器）、`IPHONE_CONTROL_VIEWER_QP`、`ICTL_FFMPEG`，见[配置](./configuration)。Linux 推荐安装 ffmpeg：`sudo apt install ffmpeg`（deb 包已推荐）；macOS 无需安装。

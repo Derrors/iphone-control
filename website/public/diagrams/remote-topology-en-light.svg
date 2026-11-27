@@ -1,0 +1,106 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 560" width="1200" height="560" role="img" aria-label="Shows how local browsers, LAN HTTPS browsers, remote AI clients, and external agent platforms reach the viewer and daemon with separate token scopes for read-only viewing and execution/control separation">
+  <title>Viewer, LAN HTTPS, and remote task topology</title>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#59636e"/>
+    </marker>
+    <marker id="arrow-brand" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#0891b2"/>
+    </marker>
+    <marker id="arrow-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#16a34a"/>
+    </marker>
+    <marker id="arrow-amber" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#d4a72c"/>
+    </marker>
+    <marker id="arrow-red" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#dc2626"/>
+    </marker>
+    <marker id="arrow-purple" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#7c3aed"/>
+    </marker>
+    <linearGradient id="screen" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0e7490"/>
+      <stop offset="1" stop-color="#164e63"/>
+    </linearGradient>
+    <style>
+      text { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans CJK SC', 'Source Han Sans SC', 'WenQuanYi Zen Hei', Helvetica, Arial, sans-serif; fill: #1f2328; }
+      .h1 { font-size: 22px; font-weight: 700; }
+      .h2 { font-size: 20px; font-weight: 700; }
+      .h3 { font-size: 16px; font-weight: 700; }
+      .sub { font-size: 13px; fill: #59636e; }
+      .label { font-size: 13px; fill: #59636e; font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace; }
+      .frame { font-size: 15px; fill: #59636e; }
+    </style>
+  </defs>
+  <text x="28" y="38" class="h1">Viewer &amp; Remote Access: Four Roles and Token Boundaries</text>
+  <text x="28" y="62" class="sub">Binds 127.0.0.1 by default; --lan opens LAN HTTPS (incl. Tailscale 100.64/10). Every HTTP request requires a token</text>
+  <rect x="24" y="88" width="420" height="92" rx="12" fill="#ecfdf5" stroke="#16a34a" stroke-width="1.5"/>
+  <text x="40" y="116" style="font-size:14px;font-weight:700;fill:#15803d">1. Operator Browser (Local / LAN)</text>
+  <rect x="366" y="97" width="64" height="24" rx="12.0" fill="#16a34a"/>
+  <text x="398.0" y="113.32" text-anchor="middle" style="font-size:12px;font-weight:600;fill:#ffffff">operate</text>
+  <text x="40" y="142" style="font-size:12px;fill:#59636e">Holds operate token (30-day cookie)</text>
+  <text x="40" y="162" style="font-size:12px;fill:#59636e">Watch · tap/type · start &amp; approve tasks</text>
+  <rect x="24" y="196" width="420" height="92" rx="12" fill="#eff6ff" stroke="#2563eb" stroke-width="1.5"/>
+  <text x="40" y="224" style="font-size:14px;font-weight:700;fill:#1d4ed8">2. Read-Only Viewer</text>
+  <rect x="378" y="205" width="52" height="24" rx="12.0" fill="#2563eb"/>
+  <text x="404.0" y="221.32" text-anchor="middle" style="font-size:12px;font-weight:600;fill:#ffffff">view</text>
+  <text x="40" y="250" style="font-size:12px;fill:#59636e">Holds --read-only token (GET + video/ack)</text>
+  <text x="40" y="270" style="font-size:12px;fill:#59636e">Watch screen &amp; steps; no taps, unlock or /mcp</text>
+  <rect x="24" y="304" width="420" height="92" rx="12" fill="#f6f8fa" stroke="#d0d7de" stroke-width="1.5"/>
+  <text x="40" y="332" style="font-size:14px;font-weight:700;fill:#1f2328">3. Remote AI Client (Another Host)</text>
+  <rect x="372" y="313" width="58" height="24" rx="12.0" fill="#d0d7de"/>
+  <text x="401.0" y="329.32" text-anchor="middle" style="font-size:12px;font-weight:600;fill:#1f2328">Bearer</text>
+  <text x="40" y="358" style="font-size:12px;fill:#59636e">Direct HTTPS /mcp (Bearer token)</text>
+  <text x="40" y="378" style="font-size:12px;fill:#59636e">Or iphone-control mcp --url for stdio clients</text>
+  <rect x="24" y="412" width="420" height="92" rx="12" fill="#f5f3ff" stroke="#7c3aed" stroke-width="1.5"/>
+  <text x="40" y="440" style="font-size:14px;font-weight:700;fill:#6d28d9">4. External Platform (task run --url)</text>
+  <rect x="382" y="421" width="48" height="24" rx="12.0" fill="#7c3aed"/>
+  <text x="406.0" y="437.32" text-anchor="middle" style="font-size:12px;font-weight:600;fill:#ffffff">Split</text>
+  <text x="40" y="466" style="font-size:12px;fill:#59636e">Platform keeps login token: open/pause/approve</text>
+  <text x="40" y="486" style="font-size:12px;fill:#59636e">Agent gets Task Token only: /mcp &amp; finish only</text>
+  <line x1="444" y1="134" x2="520" y2="134" stroke="#16a34a" stroke-width="2" marker-end="url(#arrow-green)"/>
+  <line x1="444" y1="242" x2="520" y2="242" stroke="#2563eb" stroke-width="2" marker-end="url(#arrow)"/>
+  <line x1="444" y1="350" x2="520" y2="350" stroke="#59636e" stroke-width="2" marker-end="url(#arrow)"/>
+  <line x1="444" y1="458" x2="520" y2="458" stroke="#7c3aed" stroke-width="2" marker-end="url(#arrow-purple)"/>
+  <text x="482" y="118" class="label" text-anchor="middle" style="font-size:11px">HTTPS</text>
+  <text x="482" y="226" class="label" text-anchor="middle" style="font-size:11px">HTTPS</text>
+  <text x="482" y="334" class="label" text-anchor="middle" style="font-size:11px">/mcp</text>
+  <text x="482" y="442" text-anchor="middle" style="font-size:11px;font-weight:600;fill:#6d28d9">2 tokens</text>
+  <rect x="522" y="88" width="316" height="416" rx="16" fill="#ecfeff" stroke="#0891b2" stroke-width="2"/>
+  <text x="542" y="122" style="font-size:18px;font-weight:700;fill:#0e7490">iphone-control viewer</text>
+  <text x="542" y="146" class="label" style="font-size:12px">127.0.0.1:8200 / --lan HTTPS</text>
+  <rect x="538" y="164" width="284" height="116" rx="10" fill="#ffffff" stroke="#a5f3fc" stroke-width="1.5"/>
+  <text x="550" y="188" style="font-size:13px;font-weight:700;fill:#1f2328">Auth &amp; Security Checks</text>
+  <text x="550" y="210" style="font-size:11px;fill:#59636e">• Loopback &amp; LAN/Tailscale IPs only</text>
+  <text x="550" y="228" style="font-size:11px;fill:#59636e">• Host, Origin &amp; Sec-Fetch-Site checks</text>
+  <text x="550" y="246" style="font-size:11px;fill:#59636e">• 20 bad tokens/min cap (valid still works)</text>
+  <text x="550" y="264" style="font-size:11px;fill:#59636e">• Self-signed fingerprint or custom PEM</text>
+  <rect x="538" y="294" width="284" height="90" rx="10" fill="#ffffff" stroke="#a5f3fc" stroke-width="1.5"/>
+  <text x="550" y="318" style="font-size:13px;font-weight:700;fill:#1f2328">Hot-Reloaded Tokens</text>
+  <text x="550" y="340" style="font-size:11px;fill:#59636e">• Stored in viewer-tokens.json (0600)</text>
+  <text x="550" y="358" style="font-size:11px;fill:#59636e">• Add/rotate/remove takes effect at once</text>
+  <text x="550" y="376" style="font-size:11px;fill:#59636e">• Revoked sessions &amp; streams drop ≤5 s</text>
+  <rect x="538" y="398" width="284" height="84" rx="10" fill="#ffffff" stroke="#a5f3fc" stroke-width="1.5"/>
+  <text x="550" y="422" style="font-size:13px;font-weight:700;fill:#1f2328">Task Lease &amp; Anti-Self-Control</text>
+  <text x="550" y="444" style="font-size:11px;fill:#59636e">• /tasks/open stream is the task lease</text>
+  <text x="550" y="462" style="font-size:11px;fill:#59636e">• Task Token blocked from pause/approve</text>
+  <line x1="838" y1="296" x2="896" y2="296" stroke="#0891b2" stroke-width="2.5" marker-end="url(#arrow-brand)"/>
+  <text x="867" y="282" class="label" text-anchor="middle" style="font-size:11px">Unix</text>
+  <text x="867" y="316" class="label" text-anchor="middle" style="font-size:11px">0600</text>
+  <rect x="898" y="126" width="278" height="174" rx="14" fill="#f6f8fa" stroke="#0891b2" stroke-width="1.5"/>
+  <text x="914" y="156" style="font-size:15px;font-weight:700;fill:#0e7490">iphone-control daemon</text>
+  <text x="914" y="184" style="font-size:12px;fill:#59636e">• Sole owner of the USB phone</text>
+  <text x="914" y="205" style="font-size:12px;fill:#59636e">• Task admission, app scope &amp; logs</text>
+  <text x="914" y="226" style="font-size:12px;fill:#59636e">• Local PID check (/proc · libproc)</text>
+  <text x="914" y="247" style="font-size:12px;fill:#59636e">• Streams HEVC / MJPEG to viewer</text>
+  <text x="914" y="268" style="font-size:12px;fill:#59636e">• Serves local MCP with viewer off</text>
+  <line x1="1037" y1="300" x2="1037" y2="356" stroke="#59636e" stroke-width="2.5" marker-start="url(#arrow)" marker-end="url(#arrow)"/>
+  <text x="1050" y="334" class="label" style="font-size:12px">USB · usbmuxd</text>
+  <rect x="926" y="360" width="222" height="144" rx="20" fill="#1f2328"/>
+  <rect x="936" y="370" width="202" height="124" rx="14" fill="url(#screen)"/>
+  <text x="1037" y="412" text-anchor="middle" style="font-size:17px;font-weight:700;fill:#ffffff">iPhone / iPad</text>
+  <text x="1037" y="440" text-anchor="middle" style="font-size:13px;font-weight:600;fill:#d5f3fb">iOS 27+ Native Control</text>
+  <text x="1037" y="466" text-anchor="middle" style="font-size:12px;fill:#b7e7f5">iOS 17–26 WebDriverAgent</text>
+  <text x="28" y="538" style="font-size:12px;fill:#59636e">Tip: For internet access, prefer Tailscale; if using a reverse proxy (frp / nginx / cloudflared), always enable HTTPS on the proxy.</text>
+</svg>

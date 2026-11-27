@@ -29,7 +29,7 @@ iphone-control doctor    # 逐层检查，每项失败都给出修复办法
 - **守护进程没在运行：** `iphone-control service status` 看看，`iphone-control service start` 启动。直接运行 `iphone-control` 也会在服务没运行时启动它。
 - **别的工具占着手机：** 同时运行 go-ios、pymobiledevice3 等会冲突。
 - **数据线：** 有的线只能充电。`lsusb` 里看不到 Apple 设备（`05ac`）时换根线或换个口。
-- **拔插后：** 大约 1 分钟内自动恢复。
+- **拔插后：** USB 热插拔由 `usbmuxd Listen` 立即唤醒巡检，原生控制（iOS 27+）和接管后台 WDA 通常几秒恢复，WDA 需重新冷启动时约 10～60 秒。
 - **充电时大约每分钟断开一次：** 手机开着「设置 → 电池 → 充电 → 80% 上限」时，在 80% 附近反复开始、停止充电，每次 USB-C 重新协商供电都会让 USB 断开 3～5 秒。用来做自动化的手机把上限改成 100%。
 - **Mac 上：** usbmuxd 是系统自带的，`doctor` 报连不上时运行 `sudo launchctl kickstart -k system/com.apple.usbmuxd`。见 [macOS](../deploy/macos)。
 
@@ -58,7 +58,7 @@ iOS 27 及以上默认原生控制，只要配对、开发者模式、开发者�
 ## 登录
 
 - **输不了验证码：** `login`、`setup` 和第一次运行的 `iphone-control` 都要在终端里交互运行，不能放进脚本或管道。
-- **anisette 报错：** 默认的公共 anisette 服务可能暂时不可用，稍后重试，或自建后设 `ICTL_ANISETTE_URL`。
+- **anisette 报错：** 默认公共 anisette 服务偶发抖动或超时时，程序会自动退避重试（最多 3 次），日常会话检查也不会因此误报「会话已失效」（而是 1 小时后复查）。若长期不可用，稍后重试或自建后设 `ICTL_ANISETTE_URL`。
 
 ## AI 客户端
 
@@ -100,6 +100,14 @@ iOS 27 及以上默认原生控制，只要配对、开发者模式、开发者�
 ## 灵动岛一直显示「配对的电脑」、手机不自动锁屏
 
 HID 后备路线使用时，iOS 27 及以上原生控制下的点击、滑动和按键（它们也经 HID），以及控制台在显示手机自己的视频（iOS 27 及以上）时，会开一个屏幕镜像会话；不再使用（关掉控制台页面）30 秒后自动关闭。图标一直不消失时，重启一下守护进程（`iphone-control service restart`）。
+
+## 收到「守护进程异常重启」告警（`daemon`）
+
+守护进程在 `run-state.json` 中记录运行标记，正常退出、`service restart` 或升级时会自动清除。若进程崩溃、被 `SIGKILL` 杀死或因设备调用卡死 10 分钟触发看门狗退出，被 launchd / systemd 重新拉起后新进程会记录事件并发送 `daemon` 告警（崩溃循环时 30 分钟冷却防刷屏）。请查看 `iphone-control status`、`~/.local/share/iphone-control/logs/daemon.log` 以及系统服务日志（Linux 用 `journalctl --user -u iphone-control`，macOS 看 `~/Library/Logs/iphone-control/daemon.log`）。
+
+## `doctor` 提示「已移除的配置项」
+
+若 `~/.config/iphone-control/env` 或环境中仍留有旧版已移除配置项的非空值（如早期版本的实验开关或已废弃变量），守护进程启动日志和 `iphone-control doctor` 会输出温和的 `⚠️` 提示，但不会报错或影响正常使用。从 `~/.config/iphone-control/env` 中删掉对应行后运行 `iphone-control service restart` 即可消除提示。
 
 ## 报告问题
 

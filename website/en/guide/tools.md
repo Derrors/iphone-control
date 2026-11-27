@@ -29,7 +29,13 @@ With [auto-unlock](./auto-unlock) on, `iphone_screenshot`, `iphone_list_elements
 | `iphone_open_url` | Open a link or URL scheme |
 | `iphone_batch` | Run up to 20 steps in one call, stopping at the first error. When every step is a coordinate tap, `one_gesture` taps them in turn within one gesture, for pressing keys on one keyboard. If the MCP client cancels the call, the remaining steps don't run; with no device selected, it also stops with an error if the controlled device changes |
 
-Taps, long presses, swipes and text input report the delivery of the requested input in `structuredContent.delivery`. With `not_sent` you can reconsider the input and retry. With `unknown`, inspect the phone first because the input may already have taken effect. With `sent`, the input was dispatched. When using `then`, check `readback` separately.
+Taps, long presses, swipes and text input report the delivery status of the requested input in `structuredContent.delivery` (when using `then`, check `readback` separately):
+
+| `delivery` value | Meaning | What the agent should do |
+|---|---|---|
+| `sent` | Input was dispatched to the device | Continue, or check `readback` for the resulting screen |
+| `not_sent` | Failed before dispatch (locked, queue timeout, rejected) | Input definitely did not happen; safe to reconsider and retry |
+| `unknown` | Connection dropped or timed out after sending | **Do not blindly retry** — inspect the screen first because it may have taken effect |
 
 ## Several devices
 
@@ -74,9 +80,11 @@ The result says how long it waited, whether the page is probably still loading, 
 
 iOS 27 and later are controlled natively by default. The tools and their results are the same, so agents needn't care, with a few differences:
 
-- **Rows off the screen aren't listed:** scroll a long list to a row before finding or tapping it by text (WDA lists such rows but can't tap them).
-- **Text is always pasted:** `iphone_type_text` puts the text on the phone's pasteboard and pastes it; the daemon taps *Allow Paste*, reads the field back and restores the pasteboard at once.
-- **Coarser elements:** the accessibility service often makes one element of a whole row ("Wi-Fi, Home-WiFi"), so `iphone_list_elements` is shorter than with WDA; finding by contained text still works.
+| Aspect | Native control (iOS 27+) | WebDriverAgent (iOS 17–26) |
+|---|---|---|
+| Off-screen list rows | Not listed; scroll first (`iphone_scroll_collect` or `iphone_tap_element` with `scroll`) | Listed, but cannot be tapped until scrolled into view |
+| Text input | Always pasted via pasteboard; daemon taps *Allow Paste*, verifies and restores pasteboard; `replace: true` leaves original text on failure | Typed via WDA; `replace: true` clears first, so failure leaves the field empty |
+| Element granularity | Often merges a whole row into one element ("Wi-Fi, Home-WiFi"); shorter list, substring matching still works | Lists nested labels, icons and chevrons separately |
 
 ## When WDA is down: the HID fallback
 

@@ -143,5 +143,7 @@ rm -rf ~/.local/share/iphone-control ~/.config/iphone-control   # 会删掉 Appl
 | 数据目录 | `~/.local/share/iphone-control` | 同左（不是 Mac 习惯的 `~/Library/Application Support`） |
 | 控制接口 | `$XDG_RUNTIME_DIR/iphone-control/ctl.sock` | `~/.local/share/iphone-control/ctl.sock` |
 | 配对记录 | `/var/lib/lockdown` | `/var/db/lockdown`（和 Finder 共用） |
+| 控制台 H.264 画面 | 需安装 `ffmpeg`（优先显卡硬编） | 本程序直调 VideoToolbox，**无需安装 ffmpeg**（仅 HEVC 转码 H.264 需 ffmpeg） |
+| 本机 HTTP 防自控 | 通过 `/proc` 识别调用方进程 | 通过 `libproc` 识别调用方进程 |
 
 还没在 Mac 上验证过的：Xcode 的「设备与模拟器」窗口开着时会不会抢连接、手机第一次在这台 Mac 上配对的流程、iPad、接多台设备、真正的 Intel Mac（Intel 的包只在 Rosetta 下测过）。遇到问题欢迎[反馈](https://github.com/Derrors/iphone-control/issues)。

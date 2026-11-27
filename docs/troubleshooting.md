@@ -39,8 +39,13 @@ iOS 27 and later are controlled natively by default, which needs only pairing, D
 ## Login and signing
 
 - **Two-factor code:** `login`, `setup` and the first run of `iphone-control` ask for it in the terminal, so run them in an interactive terminal (not from a script or a pipe).
-- **Anisette errors:** the default public anisette server may be slow or down. Retry later, or run your own and set `ICTL_ANISETTE_URL` (see [SECURITY.md](../SECURITY.md)).
+- **Anisette errors:** transient glitches or timeouts on the default public anisette server are retried automatically (up to 3 attempts with short backoff), and routine daily session checks log transient glitches and retry in an hour instead of firing a false "session expired" alert. If the public node stays down, retry later or run your own and set `ICTL_ANISETTE_URL` (see [SECURITY.md](../SECURITY.md)).
 - **Account limits:** free accounts can only have a limited number of app IDs and devices. Use a dedicated Apple ID if your main one is already used with other sideloading tools.
+
+## Abnormal daemon restart alerts and removed settings
+
+- **Daemon restarted unexpectedly (`daemon` alert):** the daemon records a running marker in `run-state.json` and clears it on clean shutdown. If it crashes, gets `SIGKILL`ed, or exits via the 600-second watchdog and is restarted by launchd/systemd, the new process logs the event and sends a `daemon` alert (rate-limited to once every 30 minutes during a crash loop). Inspect `logs/daemon.log` and service logs (`journalctl --user -u iphone-control` or `~/Library/Logs/iphone-control/daemon.log`).
+- **Removed settings warning in `doctor`:** if an older `~/.config/iphone-control/env` still sets removed variables to non-empty values, the daemon logs a gentle notice and `doctor` shows a non-fatal `⚠️` warning. Remove those lines and run `iphone-control service restart`.
 
 ## MCP
 

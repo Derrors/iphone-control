@@ -15,14 +15,22 @@ iphone-control 让 AI agent（例如 Claude）操作一台用数据线接在 Lin
 
 ## 怎么工作
 
-![架构：AI 客户端经 stdio 调用 iphone-control mcp，可选的控制台经 HTTPS 服务浏览器和远程 agent，两者都经 Unix socket 交给守护进程。守护进程是核心：经 USB 操作 iPhone 或 iPad，iOS 27 起用原生控制，iOS 17–26 用 WebDriverAgent，控制台关着也照常运行](/architecture-light.svg){.light-only}
-![架构：AI 客户端经 stdio 调用 iphone-control mcp，可选的控制台经 HTTPS 服务浏览器和远程 agent，两者都经 Unix socket 交给守护进程。守护进程是核心：经 USB 操作 iPhone 或 iPad，iOS 27 起用原生控制，iOS 17–26 用 WebDriverAgent，控制台关着也照常运行](/architecture-dark.svg){.dark-only}
+![架构：AI 客户端经 stdio 调用 iphone-control mcp，可选的控制台经 HTTPS 服务浏览器和远程 agent，两者都经 Unix socket 交给守护进程。守护进程是核心：经 USB 操作 iPhone 或 iPad，iOS 27 起用原生控制，iOS 17–26 用 WebDriverAgent，控制台关着也照常运行](/architecture-zh-light.svg){.light-only}
+![架构：AI 客户端经 stdio 调用 iphone-control mcp，可选的控制台经 HTTPS 服务浏览器和远程 agent，两者都经 Unix socket 交给守护进程。守护进程是核心：经 USB 操作 iPhone 或 iPad，iOS 27 起用原生控制，iOS 17–26 用 WebDriverAgent，控制台关着也照常运行](/architecture-zh-dark.svg){.dark-only}
 
-- **守护进程**常驻，独占手机：配对、挂载开发者镜像、建立隧道，然后按 iOS 版本选一条路线操作手机：
-  - **iOS 27 及以上：原生控制（默认）。** 读界面用系统的无障碍服务，点击、滑动、按键走 CoreDevice HID，启动 App 走 CoreDevice。手机上什么都不装，不用 Apple ID，几秒就绪。
-  - **iOS 17–26：WebDriverAgent。** 在手机上运行 [WebDriverAgent](https://github.com/appium/WebDriverAgent)（WDA，苹果 XCTest 自动化框架上的代理），用它读界面、点击和输入。WDA 用你的**免费 Apple ID** 签名，免费签名 7 天过期，守护进程会在到期前自动重签。这条路线继续维护。
-- **MCP 服务**由 AI 客户端按需拉起，只是把工具调用转给守护进程。
-- iOS 27 及以上改回用 WDA（`ICTL_IOS_BACKEND=wda`）时，WDA 不可用期间（例如正在重启）点击、滑动、按键和截图改走 CoreDevice HID，照样能用。
+- **守护进程**常驻，独占手机：配对、挂载开发者镜像、建立隧道，再按 iOS 版本自动选择控制路线；USB 热插拔通过系统 `usbmuxd` 立即感知。
+- **MCP 服务**由 AI 客户端按需拉起，只是无状态薄客户端，将工具调用转给守护进程。
+
+### 两条控制路线对比
+
+| 维度 | iOS 27 及以上：原生控制（默认推荐） | iOS 17–26：WebDriverAgent |
+|---|---|---|
+| 手机端安装 | **免安装**，直接调用系统无障碍、HID 与 CoreDevice | 需在手机上签名安装 [WebDriverAgent](https://github.com/appium/WebDriverAgent) |
+| Apple ID 与签名 | **不需要** | 需免费 Apple ID，7 天到期前自动重签 |
+| 重启后操作 | 仅需人工解锁一次（BFU） | 除 BFU 解锁外，首次启用 UI 自动化需再输一次密码 |
+| 就绪速度 | 几秒至半分钟 | 首次冷启动 10～60 秒；后台常驻切回几秒接管 |
+| 控制台画面 | 手机硬件 HEVC（~60 fps，本机零编码） | WDA MJPEG → 本机 H.264（macOS 免 ffmpeg） |
+| 切换方式 | 设 `ICTL_IOS_BACKEND=wda` 可切回 WDA（期间 WDA 不可用时有 HID 后备） | 固定使用 WDA，持续维护 |
 
 ## 兼容性
 
@@ -30,7 +38,7 @@ iphone-control 让 AI agent（例如 Claude）操作一台用数据线接在 Lin
 |---|---|
 | 主机 | Linux，x86_64 或 arm64：一行命令安装、Homebrew 或 deb 包（Debian 12+、Ubuntu 22.04+），要系统的 usbmuxd；也可以用 Rust 1.89+ 从源码编译<br>macOS 11 及以上，Apple Silicon 或 Intel（Intel 的包从 0.2.14 起提供）：一行命令安装或 Homebrew，也可以从源码编译，见 [macOS](../deploy/macos)<br>不支持 Windows |
 | 手机 | iPhone 或 iPad，iOS 17 及以上。**推荐 iOS 27 及以上**（原生控制）；iOS 17–26 经 WebDriverAgent |
-| 已在真机验证 | iPhone 15 Pro Max，iOS 27.2.1，原生控制（Linux）<br>iPhone 15 Pro Max，iOS 27.0.1，WDA（Linux、macOS）<br>iPhone 12 mini，iOS 26.4.1（Linux）<br>iPad mini 5，iOS 26.6.1（Linux） |
+| 已在真机验证 | iPhone 15 Pro Max，iOS 27.2.1，原生控制（Linux）<br>iPhone 15 Pro Max，iOS 27.0.1，WDA（Linux、macOS）<br>iPhone 12 mini，iOS 26.4.1（Linux）<br>iPad mini 5，iOS 26.6.1 / 26.7.3（Linux） |
 | 账号 | iOS 27 及以上（原生控制）不需要；iOS 26 及以下要一个免费 Apple ID，建议专门注册一个 |
 
 其他机型和 iOS 版本应该也能用，但还没测过，欢迎[反馈](https://github.com/Derrors/iphone-control/issues)。

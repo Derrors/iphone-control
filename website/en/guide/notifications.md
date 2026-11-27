@@ -6,27 +6,17 @@ The notifications below about re-signing, the Apple ID, the signing certificate 
 
 ## When
 
-| Event | What to do |
-|---|---|
-| Re-signing failed | Check the error in `status`; run `login` again if the session expired |
-| Apple ID session expired (checked daily) | Run `iphone-control login` |
-| The phone needs the passcode after a reboot (Enable UI Automation) | Enter the passcode on the phone |
-| WDA recovered | — |
-| Auto-unlock failed and was disabled | See [Auto-unlock](./auto-unlock) |
-| Phone offline / back online | Check the cable and the host |
-| Signing certificate replaced (signing created a new certificate, maybe revoking an old one) | Usually nothing: devices signed with the old certificate are re-signed automatically when their WDA won't start; other machines or sideloading tools using the same Apple ID have to re-sign there, see the [FAQ](../troubleshoot/faq#cert) |
-| Daemon restarted after unexpected exit or watchdog timeout | Check `iphone-control status` or `logs/daemon.log`; if suppressed restarts are reported, check for a crash loop |
+| Event | Applies to | Dedup / cooldown | Recovery alert | What to do |
+|---|---|---|---|---|
+| **Re-signing failed** (`resign`) | WDA only | Once per 20 h | — | Check the error in `status`; run `login` if the session expired |
+| **Apple ID session expired** (`session`, checked daily; transient network/Anisette glitches retry automatically and recheck in 1 h without alerting) | WDA only | Once per 20 h | — | Run `iphone-control login` |
+| **Passcode needed after reboot** (`pin`, Enable UI Automation) | WDA only | Once until recovered | ✅ WDA recovered (`pin-recovered`) | Enter the passcode on the phone |
+| **Signing certificate replaced** (`cert`, new cert created or old one revoked) | WDA only | Every time | — | Local devices auto re-sign when WDA refuses to start; re-sign on other machines or sideloading tools ([FAQ](../troubleshoot/faq#cert)) |
+| **Auto-unlock disabled** (`unlock`) | All | Once until `unlock-reset` | — | Unlock manually and verify the passcode ([Auto-unlock](./auto-unlock)) |
+| **Phone offline** (`offline`, default 10 min) | All | Once until back online | ✅ Back online (`online`) | Check cable, charging limit and host |
+| **Daemon unexpected exit / watchdog restart** (`daemon`) | All | **30 min cooldown** (persisted in `run-state.json`; summarizes suppressed restarts and 1 h total after cooldown) | — | Inspect `status` or `logs/daemon.log`; clean stops, manual `service restart` and updates never trigger it |
 
-How repeats are limited:
-
-- Re-signing failed, Apple ID session expired: not repeated for 20 hours; sent again after that if the problem is still there.
-- Passcode needed, phone offline: sent once until it recovers. Only these two have a recovery notification ("WDA recovered", "back online").
-- Auto-unlock disabled: sent once; it can only be sent again after `unlock-reset`.
-- Signing certificate replaced: sent every time.
-- Daemon unexpected exit / watchdog restart: not repeated for 30 minutes (persisted in `run-state.json`, so a crash loop cannot flood notifications; once cooldown expires, the next alert summarizes suppressed restarts and the 1-hour total). Clean stops, manual `service restart`, and updates never trigger it.
-- The other records are kept in memory only. Restarting the daemon clears them, so a problem that isn't solved yet is sent again.
-
-A notification's title names the device (its name from Settings › General › About on the phone, as in "My iPhone offline for 10 minutes"), so with several connected you can tell which one. See [Several devices](./multi-device).
+Except for `daemon` (persisted in `run-state.json`), dedup records live in memory and reset when the daemon restarts. Device-scoped alert titles include the device's name from *Settings › General › About* (e.g. "My iPhone offline for 10 minutes"); see [Several devices](./multi-device).
 
 ## Setting up
 

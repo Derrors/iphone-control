@@ -1,0 +1,83 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 480" width="1200" height="480" role="img" aria-label="首次设置流程图：安装程序后运行 iphone-control 完成配对和开启开发者模式，iOS 27 及以上自动跳过 Apple ID 和签名直接就绪，iOS 17–26 登录免费 Apple ID 并签名安装 WDA，最后注册 MCP 到 AI 客户端">
+  <title>首次设置双路线流程</title>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#9198a1"/>
+    </marker>
+    <marker id="arrow-brand" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#22d3ee"/>
+    </marker>
+    <marker id="arrow-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#22c55e"/>
+    </marker>
+    <marker id="arrow-amber" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#d4a72c"/>
+    </marker>
+    <marker id="arrow-red" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#f87171"/>
+    </marker>
+    <marker id="arrow-purple" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#a78bfa"/>
+    </marker>
+    <linearGradient id="screen" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0e7490"/>
+      <stop offset="1" stop-color="#083344"/>
+    </linearGradient>
+    <style>
+      text { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans CJK SC', 'Source Han Sans SC', 'WenQuanYi Zen Hei', Helvetica, Arial, sans-serif; fill: #e6edf3; }
+      .h1 { font-size: 22px; font-weight: 700; }
+      .h2 { font-size: 20px; font-weight: 700; }
+      .h3 { font-size: 16px; font-weight: 700; }
+      .sub { font-size: 13px; fill: #9198a1; }
+      .label { font-size: 13px; fill: #9198a1; font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace; }
+      .frame { font-size: 15px; fill: #9198a1; }
+    </style>
+  </defs>
+  <text x="28" y="38" class="h1">首次设置流程：按 iOS 版本自动分流</text>
+  <text x="28" y="62" class="sub">运行 iphone-control 后向导自动跳过已完成步骤；iOS 27+ 无需 Apple ID 与签名，几分钟即可就绪</text>
+  <rect x="24" y="150" width="210" height="172" rx="14" fill="#151b23" stroke="#3d444d" stroke-width="1.5"/>
+  <text x="40" y="182" style="font-size:15px;font-weight:700;fill:#e6edf3">1. 安装程序</text>
+  <rect x="162" y="163" width="58" height="24" rx="12.0" fill="#3d444d"/>
+  <text x="191.0" y="179.32" text-anchor="middle" style="font-size:12px;font-weight:600;fill:#e6edf3">~1 min</text>
+  <text x="40" y="214" style="font-size:12px;fill:#9198a1">• 一行命令（推荐）</text>
+  <text x="40" y="236" style="font-size:12px;fill:#9198a1">• 或 Homebrew / .deb</text>
+  <text x="40" y="258" style="font-size:12px;fill:#9198a1">• Linux 需系统 usbmuxd</text>
+  <text x="40" y="280" style="font-size:12px;fill:#9198a1">• 后台用户服务自启</text>
+  <line x1="234" y1="236" x2="264" y2="236" stroke="#9198a1" stroke-width="2" marker-end="url(#arrow)"/>
+  <rect x="266" y="150" width="226" height="172" rx="14" fill="#151b23" stroke="#3d444d" stroke-width="1.5"/>
+  <text x="282" y="182" style="font-size:15px;font-weight:700;fill:#e6edf3">2. 接手机 · 配对</text>
+  <text x="282" y="214" style="font-size:12px;fill:#9198a1">运行 iphone-control：</text>
+  <text x="282" y="236" style="font-size:12px;fill:#9198a1">• 选择语言与代理（可选）</text>
+  <text x="282" y="258" style="font-size:12px;fill:#9198a1">• 手机点「信任此电脑」</text>
+  <text x="282" y="280" style="font-size:12px;fill:#9198a1">• 打开「开发者模式」并重启</text>
+  <path d="M492 204 C 520 204, 520 154, 550 154" fill="none" stroke="#22d3ee" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-brand)"/>
+  <path d="M492 272 C 520 272, 520 342, 550 342" fill="none" stroke="#9198a1" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)"/>
+  <rect x="552" y="86" width="390" height="156" rx="16" fill="#0b2a33" stroke="#22d3ee" stroke-width="2"/>
+  <text x="572" y="118" style="font-size:16px;font-weight:700;fill:#22d3ee">3A. iOS 27+ 原生控制</text>
+  <rect x="830" y="98" width="96" height="24" rx="12.0" fill="#0e7490"/>
+  <text x="878.0" y="113.96" text-anchor="middle" style="font-size:11px;font-weight:600;fill:#ffffff">推荐 · 默认</text>
+  <text x="572" y="146" style="font-size:13px;font-weight:600;fill:#4ade80">✓ 自动跳过 Apple ID 登录与 WDA 签名</text>
+  <text x="572" y="172" style="font-size:12px;fill:#9198a1">• 自动下载并挂载开发者镜像（DDI）</text>
+  <text x="572" y="194" style="font-size:12px;fill:#9198a1">• 连接系统无障碍服务（保持手机解锁）</text>
+  <text x="572" y="222" style="font-size:12px;font-weight:700;fill:#22d3ee">▸ 通常几秒到半分钟即「就绪」</text>
+  <rect x="552" y="262" width="390" height="176" rx="16" fill="#151b23" stroke="#3d444d" stroke-width="1.5"/>
+  <text x="572" y="294" style="font-size:16px;font-weight:700">3B. iOS 17–26（WebDriverAgent）</text>
+  <rect x="854" y="274" width="72" height="24" rx="12.0" fill="#3d444d"/>
+  <text x="890.0" y="289.96" text-anchor="middle" style="font-size:11px;font-weight:600;fill:#e6edf3">经典路线</text>
+  <text x="572" y="322" style="font-size:12px;fill:#9198a1">• 终端登录免费 Apple ID（不存密码，仅存会话）</text>
+  <text x="572" y="344" style="font-size:12px;fill:#9198a1">• 自动下载并签名安装 WebDriverAgent</text>
+  <text x="572" y="366" style="font-size:12px;fill:#9198a1">• 手机「VPN 与设备管理」点信任（需联网）</text>
+  <text x="572" y="388" style="font-size:12px;fill:#9198a1">• 弹出 XCTest 提示时输入一次锁屏密码</text>
+  <text x="572" y="418" style="font-size:12px;font-weight:600;fill:#f0c869">↺ 免费描述文件 7 天到期前自动重签</text>
+  <path d="M942 164 C 966 164, 966 220, 988 220" fill="none" stroke="#22c55e" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-green)"/>
+  <path d="M942 350 C 966 350, 966 266, 988 266" fill="none" stroke="#22c55e" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-green)"/>
+  <rect x="990" y="140" width="186" height="200" rx="14" fill="#0d261a" stroke="#22c55e" stroke-width="1.5"/>
+  <text x="1006" y="172" style="font-size:15px;font-weight:700;fill:#4ade80">4. 注册并开用</text>
+  <text x="1006" y="204" style="font-size:12px;fill:#9198a1">• 自动解锁（可选）</text>
+  <text x="1006" y="226" style="font-size:12px;fill:#9198a1">• Bark / TG 通知（可选）</text>
+  <text x="1006" y="248" style="font-size:12px;fill:#9198a1">• 回车注册到 Claude</text>
+  <text x="1006" y="270" style="font-size:12px;fill:#9198a1">  Code 或 Codex</text>
+  <text x="1006" y="292" style="font-size:12px;fill:#9198a1">• 打开新会话直接</text>
+  <text x="1006" y="314" style="font-size:12px;fill:#9198a1">  对话操作真机！</text>
+  <text x="28" y="462" style="font-size:12px;fill:#9198a1">提示：之后随时可运行 iphone-control setup --reconfigure 单独修改任意一项（语言、代理、手机、通知、注册 MCP）。</text>
+</svg>

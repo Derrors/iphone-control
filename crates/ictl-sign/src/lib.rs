@@ -17,6 +17,7 @@ pub mod ipa;
 pub mod profile;
 
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use plume_core::{
     AnisetteConfiguration, CertificateIdentity, MobileProvision, SettingsScope, SigningSettings, UnifiedSigner,
@@ -29,6 +30,12 @@ pub use profile::Profile;
 use rsa::pkcs1::EncodeRsaPublicKey;
 use rsa::pkcs8::DecodePrivateKey;
 
+/// Backoff delays before retry attempt 2 and attempt 3 when Anisette or Apple's service hits a transient failure.
+pub const SESSION_RETRY_DELAYS: [Duration; 2] = [Duration::from_secs(2), Duration::from_secs(5)];
+/// Per-attempt timeout when fetching Anisette headers or establishing a developer session, bounded so up to 3 attempts
+/// plus backoff still finish within the daemon's 3-minute session-check timeout.
+pub const SESSION_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(45);
+
 /// 证书（DER）里的公钥（SubjectPublicKeyInfo 的位串，RSA 时是 PKCS#1）。和 plume 认自己证书的比法一样
 pub fn certificate_public_key(der: &[u8]) -> Option<Vec<u8>> {
     x509_certificate::X509Certificate::from_der(der).ok().map(|c| c.public_key_data().to_vec())
@@ -40,6 +47,8 @@ pub enum SignError {
     NotLoggedIn,
     #[error("{}", ictl_l10n::trf!("Apple ID 会话已失效，需要重新登录（iphone-control login）：{0}", "The Apple ID session expired; sign in again (iphone-control login): {0}", .0))]
     SessionInvalid(String),
+    #[error("{}", ictl_l10n::trf!("暂时连不上 Anisette 或苹果服务（可稍后重试）：{0}", "Temporarily unable to reach the Anisette or Apple service (retry later): {0}", .0))]
+    Transient(String),
     #[error("{}", ictl_l10n::tr!("账号下没有可用的开发团队", "The account has no usable development team"))]
     NoTeam,
     #[error("{}", ictl_l10n::trf!("签名失败：{0}", "Signing failed: {0}", .0))]
@@ -52,9 +61,76 @@ pub enum SignError {
     Io(#[from] std::io::Error),
 }
 
+impl SignError {
+    /// Whether this error reflects a transient network, Anisette, or upstream availability problem rather than a
+    /// rejected/expired Apple ID session.
+    pub fn is_transient(&self) -> bool {
+        matches!(self, Self::Transient(_))
+    }
+}
+
+/// Returns true when a [`plume_core::Error`] comes from a transient Anisette, network, or upstream availability
+/// failure instead of a real Apple ID session expiration or credential rejection.
+fn is_transient_plume_error(e: &plume_core::Error) -> bool {
+    match e {
+        plume_core::Error::Anisette(_) => true,
+        plume_core::Error::Reqwest(re) => !matches!(re.status().map(|s| s.as_u16()), Some(401 | 403)),
+        plume_core::Error::GeneralHttpError { status, .. } => matches!(status, 408 | 429 | 500..=599),
+        plume_core::Error::DeveloperApi { http_code: Some(code), .. } => matches!(code, 408 | 429 | 500..=599),
+        // `qh_send_request` / `v1_send_request` parse the raw response body without checking HTTP status first, so a
+        // proxy/gateway 502/503 HTML page surfaces as Plist/SerdeJson rather than Reqwest; real Apple session
+        // rejections arrive as valid plists/JSON (`DeveloperApi`).
+        plume_core::Error::Io(_) | plume_core::Error::Plist(_) | plume_core::Error::SerdeJson(_) => true,
+        _ => false,
+    }
+}
+
+fn classify_session_error(e: plume_core::Error) -> SignError {
+    if is_transient_plume_error(&e) {
+        SignError::Transient(e.to_string())
+    } else {
+        SignError::SessionInvalid(e.to_string())
+    }
+}
+
+/// Retry `op` up to `delays.len() + 1` times while it returns a transient [`SignError`]. Non-transient errors
+/// (such as [`SignError::SessionInvalid`] or [`SignError::NoTeam`]) fail immediately without sleeping.
+async fn retry_transient<T, Op, Fut, Sleep, SleepFut>(delays: &[Duration], mut op: Op, mut sleep: Sleep) -> Result<T>
+where
+    Op: FnMut(usize) -> Fut,
+    Fut: std::future::Future<Output = Result<T>>,
+    Sleep: FnMut(Duration) -> SleepFut,
+    SleepFut: std::future::Future<Output = ()>,
+{
+    let total = delays.len() + 1;
+    for attempt in 1..=total {
+        match op(attempt).await {
+            Ok(v) => return Ok(v),
+            Err(e) if e.is_transient() && attempt < total => {
+                let delay = delays[attempt - 1];
+                tracing::warn!(
+                    "{}",
+                    ictl_l10n::log_trf!(
+                        "Anisette/苹果服务请求临时失败（第 {attempt}/{total} 次），{} 秒后重试：{e}",
+                        "Transient Anisette/Apple request failure (attempt {attempt}/{total}), retrying in {} s: {e}",
+                        delay.as_secs()
+                    )
+                );
+                sleep(delay).await;
+            }
+            Err(e) => return Err(e),
+        }
+    }
+    unreachable!("loop always returns on attempt == total")
+}
+
 impl From<plume_core::Error> for SignError {
     fn from(e: plume_core::Error) -> Self {
-        Self::Developer(e.to_string().into())
+        if is_transient_plume_error(&e) {
+            Self::Transient(e.to_string())
+        } else {
+            Self::Developer(e.to_string().into())
+        }
     }
 }
 
@@ -88,6 +164,36 @@ impl AccountDir {
         }
     }
 
+    async fn fetch_anisette_with<Sleep, SleepFut>(
+        &self,
+        delays: &[Duration],
+        attempt_timeout: Duration,
+        sleep: Sleep,
+    ) -> Result<plume_core::auth::anisette_data::AnisetteData>
+    where
+        Sleep: FnMut(Duration) -> SleepFut,
+        SleepFut: std::future::Future<Output = ()>,
+    {
+        retry_transient(
+            delays,
+            |_attempt| async {
+                let cfg = self.anisette();
+                match tokio::time::timeout(attempt_timeout, plume_core::auth::anisette_data::AnisetteData::new(cfg))
+                    .await
+                {
+                    Ok(Ok(data)) => Ok(data),
+                    Ok(Err(e)) => Err(SignError::from(e)),
+                    Err(_) => Err(SignError::Transient(format!(
+                        "Anisette request timed out after {} s",
+                        attempt_timeout.as_secs()
+                    ))),
+                }
+            },
+            sleep,
+        )
+        .await
+    }
+
     /// 交互式登录。`two_factor` 在需要验证码时被调用（可在里面读终端输入）。成功后会话写入 `accounts.json`。
     pub async fn login(
         &self,
@@ -96,8 +202,11 @@ impl AccountDir {
         two_factor: impl Fn(TwoFactorRequest) -> std::result::Result<TwoFactorAction, String>,
     ) -> Result<String> {
         restrict_dir(&self.dir)?;
+        let anisette =
+            self.fetch_anisette_with(&SESSION_RETRY_DELAYS, SESSION_ATTEMPT_TIMEOUT, tokio::time::sleep).await?;
         let (e, p) = (email.to_owned(), password.to_owned());
-        let account = PlumeAccount::login(move || Ok((e.clone(), p.clone())), two_factor, self.anisette()).await?;
+        let account =
+            PlumeAccount::login_with_anisette(move || Ok((e.clone(), p.clone())), two_factor, anisette).await?;
         let mut store = AccountStore::load(&Some(self.store_path()))
             .await
             .map_err(|e| SignError::Developer(e.to_string().into()))?;
@@ -130,7 +239,7 @@ impl AccountDir {
         store.selected_account().map(|a| a.email().clone()).ok_or(SignError::NotLoggedIn)
     }
 
-    /// 用保存的令牌恢复会话，取第一个团队
+    /// 用保存的令牌恢复会话，取第一个团队；对 Anisette / 苹果服务的瞬断做有限次退避重试，避免单次抖动误判会话失效
     pub async fn session(&self) -> Result<Session> {
         restrict_dir(&self.dir)?;
         restrict_tree(&self.dir)?;
@@ -138,10 +247,29 @@ impl AccountDir {
             .await
             .map_err(|e| SignError::Developer(e.to_string().into()))?;
         let acct = store.selected_account().ok_or(SignError::NotLoggedIn)?.clone();
-        let inner = DeveloperSession::new(acct.adsid().clone(), acct.xcode_gs_token().clone(), self.anisette())
+        let adsid = acct.adsid().clone();
+        let gs_token = acct.xcode_gs_token().clone();
+        retry_transient(
+            &SESSION_RETRY_DELAYS,
+            |_attempt| async {
+                match tokio::time::timeout(SESSION_ATTEMPT_TIMEOUT, self.connect_session(&adsid, &gs_token)).await {
+                    Ok(res) => res,
+                    Err(_) => Err(SignError::Transient(format!(
+                        "session request timed out after {} s",
+                        SESSION_ATTEMPT_TIMEOUT.as_secs()
+                    ))),
+                }
+            },
+            tokio::time::sleep,
+        )
+        .await
+    }
+
+    async fn connect_session(&self, adsid: &str, gs_token: &str) -> Result<Session> {
+        let inner = DeveloperSession::new(adsid.to_owned(), gs_token.to_owned(), self.anisette())
             .await
-            .map_err(|e| SignError::SessionInvalid(e.to_string()))?;
-        let teams = inner.qh_list_teams().await.map_err(|e| SignError::SessionInvalid(e.to_string()))?.teams;
+            .map_err(classify_session_error)?;
+        let teams = inner.qh_list_teams().await.map_err(classify_session_error)?.teams;
         let team_id = teams.first().map(|t| t.team_id.clone()).ok_or(SignError::NoTeam)?;
         Ok(Session { inner, team_id, dir: self.clone() })
     }
@@ -409,7 +537,7 @@ mod tests {
         assert_eq!(anisette.get_header("x-apple-locale").unwrap(), "en_US");
         assert_eq!(anisette.get_header("X-Apple-Locale").unwrap(), "en_US");
     }
-    use std::time::{Duration, SystemTime};
+    use std::time::SystemTime;
 
     /// The scratch directory goes with the guard, also when the signing future is dropped (a caller's timeout)
     #[test]
@@ -513,5 +641,330 @@ mod tests {
         let none = AccountDir { dir: root.join("nothing"), anisette_url: None };
         assert!(none.local_public_keys().is_empty(), "never signed here");
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn plume_error_classification_separates_transient_from_session_invalid() {
+        let transient_cases = vec![
+            plume_core::Error::GeneralHttpError { url: "https://example.com".into(), status: 408 },
+            plume_core::Error::GeneralHttpError { url: "https://example.com".into(), status: 429 },
+            plume_core::Error::GeneralHttpError { url: "https://example.com".into(), status: 502 },
+            plume_core::Error::GeneralHttpError { url: "https://example.com".into(), status: 503 },
+            plume_core::Error::DeveloperApi {
+                url: "https://developerservices2.apple.com".into(),
+                result_code: 500,
+                http_code: Some(503),
+                message: "Service Unavailable".into(),
+            },
+            plume_core::Error::DeveloperApi {
+                url: "https://developerservices2.apple.com".into(),
+                result_code: 429,
+                http_code: Some(429),
+                message: "Too Many Requests".into(),
+            },
+            plume_core::Error::Io(std::io::Error::new(std::io::ErrorKind::ConnectionReset, "reset")),
+            plume_core::Error::Plist(
+                plist::from_bytes::<plist::Dictionary>(b"<html>502 Bad Gateway</html>").unwrap_err(),
+            ),
+            plume_core::Error::SerdeJson(serde_json::from_str::<serde_json::Value>("<html>503</html>").unwrap_err()),
+        ];
+        for err in transient_cases {
+            assert!(is_transient_plume_error(&err), "expected transient: {err}");
+            let classified = classify_session_error(err);
+            assert!(matches!(classified, SignError::Transient(_)), "expected Transient, got {classified:?}");
+            assert!(classified.is_transient());
+        }
+
+        let invalid_cases = vec![
+            plume_core::Error::GeneralHttpError { url: "https://example.com".into(), status: 401 },
+            plume_core::Error::GeneralHttpError { url: "https://example.com".into(), status: 403 },
+            plume_core::Error::DeveloperApi {
+                url: "https://developerservices2.apple.com".into(),
+                result_code: 1100,
+                http_code: Some(200),
+                message: "Your session has expired. Please log in.".into(),
+            },
+            plume_core::Error::DeveloperApi {
+                url: "https://developerservices2.apple.com".into(),
+                result_code: 22411,
+                http_code: None,
+                message: "Unauthorized".into(),
+            },
+            plume_core::Error::DeveloperSessionRequestFailed,
+            plume_core::Error::AuthSrpWithMessage(-20101, "Invalid credentials".into()),
+            plume_core::Error::Bad2faCode,
+        ];
+        for err in invalid_cases {
+            assert!(!is_transient_plume_error(&err), "expected non-transient: {err}");
+            let classified = classify_session_error(err);
+            assert!(matches!(classified, SignError::SessionInvalid(_)), "expected SessionInvalid, got {classified:?}");
+            assert!(!classified.is_transient());
+        }
+
+        let dev_err = SignError::from(plume_core::Error::DeveloperApi {
+            url: "https://developerservices2.apple.com".into(),
+            result_code: 9401,
+            http_code: Some(200),
+            message: "App ID limit reached".into(),
+        });
+        assert!(matches!(dev_err, SignError::Developer(_)));
+        let transient_from =
+            SignError::from(plume_core::Error::GeneralHttpError { url: "https://example.com".into(), status: 502 });
+        assert!(matches!(transient_from, SignError::Transient(_)));
+        ictl_l10n::with_lang(ictl_l10n::Lang::Zh, || {
+            assert!(transient_from.to_string().contains("暂时连不上 Anisette 或苹果服务"));
+        });
+        ictl_l10n::with_lang(ictl_l10n::Lang::En, || {
+            assert!(transient_from.to_string().contains("Temporarily unable to reach the Anisette or Apple service"));
+        });
+    }
+
+    #[tokio::test]
+    async fn retry_transient_backs_off_recovers_and_skips_non_transient_errors() {
+        use std::cell::RefCell;
+
+        // Recovers on attempt 3 after two transient failures.
+        let slept = RefCell::new(Vec::new());
+        let attempts = RefCell::new(0usize);
+        let ok = retry_transient(
+            &SESSION_RETRY_DELAYS,
+            |n| {
+                *attempts.borrow_mut() += 1;
+                async move { if n < 3 { Err(SignError::Transient(format!("glitch {n}"))) } else { Ok("recovered") } }
+            },
+            |d| {
+                slept.borrow_mut().push(d);
+                async {}
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(ok, "recovered");
+        assert_eq!(*attempts.borrow(), 3);
+        assert_eq!(&*slept.borrow(), &SESSION_RETRY_DELAYS);
+
+        // Exhausts all 3 attempts on persistent transient failures.
+        slept.borrow_mut().clear();
+        *attempts.borrow_mut() = 0;
+        let err = retry_transient::<(), _, _, _, _>(
+            &SESSION_RETRY_DELAYS,
+            |n| {
+                *attempts.borrow_mut() += 1;
+                async move { Err(SignError::Transient(format!("down {n}"))) }
+            },
+            |d| {
+                slept.borrow_mut().push(d);
+                async {}
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, SignError::Transient(ref m) if m == "down 3"), "{err:?}");
+        assert_eq!(*attempts.borrow(), 3);
+        assert_eq!(&*slept.borrow(), &SESSION_RETRY_DELAYS);
+
+        // Non-transient errors fail immediately without sleeping or retrying.
+        for make_err in
+            [|| SignError::SessionInvalid("expired".into()), || SignError::NoTeam, || SignError::NotLoggedIn]
+        {
+            slept.borrow_mut().clear();
+            *attempts.borrow_mut() = 0;
+            let err = retry_transient::<(), _, _, _, _>(
+                &SESSION_RETRY_DELAYS,
+                |_n| {
+                    *attempts.borrow_mut() += 1;
+                    let e = make_err();
+                    async move { Err(e) }
+                },
+                |d| {
+                    slept.borrow_mut().push(d);
+                    async {}
+                },
+            )
+            .await
+            .unwrap_err();
+            assert!(!err.is_transient(), "{err:?}");
+            assert_eq!(*attempts.borrow(), 1);
+            assert!(slept.borrow().is_empty());
+        }
+    }
+
+    /// Write a pre-provisioned SideStore Anisette v3 `state.plist` so local mock tests exercise `/v3/client_info`
+    /// and `/v3/get_headers` without touching Apple's live GSA servers.
+    fn write_provisioned_anisette_state(dir: &Path) {
+        std::fs::create_dir_all(dir).unwrap();
+        let mut dict = plist::Dictionary::new();
+        dict.insert("keychain_identifier".into(), plist::Value::Data(vec![0x11; 16]));
+        dict.insert("adi_pb".into(), plist::Value::Data(vec![0x22; 32]));
+        plist::to_file_xml(dir.join("state.plist"), &plist::Value::Dictionary(dict)).unwrap();
+    }
+
+    async fn read_http_request_head(stream: &mut tokio::net::TcpStream) -> String {
+        use tokio::io::AsyncReadExt;
+        let mut buf = Vec::new();
+        let mut tmp = [0u8; 1024];
+        let header_end = loop {
+            let n = stream.read(&mut tmp).await.unwrap();
+            if n == 0 {
+                break buf.len();
+            }
+            buf.extend_from_slice(&tmp[..n]);
+            if let Some(pos) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                break pos + 4;
+            }
+            if buf.len() > 8192 {
+                break buf.len();
+            }
+        };
+        let head = String::from_utf8_lossy(&buf[..header_end]).into_owned();
+        let content_len = head
+            .lines()
+            .find_map(|l| {
+                let (k, v) = l.split_once(':')?;
+                k.eq_ignore_ascii_case("content-length").then(|| v.trim().parse::<usize>().ok()).flatten()
+            })
+            .unwrap_or(0);
+        while buf.len() < header_end.saturating_add(content_len) {
+            let n = stream.read(&mut tmp).await.unwrap();
+            if n == 0 {
+                break;
+            }
+            buf.extend_from_slice(&tmp[..n]);
+        }
+        head
+    }
+
+    async fn write_http_response(stream: &mut tokio::net::TcpStream, status: &str, content_type: &str, body: &str) {
+        use tokio::io::AsyncWriteExt;
+        let resp = format!(
+            "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        let _ = stream.write_all(resp.as_bytes()).await;
+        let _ = stream.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn anisette_v3_transient_client_info_glitch_recovers_via_retry() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let dir = std::env::temp_dir().join(format!("ictl-ani-recover-{}", uuid::Uuid::new_v4()));
+        write_provisioned_anisette_state(&dir);
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let mut client_info_hits = 0usize;
+            for _ in 0..3 {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let req = read_http_request_head(&mut stream).await;
+                if req.starts_with("GET /v3/client_info ") {
+                    client_info_hits += 1;
+                    if client_info_hits == 1 {
+                        write_http_response(&mut stream, "502 Bad Gateway", "text/html", "<html>502</html>").await;
+                    } else {
+                        let body = r#"{"client_info":"<MacBookPro13,3> <Mac OS X;10.12.6;16G29> <com.apple.AuthKit/1 (com.apple.dt.Xcode/3594.4.19)>","user_agent":"akd/1.0"}"#;
+                        write_http_response(&mut stream, "200 OK", "application/json", body).await;
+                    }
+                } else if req.starts_with("POST /v3/get_headers ") {
+                    let body = r#"{"result":"Headers","X-Apple-I-MD-M":"MID","X-Apple-I-MD":"OTP","X-Apple-I-MD-RINFO":"17106176"}"#;
+                    write_http_response(&mut stream, "200 OK", "application/json", body).await;
+                    break;
+                }
+            }
+        });
+
+        // Trailing slash verifies URL normalization in omnisette as well.
+        let acct = AccountDir { dir: dir.clone(), anisette_url: Some(format!("http://{addr}/")) };
+        let slept = std::cell::RefCell::new(Vec::new());
+        let data = acct
+            .fetch_anisette_with(&SESSION_RETRY_DELAYS, Duration::from_secs(5), |d| {
+                slept.borrow_mut().push(d);
+                async {}
+            })
+            .await
+            .unwrap();
+        assert_eq!(data.get_header("X-Apple-I-MD").unwrap(), "OTP");
+        assert_eq!(data.get_header("X-Apple-I-MD-M").unwrap(), "MID");
+        assert_eq!(&*slept.borrow(), &[SESSION_RETRY_DELAYS[0]]);
+
+        server.await.unwrap();
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn anisette_v3_get_headers_errors_and_timeouts_return_transient_without_panicking() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+
+        // Scenario A & B: /v3/get_headers returns 503 HTML, then a non--45061 GetHeadersError JSON.
+        // Upstream omnisette panicked on both (remote_anisette_v3.rs L266 & L521); verify both become SignError::Transient.
+        for (status, ctype, body, expected_substr) in [
+            ("503 Service Unavailable", "text/html", "<html>overloaded</html>", "503"),
+            (
+                "200 OK",
+                "application/json",
+                r#"{"result":"GetHeadersError","message":"anisette backend busy"}"#,
+                "anisette backend busy",
+            ),
+        ] {
+            let dir = std::env::temp_dir().join(format!("ictl-ani-err-{}", uuid::Uuid::new_v4()));
+            write_provisioned_anisette_state(&dir);
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = listener.local_addr().unwrap();
+            let server = tokio::spawn(async move {
+                // 3 attempts * (GET client_info + POST get_headers)
+                for _ in 0..6 {
+                    let Ok((mut stream, _)) = listener.accept().await else { break };
+                    let req = read_http_request_head(&mut stream).await;
+                    if req.starts_with("GET /v3/client_info ") {
+                        let ok = r#"{"client_info":"<MacBookPro13,3> <Mac OS X;10.12.6;16G29> <com.apple.AuthKit/1 (com.apple.dt.Xcode/3594.4.19)>","user_agent":"akd/1.0"}"#;
+                        write_http_response(&mut stream, "200 OK", "application/json", ok).await;
+                    } else if req.starts_with("POST /v3/get_headers ") {
+                        write_http_response(&mut stream, status, ctype, body).await;
+                    }
+                }
+            });
+
+            let acct = AccountDir { dir: dir.clone(), anisette_url: Some(format!("http://{addr}")) };
+            let slept = std::cell::RefCell::new(Vec::new());
+            let err = acct
+                .fetch_anisette_with(&SESSION_RETRY_DELAYS, Duration::from_secs(5), |d| {
+                    slept.borrow_mut().push(d);
+                    async {}
+                })
+                .await
+                .unwrap_err();
+            assert!(matches!(err, SignError::Transient(ref msg) if msg.contains(expected_substr)), "{err:?}");
+            assert_eq!(&*slept.borrow(), &SESSION_RETRY_DELAYS);
+            server.await.unwrap();
+            std::fs::remove_dir_all(dir).unwrap();
+        }
+
+        // Scenario C: stalled server never replies; per-attempt timeout cuts it off and retries cleanly.
+        let dir = std::env::temp_dir().join(format!("ictl-ani-hang-{}", uuid::Uuid::new_v4()));
+        write_provisioned_anisette_state(&dir);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let mut held = Vec::new();
+            for _ in 0..3 {
+                let Ok((stream, _)) = listener.accept().await else { break };
+                held.push(stream);
+            }
+            tokio::time::sleep(Duration::from_secs(2)).await;
+        });
+
+        let acct = AccountDir { dir: dir.clone(), anisette_url: Some(format!("http://{addr}")) };
+        let slept = std::cell::RefCell::new(Vec::new());
+        let err = acct
+            .fetch_anisette_with(&SESSION_RETRY_DELAYS, Duration::from_millis(120), |d| {
+                slept.borrow_mut().push(d);
+                async {}
+            })
+            .await
+            .unwrap_err();
+        assert!(matches!(err, SignError::Transient(ref msg) if msg.contains("timed out")), "{err:?}");
+        assert_eq!(&*slept.borrow(), &SESSION_RETRY_DELAYS);
+        server.abort();
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

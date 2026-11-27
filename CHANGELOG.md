@@ -10,6 +10,10 @@ What changed in each release, one line per change. Versions follow [Semantic Ver
 
 - Removed settings left set to non-empty values in `~/.config/iphone-control/env` or the daemon's environment (such as `ICTL_WDA_DETACHED`, `ICTL_MANAGE_USBMUXD`, `ICTL_USBMUXD_BIN`, `ICTL_AGENT_GATE`, and `ICTL_AGENT_TOKEN`) now log a gentle startup notice and show a non-fatal warning in `iphone-control doctor` instead of being silently ignored (#223).
 
+### Fixes
+
+- Transient failures or timeouts from the public Anisette server or Apple's developer endpoint no longer panic in `omnisette` or immediately fire a false "Apple ID session expired" alert: HTTP requests now have bounded timeouts, session recovery and login's Anisette fetch retry up to 3 times with short backoff (2 s → 5 s), and routine session checks log transient glitches and retry in an hour without triggering `Event::SessionExpired` (#224).
+
 ## [0.3.0] - 2026-11-26
 
 A major architecture, security, stability and performance release: hyper-based control page, direct iOS 27 accessibility tree, instant USB hotplug discovery, abnormal-restart alerting and dozens of reliability fixes.

@@ -9,8 +9,10 @@ use crate::notify::Event;
 
 /// 整个重签（登录会话、注册设备、签名、上传安装）的时限：苹果服务器或安装卡住时不能永远「正在重签」
 const RESIGN_TIMEOUT: Duration = Duration::from_secs(15 * 60);
-/// Apple ID 会话检查的时限
+/// Apple ID 会话检查的时限（容得下 `ictl_sign::AccountDir::session` 最多 3 次尝试 + 退避）
 const SESSION_CHECK_TIMEOUT: Duration = Duration::from_secs(3 * 60);
+/// 会话检查遇到 Anisette / 网络瞬断或超时时的缩短复查间隔：不误发会话失效通知，较快重试确认
+pub(crate) const SESSION_CHECK_TRANSIENT_RETRY: Duration = Duration::from_secs(60 * 60);
 
 /// 因为证书自动重签同一台设备的最短间隔：重签也治不好时（例如其实是没信任开发者）不反复签
 pub(crate) const CERT_HEAL_EVERY: Duration = Duration::from_secs(6 * 3600);
@@ -118,7 +120,7 @@ impl Daemon {
         let account = self.account();
         // plume_core 的 future 不是 Send，放到阻塞线程里 block_on（同重签）；也不持锁
         // 会话好的话顺便查本机的签名证书还在不在团队里（同一次登录）
-        let r: Result<Option<bool>, Option<String>> = tokio::task::spawn_blocking(move || {
+        let outcome = tokio::task::spawn_blocking(move || {
             tokio::runtime::Handle::current().block_on(async move {
                 let check = async {
                     let s = account.session().await?;
@@ -137,26 +139,26 @@ impl Daemon {
                         }
                     })
                 };
-                match tokio::time::timeout(SESSION_CHECK_TIMEOUT, check).await {
-                    Ok(Ok(listed)) => Ok(listed),
-                    Ok(Err(ictl_sign::SignError::NotLoggedIn)) => Err(None),
-                    Ok(Err(e)) => Err(Some(e.to_string())),
-                    Err(_) => Err(Some(ictl_l10n::trf!(
-                        "{} 分钟内没有完成",
-                        "not finished within {} minutes",
-                        SESSION_CHECK_TIMEOUT.as_secs() / 60
-                    ))),
-                }
+                classify_session_check_result(tokio::time::timeout(SESSION_CHECK_TIMEOUT, check).await)
             })
         })
         .await
-        .unwrap_or_else(|e| Err(Some(ictl_l10n::trf!("会话检查任务异常：{e}", "Session check task failed: {e}"))));
+        .unwrap_or_else(|e| {
+            SessionCheckOutcome::Transient(ictl_l10n::log_trf!(
+                "会话检查任务异常：{e}",
+                "Session check task failed: {e}"
+            ))
+        });
         let mut g = self.inner.lock().await;
-        match r {
-            Ok(listed) => {
+        self.apply_session_check(&mut g, outcome, Instant::now());
+    }
+
+    fn apply_session_check(&self, g: &mut Inner, outcome: SessionCheckOutcome, now: Instant) {
+        match outcome {
+            SessionCheckOutcome::Ok(listed) => {
                 g.dedup.clear("session");
                 if let Some(l) = listed {
-                    g.own_cert = Some((Instant::now(), l));
+                    g.own_cert = Some((now, l));
                     if !l {
                         self.log.log(ictl_l10n::log_tr!(
                             "本机的签名证书已不在 Apple ID 的团队里（别处新建证书时把它吊销了）：用它签的 WDA 起不来，会自动重签",
@@ -165,11 +167,22 @@ impl Daemon {
                     }
                 }
             }
-            Err(None) => {}
-            Err(Some(e)) => {
-                self.log
-                    .log(&ictl_l10n::trf!("Apple ID 会话检查失败：{e}", "Checking the Apple ID session failed: {e}"));
-                self.notify(&mut g, Event::SessionExpired(e));
+            SessionCheckOutcome::NotLoggedIn => {}
+            SessionCheckOutcome::Transient(e) => {
+                let retry = self.cfg.session_check.min(SESSION_CHECK_TRANSIENT_RETRY);
+                g.next_session_check = g.next_session_check.min(now + retry);
+                let mins = (retry.as_secs() / 60).max(1);
+                self.log.log(&ictl_l10n::log_trf!(
+                    "Apple ID 会话检查遇到临时网络/Anisette 故障，{mins} 分钟后重试（暂不视为会话失效）：{e}",
+                    "Apple ID session check hit a transient network/Anisette failure; retrying in {mins} min (not treating the session as expired): {e}"
+                ));
+            }
+            SessionCheckOutcome::Expired(e) => {
+                self.log.log(&ictl_l10n::log_trf!(
+                    "Apple ID 会话检查失败：{e}",
+                    "Checking the Apple ID session failed: {e}"
+                ));
+                self.notify(g, Event::SessionExpired(e));
             }
         }
     }
@@ -323,6 +336,102 @@ impl Daemon {
     }
 }
 
+#[derive(Debug, PartialEq, Eq)]
+enum SessionCheckOutcome {
+    Ok(Option<bool>),
+    NotLoggedIn,
+    Transient(String),
+    Expired(String),
+}
+
+fn classify_session_check_result(
+    res: std::result::Result<ictl_sign::Result<Option<bool>>, tokio::time::error::Elapsed>,
+) -> SessionCheckOutcome {
+    match res {
+        Ok(Ok(listed)) => SessionCheckOutcome::Ok(listed),
+        Ok(Err(ictl_sign::SignError::NotLoggedIn)) => SessionCheckOutcome::NotLoggedIn,
+        Ok(Err(e)) if e.is_transient() || matches!(e, ictl_sign::SignError::Io(_)) => {
+            SessionCheckOutcome::Transient(ictl_l10n::in_own_lang(|| e.to_string()))
+        }
+        Ok(Err(e)) => SessionCheckOutcome::Expired(ictl_l10n::in_own_lang(|| e.to_string())),
+        Err(_) => SessionCheckOutcome::Transient(ictl_l10n::log_trf!(
+            "{} 分钟内没有完成",
+            "not finished within {} minutes",
+            SESSION_CHECK_TIMEOUT.as_secs() / 60
+        )),
+    }
+}
+
 fn now_secs() -> u64 {
     std::time::SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn session_check_transient_failure_logs_and_retries_sooner_without_alerting() {
+        let dir = std::env::temp_dir().join(format!("ictl-session-check-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(dir.join("logs")).unwrap();
+        let mut cfg = crate::config::Config::from_env(&dir);
+        cfg.notify = crate::config::NotifyConfig::default();
+        let d = Daemon::new(cfg);
+
+        // Verify classification separates transient / timeout from real session invalidation.
+        let transient = classify_session_check_result(Ok(Err(ictl_sign::SignError::Transient("anisette down".into()))));
+        assert!(matches!(transient, SessionCheckOutcome::Transient(ref s) if s.contains("anisette down")));
+
+        let timed_out =
+            tokio::time::timeout(Duration::ZERO, std::future::pending::<ictl_sign::Result<Option<bool>>>()).await;
+        let timeout_outcome = classify_session_check_result(timed_out);
+        assert!(matches!(timeout_outcome, SessionCheckOutcome::Transient(_)), "{timeout_outcome:?}");
+
+        let not_logged_in = classify_session_check_result(Ok(Err(ictl_sign::SignError::NotLoggedIn)));
+        assert_eq!(not_logged_in, SessionCheckOutcome::NotLoggedIn);
+
+        let expired = classify_session_check_result(Ok(Err(ictl_sign::SignError::SessionInvalid("code 1100".into()))));
+        assert!(matches!(expired, SessionCheckOutcome::Expired(ref s) if s.contains("code 1100")));
+
+        // Routine 24h schedule hits a transient failure: no SessionExpired alert, retry pulled in to 1h.
+        let now = Instant::now();
+        {
+            let mut g = d.inner.lock().await;
+            g.next_session_check = now + d.cfg.session_check;
+            d.apply_session_check(&mut g, transient, now);
+            assert!(!g.dedup.was_sent("session"), "transient glitch must not trigger SessionExpired");
+            assert_eq!(g.next_session_check, now + SESSION_CHECK_TRANSIENT_RETRY);
+
+            // An already-sooner next_session_check is not pushed back.
+            let sooner = now + Duration::from_secs(600);
+            g.next_session_check = sooner;
+            d.apply_session_check(&mut g, timeout_outcome, now);
+            assert_eq!(g.next_session_check, sooner);
+            assert!(!g.dedup.was_sent("session"));
+
+            // NotLoggedIn leaves schedule and dedup untouched.
+            d.apply_session_check(&mut g, not_logged_in, now);
+            assert_eq!(g.next_session_check, sooner);
+            assert!(!g.dedup.was_sent("session"));
+
+            // Real SessionInvalid does alert via Event::SessionExpired.
+            d.apply_session_check(&mut g, expired, now);
+            assert!(g.dedup.was_sent("session"), "confirmed session invalidation must alert");
+
+            // A subsequent transient error does not wipe the session alert dedup state.
+            d.apply_session_check(&mut g, SessionCheckOutcome::Transient("blip".into()), now);
+            assert!(g.dedup.was_sent("session"));
+
+            // Recovery clears dedup and records own_cert.
+            d.apply_session_check(&mut g, SessionCheckOutcome::Ok(Some(true)), now);
+            assert!(!g.dedup.was_sent("session"));
+            assert_eq!(g.own_cert, Some((now, true)));
+        }
+
+        let log_text = std::fs::read_to_string(dir.join("logs/daemon.log")).unwrap();
+        assert!(log_text.contains("anisette down"), "{log_text}");
+        let notify_lines = log_text.lines().filter(|l| l.contains("通知：") || l.contains("Notification:")).count();
+        assert_eq!(notify_lines, 1, "only confirmed expiration should dispatch a notification:\n{log_text}");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 }

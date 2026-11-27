@@ -136,9 +136,66 @@ pub const ALL: &[Var] = &[
     var(QPS, Kind::Dev, false),
 ];
 
+/// A removed environment variable kept here only so the daemon and `doctor` can gently remind users who still have a
+/// non-empty value set in `~/.config/iphone-control/env` or their shell.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RemovedVar {
+    pub name: &'static str,
+    pub reason_zh: &'static str,
+    pub reason_en: &'static str,
+}
+
+impl RemovedVar {
+    /// Human-readable reason in the current request/thread language (`ictl_l10n::lang()`).
+    pub fn reason(&self) -> &'static str {
+        if ictl_l10n::is_en() { self.reason_en } else { self.reason_zh }
+    }
+}
+
+/// Environment variables removed in earlier releases: non-empty values trigger a gentle notice in daemon startup logs
+/// and `doctor` instead of failing or being silently ignored.
+pub const REMOVED: &[RemovedVar] = &[
+    RemovedVar {
+        name: "ICTL_WDA_DETACHED",
+        reason_zh: "WDA 现已固定在后台启动，该项不再起作用",
+        reason_en: "WDA now always launches in the background; this setting no longer has any effect",
+    },
+    RemovedVar {
+        name: "ICTL_MANAGE_USBMUXD",
+        reason_zh: "现已固定使用系统的 usbmuxd 服务，该项不再起作用",
+        reason_en: "the system usbmuxd service is now always used; this setting no longer has any effect",
+    },
+    RemovedVar {
+        name: "ICTL_USBMUXD_BIN",
+        reason_zh: "现已固定使用系统的 usbmuxd 服务，该项不再起作用",
+        reason_en: "the system usbmuxd service is now always used; this setting no longer has any effect",
+    },
+    RemovedVar {
+        name: "ICTL_AGENT_GATE",
+        reason_zh: "已由任务口令机制（IPHONE_CONTROL_TASK_TOKEN）取代，该项不再起作用",
+        reason_en: "replaced by the task token mechanism (IPHONE_CONTROL_TASK_TOKEN); this setting no longer has any effect",
+    },
+    RemovedVar {
+        name: "ICTL_AGENT_TOKEN",
+        reason_zh: "已由 IPHONE_CONTROL_TASK_TOKEN 取代，该项不再起作用",
+        reason_en: "replaced by IPHONE_CONTROL_TASK_TOKEN; this setting no longer has any effect",
+    },
+];
+
 /// A variable's value, trimmed; `None` when it isn't set or is empty
 pub fn get(name: &str) -> Option<String> {
     std::env::var(name).ok().map(|v| v.trim().to_owned()).filter(|v| !v.is_empty())
+}
+
+/// Removed variables currently set to a non-empty value in this process's environment.
+pub fn active_removed() -> Vec<&'static RemovedVar> {
+    active_removed_with(get)
+}
+
+/// Removed variables that are non-empty under `lookup` (for tests and inspecting parsed env files without mutating
+/// the process environment).
+pub fn active_removed_with(mut lookup: impl FnMut(&str) -> Option<String>) -> Vec<&'static RemovedVar> {
+    REMOVED.iter().filter(|v| lookup(v.name).is_some_and(|s| !s.trim().is_empty())).collect()
 }
 
 #[cfg(test)]
@@ -182,6 +239,32 @@ mod tests {
     #[test]
     fn each_name_once() {
         assert_eq!(known().len(), ALL.len());
+    }
+
+    #[test]
+    fn removed_env_vars_are_reported_when_non_empty_and_disjoint_from_all() {
+        let active = known();
+        let mut seen = BTreeSet::new();
+        for v in REMOVED {
+            assert!(seen.insert(v.name), "duplicate removed env var {}", v.name);
+            assert!(!active.contains(v.name), "removed env var {} must not also be in env::ALL", v.name);
+            assert!(!v.reason_zh.trim().is_empty() && !v.reason_en.trim().is_empty(), "empty reason for {}", v.name);
+        }
+        let hit = active_removed_with(|name| match name {
+            "ICTL_WDA_DETACHED" => Some("0".into()),
+            "ICTL_MANAGE_USBMUXD" => Some("   ".into()),
+            "ICTL_USBMUXD_BIN" => Some(String::new()),
+            "ICTL_AGENT_TOKEN" => Some("legacy".into()),
+            _ => None,
+        });
+        let names: Vec<&str> = hit.iter().map(|v| v.name).collect();
+        assert_eq!(names, vec!["ICTL_WDA_DETACHED", "ICTL_AGENT_TOKEN"]);
+        ictl_l10n::with_lang(ictl_l10n::Lang::Zh, || {
+            assert_eq!(hit[0].reason(), hit[0].reason_zh);
+        });
+        ictl_l10n::with_lang(ictl_l10n::Lang::En, || {
+            assert_eq!(hit[0].reason(), hit[0].reason_en);
+        });
     }
 
     /// The pages describe what there is, and nothing that isn't there any more

@@ -131,6 +131,7 @@ async fn serve(cfg: Config, listener: tokio::net::UnixListener) -> anyhow::Resul
     let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
     let daemon = Daemon::new(cfg);
     daemon.log.log(ictl_l10n::log_tr!("守护进程启动", "Daemon started"));
+    log_removed_env_notices(&daemon.log, &protocol::env::active_removed());
     let run_state = Arc::new(watchdog::RunState::new(daemon.cfg.run_state_file()));
     if let Some(incident) = run_state.on_startup(daemon.cfg.notify.any()) {
         report_abnormal_restart(&daemon, incident).await;
@@ -477,6 +478,21 @@ async fn task_stream(
     }
 }
 
+/// Log gentle startup notices when removed environment variables are still set to non-empty values.
+fn log_removed_env_notices(log: &eventlog::EventLog, removed: &[&protocol::env::RemovedVar]) {
+    for v in removed {
+        let msg = ictl_l10n::in_own_lang(|| {
+            ictl_l10n::trf!(
+                "忽略已移除的配置项 {}（{}），可从 ~/.config/iphone-control/env 或环境中移除",
+                "Ignoring removed setting {} ({}); you can remove it from ~/.config/iphone-control/env or your environment",
+                v.name,
+                v.reason()
+            )
+        });
+        log.log(&msg);
+    }
+}
+
 /// 等到调用方关掉连接（读到 EOF 或出错）。带 cancel_on_close 的客户端一个连接只发一个请求，之后不会再写
 async fn wait_closed<R: tokio::io::AsyncRead + Unpin>(reader: &mut R) {
     let mut buf = [0u8; 64];
@@ -764,6 +780,22 @@ mod tests {
         assert!(log_text.contains("抑制 1") || log_text.contains("1 suppressed"), "{log_text}");
         let notify_lines = log_text.lines().filter(|l| l.contains("通知：") || l.contains("Notification:")).count();
         assert_eq!(notify_lines, 2, "only the first crash and the post-cooldown watchdog summary notify:\n{log_text}");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn daemon_startup_logs_removed_env_notices_without_failing() {
+        let dir = std::env::temp_dir().join(format!("ictl-removed-env-log-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let log_path = dir.join("daemon.log");
+        let log = eventlog::EventLog::new(&dir);
+        log_removed_env_notices(&log, &[]);
+        assert!(!log_path.exists());
+        let first = &protocol::env::REMOVED[0];
+        log_removed_env_notices(&log, &[first]);
+        let content = std::fs::read_to_string(&log_path).unwrap();
+        assert!(content.contains(first.name), "{content}");
+        assert!(content.contains(first.reason_zh) || content.contains(first.reason_en), "{content}");
         std::fs::remove_dir_all(dir).unwrap();
     }
 }

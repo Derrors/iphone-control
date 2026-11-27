@@ -14,6 +14,7 @@ impl Daemon {
             usb: ictl_device::host_ios_usb_present().await,
             signed_in: self.account().selected_email().await.is_ok(),
             picture: viewer_picture().await,
+            removed_env: crate::protocol::env::active_removed(),
         }
     }
 
@@ -311,6 +312,7 @@ impl Daemon {
             );
         }
         out.push(host.picture);
+        out.extend(format_removed_env_notices(&host.removed_env));
         out.push(String::new());
         out.push(if fails == 0 {
             ictl_l10n::tr!("全部正常", "All good").into()
@@ -327,6 +329,22 @@ pub(crate) struct DoctorHost {
     usb: Option<bool>,
     signed_in: bool,
     picture: String,
+    removed_env: Vec<&'static crate::protocol::env::RemovedVar>,
+}
+
+/// Gentle `doctor` warning lines for removed environment variables that are still set to a non-empty value.
+fn format_removed_env_notices(removed: &[&crate::protocol::env::RemovedVar]) -> Vec<String> {
+    removed
+        .iter()
+        .map(|v| {
+            ictl_l10n::trf!(
+                "⚠️  已移除的配置项 {}（{}），可从 ~/.config/iphone-control/env 或环境中移除",
+                "⚠️  Removed setting {} ({}); you can remove it from ~/.config/iphone-control/env or your environment",
+                v.name,
+                v.reason()
+            )
+        })
+        .collect()
 }
 
 /// 控制台（`iphone-control viewer`）的画面能不能用 H.264：macOS 上本程序直接调 VideoToolbox 编 WDA 的 JPEG，不用
@@ -444,5 +462,21 @@ mod tests {
                 assert!(!with.contains("brew install"), "{with}");
             });
         }
+    }
+
+    #[test]
+    fn doctor_warns_about_removed_env_vars_in_both_languages() {
+        assert!(format_removed_env_notices(&[]).is_empty());
+        let first = &crate::protocol::env::REMOVED[0];
+        ictl_l10n::with_lang(ictl_l10n::Lang::Zh, || {
+            let lines = format_removed_env_notices(&[first]);
+            assert_eq!(lines.len(), 1);
+            assert!(lines[0].starts_with("⚠️") && lines[0].contains(first.name) && lines[0].contains(first.reason_zh));
+        });
+        ictl_l10n::with_lang(ictl_l10n::Lang::En, || {
+            let lines = format_removed_env_notices(&[first]);
+            assert_eq!(lines.len(), 1);
+            assert!(lines[0].starts_with("⚠️") && lines[0].contains(first.name) && lines[0].contains(first.reason_en));
+        });
     }
 }

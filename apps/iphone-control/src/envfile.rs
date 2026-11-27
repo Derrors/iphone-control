@@ -208,4 +208,15 @@ mod tests {
         assert_eq!(f.get(ictl_daemon::protocol::env::LANG), None);
         assert_eq!(f.get(ictl_daemon::protocol::env::BARK_SERVER).as_deref(), Some("https://api.day.app"));
     }
+
+    #[test]
+    fn envfile_last_values_surfaces_only_non_empty_removed_vars() {
+        let first = ictl_daemon::protocol::env::REMOVED[0].name;
+        let second = ictl_daemon::protocol::env::REMOVED[1].name;
+        let text = format!("{first}=0\n{second}=1\n{second}=\n");
+        let map: std::collections::HashMap<String, String> = last_values(parse(&text)).into_iter().collect();
+        let hit = ictl_daemon::protocol::env::active_removed_with(|k| map.get(k).cloned());
+        let names: Vec<&str> = hit.iter().map(|v| v.name).collect();
+        assert_eq!(names, vec![first]);
+    }
 }

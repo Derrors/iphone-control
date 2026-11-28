@@ -859,6 +859,22 @@ impl Tunnel {
         .await
     }
 
+    /// When each running process started, as the phone says (DVT deviceinfo `runningProcesses`, `startDate`): by
+    /// pid, as a text that is the same for the same process and differs for another one with that pid later (after
+    /// the phone restarted, say). A process whose start isn't given is left out
+    pub async fn process_starts(&mut self) -> Result<std::collections::HashMap<u64, String>> {
+        use idevice::dvt::remote_server::RemoteServerClient;
+        limit(ictl_l10n::text!("读进程启动时间", "read when processes started"), Duration::from_secs(20), async {
+            let mut dvt: RemoteServerClient<Box<dyn idevice::ReadWrite>> =
+                RemoteServerClient::connect_rsd(&mut self.adapter, &mut self.handshake).await?;
+            let mut ch = dvt.make_channel("com.apple.instruments.server.services.deviceinfo").await?;
+            ch.call_method(Some(plist::Value::String("runningProcesses".into())), None, true).await?;
+            let reply = ch.read_message().await?;
+            Ok(process_starts_of(reply.data.as_ref()))
+        })
+        .await
+    }
+
     /// 手机上正在运行的进程：（进程号，可执行文件路径）
     pub async fn processes(&mut self) -> Result<Vec<(u64, String)>> {
         use idevice::core_device::AppServiceClient;
@@ -880,6 +896,36 @@ impl Tunnel {
     }
 }
 
+/// [`Tunnel::process_starts`] from `runningProcesses`' reply: an array of dictionaries with `pid` and `startDate`
+/// (an NSDate, decoded as a date, a number of seconds, or a dictionary holding `NS.time`)
+fn process_starts_of(data: Option<&plist::Value>) -> std::collections::HashMap<u64, String> {
+    use plist::Value;
+    let start = |v: &Value| -> Option<String> {
+        match v {
+            Value::Date(d) => Some(format!("{:?}", std::time::SystemTime::from(*d))),
+            Value::Real(r) => Some(format!("{r:.6}")),
+            Value::Integer(i) => i.as_signed().map(|i| i.to_string()),
+            Value::Dictionary(d) => match d.get("NS.time")? {
+                Value::Real(r) => Some(format!("{r:.6}")),
+                Value::Integer(i) => i.as_signed().map(|i| i.to_string()),
+                _ => None,
+            },
+            _ => None,
+        }
+    };
+    data.and_then(Value::as_array)
+        .map(|a| {
+            a.iter()
+                .filter_map(|p| {
+                    let d = p.as_dictionary()?;
+                    let pid = d.get("pid")?.as_unsigned_integer()?;
+                    Some((pid, start(d.get("startDate")?)?))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// A launch's environment as processcontrol takes it
 fn environment(env: &[(&str, &str)]) -> plist::Dictionary {
     env.iter().map(|(k, v)| ((*k).to_owned(), plist::Value::String((*v).to_owned()))).collect()
@@ -888,6 +934,34 @@ fn environment(env: &[(&str, &str)]) -> plist::Dictionary {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A process's start in any of the forms an NSDate is decoded to; one without a start is left out
+    #[test]
+    fn process_starts_are_read_in_every_form() {
+        use plist::{Dictionary, Value};
+        let p = |pid: u64, start: Option<Value>| {
+            let mut d = Dictionary::new();
+            d.insert("pid".into(), Value::Integer(pid.into()));
+            if let Some(s) = start {
+                d.insert("startDate".into(), s);
+            }
+            Value::Dictionary(d)
+        };
+        let mut ns = Dictionary::new();
+        ns.insert("NS.time".into(), Value::Real(786_000_000.25));
+        let list = Value::Array(vec![
+            p(10, Some(Value::Real(786_000_000.5))),
+            p(11, Some(Value::Dictionary(ns))),
+            p(12, None),
+            p(13, Some(Value::Date(std::time::SystemTime::UNIX_EPOCH.into()))),
+        ]);
+        let got = process_starts_of(Some(&list));
+        assert_eq!(got.get(&10).map(String::as_str), Some("786000000.500000"));
+        assert_eq!(got.get(&11).map(String::as_str), Some("786000000.250000"));
+        assert!(!got.contains_key(&12));
+        assert!(got.contains_key(&13));
+        assert!(process_starts_of(None).is_empty());
+    }
 
     /// A time limit hit while an English request was handled reads in Chinese in the daemon's Chinese log, the
     /// thing that timed out included: it came out «超时：read device info (15 s)»

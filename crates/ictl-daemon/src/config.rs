@@ -234,7 +234,17 @@ impl Config {
     /// `instance add` sees the registry it wrote), else the one worked out at start ([`Self::registry`])
     #[cfg(not(test))]
     pub fn registry_dir(&self) -> PathBuf {
-        crate::instance::anchor().ok().flatten().map(|a| a.registry).unwrap_or_else(|| self.registry.clone())
+        match crate::instance::anchor() {
+            Ok(Some(a)) => a.registry,
+            Ok(None) => self.registry.clone(),
+            // there, but unreadable: not taken for no anchor (the registry it names could be another). A path that
+            // can't be listed as a directory reads as a registry that can't be read: the default instance keeps to
+            // its own device, `select auto` refused
+            Err(e) => {
+                tracing::warn!("the instance registry's anchor can't be read: {e}");
+                PathBuf::from("/dev/null")
+            }
+        }
     }
 
     /// Unit tests never see the host's anchor

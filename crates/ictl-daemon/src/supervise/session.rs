@@ -102,7 +102,18 @@ impl Daemon {
             Ok(OriginCheck::Unknown) => !account.require_known_origin,
             Ok(OriginCheck::Mismatch { .. }) | Err(_) => false,
         };
-        origin_ok && self.inner.lock().await.persisted.wda_bundle.is_some() && account.selected_email().await.is_ok()
+        if !origin_ok || account.selected_email().await.is_err() {
+            return false;
+        }
+        let g = self.inner.lock().await;
+        if self.cfg.shared_with_others() {
+            // shared by several instances: the check is everyone's, its alert sent by the leader. One that couldn't
+            // send it (no notification configured) doesn't lead, so it can't take the check from one that can
+            self.cfg.notify.any()
+        } else {
+            // alone: as before, only for a device that uses WDA (a phone driven natively needs no Apple ID)
+            wda_checks_session(g.persisted.wda_bundle.is_some(), g.device.is_some(), self.native(&g))
+        }
     }
 
     /// One round: the lock held from before (or taken now), returned when this instance still leads
@@ -152,6 +163,12 @@ impl Daemon {
         }
         lead.filter(|_| keep)
     }
+}
+
+/// A lone instance checks the session as before this version did: with WDA installed, unless the device in use is
+/// driven natively
+fn wda_checks_session(has_bundle: bool, device: bool, native: bool) -> bool {
+    has_bundle && !(device && native)
 }
 
 /// What [`settle`] did with a check's result
@@ -254,6 +271,15 @@ mod tests {
         }
         assert_eq!(next_leader.notified.len(), CLAIMS_KEPT);
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// A lone instance checks only as before: with WDA, not for a phone driven natively (no Apple ID needed there)
+    #[test]
+    fn a_lone_instance_checks_as_before() {
+        assert!(wda_checks_session(true, true, false));
+        assert!(wda_checks_session(true, false, false), "no device connected: checked, an expiry found early");
+        assert!(!wda_checks_session(true, true, true), "driven natively");
+        assert!(!wda_checks_session(false, true, false), "WDA never installed");
     }
 
     /// One leader at a time; it is free again once the holder lets go

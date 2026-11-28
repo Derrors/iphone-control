@@ -50,8 +50,8 @@ pub(crate) enum StartOutcome {
         mounted: Option<String>,
         /// 后台 WDA 是接上的还是新启动的
         detached: Detached,
-        /// 它的可执行文件（手机进程列表里的），记进接管记录
-        executable: Option<String>,
+        /// 它的可执行文件和启动时间（手机说的），记进接管记录作创建身份
+        proof: Box<Proof>,
     },
     NeedsUnlock,
     /// 开发者镜像没准备好。`mount_failed`：是挂载这一步失败（才可能是缓存坏了）；
@@ -122,7 +122,7 @@ impl Daemon {
     /// process, launched as this version does, of the bundle this instance uses, not to be ended (an explicit stop
     /// that failed, or an intent of another instance that still matches). An older version's record in state.json is
     /// moved over first, when the device has no newer one. `None`: launched anew, which ends whatever runs
-    fn adoptable(&self, g: &mut Inner, udid: &str, bundle: &str) -> Option<(u64, Option<String>)> {
+    fn adoptable(&self, g: &mut Inner, udid: &str, bundle: &str) -> Option<crate::adopt::Record> {
         use crate::adopt::{self, Record};
         let dir = self.cfg.adopt_dir();
         let mut record = adopt::read(&dir, udid).unwrap_or_else(|e| {
@@ -137,6 +137,7 @@ impl Daemon {
                 bundle: bundle.to_owned(),
                 team: g.persisted.team_id.clone(),
                 executable: None,
+                started: None,
                 loopback: true,
                 owner_id: self.cfg.instance_id.clone(),
                 generation: 0,
@@ -144,9 +145,12 @@ impl Daemon {
             };
             record = adopt::write(&dir, udid, old).ok();
         }
-        let end = adopt::take_intents(&dir, udid, record.as_ref());
+        let record = adopt::consume_intents(&dir, udid, record).unwrap_or_else(|e| {
+            tracing::warn!("consuming the cleanup intents of {udid} failed: {e}");
+            None
+        });
         let r = record?;
-        if end || r.cleanup_pending {
+        if r.cleanup_pending {
             self.log.log(&ictl_l10n::log_trf!(
                 "手机上的后台 WDA（进程 {}）之前该结束而没结束：重新启动它",
                 "The background WDA on the phone (pid {}) was to be ended and wasn't: launching it again",
@@ -154,7 +158,9 @@ impl Daemon {
             ));
             return None;
         }
-        (r.adoptable() && r.bundle == bundle).then_some((r.pid, r.executable))
+        // without its creation identity (an older version's record, moved over) it isn't attached to: launched anew,
+        // listening on the phone's loopback only
+        (r.adoptable() && r.bundle == bundle).then_some(r)
     }
 
     /// This instance never signed WDA for itself (a new instance, first controlling a device another one used,
@@ -194,13 +200,14 @@ impl Daemon {
 
     /// The background WDA launched on or attached to on `udid`, recorded for whoever controls the device next. The
     /// default instance also writes it where 0.3.2 looks (state.json), so a downgrade still ends it
-    fn record_adopt(&self, g: &mut Inner, udid: &str, pid: u64, executable: Option<String>) {
+    fn record_adopt(&self, g: &mut Inner, udid: &str, pid: u64, proof: Proof) {
         let Some(bundle) = g.persisted.wda_bundle.clone() else { return };
         let r = crate::adopt::Record {
             pid,
             bundle,
             team: g.persisted.team_id.clone(),
-            executable,
+            executable: proof.executable,
+            started: proof.started,
             loopback: true,
             owner_id: self.cfg.instance_id.clone(),
             generation: 0,
@@ -259,7 +266,7 @@ impl Daemon {
             // 手机重启后开发者镜像可能掉了；已挂载时只是一次查询。错误带上「是不是挂载这一步」。
             // 镜像好了再在同一条隧道上处理后台 WDA（见 prepare_detached）
             // 挂上的镜像版本、后台 WDA 的处理结果、启动前打开的系统日志流
-            type Ready = (Option<String>, Result<(Detached, Option<String>), DeviceError>, Option<LogStream>);
+            type Ready = (Option<String>, Result<(Detached, Proof), DeviceError>, Option<LogStream>);
             let ddi: Result<Ready, (DeviceError, bool)> = async {
                 let mut t = device.open_tunnel().await.map_err(|e| (e, false))?;
                 let r = ensure_ddi(&device, &mut t, legacy, &cache, &url, user_dir.as_deref()).await;
@@ -286,7 +293,7 @@ impl Daemon {
                 Err((DeviceError::PasswordProtected, _)) => return StartOutcome::NeedsUnlock,
                 Err((e, mount_failed)) => return StartOutcome::Ddi { error: e.to_string(), mount_failed },
             };
-            let (prepared, executable) = match prepared {
+            let (prepared, proof) = match prepared {
                 Ok(p) => p,
                 Err(e @ DeviceError::LaunchRefused(_)) => {
                     return StartOutcome::Refused(ictl_l10n::trf!(
@@ -306,7 +313,9 @@ impl Daemon {
                 Detached::Launched(_) => WdaRunner::attach(device.provider(), start_timeout, log).await,
             };
             match started {
-                Ok((runner, client)) => StartOutcome::Ready { runner, client, mounted, detached: prepared, executable },
+                Ok((runner, client)) => {
+                    StartOutcome::Ready { runner, client, mounted, detached: prepared, proof: Box::new(proof) }
+                }
                 // still waiting for the passcode; this launch just didn't bring the prompt up: try again soon
                 Err(WdaError::NotReadyInTime(_)) if waiting_pin => StartOutcome::Wda(WdaError::NeedsAutomationPin),
                 Err(e) => StartOutcome::Wda(e),
@@ -325,7 +334,7 @@ impl Daemon {
         });
         // 后台启动被拒绝和 XCTest 会话启动被拒绝（unexpected response）走同一条路：记失败，查证书
         match outcome {
-            StartOutcome::Ready { runner, mut client, mounted, detached, executable } => {
+            StartOutcome::Ready { runner, mut client, mounted, detached, proof } => {
                 if let Some(v) = mounted {
                     self.log.log(&ictl_l10n::log_trf!("开发者镜像已挂载 {v}", "Developer disk image mounted {v}"));
                 }
@@ -342,7 +351,7 @@ impl Daemon {
                 // this device's record only: the other devices' background WDAs keep running and are attached to
                 // again when switched back to
                 if let Some(udid) = g.device.as_ref().map(|d| d.udid.clone()) {
-                    self.record_adopt(g, &udid, detached.pid(), executable);
+                    self.record_adopt(g, &udid, detached.pid(), *proof);
                 }
                 g.dev.ddi_failures = 0;
                 g.runner = Some(runner);
@@ -398,23 +407,40 @@ impl Daemon {
     }
 }
 
-/// 在挂镜像的隧道上准备 WDA：`known`（这台设备上记下的后台 WDA：进程号，和记下时的可执行文件）那个进程还是它就直接接上；
-/// 否则在后台启动一个（会先结束已在运行的 WDA，包括旧版本用 XCTest 会话启动的）。连同这个进程的可执行文件一起返回，
-/// 记进接管记录作证明（[`crate::adopt`]）
+/// What proves a background WDA is the process recorded: its executable and when it started, as the phone lists them
+/// (a pid alone may be another process's once the phone restarted, see [`crate::adopt::Record::proves`])
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct Proof {
+    pub executable: Option<String>,
+    pub started: Option<String>,
+}
+
+/// `pid`'s proof as the phone gives it now
+async fn proof_of(t: &mut Tunnel, procs: &[(u64, String)], pid: u64) -> Proof {
+    let started = t.process_starts().await.ok().and_then(|s| s.get(&pid).cloned());
+    Proof { executable: detached::executable_of(procs, pid), started }
+}
+
+/// 在挂镜像的隧道上准备 WDA：`known`（这台设备上的接管记录）那个进程还是它（进程号、可执行文件和启动时间都对上）就直接接上；
+/// 否则在后台启动一个（会先结束已在运行的 WDA，包括旧版本用 XCTest 会话启动的）。连同这个进程的创建身份一起返回，记进接管记录
+/// 作证明（[`crate::adopt`]）
 async fn prepare_detached(
     t: &mut Tunnel,
-    known: Option<(u64, Option<String>)>,
+    known: Option<crate::adopt::Record>,
     bundle: &str,
-) -> Result<(Detached, Option<String>), DeviceError> {
+) -> Result<(Detached, Proof), DeviceError> {
     let procs = t.processes().await?;
-    if let Some((pid, exe)) = known
-        && detached::is_recorded_wda(&procs, pid, exe.as_deref())
+    if let Some(r) = known
+        && detached::is_wda(&procs, r.pid)
     {
-        return Ok((Detached::Adopted(pid), detached::executable_of(&procs, pid)));
+        let proof = proof_of(t, &procs, r.pid).await;
+        if r.proves(r.pid, proof.executable.as_deref(), proof.started.as_deref()) {
+            return Ok((Detached::Adopted(r.pid), proof));
+        }
     }
     let pid = t.launch_in_background(bundle, &ictl_wda::runner::launch_env()).await?;
-    let exe = t.processes().await.ok().and_then(|p| detached::executable_of(&p, pid));
-    Ok((Detached::Launched(pid), exe))
+    let procs = t.processes().await.unwrap_or_default();
+    Ok((Detached::Launched(pid), proof_of(t, &procs, pid).await))
 }
 
 /// 打开手机系统日志流；打不开只记一笔（后台启动照样进行，只是认不出密码框）

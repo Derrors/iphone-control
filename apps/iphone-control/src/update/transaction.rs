@@ -710,10 +710,22 @@ pub async fn apply(socket: &Path, background: bool, report: super::Report) -> Re
 
 /// [`service::pause_viewer`], unless an AI task is running
 pub(super) async fn pause_viewer(socket: &Path) -> Result<Option<Service>> {
-    if crate::service::viewer_find().is_some_and(|s| crate::service::running(&s))
-        && ictl_daemon::protocol::task_list(socket).await.is_ok_and(|l| l.iter().any(|t| t.active()))
-    {
-        anyhow::bail!("{}", ictl_l10n::tr!("正忙：有 AI 任务在进行", "busy: an AI task is running"));
+    if crate::service::viewer_find().is_some_and(|s| crate::service::running(&s)) {
+        // a running viewer may run a task: not known (the list can't be read) counts as one
+        let list = ictl_daemon::protocol::task_list(socket).await.map_err(|e| {
+            anyhow::anyhow!(
+                "{}",
+                ictl_l10n::trf!(
+                    "正忙：查不了任务（{e}），没有升级",
+                    "busy: the tasks can't be listed ({e}); not updated"
+                )
+            )
+        })?;
+        ensure!(
+            !list.iter().any(|t| t.active()),
+            "{}",
+            ictl_l10n::tr!("正忙：有 AI 任务在进行", "busy: an AI task is running")
+        );
     }
     service::pause_viewer()
 }

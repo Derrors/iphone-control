@@ -378,6 +378,8 @@ pub struct Daemon {
     pub(crate) select_latch: tokio::sync::Mutex<()>,
     /// A lease taken in the background after a probe let go of it, for the next round ([`crate::lease`])
     pub(crate) claimed: std::sync::Mutex<Option<crate::lease::Lease>>,
+    /// The device that background claim is for; another chosen meanwhile cancels it (what it gets is let go of)
+    pub(crate) claim_for: std::sync::Mutex<Option<String>>,
     /// That background claim is under way
     pub(crate) claiming: std::sync::atomic::AtomicBool,
     /// At most this many other devices' details are read at once
@@ -592,6 +594,7 @@ impl Daemon {
             gate: Arc::default(),
             select_latch: tokio::sync::Mutex::new(()),
             claimed: std::sync::Mutex::new(None),
+            claim_for: std::sync::Mutex::new(None),
             claiming: std::sync::atomic::AtomicBool::new(false),
             probes: Arc::new(tokio::sync::Semaphore::new(crate::devices::PROBES_AT_ONCE)),
             forwards: Arc::default(),

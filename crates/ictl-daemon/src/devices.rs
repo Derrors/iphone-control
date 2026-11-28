@@ -181,9 +181,11 @@ impl Daemon {
 
     /// The details of the device whose lease was just taken, read now when there are none yet: `online` needs them
     /// at once (the iOS version decides how it is driven)
+    /// The iOS version is read now, whatever the retry delay says: reading the device aside (before its lease was
+    /// taken) may have spent it without getting there
     pub(crate) async fn read_leased(&self, g: &mut Inner, d: &UsbDevice) {
         let cached = g.infos.entry(d.udid.clone()).or_default();
-        if cached.value.is_some() || !cached.due(Instant::now()) {
+        if cached.value.as_ref().is_some_and(|i| !i.product_version.is_empty()) {
             return;
         }
         if let Ok(info) = Device::from_usb(d).info().await

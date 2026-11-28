@@ -50,16 +50,20 @@ impl Forwards {
         Open(self.clone(), *self.end.borrow())
     }
 
-    /// Ends every forward and waits (a bounded time) for them to close. With the selection latch held
-    pub(crate) async fn end_all(&self) {
+    /// Ends every forward and waits (a bounded time) for them to close. With the selection latch held. `false`: some
+    /// are still open (a task isn't opened then)
+    pub(crate) async fn end_all(&self) -> bool {
         self.end.send_modify(|e| *e += 1);
         let deadline = tokio::time::Instant::now() + END_WAIT;
         loop {
             let closed = self.closed.notified();
             tokio::pin!(closed);
             closed.as_mut().enable();
-            if self.open.load(Ordering::SeqCst) == 0 || tokio::time::timeout_at(deadline, closed).await.is_err() {
-                return;
+            if self.open.load(Ordering::SeqCst) == 0 {
+                return true;
+            }
+            if tokio::time::timeout_at(deadline, closed).await.is_err() {
+                return self.open.load(Ordering::SeqCst) == 0;
             }
         }
     }

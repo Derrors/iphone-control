@@ -46,6 +46,12 @@ pub(crate) struct Member {
     /// Its control page's port: a viewer counts as started again once it answers there ([`viewer_answers`])
     #[serde(default)]
     pub port: u16,
+    /// Its id and device, from the registration: the daemon started again must answer as that instance, with that
+    /// device (a name can be used again, an id can't)
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub udid: String,
 }
 
 /// Where the update is ([`Record::phase`])
@@ -71,6 +77,10 @@ pub(crate) struct Record {
     pub default_viewer: bool,
     #[serde(default = "default_port")]
     pub default_port: u16,
+    /// The default instance's daemon service was running: started again by `update recover` after a package
+    /// manager's run, which starts it again only once it is done
+    #[serde(default)]
+    pub default_daemon: bool,
 }
 
 fn default_port() -> u16 {
@@ -208,20 +218,38 @@ fn remove(root: &Path, name: &str) -> Result<()> {
 /// The registered instances and what of theirs runs now
 fn inventory() -> Result<Vec<Member>> {
     let scan = ictl_daemon::instance::scan(&ictl_daemon::instance::registry_dir()?)?;
-    Ok(scan
-        .registered
+    let exe = service::stable_exe()?;
+    scan.registered
         .into_iter()
         .map(|r| {
+            // only the services of this installation: one running another program isn't this update's to replace
+            ensure!(
+                service::instance_runs(&r.name, &exe),
+                "{}",
+                ictl_l10n::trf!(
+                    "实例 {} 的服务运行的不是 {}：没有升级（先 instance remove 掉它，或用它自己的程序升级）",
+                    "The instance {}'s services don't run {}: not updated (instance remove it first, or update it with its own program)",
+                    r.name,
+                    exe.display()
+                )
+            );
             let (d, v) = service::instance_services(&r.name);
-            Member {
+            Ok(Member {
                 name: r.name,
                 socket: r.managed.socket,
                 daemon_running: service::running(&d),
                 viewer_running: service::running(&v),
                 port: r.managed.port,
-            }
+                id: r.managed.id,
+                udid: r.managed.udid,
+            })
         })
-        .collect())
+        .collect()
+}
+
+/// The default instance's daemon service runs now; `None`: not known (no service found, a foreground daemon may run)
+fn default_daemon_running() -> Option<bool> {
+    service::find().map(|s| service::running(&s))
 }
 
 impl Fleet {
@@ -266,6 +294,7 @@ impl Fleet {
             members,
             default_viewer,
             default_port: default_port(),
+            default_daemon: default_daemon_running().unwrap_or(false),
         };
         write(&root, RECORD, &serde_json::to_vec_pretty(&record)?)?;
         write(&root, INTENT, target.as_bytes())?;
@@ -300,8 +329,19 @@ impl Fleet {
                             "The instance {name} keeps opening a task; not updated"
                         )
                     ),
-                    // the default instance may well not run; a named one recorded as running must answer
-                    _ if !running || name == ictl_daemon::instance::DEFAULT => break false,
+                    // not answering: fine only for one known not to run (a named one stopped, the default one with its
+                    // service stopped); one running, or the default one whose state isn't known, fails closed
+                    _ if name == ictl_daemon::instance::DEFAULT && default_daemon_running() == Some(false) => {
+                        break false;
+                    }
+                    _ if name != ictl_daemon::instance::DEFAULT && !running => break false,
+                    _ if name == ictl_daemon::instance::DEFAULT => bail!(
+                        "{}",
+                        ictl_l10n::tr!(
+                            "默认实例的控制接口连不上，查不了它的任务，没有升级",
+                            "The default instance's socket doesn't answer, so its tasks can't be checked; not updated"
+                        )
+                    ),
                     _ => bail!(
                         "{}",
                         ictl_l10n::trf!(
@@ -410,9 +450,12 @@ pub(crate) async fn start_daemons(members: &[Member], version: &str) -> Result<(
     for m in members.iter().filter(|m| m.daemon_running) {
         let deadline = tokio::time::Instant::now() + START_WAIT;
         loop {
+            // as itself: its version, its instance and id, the device it is pinned to
             let ok = matches!(
                 tokio::time::timeout(Duration::from_secs(2), crate::client::snapshot(&m.socket)).await,
-                Ok(Ok(s)) if s.version.as_deref() == Some(version) && s.instance.as_ref().is_some_and(|i| i.name == m.name)
+                Ok(Ok(s)) if s.version.as_deref() == Some(version)
+                    && s.instance.as_ref().is_some_and(|i| i.name == m.name && (m.id.is_empty() || i.id == m.id))
+                    && (m.udid.is_empty() || s.pinned.as_deref().is_some_and(|p| p.eq_ignore_ascii_case(&m.udid)))
             );
             if ok {
                 break;
@@ -502,7 +545,7 @@ pub(crate) async fn recover(installed: &str) -> Result<()> {
     };
     if record.phase == Phase::Package {
         ensure!(
-            !package_manager_running(),
+            !package_manager_busy(),
             "{}",
             ictl_l10n::tr!(
                 "包管理器还在运行：等它结束再 update recover",
@@ -525,6 +568,22 @@ pub(crate) async fn recover(installed: &str) -> Result<()> {
     if record.phase != Phase::Intent {
         start_daemons(&record.members, installed).await?;
     }
+    // after a package manager's run the default daemon is started again only once it is done: killed in between,
+    // the old program may still run as the default instance
+    if record.phase == Phase::Package
+        && record.default_daemon
+        && let Some(s) = service::find()
+    {
+        service::restart(&s)?;
+        ensure!(
+            default_answers_with(installed).await,
+            "{}",
+            ictl_l10n::trf!(
+                "默认实例的守护进程没有以 {installed} 起来，记录留着：查看后再运行 update recover",
+                "The default instance's daemon didn't come up with {installed}, so the record stays: look into it, then run update recover again"
+            )
+        );
+    }
     if start_viewers(&record).await {
         remove(&root, RECORD)?;
     } else {
@@ -539,20 +598,54 @@ pub(crate) async fn recover(installed: &str) -> Result<()> {
     Ok(())
 }
 
-/// An `apt`, `dpkg` or `brew` process of this machine is running
-fn package_manager_running() -> bool {
-    let Ok(out) = std::process::Command::new("ps").args(["-A", "-o", "comm="]).env("LC_ALL", "C").output() else {
-        return true;
+/// The default instance's daemon answers with `version`, within a minute
+async fn default_answers_with(version: &str) -> bool {
+    let socket = ictl_daemon::protocol::default_socket();
+    let deadline = tokio::time::Instant::now() + START_WAIT;
+    while tokio::time::Instant::now() < deadline {
+        if let Ok(Ok(s)) = tokio::time::timeout(Duration::from_secs(2), crate::client::snapshot(&socket)).await
+            && s.version.as_deref() == Some(version)
+        {
+            return true;
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+    false
+}
+
+/// A package manager may still be at work, or left its work unfinished: an `apt`, `dpkg` or `brew` process runs, the
+/// process list can't be read, or dpkg was interrupted (`/var/lib/dpkg/updates` isn't empty). Not known counts as
+/// busy: the update stays to be recovered
+fn package_manager_busy() -> bool {
+    let out = match std::process::Command::new("ps").args(["-A", "-o", "comm="]).env("LC_ALL", "C").output() {
+        Ok(o) if o.status.success() => o,
+        _ => return true,
     };
-    String::from_utf8_lossy(&out.stdout).lines().any(|c| {
+    let running = busy_in(&String::from_utf8_lossy(&out.stdout));
+    let interrupted = std::fs::read_dir("/var/lib/dpkg/updates").is_ok_and(|mut d| d.next().is_some());
+    running || interrupted
+}
+
+/// Whether `ps -A -o comm=` lists a package manager
+fn busy_in(ps: &str) -> bool {
+    ps.lines().any(|c| {
         let c = Path::new(c.trim()).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-        matches!(c.as_str(), "apt" | "apt-get" | "dpkg" | "brew" | "unattended-upgr")
+        matches!(c.as_str(), "apt" | "apt-get" | "dpkg" | "brew" | "unattended-upgr" | "unattended-upgrade")
     })
 }
 
 #[cfg(test)]
 mod tests {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    /// The package managers a recovery waits for, as `ps` names them
+    #[test]
+    fn a_package_manager_still_at_work_is_seen() {
+        assert!(super::busy_in("bash\n/usr/bin/dpkg\nsshd\n"));
+        assert!(super::busy_in("  apt-get\n"));
+        assert!(super::busy_in("brew\n"));
+        assert!(!super::busy_in("bash\nsystemd\niphone-control\n"));
+    }
 
     /// Something else on the port (it took it first: the viewer couldn't bind) isn't a viewer started again; one
     /// whose login page says so is

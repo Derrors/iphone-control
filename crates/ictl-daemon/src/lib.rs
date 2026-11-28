@@ -475,10 +475,13 @@ async fn task_stream(
         None => None,
     };
     // the bridges to WDA end before a task is registered: what goes through them is out of its reach
-    if held.is_some() {
-        daemon.forwards.end_all().await;
-    }
+    let bridges_closed = held.is_none() || daemon.forwards.end_all().await;
     let found = match req {
+        protocol::Request::TaskOpen { .. } if !bridges_closed => Err(ictl_l10n::tr!(
+            "WDA 桥接没有关掉，没有开任务；停掉 wda-bridge 再试",
+            "A WDA bridge didn't close, so no task was opened; stop wda-bridge and try again"
+        )
+        .into()),
         protocol::Request::TaskOpen { .. } if daemon.gate.check_open().is_err() => Err(admission::switching().into()),
         protocol::Request::TaskOpen { .. } if daemon.cfg.update_intent().exists() => Err(ictl_l10n::tr!(
             "正在准备升级，现在不开新任务；升级完再试",

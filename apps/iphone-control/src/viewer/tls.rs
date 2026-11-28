@@ -229,7 +229,7 @@ fn now() -> u64 {
 }
 
 /// What a made certificate covers: `names.json` of before, and the header of the bundle
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, PartialEq, Eq)]
 struct Made {
     names: Vec<String>,
     not_after: u64,
@@ -298,6 +298,9 @@ fn ensure_made(data_dir: &Path, names: &[String], now: u64) -> anyhow::Result<Ve
             // the older version's pair, taken over once
             write_atomic(&bundle_f, &pem, 0o600)?;
         }
+        // the three files exported from it (`cert.pem` is what a remote `--ca` copies): written again when a stop
+        // after the bundle left them out of date
+        export(&dir, b)?;
         return Ok(pem);
     }
     // the names it had stay: a page opened at an old address keeps working; so does the key
@@ -332,9 +335,21 @@ fn ensure_made(data_dir: &Path, names: &[String], now: u64) -> anyhow::Result<Ve
     };
     let pem = b.render()?;
     write_atomic(&bundle_f, &pem, 0o600)?;
-    // the older version's three files, in #218's order: names.json is what makes that pair reused, gone first and
-    // written last, so a stop halfway is made again rather than failing to load
+    export(&dir, &b)?;
+    Ok(pem)
+}
+
+/// The bundle's three files of before (`key.pem`, `cert.pem`, `names.json`), written when they aren't the bundle's,
+/// in #218's order: names.json is what makes that pair reused by an older version, gone first and written last, so a
+/// stop halfway is made again rather than failing to load. With the TLS lock held
+fn export(dir: &Path, b: &Bundle) -> anyhow::Result<()> {
     let meta_f = dir.join("names.json");
+    let same = std::fs::read(dir.join("key.pem")).ok().as_deref() == Some(&b.key[..])
+        && std::fs::read(dir.join("cert.pem")).ok().as_deref() == Some(&b.cert[..])
+        && std::fs::read(&meta_f).ok().and_then(|m| serde_json::from_slice::<Made>(&m).ok()).as_ref() == Some(&b.made);
+    if same {
+        return Ok(());
+    }
     match std::fs::remove_file(&meta_f) {
         Err(e) if e.kind() != io::ErrorKind::NotFound => return Err(e.into()),
         _ => {}
@@ -342,7 +357,7 @@ fn ensure_made(data_dir: &Path, names: &[String], now: u64) -> anyhow::Result<Ve
     write_atomic(&dir.join("key.pem"), &b.key, 0o600)?;
     write_atomic(&dir.join("cert.pem"), &b.cert, 0o644)?;
     write_atomic(&meta_f, &serde_json::to_vec_pretty(&b.made)?, 0o644)?;
-    Ok(pem)
+    Ok(())
 }
 
 /// The pair an older version made (three files), if whole: the certificate and key that go together, and its names
@@ -508,6 +523,23 @@ mod tests {
         let left: Vec<String> =
             std::fs::read_dir(&dir).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
         assert!(left.iter().all(|n| !n.ends_with(".tmp")), "{left:?}");
+    }
+
+    /// Stopped after the bundle was written and before its public certificate was: the next start exports it again
+    /// (a remote `--ca` copies `cert.pem`), with the bundle unchanged
+    #[test]
+    fn a_bundle_written_without_its_export_is_exported_again() {
+        let tmp = tempfile::tempdir().unwrap();
+        let a = Tls::made(tmp.path(), &names(&["localhost"])).unwrap();
+        let dir = tmp.path().join(DIR);
+        let cert = std::fs::read(dir.join("cert.pem")).unwrap();
+        std::fs::remove_file(dir.join("cert.pem")).unwrap();
+        std::fs::write(dir.join("key.pem"), b"stale").unwrap();
+        let b = Tls::made(tmp.path(), &names(&["localhost"])).unwrap();
+        assert_eq!(a.fingerprint(), b.fingerprint(), "the same bundle");
+        assert_eq!(std::fs::read(dir.join("cert.pem")).unwrap(), cert, "exported again");
+        assert_ne!(std::fs::read(dir.join("key.pem")).unwrap(), b"stale");
+        assert_eq!(made_fingerprint(tmp.path()), Some(a.fingerprint()));
     }
 
     /// A viewer takes the certificate another one made since, at its next TLS connection; a bundle that doesn't load

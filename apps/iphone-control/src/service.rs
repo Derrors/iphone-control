@@ -716,6 +716,27 @@ fn instance_plist_text(exe: &str, name: &str, what: &str, path: Option<&str>, lo
     ))
 }
 
+/// Whether the instance `name`'s services run `exe` (their unit or launch agent names it): an update replaces only
+/// that program, and goes through only the services that run it
+pub fn instance_runs(name: &str, exe: &Path) -> bool {
+    let exe = exe.to_string_lossy();
+    let file = if cfg!(target_os = "macos") {
+        match instance_services(name).0 {
+            Service::Launchd { plist, .. } => plist,
+            Service::Systemd { .. } => return false,
+        }
+    } else {
+        our_unit().parent().unwrap_or(Path::new("/")).join(format!("{INSTANCE_UNIT}.service"))
+    };
+    std::fs::read_to_string(file).is_ok_and(|text| runs_in(&text, &exe))
+}
+
+/// Whether a named instance's unit or launch agent text starts `exe`
+fn runs_in(text: &str, exe: &str) -> bool {
+    text.lines().any(|l| l.strip_prefix("ExecStart=").is_some_and(|c| c.starts_with(&format!("{} ", exec_path(exe)))))
+        || text.contains(&format!("exec \"{}\" --instance", xml(exe)))
+}
+
 /// Sets up and starts a named instance's daemon and control page (`instance add`). `name` is a valid instance name
 /// ([`ictl_daemon::instance::valid_name`]): nothing in it a unit or a shell line reads as its own
 pub fn instance_install(name: &str) -> anyhow::Result<(Service, Service)> {
@@ -918,6 +939,10 @@ mod tests {
             .unwrap();
         assert!(v.contains("instance.ipad.viewer</string>") && v.contains("<key>PATH</key>"));
         plist::Value::from_reader_xml(plist.as_bytes()).unwrap();
+        // which program they run: what an update goes by
+        assert!(runs_in(&unit, "/usr/bin/iphone-control") && !runs_in(&unit, "/opt/other/iphone-control"));
+        assert!(runs_in(&viewer, "/opt/i c/iphone-control"));
+        assert!(runs_in(&plist, "/b/iphone-control") && !runs_in(&plist, "/b/iphone"));
     }
 
     #[test]

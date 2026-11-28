@@ -14,7 +14,7 @@
 //! It is only written by the holder of the device's lease. A process without the lease (a `service stop` while
 //! another instance has the device) only adds an intent (`<UDID>.intent-<id>-<n>.json`) naming the record's
 //! generation and process as it saw them; the next holder ends the process only if the record still says the same,
-//! and drops the intent either way ([`take_intents`]).
+//! and drops the intent either way ([`consume_intents`]).
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -30,6 +30,11 @@ pub struct Record {
     /// The process's executable as the phone listed it when it was launched or attached to
     #[serde(default)]
     pub executable: Option<String>,
+    /// When the process started, as the phone says (`ictl_device::Tunnel::process_starts`): with the pid, its
+    /// creation identity (a pid alone, or with the executable, may be another process's after the phone restarted).
+    /// None (a record moved over from an older version's, or a start not given): no proof, never attached to
+    #[serde(default)]
+    pub started: Option<String>,
     #[serde(default)]
     pub loopback: bool,
     pub owner_id: String,
@@ -39,9 +44,16 @@ pub struct Record {
 }
 
 impl Record {
-    /// May be attached to: launched as this version does, and not to be ended
+    /// May be attached to: launched as this version does, with its creation identity known, and not to be ended
     pub fn adoptable(&self) -> bool {
-        self.loopback && !self.cleanup_pending
+        self.loopback && !self.cleanup_pending && self.executable.is_some() && self.started.is_some()
+    }
+
+    /// Whether the process `pid`, with `executable` and its `started`, is the one recorded (creation identity)
+    pub fn proves(&self, pid: u64, executable: Option<&str>, started: Option<&str>) -> bool {
+        pid == self.pid
+            && self.executable.as_deref().is_some_and(|e| Some(e) == executable)
+            && self.started.as_deref().is_some_and(|s| Some(s) == started)
     }
 }
 
@@ -121,13 +133,20 @@ pub fn add_intent(dir: &Path, udid: &str, i: &Intent) -> io::Result<()> {
     ictl_unlock::durable::write_atomic(dir, &name, &data, 0o600)
 }
 
-/// The intents for `udid`, removed: whether one of them still matches `record` (its generation and process), so the
-/// process is to be ended. One that doesn't match was overtaken (another instance wrote the record since) and is only
-/// dropped. Only with the device's lease held
-pub fn take_intents(dir: &Path, udid: &str, record: Option<&Record>) -> bool {
-    let Ok(u) = valid(udid) else { return false };
+/// The intents for `udid` consumed against `record`: one that still matches it (its generation and process) means
+/// the process is to be ended. Then the record is marked `cleanup_pending` on disk first, and only after that are the
+/// intents removed: cut short in between, the process is still ended later, never attached to again. One that
+/// doesn't match was overtaken (another instance wrote the record since) and is only dropped. Returns the record as
+/// it is now. Only with the device's lease held
+pub fn consume_intents(dir: &Path, udid: &str, record: Option<Record>) -> io::Result<Option<Record>> {
+    let Ok(u) = valid(udid) else { return Ok(record) };
     let prefix = format!("{u}.intent-");
-    let Ok(entries) = std::fs::read_dir(dir) else { return false };
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(record),
+        Err(e) => return Err(e),
+    };
+    let mut found = Vec::new();
     let mut end = false;
     for e in entries.flatten() {
         let name = e.file_name();
@@ -136,12 +155,19 @@ pub fn take_intents(dir: &Path, udid: &str, record: Option<&Record>) -> bool {
             continue;
         }
         let intent: Option<Intent> = std::fs::read(e.path()).ok().and_then(|b| serde_json::from_slice(&b).ok());
-        if let (Some(i), Some(r)) = (intent, record) {
+        if let (Some(i), Some(r)) = (intent, &record) {
             end |= i.generation == r.generation && i.pid == r.pid && i.bundle == r.bundle;
         }
-        let _ = std::fs::remove_file(e.path());
+        found.push(e.path());
     }
-    end
+    let record = match record {
+        Some(r) if end && !r.cleanup_pending => Some(write(dir, udid, Record { cleanup_pending: true, ..r })?),
+        r => r,
+    };
+    for p in found {
+        let _ = std::fs::remove_file(p);
+    }
+    Ok(record)
 }
 
 #[cfg(test)]
@@ -154,6 +180,7 @@ mod tests {
             bundle: "com.x.WebDriverAgentRunner.xctrunner".into(),
             team: Some("T".into()),
             executable: Some("/private/var/containers/Bundle/Application/A/WebDriverAgentRunner-Runner.app/R".into()),
+            started: Some("786000000.500000".into()),
             loopback: true,
             owner_id: "default".into(),
             generation: 0,
@@ -180,21 +207,39 @@ mod tests {
         std::fs::remove_dir_all(dir).unwrap();
     }
 
-    /// An intent is acted on only while the record is the one it saw; overtaken (written again since), it is dropped
+    /// An intent is acted on only while the record is the one it saw: the record is marked to be cleaned up before
+    /// the intent goes (cut short after, it isn't attached to again); overtaken (written again since), it is dropped
     /// without ending anything; either way it is gone afterwards
     #[test]
-    fn an_intent_overtaken_by_a_newer_record_is_dropped() {
+    fn an_intent_marks_the_record_before_it_goes_and_an_overtaken_one_is_dropped() {
         let dir = std::env::temp_dir().join(format!("ictl-adopt-{}", uuid::Uuid::new_v4()));
         let seen = write(&dir, "aa", rec(10)).unwrap();
         let intent =
             Intent { owner_id: "default".into(), generation: seen.generation, pid: 10, bundle: seen.bundle.clone() };
         add_intent(&dir, "aa", &intent).unwrap();
-        assert!(take_intents(&dir, "AA", Some(&seen)), "still the same: ended");
-        assert!(!take_intents(&dir, "aa", Some(&seen)), "taken once");
+        let after = consume_intents(&dir, "AA", Some(seen.clone())).unwrap().unwrap();
+        assert!(after.cleanup_pending && !after.adoptable(), "to be ended");
+        assert_eq!(read(&dir, "aa").unwrap(), Some(after.clone()), "on disk");
+        assert_eq!(consume_intents(&dir, "aa", Some(after.clone())).unwrap(), Some(after), "consumed once");
         add_intent(&dir, "aa", &intent).unwrap();
         let newer = write(&dir, "aa", rec(12)).unwrap();
-        assert!(!take_intents(&dir, "aa", Some(&newer)), "another instance took over meanwhile");
+        let kept = consume_intents(&dir, "aa", Some(newer.clone())).unwrap().unwrap();
+        assert!(!kept.cleanup_pending, "another instance took over meanwhile");
         assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1, "only the record is left");
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// The creation identity: the same pid and executable but another start (the phone restarted) isn't the process
+    /// recorded; a record without it (an older version's) is never attached to
+    #[test]
+    fn a_process_is_proved_by_its_start_too() {
+        let r = rec(10);
+        let exe = r.executable.clone();
+        assert!(r.adoptable());
+        assert!(r.proves(10, exe.as_deref(), Some("786000000.500000")));
+        assert!(!r.proves(10, exe.as_deref(), Some("786999999.000000")), "restarted: another process");
+        assert!(!r.proves(10, exe.as_deref(), None), "start not known");
+        assert!(!Record { started: None, ..r.clone() }.adoptable(), "moved over: no proof");
+        assert!(!Record { executable: None, ..r }.adoptable());
     }
 }

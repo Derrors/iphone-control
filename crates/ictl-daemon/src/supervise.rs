@@ -286,6 +286,28 @@ impl Daemon {
         if g.state != DeviceState::Ready && !device.developer_mode_enabled().await.unwrap_or(true) {
             return self.set_state(g, DeviceState::DeveloperModeOff);
         }
+        // which way it is driven depends on its iOS version: not known yet (its details not read), it isn't taken for
+        // a WDA device (which would sign and launch WDA on an iOS 27 phone); read again next round
+        if self.cfg.ios_backend != crate::config::IosBackend::Wda
+            && g.info.as_ref().is_none_or(|i| i.major_version() == 0)
+        {
+            self.read_leased(g, seen).await;
+            g.info = g.infos.get(&seen.udid).and_then(|entry| entry.value.clone());
+            if g.info.as_ref().is_none_or(|i| i.major_version() == 0) {
+                return self.set_state(
+                    g,
+                    DeviceState::Preparing {
+                        last_error: Some(
+                            ictl_l10n::tr!(
+                                "还没读到 iOS 版本，稍后再试",
+                                "The iOS version isn't known yet; trying again shortly"
+                            )
+                            .into(),
+                        ),
+                    },
+                );
+            }
+        }
         // iOS 27 起默认原生控制：不签名、不启动 WDA（docs/dev/ios27-native.md）
         if self.native(g) {
             return Box::pin(self.native_online(g, device)).await;

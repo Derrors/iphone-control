@@ -57,8 +57,33 @@ impl Daemon {
         Holder::instance(self.cfg.instance_name()).with_device(g.info.as_ref())
     }
 
+    /// A background claim (and what it got) that isn't for `udid` is cancelled: the lease let go of, so a device
+    /// waited for once isn't held idle while another one is controlled
+    fn cancel_claim_unless(&self, udid: Option<&str>) {
+        let mut target = self.claim_for.lock().unwrap_or_else(|p| p.into_inner());
+        if target.as_deref().is_some_and(|t| udid.is_none_or(|u| !t.eq_ignore_ascii_case(u))) {
+            *target = None;
+        }
+        drop(target);
+        let mut got = self.claimed.lock().unwrap_or_else(|p| p.into_inner());
+        if got.as_ref().is_some_and(|l| udid.is_none_or(|u| !l.is_for(u))) {
+            *got = None;
+        }
+    }
+
     /// The device this round controls, with its lease taken
     pub(crate) async fn round_target(self: &Arc<Self>, g: &mut Inner) -> Round {
+        let r = self.round_target_inner(g).await;
+        // whatever is waited for in the background is for the device chosen, or for none any more
+        match &r {
+            Round::Device(d) => self.cancel_claim_unless(Some(&d.udid)),
+            Round::Offline => self.cancel_claim_unless(None),
+            Round::Held => {}
+        }
+        r
+    }
+
+    async fn round_target_inner(self: &Arc<Self>, g: &mut Inner) -> Round {
         let mut pinned = self.pinned(g);
         if pinned.is_none() && self.restricted() {
             // the device controlled now is kept, as if selected (`instance add` is about to pin it): none other is
@@ -71,6 +96,7 @@ impl Daemon {
                 Some(u) => pinned = Some(u),
                 None => {
                     self.let_go(g).await;
+                    self.cancel_claim_unless(None);
                     self.set_state(g, DeviceState::NeedsSelection);
                     return Round::Held;
                 }
@@ -184,15 +210,25 @@ impl Daemon {
         if self.claiming.swap(true, Ordering::SeqCst) {
             return;
         }
+        *self.claim_for.lock().unwrap_or_else(|p| p.into_inner()) = Some(udid.clone());
         let d = self.clone();
         tokio::task::spawn_local(async move {
             let deadline = tokio::time::Instant::now() + PROBE_WAIT;
             while tokio::time::Instant::now() < deadline {
                 tokio::time::sleep(PROBE_RETRY).await;
+                // cancelled: another device was chosen meanwhile
+                if d.claim_for.lock().unwrap_or_else(|p| p.into_inner()).as_deref() != Some(udid.as_str()) {
+                    break;
+                }
                 match crate::lease::try_claim(&d.cfg.devices_dir(), &udid, holder.clone()) {
                     Ok(Claim::Got(l)) => {
-                        *d.claimed.lock().unwrap_or_else(|p| p.into_inner()) = Some(l);
-                        d.wake.notify_one();
+                        // kept only while it is still the one wanted (checked with the target's lock held, as a
+                        // cancellation takes it before it drops what was got)
+                        let target = d.claim_for.lock().unwrap_or_else(|p| p.into_inner());
+                        if target.as_deref() == Some(udid.as_str()) {
+                            *d.claimed.lock().unwrap_or_else(|p| p.into_inner()) = Some(l);
+                            d.wake.notify_one();
+                        }
                         break;
                     }
                     Ok(Claim::Held(Some(h))) if !h.is_probe() => break,

@@ -95,13 +95,21 @@ pub async fn end_recorded(cfg: &Config) -> Vec<(String, StoppedWda)> {
     use crate::lease::{Claim, Holder};
     let path = cfg.state_file();
     let dir = cfg.adopt_dir();
-    let mut recorded: Vec<Recorded> = adopt::all(&dir)
-        .into_iter()
+    let shared = adopt::all(&dir);
+    let mut recorded: Vec<Recorded> = shared
+        .iter()
         .filter(|(_, r)| r.owner_id == cfg.instance_id)
-        .map(|(udid, r)| Recorded { udid, pid: r.pid, exe: r.executable, shared: Some((r.generation, r.bundle)) })
+        .map(|(udid, r)| Recorded {
+            udid: udid.clone(),
+            pid: r.pid,
+            exe: r.executable.clone(),
+            shared: Some((r.generation, r.bundle.clone())),
+        })
         .collect();
+    // an older version's record (state.json) only for a device with no shared record at all: one there, of any
+    // instance, says what runs on the device now (another instance may have taken its WDA over)
     for (udid, pid) in Persisted::load(&path).detached_all() {
-        if !recorded.iter().any(|r| r.udid.eq_ignore_ascii_case(&udid)) {
+        if !shared.iter().any(|(u, _)| u.eq_ignore_ascii_case(&udid)) {
             recorded.push(Recorded { udid, pid, exe: None, shared: None });
         }
     }
@@ -151,6 +159,24 @@ pub async fn end_recorded(cfg: &Config) -> Vec<(String, StoppedWda)> {
                 continue;
             }
         };
+        // the lease held: the shared record read again, the process still ours to end only if nothing changed since
+        // it was listed (no other instance took it over, wrote it again, or recorded one at all)
+        let now = adopt::read(&dir, &udid).ok().flatten();
+        let still_ours = match (&shared, &now) {
+            (Some((generation, _)), Some(r)) => {
+                r.owner_id == cfg.instance_id && r.generation == *generation && r.pid == pid
+            }
+            (None, None) => true,
+            _ => false,
+        };
+        if !still_ours {
+            let why = ictl_l10n::tr!(
+                "这台设备上的后台 WDA 记录已经换了（别的实例接手了）：不动它",
+                "the background WDA record of this device changed (another instance took over): left alone"
+            );
+            out.push((udid, StoppedWda::Failed(pid, why.to_string())));
+            continue;
+        }
         let s = match ictl_device::Device::from_usb(usb).open_tunnel().await {
             Ok(mut t) => {
                 let s = stop(&mut t, pid, exe.as_deref()).await;

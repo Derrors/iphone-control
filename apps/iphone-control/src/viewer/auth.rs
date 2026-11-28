@@ -124,6 +124,25 @@ fn load_unlocked(data_dir: &Path) -> anyhow::Result<Vec<Entry>> {
 }
 
 /// The tokens as they are on disk; `None` when there is no file yet
+/// The tokens and the stamp of the very file they were read from (one open file: a save in between can't give one
+/// file's tokens with another's stamp, which would keep the newer tokens from being read)
+fn read_stamped(data_dir: &Path) -> anyhow::Result<Option<(Vec<Entry>, Option<Stamp>)>> {
+    use std::io::Read;
+    use std::os::unix::fs::MetadataExt;
+    let file = tokens_file(data_dir);
+    let mut f = match std::fs::File::open(&file) {
+        Ok(f) => f,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(anyhow::Error::new(e).context(file.display().to_string())),
+    };
+    let m = f.metadata()?;
+    let stamp = m.modified().ok().map(|modified| Stamp { modified, len: m.len(), ino: m.ino() });
+    let mut b = Vec::new();
+    f.read_to_end(&mut b)?;
+    let v: Vec<Entry> = serde_json::from_slice(&b).with_context(|| file.display().to_string())?;
+    Ok(Some((v.into_iter().filter(|e| valid_token(&e.token)).collect(), stamp)))
+}
+
 fn read(data_dir: &Path) -> anyhow::Result<Option<Vec<Entry>>> {
     let file = tokens_file(data_dir);
     match std::fs::read(&file) {
@@ -408,13 +427,11 @@ impl Auth {
     /// The tokens, read again if the file changed. A file that can't be read leaves them as they were
     fn tokens(&self) -> std::sync::MutexGuard<'_, Tokens> {
         let mut t = self.tokens.lock().unwrap_or_else(|p| p.into_inner());
-        if let Some(dir) = &self.data_dir {
-            let modified = stamp(dir);
-            if modified != t.modified
-                && let Ok(Some(v)) = read(dir)
-            {
-                *t = Tokens { known: v.into_iter().map(|e| Known::of(e, &self.scope)).collect(), modified };
-            }
+        if let Some(dir) = &self.data_dir
+            && stamp(dir) != t.modified
+            && let Ok(Some((v, modified))) = read_stamped(dir)
+        {
+            *t = Tokens { known: v.into_iter().map(|e| Known::of(e, &self.scope)).collect(), modified };
         }
         t
     }

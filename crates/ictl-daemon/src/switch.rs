@@ -450,6 +450,28 @@ mod tests {
         .await;
     }
 
+    /// A device waited for in the background (a probe held it) and got after another one was chosen is let go of,
+    /// not held idle
+    #[tokio::test]
+    async fn a_claim_overtaken_by_another_device_lets_go() {
+        local(async {
+            let (d, dir) = crate::core::tests::test_daemon("claim-overtaken");
+            let Claim::Got(l) = try_claim(&d.cfg.devices_dir(), A, Holder::instance("default")).unwrap() else {
+                panic!()
+            };
+            *d.claim_for.lock().unwrap() = Some(A.into());
+            *d.claimed.lock().unwrap() = Some(l);
+            let mut g = d.inner.lock().await;
+            g.connected = vec![usb(B, 2)];
+            assert!(matches!(d.round_target(&mut g).await, crate::claim::Round::Device(u) if u.udid == B));
+            drop(g);
+            assert!(free(&d, A), "let go of");
+            assert!(d.claim_for.lock().unwrap().is_none());
+            std::fs::remove_dir_all(dir).unwrap();
+        })
+        .await;
+    }
+
     /// Work let in on a device keeps its lease held after the instance let go of it (the device gone in automatic
     /// mode, say), and no other device is taken until that work ends (docs/dev/multi-instance-plan.md 10.5)
     #[tokio::test]

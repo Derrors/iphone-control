@@ -30,12 +30,16 @@ pub(super) async fn apply(socket: &Path, report: &Report) -> Result<()> {
     // a record even without named instances: the default instance's services, to be started again by `update
     // recover` should this updater die after the package manager replaced the program. A state that can't be read
     // isn't taken for stopped
-    let default_viewer = match crate::service::viewer_find() {
-        Some(v) => crate::service::state(&v).context(ictl_l10n::tr!(
+    let not_known = || {
+        ictl_l10n::tr!(
             "查不了默认实例控制台的服务状态，没有升级",
             "The default instance's viewer service state can't be read; not updated"
-        ))?,
-        None => false,
+        )
+    };
+    let default_viewer = match crate::service::viewer_find_checked() {
+        Ok(Some(v)) => crate::service::state(&v).with_context(not_known)?,
+        Ok(None) => false,
+        Err(e) => bail!("{}（{e}）", not_known()),
     };
     let brew_prefix = (report.install_method == InstallMethod::Homebrew)
         .then(|| exe.ancestors().nth(4).and_then(Path::parent).map(Path::to_owned))

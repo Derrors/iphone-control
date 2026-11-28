@@ -436,6 +436,74 @@ pub fn uninstall() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// [`find`], saying when it can't be told: `Ok(None)` only when no service is set up for sure (an update takes
+/// "can't tell" for neither set up nor not)
+pub fn find_checked() -> Result<Option<Service>, String> {
+    let file = |p: &Path| match std::fs::metadata(p) {
+        Ok(m) => Ok(m.is_file()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(e) => Err(format!("{}: {e}", p.display())),
+    };
+    if cfg!(target_os = "macos") {
+        if file(&our_plist())? {
+            return Ok(Some(Service::Launchd { label: LABEL.into(), plist: our_plist(), ours: true }));
+        }
+        let entries = match std::fs::read_dir(launch_agents()) {
+            Ok(e) => e,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(e) => return Err(format!("{}: {e}", launch_agents().display())),
+        };
+        for e in entries {
+            let p = e.map_err(|e| e.to_string())?.path();
+            if p.extension().is_some_and(|x| x == "plist")
+                && let Some(stem) = p.file_stem().map(|s| s.to_string_lossy().into_owned())
+                && stem.ends_with(".iphone-control")
+            {
+                return Ok(Some(Service::Launchd { label: stem, plist: p, ours: false }));
+            }
+        }
+        return Ok(None);
+    }
+    if !has_systemd_user() {
+        // no user manager to run one: none can be set up, unless a unit file says otherwise
+        let files = [our_unit(), PathBuf::from("/usr/lib/systemd/user/iphone-control.service")];
+        for f in &files {
+            if file(f)? {
+                return Err(ictl_l10n::tr!("systemd 用户会话不可用", "the systemd user session isn't available").into());
+            }
+        }
+        return Ok(None);
+    }
+    for unit in [UNIT, "homebrew.iphone-control"] {
+        let out = Command::new("systemctl")
+            .args(["--user", "cat", unit])
+            .env("LC_ALL", "C")
+            .output()
+            .map_err(|e| e.to_string())?;
+        if out.status.success() {
+            return Ok(Some(Service::Systemd { unit: unit.into(), ours: unit == UNIT && our_unit().is_file() }));
+        }
+        if !String::from_utf8_lossy(&out.stderr).contains("No files found") {
+            return Err(format!("systemctl --user cat {unit}: {}", String::from_utf8_lossy(&out.stderr).trim()));
+        }
+    }
+    Ok(None)
+}
+
+/// [`viewer_find`], saying when it can't be told
+pub fn viewer_find_checked() -> Result<Option<Service>, String> {
+    let (file, s) = if cfg!(target_os = "macos") {
+        (viewer_plist(), Service::Launchd { label: VIEWER_LABEL.into(), plist: viewer_plist(), ours: true })
+    } else {
+        (viewer_unit_file(), Service::Systemd { unit: VIEWER_UNIT.into(), ours: true })
+    };
+    match std::fs::metadata(&file) {
+        Ok(m) => Ok(m.is_file().then_some(s)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(format!("{}: {e}", file.display())),
+    }
+}
+
 /// The control page's service, if it is set up (no package brings one: only ours)
 pub fn viewer_find() -> Option<Service> {
     if cfg!(target_os = "macos") {
@@ -513,7 +581,12 @@ fn systemd_state(answer: &str) -> Option<bool> {
 /// isn't known
 fn launchd_state(ok: bool, out: &str, err: &str) -> Option<bool> {
     if ok {
-        return Some(out.contains("state = running"));
+        // a state this doesn't know (waiting, spawn scheduled…) isn't taken for stopped
+        return match out.lines().find_map(|l| l.trim().strip_prefix("state = ")) {
+            Some("running") => Some(true),
+            Some("not running") => Some(false),
+            _ => None,
+        };
     }
     (err.contains("Could not find service") || out.contains("Could not find service")).then_some(false)
 }
@@ -976,6 +1049,8 @@ mod tests {
         assert_eq!(launchd_state(true, "\tstate = not running\n", ""), Some(false));
         assert_eq!(launchd_state(false, "", "Could not find service \"x\" in domain"), Some(false));
         assert_eq!(launchd_state(false, "", "Bootstrap failed: 5: Input/output error"), None);
+        assert_eq!(launchd_state(true, "\tstate = spawn scheduled\n", ""), None, "a state not known");
+        assert_eq!(launchd_state(true, "no state here", ""), None);
     }
 
     /// A named instance's units and agents: started only once `instance check` passes, as that instance, with the

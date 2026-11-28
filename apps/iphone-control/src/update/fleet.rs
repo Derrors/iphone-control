@@ -164,9 +164,13 @@ pub(crate) trait Machine {
     fn lock_registry(&self) -> Result<File>;
     /// The registered instances this update goes through, and what of theirs runs now
     fn inventory(&self) -> Result<Vec<Member>>;
-    /// The default instance's daemon and viewer services, if set up
-    fn default_daemon(&self) -> Option<Service>;
-    fn default_viewer(&self) -> Option<Service>;
+    /// The default instance's daemon and viewer services, if set up: `Ok(None)` only when not set up for sure,
+    /// `Err` when that can't be told
+    fn default_daemon(&self) -> std::result::Result<Option<Service>, String>;
+    fn default_viewer(&self) -> std::result::Result<Option<Service>, String>;
+    /// Whether something listens on `socket`: `Some(false)` only when nothing does for sure (no socket file, the
+    /// connection refused); `None` when that can't be told
+    async fn listening(&self, socket: &Path) -> Option<bool>;
     fn default_socket(&self) -> PathBuf;
     fn services(&self, name: &str) -> (Service, Service);
     /// Whether `s` runs: `None` when its manager can't tell (never taken for stopped)
@@ -248,12 +252,22 @@ impl Machine for Real {
             .collect()
     }
 
-    fn default_daemon(&self) -> Option<Service> {
-        service::find()
+    fn default_daemon(&self) -> std::result::Result<Option<Service>, String> {
+        service::find_checked()
     }
 
-    fn default_viewer(&self) -> Option<Service> {
-        service::viewer_find()
+    fn default_viewer(&self) -> std::result::Result<Option<Service>, String> {
+        service::viewer_find_checked()
+    }
+
+    async fn listening(&self, socket: &Path) -> Option<bool> {
+        match tokio::time::timeout(Duration::from_secs(2), tokio::net::UnixStream::connect(socket)).await {
+            Ok(Ok(_)) => Some(true),
+            Ok(Err(e)) if matches!(e.kind(), std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused) => {
+                Some(false)
+            }
+            _ => None,
+        }
     }
 
     fn default_socket(&self) -> PathBuf {
@@ -347,8 +361,18 @@ fn take_lock(root: &Path) -> Result<Option<File>> {
         .truncate(false)
         .mode(0o600)
         .open(root.join(LOCK))?;
-    // SAFETY: a valid descriptor, owned by `f` for as long as the lock is held
-    Ok((unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0).then_some(f))
+    // tests: another test spawning a process holds a copy of a lock just let go of until that child execs (as in
+    // `transaction::tests::open_once_free`): tried again for a moment there; once otherwise
+    for _ in 0..if cfg!(test) { 100 } else { 1 } {
+        // SAFETY: a valid descriptor, owned by `f` for as long as the lock is held
+        if unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
+            return Ok(Some(f));
+        }
+        if cfg!(test) {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+    Ok(None)
 }
 
 fn read_record(root: &Path) -> Result<Option<Record>> {
@@ -370,9 +394,27 @@ fn remove(root: &Path, name: &str) -> Result<()> {
     }
 }
 
-/// The default instance's daemon service runs now; `None`: not known (no service found, a foreground daemon may run)
-fn default_daemon_running(m: &impl Machine) -> Option<bool> {
-    m.default_daemon().and_then(|s| m.state(&s))
+/// The default instance's daemon as the update sees it
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Default {
+    /// No service set up, for sure (a daemon may still run by hand: see its socket)
+    Absent,
+    Stopped,
+    Running,
+    /// Its service, or whether there is one, can't be told
+    Unknown,
+}
+
+fn default_daemon_state(m: &impl Machine) -> Default {
+    match m.default_daemon() {
+        Err(_) => Default::Unknown,
+        Ok(None) => Default::Absent,
+        Ok(Some(s)) => match m.state(&s) {
+            Some(true) => Default::Running,
+            Some(false) => Default::Stopped,
+            None => Default::Unknown,
+        },
+    }
 }
 
 /// A package manager is about to replace the program (with the maintenance lock's exclusive lease held): from now on
@@ -451,16 +493,17 @@ impl<M: Machine> Fleet<M> {
             members,
             default_viewer,
             default_port: default_port(),
-            // set up but its state not known: what to start again wouldn't be either
-            default_daemon: match (m.default_daemon(), default_daemon_running(&m)) {
-                (Some(_), None) => bail!(
+            // its state not known: what to start again wouldn't be either
+            default_daemon: match default_daemon_state(&m) {
+                Default::Running => true,
+                Default::Stopped | Default::Absent => false,
+                Default::Unknown => bail!(
                     "{}",
                     ictl_l10n::tr!(
                         "查不了默认实例的服务状态，没有升级",
                         "The default instance's service state can't be read; not updated"
                     )
                 ),
-                (_, r) => r.unwrap_or(false),
             },
             default_socket: Some(default_socket.to_owned()),
             brew_prefix: None,
@@ -499,7 +542,15 @@ impl<M: Machine> Fleet<M> {
                     ),
                     // not answering: fine only for one known not to run (a named one stopped, the default one with its
                     // service stopped); one running, or the default one whose state isn't known, fails closed
-                    _ if name == ictl_daemon::instance::DEFAULT && default_daemon_running(m) == Some(false) => {
+                    // not answering: the default one may be stopped, or never set up as a service (a Homebrew install
+                    // without `brew services`) with nothing listening on its socket; anything else can't be told
+                    _ if name == ictl_daemon::instance::DEFAULT
+                        && match default_daemon_state(m) {
+                            Default::Stopped => true,
+                            Default::Absent => m.listening(socket).await == Some(false),
+                            Default::Running | Default::Unknown => false,
+                        } =>
+                    {
                         break false;
                     }
                     _ if name != ictl_daemon::instance::DEFAULT && !running => break false,
@@ -686,8 +737,25 @@ async fn start_viewers(m: &impl Machine, record: &Record) -> bool {
             );
         }
     }
+    // was running, so must be started again: one that can't be found now (its definition gone, the manager not
+    // answering) isn't taken for started
+    let default_viewer = match m.default_viewer() {
+        Ok(Some(v)) => Some(v),
+        _ if !record.default_viewer => None,
+        other => {
+            eprintln!(
+                "{}",
+                ictl_l10n::trf!(
+                    "默认实例的控制台原来在运行，现在找不到它的服务（{}）：没有恢复",
+                    "The default instance's viewer was running, and its service can't be found now ({}): not started again",
+                    other.err().unwrap_or_else(|| ictl_l10n::tr!("没有装", "not set up").into())
+                )
+            );
+            return false;
+        }
+    };
     if record.default_viewer
-        && let Some(v) = m.default_viewer()
+        && let Some(v) = default_viewer
     {
         let default = (ictl_daemon::instance::DEFAULT, ictl_daemon::instance::DEFAULT_ID);
         match m.start(&v) {
@@ -766,10 +834,19 @@ async fn recover_with(m: &impl Machine, installed: &str) -> Result<()> {
     }
     // after a package manager's run the default daemon is started again only once it is done: killed in between,
     // the old program may still run as the default instance
-    if record.phase == Phase::Package
-        && record.default_daemon
-        && let Some(s) = m.default_daemon()
-    {
+    if record.phase == Phase::Package && record.default_daemon {
+        // it was running: one that can't be found now isn't taken for started again
+        let s = match m.default_daemon() {
+            Ok(Some(s)) => s,
+            other => bail!(
+                "{}",
+                ictl_l10n::trf!(
+                    "默认实例的守护进程原来在运行，现在找不到它的服务（{}），记录留着：查看后再运行 update recover",
+                    "The default instance's daemon was running, and its service can't be found now ({}), so the record stays: look into it, then run update recover again",
+                    other.err().unwrap_or_else(|| ictl_l10n::tr!("没有装", "not set up").into())
+                )
+            ),
+        };
         m.restart(&s)?;
         ensure!(
             default_answers_with(m, record.default_socket.as_deref(), installed).await,
@@ -938,6 +1015,12 @@ mod tests {
         no_start: HashSet<String>,
         /// Services whose state their manager can't tell
         unknown: HashSet<String>,
+        /// The default daemon's or viewer's service not set up (absent), or not known whether it is
+        default_absent: bool,
+        default_lookup_fails: bool,
+        viewer_absent: bool,
+        /// Sockets of which it can't be told whether anything listens on them
+        listening_unknown: HashSet<PathBuf>,
         /// What answers on each socket: (version, instance name, instance id, pinned device); none: nothing answers
         answers: RefCell<HashMap<PathBuf, Answer>>,
         /// Sockets whose task list can't be read; sockets with an active task
@@ -973,11 +1056,23 @@ mod tests {
         fn inventory(&self) -> Result<Vec<Member>> {
             Ok(self.members.clone())
         }
-        fn default_daemon(&self) -> Option<Service> {
-            Some(svc("iphone-control"))
+        fn default_daemon(&self) -> std::result::Result<Option<Service>, String> {
+            if self.default_lookup_fails {
+                return Err("can't tell".into());
+            }
+            Ok((!self.default_absent).then(|| svc("iphone-control")))
         }
-        fn default_viewer(&self) -> Option<Service> {
-            Some(svc("iphone-control-viewer"))
+        fn default_viewer(&self) -> std::result::Result<Option<Service>, String> {
+            if self.default_lookup_fails {
+                return Err("can't tell".into());
+            }
+            Ok((!self.viewer_absent).then(|| svc("iphone-control-viewer")))
+        }
+        async fn listening(&self, socket: &Path) -> Option<bool> {
+            if self.listening_unknown.contains(socket) {
+                return None;
+            }
+            Some(self.answers.borrow().contains_key(socket))
         }
         fn default_socket(&self) -> PathBuf {
             "/run/default.sock".into()
@@ -1235,6 +1330,69 @@ mod tests {
         assert!(log.contains(&"restart iphone-control".to_string()), "{log:?}");
         assert!(log.contains(&"start iphone-control-viewer".to_string()), "{log:?}");
         assert!(!tmp.path().join(RECORD).exists());
+    }
+
+    /// A Homebrew installation without `brew services` (no default service at all) and nothing on its socket: the
+    /// update goes on. Not known whether there is a service, or whether something listens: refused
+    #[tokio::test]
+    async fn a_default_instance_never_set_up_as_a_service_doesn_t_block_the_update() {
+        let silent = |f: &Fake| {
+            f.answers.borrow_mut().remove(Path::new("/run/default.sock"));
+            f.running.borrow_mut().remove("iphone-control");
+        };
+        let (mut f, _tmp) = two();
+        silent(&f);
+        f.default_absent = true;
+        let fleet = Fleet::begin_with(f, Path::new("/run/default.sock"), "1.1.0", false, true).await.unwrap().unwrap();
+        assert!(!fleet.record.default_daemon);
+        let (mut f, _tmp) = two();
+        silent(&f);
+        f.default_absent = true;
+        f.listening_unknown.insert("/run/default.sock".into());
+        assert!(
+            Fleet::begin_with(f, Path::new("/run/default.sock"), "1.1.0", false, true).await.is_err(),
+            "a socket not known"
+        );
+        let (mut f, _tmp) = two();
+        silent(&f);
+        f.default_lookup_fails = true;
+        assert!(
+            Fleet::begin_with(f, Path::new("/run/default.sock"), "1.1.0", false, true).await.is_err(),
+            "the manager can't tell"
+        );
+    }
+
+    /// Recorded as running, the default daemon's or viewer's service can't be found when recovering (its definition
+    /// gone, the manager not answering): not taken for started again, the record kept
+    #[tokio::test]
+    async fn a_default_service_gone_when_recovering_keeps_the_record() {
+        let record_for = |tmp: &tempfile::TempDir| {
+            let mut f = Fake { root: tmp.path().to_owned(), ..Fake::default() };
+            f.answers
+                .borrow_mut()
+                .insert("/run/default.sock".into(), ("1.0.0".into(), "default".into(), "default".into(), None));
+            f.running.borrow_mut().insert("iphone-control".into());
+            f.running.borrow_mut().insert("iphone-control-viewer".into());
+            f.viewers.insert(default_port(), ("default".into(), "default".into()));
+            f.default_restarts_with = Some("1.1.0".into());
+            f
+        };
+        for (daemon_gone, viewer_gone) in [(true, false), (false, true)] {
+            let tmp = tempfile::tempdir().unwrap();
+            let f = record_for(&tmp);
+            let mut fleet =
+                Fleet::begin_with(f, Path::new("/run/default.sock"), "1.1.0", true, true).await.unwrap().unwrap();
+            fleet.package(None).unwrap();
+            let Fleet { mut m, _lock: lock, .. } = fleet;
+            drop(lock);
+            m.running.borrow_mut().clear();
+            (m.default_absent, m.viewer_absent) = (daemon_gone, viewer_gone);
+            assert!(recover_with(&m, "1.1.0").await.is_err(), "daemon gone {daemon_gone}, viewer gone {viewer_gone}");
+            assert!(tmp.path().join(RECORD).exists(), "kept");
+            (m.default_absent, m.viewer_absent) = (false, false);
+            recover_with(&m, "1.1.0").await.unwrap();
+            assert!(!tmp.path().join(RECORD).exists());
+        }
     }
 
     /// A lock or a directory that can't be read isn't taken for none: only one that isn't there is

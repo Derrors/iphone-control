@@ -16,6 +16,7 @@ impl Daemon {
             s.log_tail = self.log.tail(15);
             s.maintenance = crate::maintenance::active();
             s.instance = Some(self.identity());
+            s.task_opening = self.task_opening.load(std::sync::atomic::Ordering::SeqCst);
             return Response::text(serde_json::to_string_pretty(&s).unwrap_or_default());
         }
         if let Err(e) = check_request(&req) {

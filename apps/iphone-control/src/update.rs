@@ -2,6 +2,7 @@
 //! contact the release API. CLI and Viewer use the same local cache and channel evidence.
 mod archive;
 mod channel;
+mod fleet;
 mod install;
 mod release;
 pub mod transaction;

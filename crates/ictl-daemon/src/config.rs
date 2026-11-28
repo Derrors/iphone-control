@@ -213,6 +213,10 @@ impl Config {
     pub fn adopt_dir(&self) -> PathBuf {
         self.root.join("wda-adopt")
     }
+    /// An update is being prepared (docs/dev/multi-instance-plan.md 5.3): no task is opened while it is there
+    pub fn update_intent(&self) -> PathBuf {
+        self.root.join("update-intent")
+    }
     /// The lock whose holder runs the daily Apple ID session check for every instance
     pub fn account_check_lock(&self) -> PathBuf {
         self.root.join("account-check.lock")

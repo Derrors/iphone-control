@@ -25,6 +25,29 @@ pub(super) async fn apply(socket: &Path, report: &Report) -> Result<()> {
         "{}",
         ictl_l10n::tr!("正式版的版本号不对", "invalid stable release version")
     );
+    // with named instances, all of them go through the update (`fleet`): their services stopped while the package
+    // manager runs, started again afterwards as they were
+    let mut fleet = super::fleet::Fleet::begin(socket, latest, false).await?;
+    if let Some(f) = fleet.as_mut() {
+        f.stop_all()?;
+        f.at(super::fleet::Phase::Package)?;
+    }
+    let result = apply_package(socket, report, exe, latest).await;
+    if let Some(f) = fleet.as_mut() {
+        let installed = if result.is_ok() { latest } else { env!("CARGO_PKG_VERSION") };
+        if result.is_ok() {
+            f.at(super::fleet::Phase::Committed)?;
+        }
+        if let Err(e) = f.start_daemons(installed).await {
+            eprintln!("{e:#}");
+        }
+        f.start_viewers();
+        f.finish()?;
+    }
+    result
+}
+
+async fn apply_package(socket: &Path, report: &Report, exe: &Path, latest: &str) -> Result<()> {
     match (report.install_method, report.availability) {
         (InstallMethod::Homebrew, Availability::BrewCheck) => {
             let cellar = exe

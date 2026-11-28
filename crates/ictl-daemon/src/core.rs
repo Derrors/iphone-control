@@ -133,6 +133,10 @@ pub struct Snapshot {
     /// Which instance answers ([`InstanceIdentity`]); older daemons don't say
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub instance: Option<InstanceIdentity>,
+    /// Tasks being opened now, from before the update intent is looked at until they are listed: an update waits
+    /// for none (docs/dev/multi-instance-plan.md 5.3)
+    #[serde(default)]
+    pub task_opening: usize,
 }
 
 /// Which daemon this is (docs/dev/multi-instance-plan.md 3.2, 4.4): reported by the daemon itself, so a command never
@@ -377,6 +381,8 @@ pub struct Daemon {
     pub(crate) probes: Arc<tokio::sync::Semaphore>,
     /// The `wda-bridge` connections open ([`crate::forward`])
     pub(crate) forwards: Arc<crate::forward::Forwards>,
+    /// Tasks being opened now ([`Snapshot::task_opening`])
+    pub(crate) task_opening: std::sync::atomic::AtomicUsize,
     /// Counts the selections written since the start ([`InstanceIdentity::selection_generation`])
     pub(crate) selection_generation: std::sync::atomic::AtomicU64,
 }
@@ -560,6 +566,7 @@ impl Daemon {
             notify_configured: cfg.notify.any(),
             log_tail: Vec::new(),
             instance: None,
+            task_opening: 0,
         };
         let (snap, _) = watch::channel(first);
         let tasks = crate::tasks::Tasks::load(Some(cfg.data_dir.join("tasks")));
@@ -585,6 +592,7 @@ impl Daemon {
             claiming: std::sync::atomic::AtomicBool::new(false),
             probes: Arc::new(tokio::sync::Semaphore::new(crate::devices::PROBES_AT_ONCE)),
             forwards: Arc::default(),
+            task_opening: std::sync::atomic::AtomicUsize::new(0),
             selection_generation: std::sync::atomic::AtomicU64::new(0),
         })
     }
@@ -799,6 +807,7 @@ impl Daemon {
             notify_configured: self.cfg.notify.any(),
             log_tail: Vec::new(),
             instance: None,
+            task_opening: 0,
         });
     }
 

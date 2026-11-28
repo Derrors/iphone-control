@@ -397,6 +397,22 @@ fn parse_request(line: &[u8]) -> serde_json::Result<(protocol::Request, bool, co
     ))
 }
 
+/// A task being opened, counted while it is ([`core::Snapshot::task_opening`])
+struct Opening<'a>(&'a std::sync::atomic::AtomicUsize);
+
+impl<'a> Opening<'a> {
+    fn new(n: &'a std::sync::atomic::AtomicUsize) -> Self {
+        n.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Self(n)
+    }
+}
+
+impl Drop for Opening<'_> {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
 /// Serves [`protocol::Request::TaskOpen`] (the connection is the task's lease) or [`protocol::Request::TaskEvents`]:
 /// one answer line, then the task's events, one JSON line each, until it ends or the client goes away
 async fn task_stream(
@@ -414,6 +430,9 @@ async fn task_stream(
     // a task is opened with the selection latch held, from the check to the registration: a switch can't come in
     // between and leave it bound to the device of before (docs/dev/multi-instance-plan.md 4.1)
     let latch = matches!(req, protocol::Request::TaskOpen { .. }).then(|| daemon.select_latch.lock());
+    // counted before the update intent is looked at, until the task is listed (or refused): an update that wrote
+    // the intent waits for none being counted, then finds every task there is
+    let opening = matches!(req, protocol::Request::TaskOpen { .. }).then(|| Opening::new(&daemon.task_opening));
     let held = match latch {
         Some(l) => Some(l.await),
         None => None,
@@ -424,6 +443,11 @@ async fn task_stream(
     }
     let found = match req {
         protocol::Request::TaskOpen { .. } if daemon.gate.check_open().is_err() => Err(admission::switching().into()),
+        protocol::Request::TaskOpen { .. } if daemon.cfg.update_intent().exists() => Err(ictl_l10n::tr!(
+            "正在准备升级，现在不开新任务；升级完再试",
+            "An update is being prepared, so no new task is opened now; try again after it"
+        )
+        .into()),
         protocol::Request::TaskOpen { title, owner, apps } => match daemon.resolve_scope(&apps).await {
             Err(m) => Err(m),
             Ok(apps) => daemon.tasks.open(&title, &owner, daemon.controlled_udid().as_deref(), apps, peer).map(|t| {
@@ -445,6 +469,7 @@ async fn task_stream(
     };
     // registered (or refused): the latch isn't held while the task runs
     drop(held);
+    drop(opening);
     let (task, opened) = match found {
         Ok(f) => f,
         Err(m) => {
@@ -551,6 +576,35 @@ mod tests {
     use super::*;
 
     /// The whole way through the socket: a task opened by a client holds the phone until its connection closes
+    /// While an update is being prepared (its intent written) no task is opened; the count of tasks being opened is
+    /// back to none either way, and once the intent goes a task opens again (docs/dev/multi-instance-plan.md 5.3)
+    #[tokio::test]
+    async fn no_task_opens_while_an_update_is_prepared() {
+        let local = tokio::task::LocalSet::new();
+        local
+            .run_until(async {
+                let (d, dir) = core::tests::test_daemon("update-intent");
+                d.fake_controlled("00008150-000B");
+                let socket = dir.join("ctl.sock");
+                let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+                let daemon = d.clone();
+                tokio::task::spawn_local(async move {
+                    while let Ok((s, _)) = listener.accept().await {
+                        tokio::task::spawn_local(serve_conn(daemon.clone(), s));
+                    }
+                });
+                std::fs::write(d.cfg.update_intent(), b"9.9.9").unwrap();
+                let Err(e) = protocol::open_task(&socket, "看看设置", "test", &[]).await else { panic!("opened") };
+                assert!(e.contains("升级") || e.contains("update"), "{e}");
+                assert_eq!(d.task_opening.load(std::sync::atomic::Ordering::SeqCst), 0);
+                std::fs::remove_file(d.cfg.update_intent()).unwrap();
+                let (_opened, _events) = protocol::open_task(&socket, "看看设置", "test", &[]).await.unwrap();
+                assert_eq!(d.task_opening.load(std::sync::atomic::Ordering::SeqCst), 0, "listed: no longer counted");
+                std::fs::remove_dir_all(dir).unwrap();
+            })
+            .await;
+    }
+
     #[tokio::test]
     async fn an_opened_task_holds_the_phone_until_its_lease_goes() {
         use protocol::{Request, Response};

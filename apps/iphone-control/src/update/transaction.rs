@@ -579,10 +579,27 @@ pub async fn apply(socket: &Path, background: bool, report: super::Report) -> Re
         report.available_version.context(ictl_l10n::tr!("没有可用的正式版", "no stable release is available"))?;
     eligible(&receipt.version, &version, background)?;
     let host = Host { service, socket, binary: &store.binary };
+    // with named instances, all of them go through the update (`fleet`): the intent first, every instance's tasks
+    // checked, their services stopped, started again afterwards as they were
+    let default_viewer = crate::service::viewer_find().is_some_and(|s| crate::service::running(&s));
+    let mut fleet = super::fleet::Fleet::begin(socket, &version, default_viewer).await?;
     // the control page's service is an always-running client: it would keep the update busy forever, so it stops
     // for the update and starts again afterwards (not while it runs an AI task: that would end the task)
-    let paused = pause_viewer(socket).await?;
+    let paused = match pause_viewer(socket).await {
+        Ok(p) => p,
+        Err(e) => {
+            if let Some(f) = &fleet {
+                f.finish()?;
+            }
+            return Err(e);
+        }
+    };
+    let stopped = match fleet.as_mut() {
+        Some(f) => f.stop_all(),
+        None => Ok(()),
+    };
     let result = async {
+        stopped?;
         if background {
             ensure!(
                 matches!(report.policy, super::Policy::AutoPatch),
@@ -627,7 +644,21 @@ pub async fn apply(socket: &Path, background: bool, report: super::Report) -> Re
         work
     }
     .await;
+    if let Some(f) = fleet.as_mut() {
+        // the named daemons run what is installed now: the new version, or the old one put back
+        let installed = read_receipt().map(|r| r.version).unwrap_or_else(|_| env!("CARGO_PKG_VERSION").into());
+        if result.is_ok() {
+            f.at(super::fleet::Phase::Committed)?;
+        }
+        if let Err(e) = f.start_daemons(&installed).await {
+            eprintln!("{e:#}");
+        }
+    }
     crate::service::resume_viewer(paused);
+    if let Some(f) = &fleet {
+        f.start_viewers();
+        f.finish()?;
+    }
     result
 }
 
@@ -685,7 +716,11 @@ async fn resume(store: &Store, host: &impl Services, tx: &Transaction) -> Result
 pub async fn recover(socket: &Path, scheduled: bool) -> Result<()> {
     let receipt = read_receipt()?;
     let store = Store::open(&receipt.binary_path, receipt_path())?;
-    let Some(tx) = read_json::<Transaction>(&store.journal())? else { return Ok(()) };
+    let Some(tx) = read_json::<Transaction>(&store.journal())? else {
+        // the program's own transaction is settled: what the instances' record says is left (`fleet`)
+        drop(store);
+        return super::fleet::recover(&receipt.version).await;
+    };
     if scheduled
         && outcome(&store.binary)?.is_some_and(|o| o.status == "recovery_failed" && o.target_version == tx.new.version)
     {
@@ -720,7 +755,9 @@ pub async fn recover(socket: &Path, scheduled: bool) -> Result<()> {
     }
     .await;
     crate::service::resume_viewer(paused);
-    result
+    result?;
+    drop(store);
+    super::fleet::recover(&read_receipt()?.version).await
 }
 
 #[cfg(test)]

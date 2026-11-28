@@ -630,3 +630,102 @@ fn an_unlock_first_is_said_on_the_answers_first_line() {
     let plain = Response::text_with("已按 home", Default::default());
     assert_eq!(with_unlock_note(plain.clone(), None), plain);
 }
+
+/// An older version's single flag is migrated when the daemon starts: every device counts as disabled, and
+/// unlock-reset re-enables only the device it is for; with no device to go by it refuses
+#[tokio::test]
+async fn unlock_reset_re_enables_only_its_device() {
+    use ictl_l10n::{Lang, with_lang};
+    const A: &str = "00008130-0019295E012B803A";
+    const B: &str = "00008020-000925043499002E";
+    let dir = std::env::temp_dir().join(format!("ictl-core-unlock-reset-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("logs")).unwrap();
+    std::fs::write(dir.join("logs/UNLOCK-DISABLED"), "1700000000 still locked after entering the whole passcode\n")
+        .unwrap();
+    let d = Daemon::new(Config::from_env(&dir));
+    d.cfg.write_passcode(A, "1111").unwrap();
+    d.cfg.write_passcode(B, "2222").unwrap();
+    assert!(d.unlock_cfg(Some(A)).disabled_by_failure() && d.unlock_cfg(Some(B)).disabled_by_failure());
+    let mut g = d.inner.lock().await;
+    assert!(d.unlock_reset(&g, None, None).is_err(), "no device controlled, none named");
+    connect(&mut g, A, "phone");
+    let text = with_lang(Lang::En, || d.unlock_reset(&g, Some(A), None)).unwrap();
+    assert!(text.contains("re-enabled") && text.contains("older version"), "{text}");
+    assert!(!d.unlock_cfg(Some(A)).disabled_by_failure());
+    assert!(d.unlock_cfg(Some(B)).disabled_by_failure(), "B wasn't reset");
+    assert!(dir.join("logs/UNLOCK-DISABLED").is_file(), "a downgraded daemon still sees B disabled");
+    // B, the last device with a passcode: the older version's flag goes, a device connected later isn't disabled
+    connect(&mut g, B, "iPad");
+    let text = with_lang(Lang::En, || d.unlock_reset(&g, Some(B), None)).unwrap();
+    assert!(text.contains("is removed"), "{text}");
+    assert!(!dir.join("logs/UNLOCK-DISABLED").exists() && !d.unlock_cfg(Some("NEW-DEVICE")).disabled_by_failure());
+    drop(g);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+fn connect(g: &mut Inner, udid: &str, name: &str) {
+    g.connected.push(ictl_device::UsbDevice { udid: udid.into(), device_id: g.connected.len() as u32 + 1 });
+    g.infos.entry(udid.into()).or_default().value =
+        Some(ictl_device::DeviceInfo { udid: udid.into(), name: name.into(), ..Default::default() });
+}
+
+/// unlock-reset never waits behind what holds the device (it may be entering a passcode whose wrong entry it would
+/// clear), and an AI task can't send it
+#[tokio::test]
+async fn unlock_reset_is_refused_while_busy_and_to_tasks() {
+    use ictl_l10n::Lang;
+    const A: &str = "00008130-0019295E012B803A";
+    let (d, dir) = test_daemon("unlock-reset-busy");
+    connect(&mut *d.inner.lock().await, A, "phone");
+    let req = || Request::UnlockResetDevice { udid: Some(A.into()) };
+    let refused = |r: &Response| matches!(r, Response::Error { .. });
+    let held = d.inner.lock().await;
+    let r = tokio::time::timeout(Duration::from_secs(2), d.handle(req(), Instant::now(), CallCtx::default()))
+        .await
+        .expect("answered at once, not queued");
+    assert!(refused(&r), "{r:?}");
+    drop(held);
+    let r = d.handle(req(), Instant::now(), CallCtx::default()).await;
+    assert!(!refused(&r), "{r:?}");
+    // what older clients send means the controlled device: with none, there is nothing to re-enable
+    let old = ictl_l10n::scope(Lang::En, d.handle(Request::UnlockReset, Instant::now(), CallCtx::default())).await;
+    assert!(matches!(&old, Response::Error { message, .. } if message.contains("--device")), "{old:?}");
+    let task = CallCtx { task: Some("some-task-token".into()), ..Default::default() };
+    assert!(refused(&d.handle(req(), Instant::now(), task).await));
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// unlock-reset --device takes the UDID of a device connected now, in either case: never a name (which may be
+/// another device's by now), nor a device that isn't there; the caller's expected device is checked against the one
+/// re-enabled
+#[tokio::test]
+async fn unlock_reset_takes_a_connected_udid_only() {
+    const A: &str = "00008130-0019295E012B803A";
+    const B: &str = "00008020-000925043499002E";
+    let (d, dir) = test_daemon("unlock-reset-udid");
+    // an older version's flag: every device disabled until reset one by one
+    std::fs::create_dir_all(d.cfg.logs()).unwrap();
+    std::fs::write(d.cfg.unlock_disabled_flag(), "1700000000 x\n").unwrap();
+    d.cfg.unlock_disabled().migrate().unwrap();
+    d.cfg.write_passcode(A, "1111").unwrap();
+    d.cfg.write_passcode(B, "2222").unwrap();
+    let mut g = d.inner.lock().await;
+    assert!(d.unlock_reset(&g, Some(B), None).is_err(), "not connected");
+    connect(&mut g, B, "iPad");
+    assert!(d.unlock_reset(&g, Some("iPad"), None).is_err(), "a name, even one that matches now");
+    assert!(d.unlock_cfg(Some(B)).disabled_by_failure());
+    d.unlock_reset(&g, Some(&B.to_lowercase()), None).unwrap();
+    assert!(!d.unlock_cfg(Some(B)).disabled_by_failure() && d.unlock_cfg(Some(A)).disabled_by_failure());
+    connect(&mut g, A, "phone");
+    drop(g);
+    let wrong = CallCtx { expect_udid: Some(B.into()), ..Default::default() };
+    let r = d.handle(Request::UnlockResetDevice { udid: Some(A.into()) }, Instant::now(), wrong).await;
+    assert!(matches!(r, Response::Error { .. }), "{r:?}");
+    assert!(d.unlock_cfg(Some(A)).disabled_by_failure(), "the expected device didn't match: nothing re-enabled");
+    let right = CallCtx { expect_udid: Some(A.into()), ..Default::default() };
+    let r = d.handle(Request::UnlockResetDevice { udid: Some(A.into()) }, Instant::now(), right).await;
+    assert!(!matches!(r, Response::Error { .. }), "{r:?}");
+    assert!(!d.unlock_cfg(Some(A)).disabled_by_failure());
+    std::fs::remove_dir_all(dir).unwrap();
+}

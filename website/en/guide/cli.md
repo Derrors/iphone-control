@@ -122,7 +122,7 @@ See [Auto-unlock](./auto-unlock). `--device` takes a UDID or name, and the devic
 | `passcode set [--device <device>]` | Save this device's passcode and turn auto-unlock on |
 | `passcode clear [--device <device>]` | Delete this device's passcode |
 | `passcode clear --all` | Delete every device's passcode |
-| `unlock-reset` | Turn auto-unlock back on after it was disabled. It doesn't check the passcode, so make sure it's right first |
+| `unlock-reset [--device <UDID>]` | Turn auto-unlock back on for this device after it was disabled (only the device that failed is). It doesn't check the passcode, so make sure it's right first |
 
 ## Other
 

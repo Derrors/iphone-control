@@ -121,12 +121,10 @@ pub(crate) async fn login(data_dir: &Path, email: Option<String>) -> anyhow::Res
 }
 
 pub(crate) async fn passcode(data_dir: &Path, socket: &Path, action: PasscodeAction) -> anyhow::Result<()> {
-    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
     let cfg = ictl_daemon::Config::from_env(data_dir);
     match action {
         PasscodeAction::Clear { all: true, .. } => {
-            let _ = std::fs::remove_dir_all(cfg.passcodes_dir());
-            let _ = std::fs::remove_file(cfg.legacy_passcode_file());
+            cfg.clear_all_passcodes()?;
             println!(
                 "{}",
                 ictl_l10n::tr!(
@@ -137,7 +135,7 @@ pub(crate) async fn passcode(data_dir: &Path, socket: &Path, action: PasscodeAct
         }
         PasscodeAction::Clear { device, .. } => {
             let d = target_device(socket, device.as_deref()).await?;
-            let _ = std::fs::remove_file(cfg.passcode_file_for(&d.udid));
+            cfg.clear_passcode(&d.udid)?;
             println!(
                 "{}",
                 ictl_l10n::trf!(
@@ -149,7 +147,6 @@ pub(crate) async fn passcode(data_dir: &Path, socket: &Path, action: PasscodeAct
         }
         PasscodeAction::Set { device } => {
             let d = target_device(socket, device.as_deref()).await?;
-            let path = cfg.passcode_file_for(&d.udid);
             println!("{}", ictl_l10n::trf!("设备：{}", "Device: {}", ictl_daemon::core::device_label(&d)));
             println!(
                 "{}",
@@ -182,11 +179,7 @@ pub(crate) async fn passcode(data_dir: &Path, socket: &Path, action: PasscodeAct
                     )
                 );
             }
-            cfg.ensure_passcodes_dir()?;
-            let mut f = std::fs::OpenOptions::new().create(true).write(true).truncate(true).mode(0o600).open(&path)?;
-            // mode() 只在新建时生效：已有文件也收紧
-            f.set_permissions(std::fs::Permissions::from_mode(0o600))?;
-            f.write_all(p.as_bytes())?;
+            cfg.write_passcode(&d.udid, &p)?;
             println!(
                 "{}",
                 ictl_l10n::tr!(

@@ -20,6 +20,16 @@ impl Daemon {
         if let Err(e) = check_request(&req) {
             return Response::error(e).with_failure(Delivery::NotSent, FailureStage::Preflight);
         }
+        let reset = matches!(req, Request::UnlockReset | Request::UnlockResetDevice { .. });
+        // re-enabling auto-unlock is the user's decision, after checking the passcode: never an AI task's, which could
+        // also name a device other than the one it is bound to
+        if reset && ctx.task.is_some() {
+            return Response::error(ictl_l10n::tr!(
+                "AI 任务不能恢复自动解锁：要由人核对密码后在命令行里运行 iphone-control unlock-reset",
+                "An AI task can't re-enable auto-unlock: a person runs iphone-control unlock-reset after checking the passcode"
+            ))
+            .with_failure(Delivery::NotSent, FailureStage::Preflight);
+        }
         if let Some(r) = self.tasks.handle(&req, ctx.task.as_deref(), ctx.peer, &mut ctx.gone).await {
             return r;
         }
@@ -29,6 +39,9 @@ impl Daemon {
                 Ok(a) => a,
                 Err(r) => return r.with_failure(Delivery::NotSent, FailureStage::Preflight),
             };
+        if reset {
+            return self.unlock_reset_now(&req, ctx.expect_udid.as_deref());
+        }
         // a task limited to some apps: outside them, the action waits for the user (docs/task-control.md §2.6)
         let mut gated = Gated::default();
         if let crate::tasks::Admission::Actor(t) = &admission
@@ -590,11 +603,8 @@ impl Daemon {
                 self.wait_for(g, text, selector, Duration::from_millis(timeout_ms), true, &mut || may_continue(&req))
                     .await
             }
-            Request::UnlockReset => {
-                let _ = std::fs::remove_file(self.cfg.unlock_disabled_flag());
-                g.dedup.clear("unlock");
-                Ok(ictl_l10n::tr!("已恢复自动解锁", "Auto-unlock re-enabled").into())
-            }
+            // answered before the device lock is waited for (`Daemon::unlock_reset_now`)
+            Request::UnlockReset | Request::UnlockResetDevice { .. } => unreachable!("unlock_reset_now"),
             Request::ListDevices => Ok(self.list_devices_text(g)),
             Request::SelectDevice { device } => self.select_device(g, &device).await,
             Request::AppLogs { process, grep, since_secs, limit, errors_only } => {
@@ -690,6 +700,7 @@ pub(super) fn lane(req: &Request) -> Lane {
         | Request::WaitFor { .. }
         | Request::WaitForDisappearance { .. }
         | Request::UnlockReset
+        | Request::UnlockResetDevice { .. }
         | Request::ListDevices
         | Request::SelectDevice { .. }
         | Request::AppLogs { .. } => Lane::Device,

@@ -12,7 +12,7 @@ The notifications below about re-signing, the Apple ID, the signing certificate 
 | **Apple ID session expired** (`session`, checked daily; transient network/Anisette glitches retry automatically and recheck in 1 h without alerting) | WDA only | Once per 20 h | — | Run `iphone-control login` |
 | **Passcode needed after reboot** (`pin`, Enable UI Automation) | WDA only | Once until recovered | ✅ WDA recovered (`pin-recovered`) | Enter the passcode on the phone |
 | **Signing certificate replaced** (`cert`, new cert created or old one revoked) | WDA only | Every time | — | Local devices auto re-sign when WDA refuses to start; re-sign on other machines or sideloading tools ([FAQ](../troubleshoot/faq#cert)) |
-| **Auto-unlock disabled** (`unlock`) | All | Once until `unlock-reset` | — | Unlock manually and verify the passcode ([Auto-unlock](./auto-unlock)) |
+| **Auto-unlock disabled** (`unlock`) | All | Once per device (it isn't tried there again until `unlock-reset`) | — | Unlock manually and verify the passcode ([Auto-unlock](./auto-unlock)) |
 | **Phone offline** (`offline`, default 10 min) | All | Once until back online | ✅ Back online (`online`) | Check cable, charging limit and host |
 | **Daemon unexpected exit / watchdog restart** (`daemon`) | All | **30 min cooldown** (persisted in `run-state.json`; summarizes suppressed restarts and 1 h total after cooldown) | — | Inspect `status` or `logs/daemon.log`; clean stops, manual `service restart` and updates never trigger it |
 

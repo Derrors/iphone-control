@@ -13,6 +13,7 @@ description = "锁屏自动解锁（默认关闭）"
 ictl-l10n.workspace = true
 ictl-ui.workspace = true
 ictl-wda.workspace = true
+libc.workspace = true
 tokio.workspace = true
 thiserror.workspace = true
 tracing.workspace = true

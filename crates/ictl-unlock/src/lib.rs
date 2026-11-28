@@ -10,8 +10,9 @@
 //! 4. 每位一个独立 W3C 手势（按下 80ms），按完核对已输入位数正好 +1，不符立即停——确定没凑满整串的不算输错；
 //!    多记一下凑满、密码栏归零或消失，按「可能已提交」去确认。多位合成一个手势会漏键；`/wda/tap` 在锁屏上每次约 2.9 秒，太慢
 //! 5. 解锁期间 waitForIdleTimeout=1、animationCoolOffTimeout=0.2（0 会唤醒失败），结束后恢复
-//! 6. 第一位没生效可以重来（最多 3 轮）。从第 2 位起先写停用标记，确认解开或确认没凑满才撤掉：整串输完仍锁着、
-//!    中途出错、进程被杀都保持停用，直到人工清除。确认结果时核对出错一律当仍锁着
+//! 6. 第一位没生效可以重来（最多 3 轮）。从第 2 位起先写这台设备的停用记录（落盘后才输，`disable.rs`），确认解开
+//!    或确认没凑满才撤掉：整串输完仍锁着、中途出错、进程被杀、断电都保持停用，直到人工清除。只停用出错的那台。
+//!    确认结果时核对出错一律当仍锁着
 //! 7. 只支持纯数字；开机后首次解锁（BFU）永远需要人工
 
 use std::path::PathBuf;
@@ -19,7 +20,11 @@ use std::time::Duration;
 
 use ictl_ui as elements;
 
+mod disable;
+pub mod durable;
 mod wda;
+
+pub use disable::{DeviceFlag, DisableStore, Migration, Reset};
 
 /// Why a step on the screen didn't happen. Each holds the error as it came (WDA's, the daemon's), shown as it is
 #[derive(Debug, thiserror::Error)]
@@ -138,7 +143,8 @@ pub const FIRST_DIGIT_ROUNDS: u32 = 3;
 
 pub struct UnlockConfig {
     pub passcode_file: PathBuf,
-    pub disabled_flag: PathBuf,
+    /// This device's record of auto-unlock disabled after a failure
+    pub disabled: DeviceFlag,
     pub timing: Timing,
 }
 
@@ -155,7 +161,7 @@ impl UnlockConfig {
     }
 
     pub fn disabled_by_failure(&self) -> bool {
-        self.disabled_flag.exists()
+        self.disabled.is_disabled()
     }
 }
 
@@ -248,11 +254,6 @@ enum Verdict {
     NotSubmitted(u32),
     /// 凑满整串后仍锁着
     Wrong,
-}
-
-fn write_flag(cfg: &UnlockConfig, why: &str) -> std::io::Result<()> {
-    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
-    std::fs::write(&cfg.disabled_flag, format!("{now} {why}\n"))
 }
 
 async fn unlock<D: Screen>(wda: &mut D, cfg: &UnlockConfig, code: &[u8]) -> Result<Outcome> {
@@ -361,8 +362,7 @@ async fn unlock<D: Screen>(wda: &mut D, cfg: &UnlockConfig, code: &[u8]) -> Resu
 
     // 从第 2 位起，任何一下都可能凑满整串让 iOS 判定一次（按键被记成两下、最后一位）。先写停用标记，
     // 确认解开或确认没凑满才撤掉；中途出错、进程被杀都会留下标记，绝不会把同一个错误密码再输一遍
-    write_flag(
-        cfg,
+    cfg.disabled.disable(
         ictl_l10n::tr!(
             "正在输入密码，未确认结果（若长期存在：上次输入中途出错或进程退出）",
             "entering the passcode, result not confirmed (if this persists: the last attempt failed midway or the process exited)"
@@ -370,12 +370,12 @@ async fn unlock<D: Screen>(wda: &mut D, cfg: &UnlockConfig, code: &[u8]) -> Resu
     )?;
     let verdict = enter_rest(wda, cfg, &pad, code).await;
     let clear = || {
-        if let Err(e) = std::fs::remove_file(&cfg.disabled_flag) {
+        if let Err(e) = cfg.disabled.clear() {
             tracing::warn!(
                 "{}",
                 ictl_l10n::log_trf!(
-                    "撤掉停用标记失败，自动解锁保持停用：{e}",
-                    "Removing the disabled flag failed, auto-unlock stays disabled: {e}"
+                    "撤掉停用记录时出错，没有确认落盘（这台可能已恢复，也可能仍停用，下次启动会核对）：{e}",
+                    "Removing the disabled record failed before it was confirmed on disk (this device may be enabled or still disabled; checked again at the next start): {e}"
                 )
             );
         }
@@ -390,10 +390,9 @@ async fn unlock<D: Screen>(wda: &mut D, cfg: &UnlockConfig, code: &[u8]) -> Resu
             Err(UnlockError::Incomplete(n))
         }
         Ok(Verdict::Wrong) => {
-            let _ = write_flag(
-                cfg,
-                ictl_l10n::tr!("整串密码输完仍是锁屏状态", "still locked after entering the whole passcode"),
-            );
+            let _ = cfg
+                .disabled
+                .disable(ictl_l10n::tr!("整串密码输完仍是锁屏状态", "still locked after entering the whole passcode"));
             Err(UnlockError::WrongPasscode)
         }
         Err(e) => {
@@ -401,7 +400,7 @@ async fn unlock<D: Screen>(wda: &mut D, cfg: &UnlockConfig, code: &[u8]) -> Resu
                 "输入过程中出错，无法确认密码是否已提交：{e}",
                 "Error while typing, can't tell whether the passcode was submitted: {e}"
             );
-            let _ = write_flag(cfg, &why);
+            let _ = cfg.disabled.disable(&why);
             Err(UnlockError::Uncertain(e.to_string()))
         }
     }
@@ -484,7 +483,10 @@ mod tests {
             unlock_confirm: Duration::from_millis(20),
             poll: Duration::from_millis(1),
         };
-        (UnlockConfig { passcode_file: dir.join("passcode"), disabled_flag: dir.join("UNLOCK-DISABLED"), timing }, dir)
+        // the daemon's layout: the records and the shadow in different directories. Side by side they would be one
+        // name on a case-insensitive file system (macOS)
+        let store = DisableStore::new(dir.join("secrets/unlock-disabled"), dir.join("logs/UNLOCK-DISABLED"));
+        (UnlockConfig { passcode_file: dir.join("passcode"), disabled: store.device("TEST-DEVICE"), timing }, dir)
     }
 
     #[tokio::test]
@@ -535,7 +537,7 @@ mod tests {
         let mut wda = WdaClient::new(&fake);
         assert_eq!(ensure_unlocked(&mut Cheap(&mut wda), &cfg).await.unwrap(), Outcome::Unlocked);
         assert!(!fake.state().locked);
-        assert!(!cfg.disabled_flag.exists());
+        assert!(!cfg.disabled_by_failure());
         std::fs::remove_dir_all(dir).unwrap();
     }
 
@@ -550,7 +552,7 @@ mod tests {
         assert_eq!(s.idle, (10.0, 2.0), "结束后要恢复原来的等待设置");
         assert!(s.idle_during_unlock.iter().all(|i| *i == (1.0, 0.2)));
         assert_eq!(s.presses_per_action_max, 1, "每位一个独立手势");
-        assert!(!cfg.disabled_flag.exists());
+        assert!(!cfg.disabled_by_failure());
         std::fs::remove_dir_all(dir).unwrap();
     }
 
@@ -571,7 +573,7 @@ mod tests {
         let mut wda = WdaClient::new(&fake);
         assert!(matches!(ensure_unlocked(&mut wda, &cfg).await, Err(UnlockError::WrongPasscode)));
         assert_eq!(fake.state().failed_attempts, 1);
-        assert!(cfg.disabled_flag.exists());
+        assert!(cfg.disabled_by_failure());
         // 停用后不再尝试
         assert!(matches!(ensure_unlocked(&mut wda, &cfg).await, Err(UnlockError::Disabled)));
         assert_eq!(fake.state().failed_attempts, 1);
@@ -607,7 +609,7 @@ mod tests {
         let (cfg, dir) = cfg(Some("123456"));
         assert_eq!(ensure_unlocked(&mut WdaClient::new(&fake), &cfg).await.unwrap(), Outcome::Unlocked);
         assert_eq!(fake.state().failed_attempts, 0);
-        assert!(!cfg.disabled_flag.exists());
+        assert!(!cfg.disabled_by_failure());
         std::fs::remove_dir_all(dir).unwrap();
     }
 
@@ -652,7 +654,7 @@ mod tests {
         assert_eq!(ensure_unlocked(&mut WdaClient::new(&fake), &cfg).await.unwrap(), Outcome::Unlocked);
         let s = fake.state();
         assert_eq!((s.failed_attempts, s.digits_typed, s.stray_taps), (0, 6, 0));
-        assert!(!cfg.disabled_flag.exists());
+        assert!(!cfg.disabled_by_failure());
         std::fs::remove_dir_all(dir).unwrap();
     }
 
@@ -704,7 +706,7 @@ mod tests {
         assert!(matches!(ensure_unlocked(&mut WdaClient::new(&fake), &cfg).await, Err(UnlockError::NoKeypad)));
         let s = fake.state();
         assert_eq!((s.failed_attempts, s.digits_typed), (0, 0));
-        assert!(!cfg.disabled_flag.exists());
+        assert!(!cfg.disabled_by_failure());
         std::fs::remove_dir_all(dir).unwrap();
     }
 
@@ -714,7 +716,7 @@ mod tests {
         fake.swipes_ignored(99);
         let (cfg, dir) = cfg(Some("123456"));
         assert!(matches!(ensure_unlocked(&mut WdaClient::new(&fake), &cfg).await, Err(UnlockError::NoKeypad)));
-        assert!(!cfg.disabled_flag.exists());
+        assert!(!cfg.disabled_by_failure());
         std::fs::remove_dir_all(dir).unwrap();
     }
 
@@ -726,7 +728,7 @@ mod tests {
         let (cfg, dir) = cfg(Some("123456"));
         assert!(matches!(ensure_unlocked(&mut WdaClient::new(&fake), &cfg).await, Err(UnlockError::Incomplete(3))));
         assert_eq!(fake.state().failed_attempts, 0);
-        assert!(!cfg.disabled_flag.exists());
+        assert!(!cfg.disabled_by_failure());
         std::fs::remove_dir_all(dir).unwrap();
     }
 
@@ -738,7 +740,7 @@ mod tests {
         let (cfg, dir) = cfg(Some("123456"));
         assert!(matches!(ensure_unlocked(&mut WdaClient::new(&fake), &cfg).await, Err(UnlockError::Incomplete(6))));
         assert_eq!(fake.state().failed_attempts, 0);
-        assert!(!cfg.disabled_flag.exists());
+        assert!(!cfg.disabled_by_failure());
         std::fs::remove_dir_all(dir).unwrap();
     }
 
@@ -764,7 +766,7 @@ mod tests {
         let (cfg, dir) = cfg(Some("123456"));
         let mut wda = WdaClient::new(&fake);
         assert!(matches!(ensure_unlocked(&mut wda, &cfg).await, Err(UnlockError::Uncertain(_))));
-        assert!(cfg.disabled_flag.exists());
+        assert!(cfg.disabled_by_failure());
         assert!(matches!(ensure_unlocked(&mut wda, &cfg).await, Err(UnlockError::Disabled)));
         assert_eq!(fake.state().failed_attempts, 0);
         std::fs::remove_dir_all(dir).unwrap();
@@ -781,7 +783,7 @@ mod tests {
         let mut wda = WdaClient::new(&fake);
         assert!(matches!(ensure_unlocked(&mut wda, &cfg).await, Err(UnlockError::WrongPasscode)));
         assert_eq!(fake.state().failed_attempts, 1);
-        assert!(cfg.disabled_flag.exists());
+        assert!(cfg.disabled_by_failure());
         std::fs::remove_dir_all(dir).unwrap();
     }
 

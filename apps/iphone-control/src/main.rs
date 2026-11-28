@@ -118,8 +118,12 @@ enum Command {
         #[command(subcommand)]
         action: PasscodeAction,
     },
-    #[command(about = ictl_l10n::tr!("解除自动解锁的停用（输错或中途出错后停用）。只删停用标记，不核对密码：先确认保存的密码对，必要时 passcode set 重设", "Re-enable auto-unlock after it was disabled (by a wrong passcode or an error midway). Only removes the flag, doesn't check the passcode: make sure the saved one is right first, or set it again with passcode set"))]
-    UnlockReset,
+    #[command(about = ictl_l10n::tr!("解除一台设备的自动解锁停用（输错或中途出错后停用，只停用出错的那台）。只删停用标记，不核对密码：先确认保存的密码对，必要时 passcode set 重设", "Re-enable auto-unlock for one device after it was disabled there (by a wrong passcode or an error midway; only that device is disabled). Only removes the flag, doesn't check the passcode: make sure the saved one is right first, or set it again with passcode set"))]
+    UnlockReset {
+        #[arg(help = ictl_l10n::tr!("哪台设备的 UDID（iphone-control devices 列出；只收 UDID，不收设备名：名字会变）；不给就是守护进程正在控制的那台", "The UDID of the device (listed by iphone-control devices; a UDID only, not a name: names change); defaults to the one the daemon controls"))]
+        #[arg(long, value_name = "UDID")]
+        device: Option<String>,
+    },
     #[command(about = ictl_l10n::tr!("列出 USB 上接着的设备，标出正在控制哪台", "List devices connected over USB and mark the one being controlled"))]
     Devices,
     #[command(about = ictl_l10n::tr!("改为控制另一台设备，重启后还记得；auto 改回自动选（正在控制的那台断开才换）", "Control another device, remembered across restarts; auto goes back to automatic (switches only when the controlled one disconnects)"))]
@@ -326,7 +330,7 @@ fn prints_and_exits(command: Option<&Command>) -> bool {
                 | Command::Devices
                 | Command::McpConfig
                 | Command::Select { .. }
-                | Command::UnlockReset
+                | Command::UnlockReset { .. }
                 | Command::NotifyTest { .. }
                 | Command::Update { action: Some(UpdateAction::Check { .. }), .. }
         )
@@ -421,7 +425,8 @@ async fn run() -> anyhow::Result<()> {
         Command::Sign => print_text(&cli.socket, Request::Resign { force: true }).await,
         Command::Resign { force } => print_text(&cli.socket, Request::Resign { force }).await,
         Command::Passcode { action } => passcode(&cli.data_dir, &cli.socket, action).await,
-        Command::UnlockReset => print_text(&cli.socket, Request::UnlockReset).await,
+        // the daemon looks the device up among those connected when it gets the request, not from a snapshot here
+        Command::UnlockReset { device } => print_text(&cli.socket, Request::UnlockResetDevice { udid: device }).await,
         Command::Devices => print_text(&cli.socket, Request::ListDevices).await,
         Command::Select { device } => print_text(&cli.socket, Request::SelectDevice { device }).await,
         Command::WdaBridge { port } => wda_bridge(&cli.socket, port).await,

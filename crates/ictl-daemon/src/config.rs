@@ -105,6 +105,14 @@ fn wda_unsigned_cache(data_dir: &Path) -> PathBuf {
     data_dir.join("wda/WDA-unsigned.ipa")
 }
 
+/// The legacy passcode moved aside for `name` (a passcode file's name): bound to that device, never another
+const LEGACY_STAGED: &str = ".legacy-for-";
+
+/// A UDID as a passcode file's name: letters, digits and dashes, anything else replaced (never a path)
+fn passcode_name(udid: &str) -> String {
+    udid.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '_' }).collect()
+}
+
 fn env_num<T: std::str::FromStr>(k: &str, default: T) -> T {
     env(k).and_then(|v| v.parse().ok()).unwrap_or(default)
 }
@@ -177,21 +185,177 @@ impl Config {
     pub fn passcodes_dir(&self) -> PathBuf {
         self.data_dir.join("secrets/passcodes")
     }
-    /// 建好 [`Self::passcodes_dir`]，只有自己能进
+    /// 建好 [`Self::passcodes_dir`]，只有自己能进；新建的目录在上一级目录里也落盘（[`ictl_unlock::durable`]）
     pub fn ensure_passcodes_dir(&self) -> std::io::Result<PathBuf> {
         use std::os::unix::fs::PermissionsExt;
         let dir = self.passcodes_dir();
-        std::fs::create_dir_all(&dir)?;
+        ictl_unlock::durable::create_dir_all_from(&self.data_dir, &dir)?;
         std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))?;
         Ok(dir)
     }
     /// 这台设备的锁屏密码。UDID 来自 usbmuxd，只有字母、数字和 `-`；别的字符换掉，不让它变成路径
     pub fn passcode_file_for(&self, udid: &str) -> PathBuf {
-        let name: String = udid.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '_' }).collect();
-        self.passcodes_dir().join(name)
+        self.passcodes_dir().join(passcode_name(udid))
     }
+    /// Saves `udid`'s passcode in place of the one it had: a crash leaves the old one or the new one whole, never a
+    /// truncated file (which would read as no passcode, or as a shorter one)
+    pub fn write_passcode(&self, udid: &str, code: &str) -> std::io::Result<()> {
+        let _lock = self.passcodes_lock()?;
+        let dir = self.ensure_passcodes_dir()?;
+        let name = passcode_name(udid);
+        ictl_unlock::durable::remove_temps(&dir, &name)?;
+        ictl_unlock::durable::write_atomic(&dir, &name, code.as_bytes(), 0o600)
+    }
+    /// `passcode clear --device`: `udid`'s passcode gone, with any copy of it a crash left while it was being written
+    /// The old passcode set aside for it by an adoption cut short goes first: removed after the passcode, a crash in
+    /// between would leave it to be linked back as `udid`'s passcode
+    pub fn clear_passcode(&self, udid: &str) -> std::io::Result<()> {
+        let _lock = self.passcodes_lock()?;
+        let dir = self.passcodes_dir();
+        let name = passcode_name(udid);
+        ictl_unlock::durable::remove(&dir, &format!("{LEGACY_STAGED}{name}"))?;
+        ictl_unlock::durable::remove_temps(&dir, &name)?;
+        ictl_unlock::durable::remove(&dir, &name)?;
+        // the device that held up an older version's flag may have been this one. Not retiring it is the safe way
+        // to fail: the passcode is cleared all the same
+        let _ = self.retire_legacy_locked();
+        Ok(())
+    }
+    /// An older version's flag on auto-unlock ([`ictl_unlock::DisableStore::retire_legacy`]) removed once every
+    /// device with a saved passcode was released from it, unless a passcode whose device isn't known is still there
+    /// (the old single one, or one set aside by an adoption cut short). Under the passcodes lock, so no passcode is
+    /// saved meanwhile. `Ok(true)`: removed
+    pub fn retire_legacy_unlock_disabled(&self) -> std::io::Result<bool> {
+        let _lock = self.passcodes_lock()?;
+        self.retire_legacy_locked()
+    }
+    fn retire_legacy_locked(&self) -> std::io::Result<bool> {
+        if self.legacy_passcode_file().try_exists()? {
+            return Ok(false);
+        }
+        let mut devices = Vec::new();
+        match std::fs::read_dir(self.passcodes_dir()) {
+            Ok(entries) => {
+                for e in entries {
+                    let name = e?.file_name().to_string_lossy().into_owned();
+                    if name.starts_with(LEGACY_STAGED) {
+                        return Ok(false);
+                    }
+                    if !name.starts_with('.') {
+                        devices.push(name);
+                    }
+                }
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e),
+        }
+        self.unlock_disabled().retire_legacy(&devices)
+    }
+    /// `passcode clear --all`: every device's passcode and the one an older version saved, under the same lock as
+    /// [`Self::adopt_legacy_passcode`], so an adoption under way can't publish the old one again afterwards
+    pub fn clear_all_passcodes(&self) -> std::io::Result<()> {
+        let _lock = self.passcodes_lock()?;
+        match std::fs::remove_dir_all(self.passcodes_dir()) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e),
+        }
+        let legacy = self.legacy_passcode_file();
+        let secrets = legacy.parent().unwrap_or(Path::new("."));
+        ictl_unlock::durable::remove(secrets, "passcode")?;
+        if secrets.is_dir() {
+            ictl_unlock::durable::sync_dir(secrets)?;
+        }
+        // no passcode left: no device is unlocked automatically, so an older version's flag has nothing to guard
+        let _ = self.retire_legacy_locked();
+        Ok(())
+    }
+    /// Whether the passcode an older version saved was set aside for `udid` by an adoption cut short: only `udid`
+    /// may finish it
+    pub fn legacy_passcode_staged_for(&self, udid: &str) -> bool {
+        self.passcodes_dir().join(format!("{LEGACY_STAGED}{}", passcode_name(udid))).exists()
+    }
+    /// The single passcode an older version saved, given to `udid` (the only device connected) unless it has one of
+    /// its own. Two steps, each on disk before the next, under a lock shared with [`Self::clear_all_passcodes`]:
+    /// 1. the old file is moved aside under a name bound to `udid` (it is no one's to take from then on);
+    /// 2. that is linked as `udid`'s passcode (a link fails if the name is taken: one set meanwhile is never
+    ///    overwritten), then the name set aside is removed.
+    ///
+    /// Cut short after step 1, only `udid` finishes it; a passcode set aside for another device is left alone.
+    /// `Ok(false)`: nothing given (no old passcode, `udid` has its own, or it was set aside for another device)
+    pub fn adopt_legacy_passcode(&self, udid: &str) -> std::io::Result<bool> {
+        let _lock = self.passcodes_lock()?;
+        let dir = self.ensure_passcodes_dir()?;
+        let mine = format!("{LEGACY_STAGED}{}", passcode_name(udid));
+        let mut set_aside = false;
+        for e in std::fs::read_dir(&dir)? {
+            let name = e?.file_name();
+            let name = name.to_string_lossy();
+            if name.starts_with(LEGACY_STAGED) {
+                if name != mine {
+                    // bound to another device by an adoption cut short: never this one's
+                    return Ok(false);
+                }
+                set_aside = true;
+            }
+        }
+        let target = self.passcode_file_for(udid);
+        if !set_aside {
+            if target.exists() {
+                return Ok(false);
+            }
+            let legacy = self.legacy_passcode_file();
+            match std::fs::rename(&legacy, dir.join(&mine)) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+                Err(e) => return Err(e),
+            }
+            ictl_unlock::durable::sync_dir(&dir)?;
+            ictl_unlock::durable::sync_dir(legacy.parent().unwrap_or(Path::new(".")))?;
+        }
+        // an older version may have left it readable by others: private before it becomes this device's passcode
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let f = std::fs::File::open(dir.join(&mine))?;
+            f.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+            f.sync_all()?;
+        }
+        let given = match std::fs::hard_link(dir.join(&mine), &target) {
+            Ok(()) => true,
+            // set for this device meanwhile: that one stays, and the old one, bound to it, goes
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => false,
+            Err(e) => return Err(e),
+        };
+        ictl_unlock::durable::sync_dir(&dir)?;
+        ictl_unlock::durable::remove(&dir, &mine)?;
+        Ok(given)
+    }
+    fn passcodes_lock(&self) -> std::io::Result<std::fs::File> {
+        use std::os::fd::AsRawFd;
+        use std::os::unix::fs::OpenOptionsExt;
+        let secrets = self.data_dir.join("secrets");
+        ictl_unlock::durable::create_dir_all_from(&self.data_dir, &secrets)?;
+        let f = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .mode(0o600)
+            .open(secrets.join("passcodes.lock"))?;
+        // SAFETY: a valid descriptor, owned by `f` for as long as the lock is used
+        if unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX) } != 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        Ok(f)
+    }
+    /// The single flag 0.3.2 and earlier kept for all devices; still written, as the shadow of
+    /// [`Self::unlock_disabled`], so a downgraded daemon keeps every device disabled
     pub fn unlock_disabled_flag(&self) -> PathBuf {
         self.logs().join("UNLOCK-DISABLED")
+    }
+    /// Auto-unlock disabled after a failure, per device ([`ictl_unlock::DisableStore`])
+    pub fn unlock_disabled(&self) -> ictl_unlock::DisableStore {
+        ictl_unlock::DisableStore::new(self.data_dir.join("secrets/unlock-disabled"), self.unlock_disabled_flag())
     }
     pub fn state_file(&self) -> PathBuf {
         self.data_dir.join("state.json")
@@ -208,7 +372,12 @@ impl Config {
     /// 建好数据目录并收紧权限：账号私钥、锁屏密码都在里面（配对记录归系统的 usbmuxd 管）
     pub fn prepare_dirs(&self) -> std::io::Result<()> {
         use std::os::unix::fs::PermissionsExt;
-        for d in ["account", "wda", "ddi", "secrets", "logs"] {
+        // first, before any plain create_dir_all: the data directory and every directory above it made now, then
+        // secrets/ and logs/, each kept in its parent. Auto-unlock writes durably inside those (passcodes, disabled
+        // records, their shadow); a directory above them made by a plain call could be lost with a power cut,
+        // taking them along ([`ictl_unlock::durable`])
+        ictl_unlock::durable::create_tree(&self.data_dir, &["secrets", "logs"])?;
+        for d in ["account", "wda", "ddi"] {
             std::fs::create_dir_all(self.data_dir.join(d))?;
         }
         for d in ["", "account", "secrets"] {
@@ -221,6 +390,153 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A first start where the data directory and the ones above it don't exist yet: everything is made, and a
+    /// passcode can be written (the order of the syncs is tested in `ictl_unlock::durable`)
+    #[test]
+    fn a_first_start_makes_the_data_directory_and_above() {
+        let root = std::env::temp_dir().join(format!("ictl-config-cold-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let data = root.join("new/share/iphone-control");
+        let cfg = Config::from_env(&data);
+        cfg.prepare_dirs().unwrap();
+        for d in ["secrets", "logs", "account", "wda", "ddi"] {
+            assert!(data.join(d).is_dir(), "{d}");
+        }
+        cfg.write_passcode("A", "123456").unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// A passcode set again replaces the old one whole and stays private; the single passcode an older version
+    /// saved is given to a device only if it has none, and never written over one set meanwhile
+    #[test]
+    fn passcodes_are_written_whole_and_an_old_one_never_replaces_a_new_one() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("ictl-config-passcode-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let cfg = Config::from_env(&dir);
+        cfg.write_passcode("A", "123456").unwrap();
+        cfg.write_passcode("A", "2468").unwrap();
+        let f = cfg.passcode_file_for("A");
+        assert_eq!(std::fs::read_to_string(&f).unwrap(), "2468");
+        assert_eq!(std::fs::metadata(&f).unwrap().permissions().mode() & 0o777, 0o600);
+
+        std::fs::write(cfg.legacy_passcode_file(), "1111").unwrap();
+        assert!(!cfg.adopt_legacy_passcode("A").unwrap(), "A has its own");
+        assert_eq!(std::fs::read_to_string(&f).unwrap(), "2468");
+        assert!(cfg.legacy_passcode_file().is_file(), "kept: nobody got it");
+        assert!(cfg.adopt_legacy_passcode("B").unwrap());
+        assert_eq!(std::fs::read_to_string(cfg.passcode_file_for("B")).unwrap(), "1111");
+        assert!(!cfg.legacy_passcode_file().exists());
+        let left: Vec<_> = std::fs::read_dir(cfg.passcodes_dir()).unwrap().flatten().map(|e| e.file_name()).collect();
+        assert_eq!(left.len(), 2, "no temporary file left: {left:?}");
+
+        // a copy a crash left while writing A's passcode goes with `passcode clear --device`
+        let stray = cfg.passcodes_dir().join(".A.tmp-1-0");
+        std::fs::write(&stray, "9999").unwrap();
+        cfg.clear_passcode("A").unwrap();
+        assert!(!stray.exists() && !cfg.passcode_file_for("A").exists());
+        assert!(cfg.passcode_file_for("B").exists(), "B's stays");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// An older version's flag goes once every device with a saved passcode is released from it, not while a
+    /// passcode whose device isn't known is there; clearing the passcode of the one left also retires it
+    #[test]
+    fn an_older_versions_flag_goes_once_every_device_with_a_passcode_is_released() {
+        let dir = std::env::temp_dir().join(format!("ictl-config-retire-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let cfg = Config::from_env(&dir);
+        cfg.prepare_dirs().unwrap();
+        cfg.write_passcode("A", "1111").unwrap();
+        cfg.write_passcode("B", "2222").unwrap();
+        std::fs::write(cfg.unlock_disabled_flag(), "1700000000 x\n").unwrap();
+        let store = cfg.unlock_disabled();
+        store.migrate().unwrap();
+        store.reset("A").unwrap();
+        assert!(!cfg.retire_legacy_unlock_disabled().unwrap(), "B isn't released");
+        store.reset("B").unwrap();
+        std::fs::write(cfg.legacy_passcode_file(), "3333").unwrap();
+        assert!(!cfg.retire_legacy_unlock_disabled().unwrap(), "an old passcode of an unknown device");
+        std::fs::remove_file(cfg.legacy_passcode_file()).unwrap();
+        std::fs::write(cfg.passcodes_dir().join(format!("{LEGACY_STAGED}C")), "3333").unwrap();
+        assert!(!cfg.retire_legacy_unlock_disabled().unwrap(), "one set aside for C, not adopted yet");
+        std::fs::remove_file(cfg.passcodes_dir().join(format!("{LEGACY_STAGED}C"))).unwrap();
+        assert!(cfg.retire_legacy_unlock_disabled().unwrap());
+        assert!(!store.legacy() && !cfg.unlock_disabled_flag().exists());
+
+        // B left unreleased, then its passcode cleared: nothing holds the flag up any more
+        std::fs::write(cfg.unlock_disabled_flag(), "1700000100 x\n").unwrap();
+        store.migrate().unwrap();
+        store.reset("A").unwrap();
+        cfg.clear_passcode("B").unwrap();
+        assert!(!store.legacy() && !cfg.unlock_disabled_flag().exists());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// An adoption cut short binds the old passcode to the device it was for: whether it stopped before or after the
+    /// link, another device connected alone later never gets it, and the first one finishes
+    #[test]
+    fn an_old_passcode_cut_short_goes_to_its_device_only() {
+        let dir = std::env::temp_dir().join(format!("ictl-config-adopt-cut-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let cfg = Config::from_env(&dir);
+        let staged = |u: &str| cfg.passcodes_dir().join(format!("{LEGACY_STAGED}{u}"));
+        // cut after the link, before the name set aside was removed
+        cfg.ensure_passcodes_dir().unwrap();
+        std::fs::write(staged("A"), "1111").unwrap();
+        std::fs::hard_link(staged("A"), cfg.passcode_file_for("A")).unwrap();
+        assert!(cfg.legacy_passcode_staged_for("A") && !cfg.legacy_passcode_staged_for("B"));
+        assert!(!cfg.adopt_legacy_passcode("B").unwrap());
+        assert!(!cfg.passcode_file_for("B").exists(), "never B's");
+        assert!(!cfg.adopt_legacy_passcode("A").unwrap(), "A has it already");
+        assert!(!staged("A").exists(), "finished");
+        assert!(!cfg.adopt_legacy_passcode("B").unwrap(), "and gone for good");
+        std::fs::remove_dir_all(&dir).unwrap();
+
+        // cut after moving it aside, before the link
+        let cfg = Config::from_env(&dir);
+        cfg.ensure_passcodes_dir().unwrap();
+        std::fs::write(staged("A"), "1111").unwrap();
+        assert!(!cfg.adopt_legacy_passcode("B").unwrap());
+        assert!(!cfg.passcode_file_for("B").exists());
+        assert!(cfg.adopt_legacy_passcode("A").unwrap());
+        assert_eq!(std::fs::read_to_string(cfg.passcode_file_for("A")).unwrap(), "1111");
+        std::fs::remove_dir_all(&dir).unwrap();
+
+        // cut short, then `passcode clear --device A`: the next round doesn't link it back
+        let cfg = Config::from_env(&dir);
+        cfg.ensure_passcodes_dir().unwrap();
+        std::fs::write(staged("A"), "1111").unwrap();
+        std::fs::hard_link(staged("A"), cfg.passcode_file_for("A")).unwrap();
+        cfg.clear_passcode("A").unwrap();
+        assert!(!staged("A").exists() && !cfg.passcode_file_for("A").exists());
+        assert!(!cfg.adopt_legacy_passcode("A").unwrap() && !cfg.passcode_file_for("A").exists());
+        std::fs::remove_dir_all(&dir).unwrap();
+
+        // an old passcode left readable by others becomes the device's private one
+        let cfg = Config::from_env(&dir);
+        cfg.ensure_passcodes_dir().unwrap();
+        std::fs::write(cfg.legacy_passcode_file(), "1111").unwrap();
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(cfg.legacy_passcode_file(), std::fs::Permissions::from_mode(0o644)).unwrap();
+            assert!(cfg.adopt_legacy_passcode("A").unwrap());
+            let mode = std::fs::metadata(cfg.passcode_file_for("A")).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600);
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
+
+        // cleared meanwhile: nothing comes back
+        let cfg = Config::from_env(&dir);
+        cfg.ensure_passcodes_dir().unwrap();
+        std::fs::write(cfg.legacy_passcode_file(), "1111").unwrap();
+        std::fs::write(staged("A"), "1111").unwrap();
+        cfg.clear_all_passcodes().unwrap();
+        assert!(!cfg.adopt_legacy_passcode("A").unwrap() && !cfg.adopt_legacy_passcode("B").unwrap());
+        assert!(!cfg.passcode_file_for("A").exists() && !cfg.passcode_file_for("B").exists());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     /// A debug print of the settings shows whether a key is set, never the key
     #[test]

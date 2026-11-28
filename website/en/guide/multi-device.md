@@ -69,7 +69,7 @@ Passcodes are kept per device:
 iphone-control passcode set --device <UDID or name>     # the device must be connected
 ```
 
-The stop marker is global: if auto-unlock fails on one device, it stops on all of them until you run `unlock-reset`. See [Auto-unlock](./auto-unlock).
+Stopping is per device too: if auto-unlock fails on one device, it stops on that one only, until you run `unlock-reset` for it (`--device <UDID>` for another one). See [Auto-unlock](./auto-unlock).
 
 ## Notifications
 

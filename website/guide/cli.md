@@ -122,7 +122,7 @@ Viewer 要用令牌登录（见下面的 `viewer`）。持有令牌的人（只�
 | `passcode set [--device <设备>]` | 保存这台设备的锁屏密码，开启自动解锁 |
 | `passcode clear [--device <设备>]` | 删除这台设备的密码 |
 | `passcode clear --all` | 删除所有设备的密码 |
-| `unlock-reset` | 自动解锁被停用后恢复。它不核对密码，先自己确认密码没错 |
+| `unlock-reset [--device <UDID>]` | 这台设备的自动解锁被停用后恢复（只停用出错的那台）。它不核对密码，先自己确认密码没错 |
 
 ## 其他
 

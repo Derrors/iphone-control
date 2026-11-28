@@ -69,7 +69,7 @@ iphone-control setup --reconfigure     # 选「手机」：配对、开发者模
 iphone-control passcode set --device <UDID 或设备名>     # 设备要接着
 ```
 
-停用标记是全局的：一台自动解锁失败，所有设备都停用，直到运行 `unlock-reset`。见[自动解锁](./auto-unlock)。
+停用也按设备：一台自动解锁失败，只停用这一台，直到对它运行 `unlock-reset`（别的设备加 `--device <UDID>`）。见[自动解锁](./auto-unlock)。
 
 ## 通知
 

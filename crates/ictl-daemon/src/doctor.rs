@@ -311,6 +311,16 @@ impl Daemon {
                     .into(),
             );
         }
+        let store = self.cfg.unlock_disabled();
+        if store.legacy() {
+            out.push(
+                ictl_l10n::tr!("⚠️  旧版本停用过自动解锁、没记是哪台设备:还没解除的设备都停用着,逐台核对密码后各运行一次 unlock-reset(别的设备加 --device)", "⚠️  An older version disabled auto-unlock without saying for which device: every device not yet re-enabled stays disabled; check each one's passcode and run unlock-reset for each (--device for another one)").into(),
+            );
+        } else if !store.settled() {
+            out.push(
+                ictl_l10n::tr!("⚠️  自动解锁的停用记录没整理好(上次中断或数据目录不可写),所有设备暂时停用;看 daemon.log,修好后重启守护进程", "⚠️  The auto-unlock disabled records aren't in order (cut short last time, or the data directory isn't writable), so every device is disabled for now; see daemon.log and restart the daemon once fixed").into(),
+            );
+        }
         out.push(host.picture);
         out.extend(format_removed_env_notices(&host.removed_env));
         out.push(String::new());

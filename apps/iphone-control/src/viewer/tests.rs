@@ -1027,11 +1027,17 @@ fn page_actions_map_to_daemon_requests() {
     assert_eq!(action("button", &json!({"button": "home"})), Some(Request::PressButton { button: "home".into() }));
     assert_eq!(
         action("tap_element", &json!({"text": "通用", "index": 1})),
-        Some(Request::TapElement { text: "通用".into(), index: 1, max_age_ms: 0, scroll: None })
+        Some(Request::TapElement {
+            text: "通用".into(),
+            index: 1,
+            max_age_ms: 0,
+            scroll: None,
+            selector: protocol::ElementSelector::default(),
+        })
     );
     assert_eq!(
         action("wait_for", &json!({"text": "x", "timeout": 99})),
-        Some(Request::WaitFor { text: "x".into(), timeout_ms: 30_000 })
+        Some(Request::WaitFor { text: "x".into(), timeout_ms: 30_000, selector: protocol::ElementSelector::default() })
     );
     assert_eq!(action("launch_app", &json!({"app": " 设置 "})), Some(Request::LaunchApp { app: "设置".into() }));
     assert_eq!(
@@ -1162,7 +1168,14 @@ fn a_system_alert_with_its_own_buttons() {
             height: h,
         })
         .collect();
-    let els = element_list(Some(protocol::Data::Elements { elements, matched_count: None, truncated: None })).elements;
+    let els = element_list(Some(protocol::Data::Elements {
+        elements,
+        matched_count: None,
+        truncated: None,
+        incomplete: None,
+        incomplete_reason: None,
+    }))
+    .elements;
     assert_eq!(
         els[0],
         json!({"type": "Button", "label": "今天", "x": 33.0, "y": 861.0, "width": 56.0, "height": 38.0})

@@ -163,13 +163,26 @@ pub(super) fn action(name: &str, b: &Value) -> Option<Request> {
             index: b.get("index").and_then(Value::as_u64).unwrap_or(0) as usize,
             max_age_ms: 0,
             scroll: None,
+            selector: selector_of(b),
         },
         "wait_for" => Request::WaitFor {
             text: text("text")?,
             timeout_ms: (num("timeout").unwrap_or(5.0).clamp(0.5, 30.0) * 1000.0) as u64,
+            selector: selector_of(b),
         },
         _ => return None,
     })
+}
+
+fn selector_of(b: &Value) -> protocol::ElementSelector {
+    let kind = b.get("kind").and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty()).map(str::to_owned);
+    let id = b.get("id").and_then(Value::as_str).filter(|s| !s.is_empty()).map(str::to_owned);
+    let mode = match b.get("match").and_then(Value::as_str) {
+        Some("exact") => protocol::MatchMode::Exact,
+        Some("contains") => protocol::MatchMode::Contains,
+        _ => protocol::MatchMode::Auto,
+    };
+    protocol::ElementSelector { kind, id, mode }
 }
 
 /// Sends one action to the daemon; `udid` limits it to the viewer's device (see the module docs)

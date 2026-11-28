@@ -516,7 +516,10 @@ impl Daemon {
             }
             Ok(_) => {
                 let mut s = before.clone();
-                (s.overlays, s.overlays_complete) = t.ax_overlays(before.app_pid).await;
+                let (overlays, overlays_cutoff) = t.ax_overlays_report(before.app_pid).await;
+                s.overlays = overlays;
+                s.overlays_complete = overlays_cutoff.is_none();
+                s.overlays_cutoff = overlays_cutoff;
                 s
             }
             Err(e @ (DeviceError::AxUnanswered(_) | DeviceError::Timeout(_))) => {

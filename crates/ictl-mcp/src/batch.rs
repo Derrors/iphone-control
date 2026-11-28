@@ -58,8 +58,8 @@ pub fn batch_steps(args: &Map<String, Value>) -> Result<Vec<Step>, String> {
                 .and_then(|()| to_request(tool, obj))
                 .map_err(|e| ictl_l10n::trf!("第 {n} 步({tool}):{e}", "step {n} ({tool}): {e}"))?
             {
-                Request::TapElement { text, index, scroll, .. } if reuse => {
-                    Request::TapElement { text, index, max_age_ms: BATCH_REUSE_MS, scroll }
+                Request::TapElement { text, index, scroll, selector, .. } if reuse => {
+                    Request::TapElement { text, index, max_age_ms: BATCH_REUSE_MS, scroll, selector }
                 }
                 other => other,
             };

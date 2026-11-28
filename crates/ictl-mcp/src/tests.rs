@@ -36,7 +36,13 @@ async fn input_delivery_is_independent_of_field_and_screen_readback() {
             Some(Response::text_data(
                 "items",
                 Default::default(),
-                Some(protocol::Data::Elements { elements: vec![], matched_count: Some(3), truncated: Some(true) }),
+                Some(protocol::Data::Elements {
+                    elements: vec![],
+                    matched_count: Some(3),
+                    truncated: Some(true),
+                    incomplete: None,
+                    incomplete_reason: None,
+                }),
             )),
         ),
         (
@@ -161,12 +167,55 @@ fn english_tool_definitions_have_no_chinese() {
 fn tap_element_scroll_search_is_optional_and_checked() {
     let req = |v: Value| to_request("iphone_tap_element", &args(v));
     let plain = req(json!({"text": "隐私"})).unwrap();
-    assert_eq!(plain, Request::TapElement { text: "隐私".into(), index: 0, max_age_ms: 0, scroll: None });
+    assert_eq!(
+        plain,
+        Request::TapElement {
+            text: "隐私".into(),
+            index: 0,
+            max_age_ms: 0,
+            scroll: None,
+            selector: protocol::ElementSelector::default(),
+        }
+    );
     let down = req(json!({"text": "隐私", "scroll": "down"})).unwrap();
     let s = |down, max| Some(protocol::ScrollSearch { down, max });
-    assert_eq!(down, Request::TapElement { text: "隐私".into(), index: 0, max_age_ms: 0, scroll: s(true, 8) });
+    assert_eq!(
+        down,
+        Request::TapElement {
+            text: "隐私".into(),
+            index: 0,
+            max_age_ms: 0,
+            scroll: s(true, 8),
+            selector: protocol::ElementSelector::default(),
+        }
+    );
     let up = req(json!({"text": "隐私", "scroll": "up", "max_scrolls": 3})).unwrap();
-    assert_eq!(up, Request::TapElement { text: "隐私".into(), index: 0, max_age_ms: 0, scroll: s(false, 3) });
+    assert_eq!(
+        up,
+        Request::TapElement {
+            text: "隐私".into(),
+            index: 0,
+            max_age_ms: 0,
+            scroll: s(false, 3),
+            selector: protocol::ElementSelector::default(),
+        }
+    );
+    let filtered = req(json!({"text": "搜索", "kind": "Button", "id": "search.go", "match": "exact"})).unwrap();
+    assert_eq!(
+        filtered,
+        Request::TapElement {
+            text: "搜索".into(),
+            index: 0,
+            max_age_ms: 0,
+            scroll: None,
+            selector: protocol::ElementSelector {
+                kind: Some("Button".into()),
+                id: Some("search.go".into()),
+                mode: protocol::MatchMode::Exact,
+            },
+        }
+    );
+    assert!(req(json!({"text": "x", "match": "regex"})).is_err());
     for bad in [
         json!({"text": "x", "scroll": "left"}),
         json!({"text": "x", "scroll": "down", "max_scrolls": 0}),
@@ -481,7 +530,11 @@ fn batch_steps_are_checked_before_anything_runs() {
         steps[3],
         Step::Request {
             tool: "iphone_wait_for".into(),
-            req: Request::WaitFor { text: "完成".into(), timeout_ms: 3000 }
+            req: Request::WaitFor {
+                text: "完成".into(),
+                timeout_ms: 3000,
+                selector: protocol::ElementSelector::default()
+            }
         }
     );
     // 第 2 步参数错：一步都不执行，报出是第几步
@@ -512,7 +565,13 @@ fn reuse_elements_only_affects_tap_element_steps() {
         steps(true)[0],
         Step::Request {
             tool: "iphone_tap_element".into(),
-            req: Request::TapElement { text: "One".into(), index: 0, max_age_ms: BATCH_REUSE_MS, scroll: None }
+            req: Request::TapElement {
+                text: "One".into(),
+                index: 0,
+                max_age_ms: BATCH_REUSE_MS,
+                scroll: None,
+                selector: protocol::ElementSelector::default(),
+            }
         }
     );
     assert!(matches!(&steps(false)[0], Step::Request { req: Request::TapElement { max_age_ms: 0, .. }, .. }));
@@ -531,7 +590,15 @@ fn missed_tap_is_read_from_outcome() {
 fn wait_for_timeout_is_bounded() {
     assert_eq!(
         to_request("iphone_wait_for", &args(json!({"text": "x"}))).unwrap(),
-        Request::WaitFor { text: "x".into(), timeout_ms: 5000 }
+        Request::WaitFor { text: "x".into(), timeout_ms: 5000, selector: protocol::ElementSelector::default() }
+    );
+    assert_eq!(
+        to_request("iphone_wait_for", &args(json!({"text": "", "id": "spinner", "state": "disappeared"}))).unwrap(),
+        Request::WaitForDisappearance {
+            text: String::new(),
+            timeout_ms: 5000,
+            selector: protocol::ElementSelector { id: Some("spinner".into()), ..Default::default() },
+        }
     );
     assert!(to_request("iphone_wait_for", &args(json!({"text": "x", "timeout": 60}))).is_err());
 }
@@ -577,7 +644,13 @@ fn wrong_typed_parameters_are_errors_not_defaults() {
     // 写成字符串的数字照收（toolkit 的 pydantic 也收）
     assert_eq!(
         to_request("iphone_tap_element", &args(json!({"text": "设置", "index": "2"}))).unwrap(),
-        Request::TapElement { text: "设置".into(), index: 2, max_age_ms: 0, scroll: None }
+        Request::TapElement {
+            text: "设置".into(),
+            index: 2,
+            max_age_ms: 0,
+            scroll: None,
+            selector: protocol::ElementSelector::default(),
+        }
     );
     assert_eq!(
         to_request("iphone_list_elements", &args(json!({"limit": null}))).unwrap(),
@@ -604,7 +677,24 @@ fn errors_become_tool_errors_with_text() {
     let r = to_result(Response::error("button 只能是 home / volume_up / volume_down / lock"));
     assert_eq!(r.is_error, Some(true));
     assert!(matches!(&r.content[0], ContentBlock::Text(t) if t.text.contains("button 只能是")));
-    let img = to_result(Response::Image { jpeg_base64: "AAAA".into(), caption: "430x932 点".into() });
+    let img = to_result(Response::Image { jpeg_base64: "AAAA".into(), caption: "430x932 点".into(), geometry: None });
     assert_eq!(img.content.len(), 2);
+    assert!(img.structured_content.is_none());
+    let with_geo = to_result(Response::Image {
+        jpeg_base64: "AAAA".into(),
+        caption: "430x932 点".into(),
+        geometry: Some(protocol::ImageGeometry {
+            width: 430,
+            height: 932,
+            point_width: 430.0,
+            point_height: 932.0,
+            region: protocol::ImageRegion { x: 0.0, y: 0.0, width: 430.0, height: 932.0 },
+            coordinate_scale: 1.0,
+        }),
+    });
+    let sc = with_geo.structured_content.unwrap();
+    assert_eq!(sc["type"], "screenshot");
+    assert_eq!(sc["point_width"], 430.0);
+    assert_eq!(sc["coordinate_scale"], 1.0);
     assert!(to_request("iphone_nope", &Map::new()).is_err());
 }

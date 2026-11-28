@@ -29,7 +29,7 @@ pub use lock::{
     CoverSheet, cover_sheet, delete_key, keypad, parse_passcode_value, passcode_field, use_passcode_button,
 };
 pub use parse::{parse, parse_tree};
-pub use query::{field_values, filter, find, find_shown};
+pub use query::{MatchMode, Selector, field_values, filter, find, find_matching, find_shown, find_shown_matching};
 
 use std::sync::LazyLock;
 
@@ -151,6 +151,33 @@ struct Blocker {
     name: String,
 }
 
+/// Why a read of the element tree stopped before visiting every node
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IncompleteReason {
+    /// Reached the element count limit
+    ElementLimit,
+    /// Reached the read time budget
+    Timeout,
+    /// Reached the maximum hierarchy depth
+    DepthLimit,
+    /// One or more live elements could not be read
+    Unreadable,
+    /// SpringBoard's overlay layer (alerts, banners) was not read in full
+    OverlaysIncomplete,
+}
+
+impl IncompleteReason {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::ElementLimit => "element_limit",
+            Self::Timeout => "timeout",
+            Self::DepthLimit => "depth_limit",
+            Self::Unreadable => "unreadable",
+            Self::OverlaysIncomplete => "overlays_incomplete",
+        }
+    }
+}
+
 /// 解析后的元素树
 #[derive(Debug, Clone, Default)]
 pub struct Tree {
@@ -160,6 +187,12 @@ pub struct Tree {
     pub loading: bool,
     /// Some nodes may not have been observed. Missing text on this tree does not prove absence.
     pub incomplete: bool,
+    /// Why [`Self::incomplete`] was set, when known (for example native AX element limit or timeout)
+    pub incomplete_reason: Option<IncompleteReason>,
+    /// Oriented screen dimensions in points when this tree was parsed
+    pub screen: Option<ScreenSize>,
+    /// Foreground application PID when read natively via `remoteAXService`
+    pub app_pid: Option<i64>,
 }
 
 /// 按名字点击时实际点哪里

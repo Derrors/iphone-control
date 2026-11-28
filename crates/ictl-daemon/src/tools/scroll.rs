@@ -76,7 +76,7 @@ impl Daemon {
                     text.push('\n');
                     text.push_str(&line);
                 }
-                text += &self.snapshot_note(g);
+                text += &self.snapshot_note(g, &tree);
                 return Ok((text, Data::ScrollCollection { stop_reason: reason, scrolls, rows, matched }));
             }
             previous = Some(tree);

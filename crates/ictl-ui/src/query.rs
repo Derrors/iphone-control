@@ -155,6 +155,49 @@ impl Element {
 /// 输入框类元素
 const EDITABLE: [&str; 4] = ["TextField", "SearchField", "TextView", "SecureTextField"];
 
+/// How [`Selector::text`] is matched against elements
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum MatchMode {
+    /// Exact label or name first, falling back to case-insensitive substring match
+    #[default]
+    Auto,
+    /// Exact label or name match only
+    Exact,
+    /// Case-insensitive substring match in label, name, or value
+    Contains,
+}
+
+/// Combined element filter: optional text plus optional type (`kind`), accessibility id (`name`), and [`MatchMode`]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Selector<'a> {
+    pub text: &'a str,
+    pub kind: Option<&'a str>,
+    pub id: Option<&'a str>,
+    pub mode: MatchMode,
+}
+
+impl<'a> Selector<'a> {
+    pub fn text(text: &'a str) -> Self {
+        Self { text, kind: None, id: None, mode: MatchMode::Auto }
+    }
+
+    /// Whether `e` satisfies the structural constraints (`kind` and `id`), ignoring `text`
+    pub fn matches_structure(&self, e: &Element) -> bool {
+        if let Some(kind) = self.kind.filter(|k| !k.is_empty()) {
+            let wanted = kind.strip_prefix("XCUIElementType").unwrap_or(kind);
+            if !e.kind.eq_ignore_ascii_case(wanted) {
+                return false;
+            }
+        }
+        if let Some(id) = self.id.filter(|s| !s.is_empty())
+            && e.name != id
+        {
+            return false;
+        }
+        true
+    }
+}
+
 /// 类型/标签/名字/值里包含 `text` 的元素（不区分大小写）。列元素时筛选用，可以按类型筛（如 `SearchField`）
 pub fn filter<'a>(elements: &'a [Element], text: &str) -> Vec<&'a Element> {
     let t = text.to_lowercase();
@@ -163,28 +206,50 @@ pub fn filter<'a>(elements: &'a [Element], text: &str) -> Vec<&'a Element> {
 
 /// 按文字找元素：先找标签或名字完全相同的，没有再找标签/名字/值包含该文字的（不看类型）
 pub fn find<'a>(elements: &'a [Element], text: &str) -> Vec<&'a Element> {
-    let exact: Vec<_> = elements.iter().filter(|e| e.label == text || e.name == text).collect();
-    if !exact.is_empty() {
-        return exact;
+    find_matching(elements, Selector::text(text))
+}
+
+/// 按组合选择器找元素：先按 `kind` / `id` 过滤，再按 `text` 和 `mode` 匹配
+pub fn find_matching<'a>(elements: &'a [Element], sel: Selector<'_>) -> Vec<&'a Element> {
+    let pool: Vec<_> = elements.iter().filter(|e| sel.matches_structure(e)).collect();
+    if sel.text.is_empty() {
+        return pool;
     }
-    let t = text.to_lowercase();
-    elements.iter().filter(|e| e.contains_text(&t)).collect()
+    if matches!(sel.mode, MatchMode::Auto | MatchMode::Exact) {
+        let exact: Vec<_> = pool.iter().copied().filter(|e| e.label == sel.text || e.name == sel.text).collect();
+        if !exact.is_empty() || sel.mode == MatchMode::Exact {
+            return exact;
+        }
+    }
+    let t = sel.text.to_lowercase();
+    pool.into_iter().filter(|e| e.contains_text(&t)).collect()
 }
 
 /// 等某段文字出现时用：同 [`find`]，但不算输入框里的内容（刚输入的搜索词不能算「结果出来了」）
 pub fn find_shown<'a>(elements: &'a [Element], text: &str) -> Vec<&'a Element> {
+    find_shown_matching(elements, Selector::text(text))
+}
+
+/// 同 [`find_shown`]，同时支持 `kind`、`id`、`mode` 组合条件
+pub fn find_shown_matching<'a>(elements: &'a [Element], sel: Selector<'_>) -> Vec<&'a Element> {
+    let pool: Vec<_> = elements.iter().filter(|e| sel.matches_structure(e)).collect();
+    if sel.text.is_empty() {
+        return pool;
+    }
     let shown = |e: &Element| -> Vec<String> {
         if !EDITABLE.contains(&e.kind.as_str()) {
             return vec![e.label.clone(), e.name.clone(), e.value.clone()];
         }
         [&e.label, &e.name].into_iter().filter(|s| **s != e.value).cloned().collect()
     };
-    let exact: Vec<_> = elements.iter().filter(|e| shown(e).iter().any(|s| s == text)).collect();
-    if !exact.is_empty() {
-        return exact;
+    if matches!(sel.mode, MatchMode::Auto | MatchMode::Exact) {
+        let exact: Vec<_> = pool.iter().copied().filter(|e| shown(e).iter().any(|s| s == sel.text)).collect();
+        if !exact.is_empty() || sel.mode == MatchMode::Exact {
+            return exact;
+        }
     }
-    let t = text.to_lowercase();
-    elements.iter().filter(|e| shown(e).iter().any(|s| s.to_lowercase().contains(&t))).collect()
+    let t = sel.text.to_lowercase();
+    pool.into_iter().filter(|e| shown(e).iter().any(|s| s.to_lowercase().contains(&t))).collect()
 }
 
 /// 屏幕上输入框里的内容，用来核对输入有没有丢字。有密码框时返回 None（值是圆点，核对不了）

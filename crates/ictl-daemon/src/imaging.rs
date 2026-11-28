@@ -3,6 +3,7 @@
 use std::io::Cursor;
 
 use ictl_device::ScreenSize;
+use ictl_protocol::{ImageGeometry, ImageRegion};
 use image::{DynamicImage, codecs::jpeg::JpegEncoder, imageops::FilterType};
 
 pub const ZOOM_MIN_LONG_SIDE: f64 = 600.0;
@@ -65,20 +66,20 @@ fn thumb_of(img: &DynamicImage) -> Vec<u8> {
     img.resize_exact(THUMB_W, THUMB_H, FilterType::Nearest).into_luma8().into_raw()
 }
 
-/// 截图工具的回答（整屏或区域放大，见 [`full_screen`]、[`region`]）和整屏的指纹，只解码一次。
+/// 截图工具的回答（整屏或区域放大，见 [`full_screen`]、[`region`]）、结构化几何信息和整屏指纹，只解码一次。
 /// 指纹记下来，下一个操作做完后比较画面变没变
 pub fn answer(
     png: &[u8],
     screen: ScreenSize,
     rect: Option<(f64, f64, f64, f64)>,
     via: &str,
-) -> Result<(Vec<u8>, String, Vec<u8>), String> {
+) -> Result<(Vec<u8>, String, ImageGeometry, Vec<u8>), String> {
     let img = decode(png)?;
-    let (jpeg, caption) = match rect {
+    let (jpeg, caption, geometry) = match rect {
         None => full_screen_of(&img, screen, via)?,
         Some(r) => region_of(&img, screen, r, via)?,
     };
-    Ok((jpeg, caption, thumb_of(&img)))
+    Ok((jpeg, caption, geometry, thumb_of(&img)))
 }
 
 /// 两个指纹的平均逐像素差（0～255）。尺寸不同算完全不同
@@ -138,18 +139,32 @@ pub fn thumb_motion(a: &[u8], b: &[u8]) -> Motion {
 
 /// 整屏缩放到点尺寸：图像像素即点坐标。返回 (jpeg, 说明文字)
 pub fn full_screen(png: &[u8], screen: ScreenSize, via: &str) -> Result<(Vec<u8>, String), String> {
-    full_screen_of(&decode(png)?, screen, via)
+    let (jpeg, caption, _) = full_screen_of(&decode(png)?, screen, via)?;
+    Ok((jpeg, caption))
 }
 
-fn full_screen_of(img: &DynamicImage, screen: ScreenSize, via: &str) -> Result<(Vec<u8>, String), String> {
+fn full_screen_of(
+    img: &DynamicImage,
+    screen: ScreenSize,
+    via: &str,
+) -> Result<(Vec<u8>, String, ImageGeometry), String> {
     let (w, h) = oriented(img.width(), img.height(), screen);
     let out = jpeg(&img.resize_exact(w, h, filter_for((img.width(), img.height()), (w, h))), 80)?;
+    let geometry = ImageGeometry {
+        width: w,
+        height: h,
+        point_width: f64::from(w),
+        point_height: f64::from(h),
+        region: ImageRegion { x: 0.0, y: 0.0, width: f64::from(w), height: f64::from(h) },
+        coordinate_scale: 1.0,
+    };
     Ok((
         out,
         ictl_l10n::trf!(
             "{w}x{h} 点,图像像素即点坐标(经 {via})",
             "{w}x{h} points, image pixels are point coordinates (via {via})"
         ),
+        geometry,
     ))
 }
 
@@ -200,7 +215,8 @@ pub fn region(
     rect: (f64, f64, f64, f64),
     via: &str,
 ) -> Result<(Vec<u8>, String), String> {
-    region_of(&decode(png)?, screen, rect, via)
+    let (jpeg, caption, _) = region_of(&decode(png)?, screen, rect, via)?;
+    Ok((jpeg, caption))
 }
 
 fn region_of(
@@ -208,7 +224,8 @@ fn region_of(
     screen: ScreenSize,
     rect: (f64, f64, f64, f64),
     via: &str,
-) -> Result<(Vec<u8>, String), String> {
+) -> Result<(Vec<u8>, String, ImageGeometry), String> {
+    let (pw, ph) = oriented(img.width(), img.height(), screen);
     let p = plan_zoom(img.width(), img.height(), screen, rect.0, rect.1, rect.2, rect.3)?;
     let (cx, cy, cw, ch) = p.crop;
     let mut crop = img.crop_imm(cx, cy, cw, ch);
@@ -223,7 +240,15 @@ fn region_of(
         fmt_g(rw),
         fmt_g(rh)
     );
-    Ok((jpeg(&crop, 90)?, caption))
+    let geometry = ImageGeometry {
+        width: p.out.0,
+        height: p.out.1,
+        point_width: f64::from(pw),
+        point_height: f64::from(ph),
+        region: ImageRegion { x: x1, y: y1, width: rw, height: rh },
+        coordinate_scale: p.zoom,
+    };
+    Ok((jpeg(&crop, 90)?, caption, geometry))
 }
 
 /// 读取 PNG 尺寸（只读文件头，不解码像素）
@@ -363,5 +388,20 @@ mod tests {
     #[test]
     fn png_size_reads_header() {
         assert_eq!(png_size(&png(12, 34)), Some((12, 34)));
+    }
+
+    #[test]
+    fn answer_returns_structured_geometry_for_full_screen_and_region() {
+        let (_, _, full, _) = answer(&png(1290, 2796), SCREEN, None, "WDA").unwrap();
+        assert_eq!((full.width, full.height), (430, 932));
+        assert_eq!((full.point_width, full.point_height), (430.0, 932.0));
+        assert_eq!(full.region, ImageRegion { x: 0.0, y: 0.0, width: 430.0, height: 932.0 });
+        assert_eq!(full.coordinate_scale, 1.0);
+
+        let (_, _, zoomed, _) = answer(&png(1290, 2796), SCREEN, Some((0.0, 55.0, 430.0, 40.0)), "WDA").unwrap();
+        assert_eq!(zoomed.width, 1200);
+        assert_eq!((zoomed.point_width, zoomed.point_height), (430.0, 932.0));
+        assert_eq!(zoomed.region, ImageRegion { x: 0.0, y: 55.0, width: 430.0, height: 40.0 });
+        assert!((zoomed.coordinate_scale - 1200.0 / 430.0).abs() < 1e-9);
     }
 }

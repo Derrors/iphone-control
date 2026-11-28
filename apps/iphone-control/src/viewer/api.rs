@@ -244,12 +244,22 @@ pub(super) struct ElementList {
     pub(super) elements: Vec<Value>,
     matched_count: Option<usize>,
     truncated: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    incomplete: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    incomplete_reason: Option<String>,
 }
 
 pub(super) fn element_list(data: Option<protocol::Data>) -> ElementList {
     match data {
-        Some(protocol::Data::Elements { elements, matched_count, truncated }) => {
-            ElementList { elements: elements.into_iter().map(|e| json!(e)).collect(), matched_count, truncated }
+        Some(protocol::Data::Elements { elements, matched_count, truncated, incomplete, incomplete_reason }) => {
+            ElementList {
+                elements: elements.into_iter().map(|e| json!(e)).collect(),
+                matched_count,
+                truncated,
+                incomplete,
+                incomplete_reason,
+            }
         }
         _ => ElementList::default(),
     }

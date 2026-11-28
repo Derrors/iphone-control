@@ -353,7 +353,11 @@ WDA 不可用时改用 CoreDevice HID(iOS 27 起;结果里注明「经 HID」)�
             ),
             schema(
                 with_then(json!({
-                    "text": {"type": "string", "description": ictl_l10n::tr!("元素的文字(标签或名字),先精确匹配再按包含匹配", "the element's text (label or name); exact match first, then substring")},
+                    "text": {"type": "string", "description": ictl_l10n::tr!("元素的文字(标签或名字),默认先精确匹配再按包含匹配;已给 kind 或 id 时可传空字符串", "the element's text (label or name); exact match first then substring by default; may be empty if kind or id is given")},
+                    "kind": {"type": "string", "description": ictl_l10n::tr!("限定控件类型(如 Button、TextField、SearchField、Cell、Switch,不区分大小写);同屏有多个同名元素时用", "restrict to this element type (e.g. Button, TextField, SearchField, Cell, Switch; case-insensitive), useful when several elements share the same text")},
+                    "id": {"type": "string", "description": ictl_l10n::tr!("限定无障碍标识(元素列表里 id=\"...\" 的精确值)", "restrict to this exact accessibility identifier (the id=\"...\" shown by iphone_list_elements)")},
+                    "match": {"type": "string", "enum": ["auto", "exact", "contains"], "default": "auto",
+                        "description": ictl_l10n::tr!("text 的匹配方式:auto=先精确再包含(默认),exact=仅精确匹配标签或名字,contains=仅按包含匹配", "how text is matched: auto = exact first then substring (default), exact = exact label or name only, contains = substring match only")},
                     "index": {"type": "integer", "default": 0,
                         "description": ictl_l10n::tr!("匹配到多个时点第几个(从 0 开始,顺序同 iphone_list_elements)", "which match to tap if there are several (from 0, same order as iphone_list_elements)")},
                     "scroll": {"type": "string", "enum": ["down", "up"],
@@ -509,7 +513,11 @@ WDA 不可用时改用 HID(iOS 27 起):美式键盘上的英文和符号直接�
                 .into(),
             schema(
                 json!({
-                    "text": {"type": "string", "description": ictl_l10n::tr!("要等的文字,元素的标签/名字/值包含它就算出现", "the text to wait for; it counts as appeared when an element's label/name/value contains it")},
+                    "text": {"type": "string", "description": ictl_l10n::tr!("要等的文字,元素的标签/名字/值包含它就算出现;已给 kind 或 id 时可传空字符串", "the text to wait for; it counts as appeared when an element's label/name/value contains it; may be empty if kind or id is given")},
+                    "kind": {"type": "string", "description": ictl_l10n::tr!("限定控件类型(如 Button、StaticText、Alert,不区分大小写)", "restrict to this element type (e.g. Button, StaticText, Alert; case-insensitive)")},
+                    "id": {"type": "string", "description": ictl_l10n::tr!("限定无障碍标识(精确值)", "restrict to this exact accessibility identifier")},
+                    "match": {"type": "string", "enum": ["auto", "exact", "contains"], "default": "auto",
+                        "description": ictl_l10n::tr!("text 的匹配方式:auto=先精确再包含(默认),exact=仅精确匹配,contains=仅包含匹配", "how text is matched: auto (default), exact, or contains")},
                     "timeout": {"type": "number", "default": 5, "description": ictl_l10n::tr!("最多等几秒(不超过 30)", "maximum seconds to wait (up to 30)")},
                     "state": {"type": "string", "enum": ["appeared", "disappeared"], "default": "appeared", "description": ictl_l10n::tr!("等文字出现或从当前界面消失", "wait for the text to appear or disappear from the visible screen")}
                 }),

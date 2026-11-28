@@ -87,6 +87,7 @@ impl Tree {
             w.walk(r);
         }
         w.tree.incomplete = source.incomplete;
+        w.tree.screen = Some(view.screen);
         w.tree
     }
 }

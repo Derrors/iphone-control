@@ -468,6 +468,45 @@ fn filter_is_case_insensitive_and_checks_value() {
     assert_eq!(filter(&h, "新项目").iter().map(|e| e.label.as_str()).collect::<Vec<_>>(), ["设置"]);
 }
 
+#[test]
+fn selector_combines_kind_id_and_match_mode() {
+    let els = vec![
+        Element {
+            kind: "StaticText".into(), label: "搜索".into(), name: "title.search".into(), ..Default::default()
+        },
+        Element {
+            kind: "SearchField".into(),
+            label: "搜索".into(),
+            name: "field.search".into(),
+            value: "搜索".into(),
+            ..Default::default()
+        },
+        Element { kind: "Button".into(), label: "搜索".into(), name: "btn.search".into(), ..Default::default() },
+        Element {
+            kind: "Button".into(), label: "搜索历史".into(), name: "btn.history".into(), ..Default::default()
+        },
+    ];
+    let by_kind = find_matching(&els, Selector { text: "搜索", kind: Some("button"), id: None, mode: MatchMode::Auto });
+    assert_eq!(by_kind.iter().map(|e| e.name.as_str()).collect::<Vec<_>>(), ["btn.search"]);
+    let by_prefix_kind = find_matching(
+        &els,
+        Selector { text: "搜索", kind: Some("XCUIElementTypeButton"), id: None, mode: MatchMode::Contains },
+    );
+    assert_eq!(by_prefix_kind.iter().map(|e| e.name.as_str()).collect::<Vec<_>>(), ["btn.search", "btn.history"]);
+    let by_id_only =
+        find_matching(&els, Selector { text: "", kind: None, id: Some("field.search"), mode: MatchMode::Auto });
+    assert_eq!(by_id_only.iter().map(|e| e.kind.as_str()).collect::<Vec<_>>(), ["SearchField"]);
+    let exact_miss =
+        find_matching(&els, Selector { text: "历史", kind: Some("Button"), id: None, mode: MatchMode::Exact });
+    assert!(exact_miss.is_empty());
+    // find_shown_matching still excludes typed text inside an editable field
+    let shown = find_shown_matching(
+        &els,
+        Selector { text: "搜索", kind: Some("SearchField"), id: None, mode: MatchMode::Auto },
+    );
+    assert!(shown.is_empty(), "editable field whose label equals its value is ignored");
+}
+
 fn key(label: &str, at: (i64, i64), kind: &str) -> Element {
     Element {
         kind: kind.into(),

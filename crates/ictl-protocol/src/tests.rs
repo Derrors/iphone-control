@@ -51,16 +51,32 @@ async fn clients_wait_for_a_restarting_daemon_only() {
 
 #[test]
 fn requests_round_trip_as_tagged_json() {
-    let r = Request::TapElement { text: "x".into(), index: 0, max_age_ms: 0, scroll: None };
-    // without a scroll search the request is what it always was on the wire
+    let r = Request::TapElement {
+        text: "x".into(),
+        index: 0,
+        max_age_ms: 0,
+        scroll: None,
+        selector: ElementSelector::default(),
+    };
+    // without a scroll search or selector the request is what it always was on the wire
     assert_eq!(serde_json::to_string(&r).unwrap(), r#"{"op":"tap_element","text":"x","index":0,"max_age_ms":0}"#);
     let r = Request::TapElement {
         text: "x".into(),
         index: 0,
         max_age_ms: 0,
         scroll: Some(ScrollSearch { down: true, max: 8 }),
+        selector: ElementSelector { kind: Some("Button".into()), id: Some("ok-btn".into()), mode: MatchMode::Exact },
     };
     assert_eq!(serde_json::from_str::<Request>(&serde_json::to_string(&r).unwrap()).unwrap(), r);
+    // empty text is allowed when kind or id is provided, and rejected when both are absent
+    let id_only = Request::WaitFor {
+        text: String::new(),
+        timeout_ms: 5000,
+        selector: ElementSelector { id: Some("done".into()), ..Default::default() },
+    };
+    assert!(id_only.check_required_text().is_ok());
+    let empty_wait = Request::WaitFor { text: String::new(), timeout_ms: 5000, selector: ElementSelector::default() };
+    assert!(empty_wait.check_required_text().is_err());
     let r = Request::Swipe { from: (1.0, 2.0), to: (3.0, 4.0), seconds: 0.3, hold: 0.0 };
     let s = serde_json::to_string(&r).unwrap();
     // a plain swipe is what it always was on the wire: older daemons and clients see no change
@@ -115,16 +131,39 @@ fn data_travels_with_the_text() {
     assert!(s.contains(r#""data":{"type":"status","wda_ready":true"#), "{s}");
     assert_eq!(serde_json::from_str::<Response>(&s).unwrap(), r);
     let el = ElementData { kind: "Button".into(), label: "OK".into(), x: 1.0, y: 2.0, width: 3.0, height: 4.0 };
-    let v = serde_json::to_value(Data::Elements { elements: vec![el], matched_count: Some(1), truncated: Some(false) })
-        .unwrap();
+    let v = serde_json::to_value(Data::Elements {
+        elements: vec![el.clone()],
+        matched_count: Some(1),
+        truncated: Some(false),
+        incomplete: None,
+        incomplete_reason: None,
+    })
+    .unwrap();
     assert_eq!(v["elements"][0]["type"], "Button", "the page reads `type`");
+    assert!(v.get("incomplete").is_none(), "complete trees omit incomplete metadata");
+    let inc = serde_json::to_value(Data::Elements {
+        elements: vec![el],
+        matched_count: Some(1),
+        truncated: Some(false),
+        incomplete: Some(true),
+        incomplete_reason: Some("element_limit".into()),
+    })
+    .unwrap();
+    assert_eq!(inc["incomplete"], true);
+    assert_eq!(inc["incomplete_reason"], "element_limit");
     assert!(!serde_json::to_string(&Response::text_with("x", Outcome::default())).unwrap().contains("data"));
 }
 
 /// Delivery follows [`Outcome::tapped_nothing`], never the human-readable wording
 #[test]
 fn outcome_decides_delivery_not_text() {
-    let tap = Request::TapElement { text: "x".into(), index: 0, max_age_ms: 0, scroll: None };
+    let tap = Request::TapElement {
+        text: "x".into(),
+        index: 0,
+        max_age_ms: 0,
+        scroll: None,
+        selector: ElementSelector::default(),
+    };
     let missed = Response::text_with("Not found", Outcome { tapped_nothing: true, ..Default::default() });
     assert_eq!(missed.delivery(&tap), Delivery::NotSent);
     let sent_cn = Response::text_with("没找到包含 \"x\" 的元素", Outcome::default());

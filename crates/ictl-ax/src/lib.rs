@@ -18,7 +18,7 @@ pub mod session;
 pub mod tree;
 
 pub use archive::{Obj, ObjectRef};
-pub use session::{PushedAt, Response, Session};
+pub use session::{PushedAt, Response, Session, WalkCutoff};
 pub use tree::{Element, Pushed};
 
 /// The service's name in the phone's RSD list

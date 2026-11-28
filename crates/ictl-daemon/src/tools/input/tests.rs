@@ -58,6 +58,33 @@ async fn a_target_that_never_settles_is_waited_for_a_while_only() {
     assert!(t0.elapsed() < Duration::from_secs(2), "{:?}", t0.elapsed());
 }
 
+#[test]
+fn target_context_drift_detects_foreground_orientation_and_bounds() {
+    let portrait = Some(ScreenSize { width: 430.0, height: 932.0 });
+    assert_eq!(target_context_drift(portrait, (215.0, 466.0), Some(false), Some(100), Some(100)), None);
+    // unknown live probes don't block taps
+    assert_eq!(target_context_drift(portrait, (215.0, 466.0), None, Some(100), None), None);
+    // foreground app switched between tree read and tap
+    assert_eq!(
+        target_context_drift(portrait, (215.0, 466.0), Some(false), Some(100), Some(200)),
+        Some(TargetDrift::ForegroundChanged)
+    );
+    // phone rotated from portrait to landscape before tap
+    assert_eq!(
+        target_context_drift(portrait, (215.0, 466.0), Some(true), Some(100), Some(100)),
+        Some(TargetDrift::OrientationChanged)
+    );
+    // point outside screen bounds
+    assert_eq!(
+        target_context_drift(portrait, (500.0, 100.0), Some(false), Some(100), Some(100)),
+        Some(TargetDrift::OutOfBounds)
+    );
+    assert_eq!(
+        target_context_drift(portrait, (f64::NAN, 100.0), Some(false), Some(100), Some(100)),
+        Some(TargetDrift::OutOfBounds)
+    );
+}
+
 /// A WDA with one focused field
 struct Fake(Mutex<Field>);
 

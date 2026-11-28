@@ -179,11 +179,12 @@ impl Daemon {
         if self.cfg.instance.is_some() {
             return Ok(());
         }
-        let scan = crate::instance::scan(&self.cfg.registry).map_err(|e| {
+        let registry = self.cfg.registry_dir();
+        let scan = crate::instance::scan(&registry).map_err(|e| {
             ictl_l10n::trf!(
                 "读不了实例登记（{}）：{e}；没有切换",
                 "The instance registry can't be read ({}): {e}; not switched",
-                self.cfg.registry.display()
+                registry.display()
             )
         })?;
         match scan.reserved_by(udid) {

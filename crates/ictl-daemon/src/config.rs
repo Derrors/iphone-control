@@ -230,10 +230,23 @@ impl Config {
             require_known_origin: self.shared_with_others(),
         }
     }
+    /// The registry directory as it is now: the anchor's, read again each time (a daemon started before the first
+    /// `instance add` sees the registry it wrote), else the one worked out at start ([`Self::registry`])
+    #[cfg(not(test))]
+    pub fn registry_dir(&self) -> PathBuf {
+        crate::instance::anchor().ok().flatten().map(|a| a.registry).unwrap_or_else(|| self.registry.clone())
+    }
+
+    /// Unit tests never see the host's anchor
+    #[cfg(test)]
+    pub fn registry_dir(&self) -> PathBuf {
+        self.registry.clone()
+    }
+
     /// Whether other instances share the data root: this is a named one, or named ones are registered or reserved. A
     /// registry that can't be read counts as shared
     pub fn shared_with_others(&self) -> bool {
-        self.instance.is_some() || crate::instance::scan(&self.registry).map(|s| s.any()).unwrap_or(true)
+        self.instance.is_some() || crate::instance::scan(&self.registry_dir()).map(|s| s.any()).unwrap_or(true)
     }
     /// Before a daemon starts: the registry and data root are the ones every instance uses
     /// ([`crate::instance::check_anchor`]); a named instance has its device and id, and its data directory where the

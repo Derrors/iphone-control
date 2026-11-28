@@ -257,12 +257,12 @@ impl Daemon {
                 return text(self.setup_step(udid, *step).await);
             }
             Lane::Select if matches!(req, Request::PinCurrent { .. }) => {
-                let Request::PinCurrent { expect_udid, expect_token } = &req else { unreachable!("lane") };
+                let Request::PinCurrent { udid, expect_token } = &req else { unreachable!("lane") };
                 if ctx.task.is_some() {
                     return Response::error(ictl_l10n::tr!("AI 任务不能固定设备", "An AI task can't pin the device"))
                         .with_failure(Delivery::NotSent, FailureStage::Preflight);
                 }
-                return text(self.pin_current(expect_udid, expect_token).await);
+                return text(self.pin_current(udid, expect_token).await);
             }
             Lane::Select => {
                 let Request::SelectDevice { device } = &req else { unreachable!("lane") };

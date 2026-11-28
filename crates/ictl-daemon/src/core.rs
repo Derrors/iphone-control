@@ -150,6 +150,9 @@ pub struct InstanceIdentity {
     pub data_dir: std::path::PathBuf,
     /// The data root every instance shares
     pub root: std::path::PathBuf,
+    /// The instance registry it reads (`instance add` refuses one that isn't the registry it writes)
+    #[serde(default)]
+    pub registry: std::path::PathBuf,
     pub socket: std::path::PathBuf,
     /// New at every start: a token made with an earlier start's generation is never taken
     pub boot_id: String,
@@ -604,6 +607,7 @@ impl Daemon {
             id: self.cfg.instance_id.clone(),
             data_dir: self.cfg.data_dir.clone(),
             root: self.cfg.root.clone(),
+            registry: self.cfg.registry_dir(),
             socket: self.cfg.socket.clone(),
             boot_id: self.boot_id.clone(),
             selection_generation: self.selection_generation.load(std::sync::atomic::Ordering::SeqCst),

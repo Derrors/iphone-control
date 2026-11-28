@@ -19,6 +19,8 @@ pub struct ScrollSearch {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SetupStepKind {
+    /// Whether the phone is paired: answers `paired` or `unpaired`
+    PairStatus,
     /// Pair with the phone: answers `paired`, or `pending` while the phone waits for "Trust" and the passcode
     Pair,
     /// Show the Developer Mode switch in the phone's settings: answers `revealed`
@@ -264,12 +266,13 @@ pub enum Request {
         udid: String,
         step: SetupStepKind,
     },
-    /// `instance add`, to the default instance (docs/dev/multi-instance-plan.md 4.4): select `expect_udid` for good,
+    /// `instance add`, to the default instance (docs/dev/multi-instance-plan.md 4.4): select `udid` for good,
     /// only if it is the device controlled or selected now and `expect_token` (the boot id and selection generation
     /// `Request::Daemon` reported, `<boot id>:<generation>`) is still current. Answers the new token. Refused while a
     /// switch is under way
     PinCurrent {
-        expect_udid: String,
+        /// Not `expect_udid`: that name every request may carry is taken off before the request is read
+        udid: String,
         expect_token: String,
     },
     /// `wda-bridge`: one connection to WDA's port on the device being controlled, relayed both ways once the answer

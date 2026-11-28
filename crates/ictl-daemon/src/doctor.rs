@@ -367,14 +367,14 @@ impl Daemon {
     /// lone default instance stays as it was
     fn instance_lines(&self) -> (Vec<String>, u32) {
         let (mut out, mut fails) = (Vec::new(), 0);
-        let scan = match crate::instance::scan(&self.cfg.registry) {
+        let scan = match crate::instance::scan(&self.cfg.registry_dir()) {
             Ok(s) => s,
             Err(e) => {
                 out.push(ictl_l10n::tr!("== 实例", "== Instances").into());
                 out.push(ictl_l10n::trf!(
                     "❌ 读不了实例登记（{}）：{e}",
                     "❌ The instance registry can't be read ({}): {e}",
-                    self.cfg.registry.display()
+                    self.cfg.registry_dir().display()
                 ));
                 return (out, 1);
             }

@@ -130,6 +130,8 @@ struct DefaultState {
     current: Option<String>,
     token: String,
     data_dir: PathBuf,
+    /// The registry it reads
+    registry: PathBuf,
 }
 
 async fn default_state(socket: &Path) -> anyhow::Result<DefaultState> {
@@ -152,6 +154,7 @@ async fn default_state(socket: &Path) -> anyhow::Result<DefaultState> {
         current: s.device.map(|d| d.udid).or(s.pinned),
         token: format!("{}:{}", id.boot_id, id.selection_generation),
         data_dir: id.data_dir,
+        registry: id.registry,
     })
 }
 
@@ -318,6 +321,18 @@ async fn add(
     );
     // 3. the checks
     let root = check_root(&now.data_dir)?;
+    // the default daemon must read the registry written here: one started with another XDG_CONFIG_HOME would miss
+    // the instance, and choose its device as before
+    ensure!(
+        same_dir(&now.registry, &registry),
+        "{}",
+        ictl_l10n::trf!(
+            "默认守护进程读的实例登记是 {}，这里写的是 {}（设置目录不同）：用同样的设置重启它再添加",
+            "The default daemon reads the instance registry {}, this writes {} (another settings directory): restart it with the same settings, then add",
+            now.registry.display(),
+            registry.display()
+        )
+    );
     check_anisette(&root)?;
     let scan = instance::scan(&registry)?;
     if scan.registered.iter().any(|r| r.name == name) {
@@ -375,16 +390,15 @@ async fn add(
         instance::write_anchor(&instance::Anchor { registry: registry.clone(), root: root.clone() })?;
     }
     // 5. the default instance pinned to what it has, if nothing changed since it was confirmed
-    let token = match ask(socket, Request::PinCurrent { expect_udid: current.clone(), expect_token: now.token.clone() })
-        .await?
-    {
-        Response::Text { text, .. } => text,
-        Response::Error { message, .. } => {
-            let _ = std::fs::remove_file(registry.join(format!("{name}.pending")));
-            bail!("{message}");
-        }
-        Response::Image { .. } => bail!("unexpected"),
-    };
+    let token =
+        match ask(socket, Request::PinCurrent { udid: current.clone(), expect_token: now.token.clone() }).await? {
+            Response::Text { text, .. } => text,
+            Response::Error { message, .. } => {
+                let _ = std::fs::remove_file(registry.join(format!("{name}.pending")));
+                bail!("{message}");
+            }
+            Response::Image { .. } => bail!("unexpected"),
+        };
     // 6. the registration
     let after = default_state(socket).await?;
     if after.token != token {

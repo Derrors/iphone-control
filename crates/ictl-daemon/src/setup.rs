@@ -34,6 +34,7 @@ impl Daemon {
             .ok_or(ictl_l10n::tr!("手机未连接", "Phone not connected"))?;
         // the device lock held throughout: each step takes a moment
         Ok(match step {
+            SetupStepKind::PairStatus => if device.paired().await? { "paired" } else { "unpaired" }.into(),
             SetupStepKind::Pair => match device.pair("iphone-control").await {
                 Ok(()) => "paired".into(),
                 Err(ictl_device::DeviceError::PairingPending | ictl_device::DeviceError::PasswordProtected) => {

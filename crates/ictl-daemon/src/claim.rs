@@ -63,11 +63,10 @@ impl Daemon {
         if pinned.is_none() && self.restricted() {
             // the device controlled now is kept, as if selected (`instance add` is about to pin it): none other is
             // chosen, and none a named instance has or is getting
-            let keep = g
-                .device
-                .as_ref()
-                .map(|d| d.udid.clone())
-                .filter(|u| crate::instance::scan(&self.cfg.registry).is_ok_and(|s| s.reserved_by(u).is_none()));
+            let keep =
+                g.device.as_ref().map(|d| d.udid.clone()).filter(|u| {
+                    crate::instance::scan(&self.cfg.registry_dir()).is_ok_and(|s| s.reserved_by(u).is_none())
+                });
             match keep {
                 Some(u) => pinned = Some(u),
                 None => {

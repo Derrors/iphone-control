@@ -56,7 +56,7 @@ pub(crate) async fn device_setup(cli: &Cli) -> anyhow::Result<()> {
     println!("{}", ictl_l10n::trf!("  手机 {}", "  Phone {}", ictl_daemon::core::device_label(&target)));
 
     println!("{}", ictl_l10n::tr!("[2/6] 配对", "[2/6] Pairing"));
-    if device.paired().await? {
+    if setup_step(socket, &device.udid, SetupStepKind::PairStatus).await? == "paired" {
         println!("{}", ictl_l10n::tr!("  已配对", "  Already paired"));
     } else {
         println!(
@@ -228,6 +228,7 @@ async fn setup_step(socket: &Path, udid: &str, step: SetupStepKind) -> anyhow::R
     };
     let device = ictl_device::Device::find(Some(udid)).await?;
     Ok(match step {
+        SetupStepKind::PairStatus => if device.paired().await? { "paired" } else { "unpaired" }.into(),
         SetupStepKind::Pair => match device.pair("iphone-control").await {
             Ok(()) => "paired".into(),
             Err(ictl_device::DeviceError::PairingPending | ictl_device::DeviceError::PasswordProtected) => {

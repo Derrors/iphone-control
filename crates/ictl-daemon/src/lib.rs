@@ -576,6 +576,39 @@ mod tests {
     use super::*;
 
     /// The whole way through the socket: a task opened by a client holds the phone until its connection closes
+    /// `PinCurrent` reaches the daemon whole over its socket: its device isn't `expect_udid`, which every request's
+    /// options take off before the request is read (docs/dev/multi-instance-plan.md 4.4)
+    #[tokio::test]
+    async fn pin_current_keeps_its_device_over_the_socket() {
+        let local = tokio::task::LocalSet::new();
+        local
+            .run_until(async {
+                let (d, dir) = core::tests::test_daemon("pin-socket");
+                let socket = dir.join("ctl.sock");
+                let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+                let daemon = d.clone();
+                tokio::task::spawn_local(async move {
+                    while let Ok((s, _)) = listener.accept().await {
+                        tokio::task::spawn_local(serve_conn(daemon.clone(), s));
+                    }
+                });
+                let req = protocol::Request::PinCurrent {
+                    udid: "00008150-000C".into(),
+                    expect_token: d.selection_token(),
+                };
+                let line = serde_json::to_string(&req).unwrap();
+                assert!(line.contains(r#""udid":"00008150-000C""#) && !line.contains("expect_udid"), "{line}");
+                let r = protocol::call(&socket, &req, None).await.unwrap();
+                // read whole: refused for the device (none controlled here), not for a field gone missing
+                assert!(
+                    matches!(&r, protocol::Response::Error { message, .. } if message.contains("00008150-000C") && !message.contains("missing field")),
+                    "{r:?}"
+                );
+                std::fs::remove_dir_all(dir).unwrap();
+            })
+            .await;
+    }
+
     /// While an update is being prepared (its intent written) no task is opened; the count of tasks being opened is
     /// back to none either way, and once the intent goes a task opens again (docs/dev/multi-instance-plan.md 5.3)
     #[tokio::test]

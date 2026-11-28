@@ -348,6 +348,7 @@ fn invocation(args: impl IntoIterator<Item = std::ffi::OsString>) -> ictl_daemon
             _ => inv.data_dir = Some(v.into()),
         }
     }
+    inv.service = command.as_ref().is_some_and(|c| c == "daemon" || c == "viewer");
     if command.is_none_or(|c| c != "mcp") {
         return inv;
     }
@@ -484,6 +485,9 @@ async fn run(named: Option<String>) -> anyhow::Result<()> {
         }
         Command::Instance { action } => instance_cmd::run(&cli.socket, named.as_deref(), action).await,
         Command::Doctor => print_text(&cli.socket, Request::Doctor).await,
+        // a named instance's setup is its phone's: the guide's other parts (language, proxy, the background service,
+        // MCP registration) are the default instance's, and its services are `instance add`'s
+        Command::Setup { .. } if named.is_some() => setup::device_setup(&cli).await,
         Command::Setup { reconfigure } => guide::setup(&cli, reconfigure).await,
         Command::Service { action } => {
             refuse_for_named(named.as_deref(), "instance")?;
@@ -779,6 +783,8 @@ mod tests {
         assert_eq!(i.socket.as_deref(), Some(Path::new("/s")));
         assert_eq!(i.data_dir.as_deref(), Some(Path::new("/d")));
         assert_eq!(inv(&["--instance=phone", "devices"]).instance.as_deref(), Some("phone"));
+        assert!(inv(&["daemon"]).service && inv(&["--data-dir", "/d", "viewer"]).service, "a service's role");
+        assert!(!inv(&["status"]).service && !inv(&["mcp"]).service);
         let after = inv(&["task", "run", "--instance", "x"]);
         assert!(after.instance.is_none() && after.socket.is_none());
         use clap::Parser;

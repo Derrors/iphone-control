@@ -309,6 +309,10 @@ pub struct Invocation {
     pub data_dir: Option<PathBuf>,
     /// `mcp --local` (or the control page's `mcp --task-token-file`): connect to `--socket`, whatever the settings say
     pub local: bool,
+    /// `daemon` or `viewer`: a service's role, an instance only by `--instance` (the default instance's units read
+    /// the shared settings into their environment, and an `IPHONE_CONTROL_INSTANCE` there must not turn them into
+    /// another instance)
+    pub service: bool,
 }
 
 /// The settings `mcp --local` never takes, from the files or the environment: they would send it elsewhere
@@ -351,7 +355,7 @@ pub fn resolve(
     let shared_get = |k: &str| shared.iter().find(|(n, _)| n == k).map(|(_, v)| v.clone()).filter(|v| !v.is_empty());
     let name = match &inv.instance {
         Some(n) => Some(n.clone()),
-        None if inv.socket.is_some() => None,
+        None if inv.socket.is_some() || inv.service => None,
         None => real(env::INSTANCE).or_else(|| shared_get(env::INSTANCE)),
     };
     let name = match name {
@@ -624,6 +628,20 @@ mod tests {
         assert_eq!(run(&same, &[], &[], &dir).unwrap().name.as_deref(), Some("ipad"));
         let dd = Invocation { data_dir: Some("/elsewhere".into()), ..ipad.clone() };
         assert!(run(&dd, &[], &[], &dir).unwrap_err().contains("--data-dir"));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// A service's `daemon` or `viewer` is a named instance only by `--instance`: the default instance's unit reads
+    /// the shared settings into its environment, and an instance named there doesn't turn it into another
+    #[test]
+    fn a_service_is_an_instance_by_its_command_line_only() {
+        let (dir, _) = registry_with("ipad", &[]);
+        let service = Invocation { service: true, ..Default::default() };
+        let r = run(&service, &[(env::INSTANCE, "ipad")], &[(env::INSTANCE, "ipad")], &dir).unwrap();
+        assert_eq!(r.name, None);
+        assert!(r.unset.contains(&env::INSTANCE.to_string()));
+        let named = Invocation { instance: Some("ipad".into()), ..service };
+        assert_eq!(run(&named, &[], &[], &dir).unwrap().name.as_deref(), Some("ipad"));
         std::fs::remove_dir_all(dir).unwrap();
     }
 

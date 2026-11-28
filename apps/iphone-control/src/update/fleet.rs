@@ -848,7 +848,7 @@ fn dpkg_locked(files: &[PathBuf], locks: &Path) -> Option<bool> {
     let mut ids = Vec::new();
     for f in files {
         match std::fs::metadata(f) {
-            Ok(m) => ids.push((libc::major(m.dev()) as u64, libc::minor(m.dev()) as u64, m.ino())),
+            Ok(m) => ids.push(dev_parts(m.dev(), m.ino())),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
             Err(_) => return None,
         }
@@ -858,6 +858,14 @@ fn dpkg_locked(files: &[PathBuf], locks: &Path) -> Option<bool> {
     }
     let list = std::fs::read_to_string(locks).ok()?;
     Some(locks_hold(&list, &ids))
+}
+
+/// A file's (major, minor, inode) as `/proc/locks` names it, from its device number as Linux encodes it (`/proc/locks`
+/// is Linux's; elsewhere the lock files aren't there)
+fn dev_parts(dev: u64, ino: u64) -> (u64, u64, u64) {
+    let major = ((dev >> 8) & 0xfff) | ((dev >> 32) & !0xfff);
+    let minor = (dev & 0xff) | ((dev >> 12) & !0xff);
+    (major, minor, ino)
 }
 
 /// Whether `/proc/locks` lists a lock on one of `files` (major, minor, inode)
@@ -1280,6 +1288,9 @@ mod tests {
     /// dpkg's lock is seen in `/proc/locks` by its file's device and inode, as a holder or a waiter
     #[test]
     fn dpkg_s_lock_is_found_in_proc_locks() {
+        // Linux's device numbers: 8:2 is 0x802, 259:3 (an NVMe partition) is 0x10303
+        assert_eq!(dev_parts(0x802, 131), (8, 2, 131));
+        assert_eq!(dev_parts(0x10303, 5), (259, 3, 5));
         let locks = "1: POSIX  ADVISORY  WRITE 1234 08:02:131 0 EOF\n2: FLOCK  ADVISORY  WRITE 99 fd:01:7 0 EOF\n2: -> FLOCK  ADVISORY  WRITE 100 fd:01:9 0 EOF\n";
         assert!(locks_hold(locks, &[(8, 2, 131)]));
         assert!(locks_hold(locks, &[(0xfd, 1, 9)]), "a waiter names it too");

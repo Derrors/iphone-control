@@ -295,8 +295,8 @@ impl McpServer {
                     text += &ictl_l10n::trf!("\n--- 操作后的界面 ---\n{t}", "\n--- Screen after the action ---\n{t}");
                     "ok"
                 }
-                Response::Image { jpeg_base64, caption } if matches!(read, Request::Screenshot { .. }) => {
-                    image = Some((jpeg_base64, caption));
+                Response::Image { jpeg_base64, caption, geometry } if matches!(read, Request::Screenshot { .. }) => {
+                    image = Some((jpeg_base64, caption, geometry));
                     "ok"
                 }
                 Response::Error { message, .. } => {
@@ -318,12 +318,18 @@ impl McpServer {
             );
         }
         let mut blocks = vec![ContentBlock::text(text)];
-        if let Some((jpeg, caption)) = image {
+        let mut image_geometry = None;
+        if let Some((jpeg, caption, geometry)) = image {
             blocks.push(ContentBlock::image(jpeg, "image/jpeg"));
             blocks.push(ContentBlock::text(caption));
+            image_geometry = geometry;
         }
         let mut result = if failed { CallToolResult::error(blocks) } else { CallToolResult::success(blocks) };
         result = with_element_data(result, elements);
+        if let Some(g) = image_geometry {
+            let data = result.structured_content.get_or_insert_with(|| json!({}));
+            data["screenshot"] = json!(g);
+        }
         if let Some(input) = input {
             let data = result.structured_content.get_or_insert_with(|| json!({}));
             data["delivery"] = json!(input.delivery);

@@ -365,13 +365,20 @@ fn a_tap_by_text_scrolls_within_bounds() {
         index: 0,
         max_age_ms: 0,
         scroll: Some(crate::protocol::ScrollSearch { down: true, max }),
+        selector: crate::protocol::ElementSelector::default(),
     };
     for (max, ok) in
         [(0, false), (1, true), (crate::protocol::MAX_SEARCH_SCROLLS, true), (16, false), (u32::MAX, false)]
     {
         assert_eq!(check_request(&tap(max)).is_ok(), ok, "{max}");
     }
-    let plain = Request::TapElement { text: "x".into(), index: 0, max_age_ms: 0, scroll: None };
+    let plain = Request::TapElement {
+        text: "x".into(),
+        index: 0,
+        max_age_ms: 0,
+        scroll: None,
+        selector: crate::protocol::ElementSelector::default(),
+    };
     assert!(check_request(&plain).is_ok());
 }
 
@@ -612,7 +619,8 @@ fn an_unlock_first_is_said_on_the_answers_first_line() {
     assert_eq!(lines[1..], ["--- 操作后的界面 ---", "Button \"设置\""]);
     assert!(outcome.is_some());
     // a screenshot's caption, and an action that failed after the unlock
-    let r = with_unlock_note(Response::Image { jpeg_base64: "x".into(), caption: "430x932".into() }, took);
+    let r =
+        with_unlock_note(Response::Image { jpeg_base64: "x".into(), caption: "430x932".into(), geometry: None }, took);
     assert!(
         matches!(&r, Response::Image { caption, .. } if caption.starts_with("430x932") && caption.contains("14.1"))
     );

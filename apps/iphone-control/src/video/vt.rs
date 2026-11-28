@@ -376,6 +376,24 @@ fn h264(w: u32, h: u32, qp: u8, sink: Sink) -> Result<(Encoder, bool), String> {
             set(s, unsafe { kVTCompressionPropertyKey_MaxFrameDelayCount }, number_i32(0).ptr(), "MaxFrameDelayCount");
         let _ =
             set(s, unsafe { kVTCompressionPropertyKey_ExpectedFrameRate }, number_i32(60).ptr(), "ExpectedFrameRate");
+        // Tag VUI colorimetry explicitly (BT.709/sRGB primaries, sRGB transfer, BT.709 matrix) to match decoded JPEG
+        // frames and prevent browsers from decoding untagged H.264 as Rec.601 without oversaturating sRGB content on
+        // wide-gamut displays. Looked up at runtime for older macOS.
+        for (prop, preferred, fallback) in [
+            (c"kVTCompressionPropertyKey_ColorPrimaries", c"kCVImageBufferColorPrimaries_ITU_R_709_2", None),
+            (
+                c"kVTCompressionPropertyKey_TransferFunction",
+                c"kCVImageBufferTransferFunction_sRGB",
+                Some(c"kCVImageBufferTransferFunction_ITU_R_709_2"),
+            ),
+            (c"kVTCompressionPropertyKey_YCbCrMatrix", c"kCVImageBufferYCbCrMatrix_ITU_R_709_2", None),
+        ] {
+            if let Some(k) = key(prop)
+                && let Some(v) = key(preferred).or_else(|| fallback.and_then(key))
+            {
+                let _ = set(s, k, v, "Colorimetry");
+            }
+        }
         if let (Some(min), Some(max)) =
             (key(c"kVTCompressionPropertyKey_MinAllowedFrameQP"), key(c"kVTCompressionPropertyKey_MaxAllowedFrameQP"))
         {

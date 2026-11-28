@@ -9,9 +9,10 @@ use std::time::Duration;
 use serde_json::{Value, json};
 use tokio::io::AsyncWriteExt;
 
+use super::events::personalize_event;
 use super::pipe::{Pipe, streamed};
 use super::server::{Reply, in_lang, json_reply, reply, reply_with, stream};
-use super::{Ctx, FeedGuard, Head, protocol, sse};
+use super::{Ctx, FeedGuard, Head, Pass, protocol, sse};
 
 /// `GET /stream` (MJPEG) or `/video` (H.264, or the phone's own HEVC with `src=device`) of the device the page shows
 pub(super) async fn picture(ctx: Arc<Ctx>, head: &Head, feed: Option<FeedGuard>) -> Reply {
@@ -123,6 +124,53 @@ where
     Fut: Future<Output = ()> + Send + 'static,
 {
     stream("application/octet-stream", streamed(move |pipe| in_lang(lang, handler(pipe))))
+}
+
+/// `GET /api/events`: on-demand, diff-deduplicated device/daemon/status/tasks SSE stream shared across pages.
+pub(super) fn state_events(ctx: Arc<Ctx>, head: &Head, pass: &Pass) -> Reply {
+    let lang = head.lang;
+    let login = pass.who.as_ref().map(|w| (w.name.clone(), w.role.name().to_owned()));
+    stream(
+        "text/event-stream",
+        streamed(move |mut pipe| {
+            in_lang(lang, async move {
+                let (initial, mut rx) = ctx.events.subscribe(&ctx);
+                let login_ref = login.as_ref().map(|(n, r)| (n.as_str(), r.as_str()));
+                for ev in initial {
+                    let frame = personalize_event(&ev, login_ref).sse_frame();
+                    if pipe.write_all(frame.as_bytes()).await.is_err() {
+                        return;
+                    }
+                }
+                loop {
+                    tokio::select! {
+                        msg = rx.recv() => match msg {
+                            Ok(ev) => {
+                                let frame = personalize_event(&ev, login_ref).sse_frame();
+                                if pipe.write_all(frame.as_bytes()).await.is_err() {
+                                    return;
+                                }
+                            }
+                            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                                for ev in ctx.events.snapshot() {
+                                    let frame = personalize_event(&ev, login_ref).sse_frame();
+                                    if pipe.write_all(frame.as_bytes()).await.is_err() {
+                                        return;
+                                    }
+                                }
+                            }
+                            Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
+                        },
+                        _ = tokio::time::sleep(Duration::from_secs(15)) => {
+                            if pipe.write_all(b": ping\n\n").await.is_err() {
+                                return;
+                            }
+                        }
+                    }
+                }
+            })
+        }),
+    )
 }
 
 /// The task's events so far, then new ones as they come (from the daemon), as server-sent events, until it is done

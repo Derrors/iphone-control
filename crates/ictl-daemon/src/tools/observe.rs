@@ -48,9 +48,10 @@ impl Daemon {
         } else {
             self.ensure_unlocked(g).await?;
         }
-        let els = self.tree(g, max_age).await?.elements;
+        let tree = self.tree(g, max_age).await?;
+        let els = &tree.elements;
         let shown: Vec<&elements::Element> =
-            if filter.is_empty() { els.iter().collect() } else { elements::filter(&els, filter) };
+            if filter.is_empty() { els.iter().collect() } else { elements::filter(els, filter) };
         let lines: Vec<_> = shown.iter().take(limit).map(|e| e.describe()).collect();
         let matched_count = shown.len();
         let truncated = matched_count > limit;
@@ -58,6 +59,8 @@ impl Daemon {
             elements: shown.iter().take(limit).map(|e| element_data(e)).collect(),
             matched_count: Some(matched_count),
             truncated: Some(truncated),
+            incomplete: tree.incomplete.then_some(true),
+            incomplete_reason: tree.incomplete_reason.map(|r| r.as_str().to_owned()),
         };
         let more = if truncated {
             ictl_l10n::trf!(
@@ -68,16 +71,20 @@ impl Daemon {
         } else {
             String::new()
         };
-        let limited = self.snapshot_note(g);
+        let limited = self.snapshot_note(g, &tree);
         Ok((
             if lines.is_empty() { no_elements_text(filter, els.len()) } else { lines.join("\n") } + &more + &limited,
             data,
         ))
     }
 
-    /// 上一次读的元素树受了快照上限的限制时，接在结果后面的说明（含换行）；没有限制时为空
-    pub(super) fn snapshot_note(&self, g: &mut Inner) -> String {
-        self.wda(g).and_then(|w| w.snapshot_note()).map(|n| format!("\n{n}")).unwrap_or_default()
+    /// 上一次读的元素树受了快照上限或原生无障碍截断时，接在结果后面的说明（含换行）；没有限制时为空
+    pub(super) fn snapshot_note(&self, g: &mut Inner, tree: &Tree) -> String {
+        self.wda(g)
+            .and_then(|w| w.snapshot_note())
+            .or_else(|| incomplete_note(tree))
+            .map(|n| format!("\n{n}"))
+            .unwrap_or_default()
     }
 
     /// 等界面稳定，最多等 `max`：
@@ -252,11 +259,12 @@ impl Daemon {
         })
     }
 
-    /// Wait for text to appear or to be absent from a successfully read screen.
+    /// Wait for text (or selector match) to appear or to be absent from a successfully read screen.
     pub(crate) async fn wait_for(
         &self,
         g: &mut Inner,
         text: &str,
+        selector: &crate::protocol::ElementSelector,
         timeout: Duration,
         disappeared: bool,
         may_continue: &mut dyn FnMut() -> bool,
@@ -265,15 +273,19 @@ impl Daemon {
         let t0 = Instant::now();
         let w = match self.route(g) {
             Route::Wda(w) => w,
-            Route::Native => return Box::pin(self.native_wait_for(g, text, timeout, disappeared, may_continue)).await,
+            Route::Native => {
+                return Box::pin(self.native_wait_for(g, text, selector, timeout, disappeared, may_continue)).await;
+            }
             Route::Hid | Route::Unavailable => return Err(wda_unavailable(g)),
         };
+        let sel = ui_selector(text, selector);
+        let desc = describe_selector(text, selector);
         // 轮询时不等界面空闲：页面还在加载、播放动画时每次读树也只要约 0.2 秒
         w.begin_polling().await?;
         let r = async {
             loop {
                 let tree = w.tree().await?;
-                let why = match wait_match(&tree, text, disappeared, t0.elapsed()) {
+                let why = match wait_match_matching(&tree, sel, &desc, disappeared, t0.elapsed()) {
                     Some(result) if !disappeared => return Ok(result),
                     // the lock screen lacks the text too: asked only when it would count as gone
                     Some(result) => match w.check_lock(None, true).await {
@@ -282,17 +294,17 @@ impl Daemon {
                         Ok(_) => Waited::Covered,
                         // not known whether locked: not gone yet, asked again on the next read
                         Err(e) => {
-                            tracing::debug!("lock state while waiting for {text:?} to disappear: {e}");
+                            tracing::debug!("lock state while waiting for {desc:?} to disappear: {e}");
                             Waited::Covered
                         }
                     },
-                    None => Waited::after(&tree, text, disappeared),
+                    None => Waited::after_matching(&tree, sel, disappeared),
                 };
                 if t0.elapsed() >= timeout {
-                    return Err(wait_timeout(text, timeout, why));
+                    return Err(wait_timeout(&desc, !selector.is_empty(), timeout, why));
                 }
                 if !may_continue() {
-                    return Err(wait_interrupted(text, t0.elapsed()));
+                    return Err(wait_interrupted(&desc, t0.elapsed()));
                 }
                 tokio::time::sleep(Duration::from_millis(300).min(timeout.saturating_sub(t0.elapsed()))).await;
             }
@@ -312,14 +324,25 @@ pub(super) fn wait_interrupted(text: &str, waited: Duration) -> Error {
     ))
 }
 
+#[cfg(test)]
 pub(super) fn wait_match(tree: &Tree, text: &str, disappeared: bool, elapsed: Duration) -> Option<String> {
-    let matches = elements::find_shown(&tree.elements, text);
+    wait_match_matching(tree, elements::Selector::text(text), text, disappeared, elapsed)
+}
+
+pub(super) fn wait_match_matching(
+    tree: &Tree,
+    sel: elements::Selector<'_>,
+    desc: &str,
+    disappeared: bool,
+    elapsed: Duration,
+) -> Option<String> {
+    let matches = elements::find_shown_matching(&tree.elements, sel);
     let elapsed = elapsed.as_secs_f64();
     if disappeared {
         if matches.is_empty() && !tree.incomplete && !tree.elements.is_empty() {
             return Some(ictl_l10n::trf!(
-                "已消失「{text}」({elapsed:.1} 秒)",
-                "Disappeared: \"{text}\" ({elapsed:.1} s)"
+                "已消失「{desc}」({elapsed:.1} 秒)",
+                "Disappeared: \"{desc}\" ({elapsed:.1} s)"
             ));
         }
         return None;
@@ -336,7 +359,7 @@ pub(super) enum Waited {
     NotAppeared,
     /// Waiting for it to disappear: it was read, still there
     Present,
-    /// Not seen, but the read can't tell it is gone: nothing read, or cut short ([`wait_match`])
+    /// Not seen, but the read can't tell it is gone: nothing read, or cut short ([`wait_match_matching`])
     Unread,
     /// Not seen, but something is over the screen (notification center, control center, a lock screen not known
     /// by its marks), or whether the phone is locked couldn't be found out
@@ -344,11 +367,16 @@ pub(super) enum Waited {
 }
 
 impl Waited {
-    /// A read where the text didn't count as appeared, or as gone ([`wait_match`] gave nothing)
+    /// A read where the text didn't count as appeared, or as gone ([`wait_match_matching`] gave nothing)
+    #[cfg(test)]
     pub(super) fn after(tree: &Tree, text: &str, disappeared: bool) -> Self {
+        Self::after_matching(tree, elements::Selector::text(text), disappeared)
+    }
+
+    pub(super) fn after_matching(tree: &Tree, sel: elements::Selector<'_>, disappeared: bool) -> Self {
         if !disappeared {
             Self::NotAppeared
-        } else if elements::find_shown(&tree.elements, text).is_empty() {
+        } else if elements::find_shown_matching(&tree.elements, sel).is_empty() {
             Self::Unread
         } else {
             Self::Present
@@ -356,36 +384,44 @@ impl Waited {
     }
 }
 
-pub(super) fn wait_timeout(text: &str, timeout: Duration, why: Waited) -> crate::error::Error {
+pub(super) fn wait_timeout(text: &str, composite: bool, timeout: Duration, why: Waited) -> crate::error::Error {
     let seconds = timeout.as_secs_f64();
+    let target_en = if composite { text.to_owned() } else { format!("\"{text}\"") };
     match why {
         Waited::NotAppeared => {}
         Waited::Present => {
             return ictl_l10n::trf!(
                 "{seconds:.1} 秒内「{text}」没消失,截图看看屏幕",
-                "\"{text}\" did not disappear within {seconds:.1} s; take a screenshot"
+                "{target_en} did not disappear within {seconds:.1} s; take a screenshot"
             )
             .into();
         }
         Waited::Unread => {
             return ictl_l10n::trf!(
                 "{seconds:.1} 秒内无法确认「{text}」已消失:界面没读到或没读全(元素太多、读得太慢),截图看看屏幕",
-                "Couldn't confirm within {seconds:.1} s that \"{text}\" disappeared: the screen wasn't read, or not in full (too many elements, a slow read); take a screenshot"
+                "Couldn't confirm within {seconds:.1} s that {target_en} disappeared: the screen wasn't read, or not in full (too many elements, a slow read); take a screenshot"
             )
             .into();
         }
         Waited::Covered => {
             return ictl_l10n::trf!(
                 "{seconds:.1} 秒内无法确认「{text}」已消失:屏幕被通知中心、控制中心或锁屏挡着,或查不到是否锁屏,截图看看屏幕",
-                "Couldn't confirm within {seconds:.1} s that \"{text}\" disappeared: notification center, control center or the lock screen is over the screen, or the lock state couldn't be found out; take a screenshot"
+                "Couldn't confirm within {seconds:.1} s that {target_en} disappeared: notification center, control center or the lock screen is over the screen, or the lock state couldn't be found out; take a screenshot"
             )
             .into();
         }
     }
-    ictl_l10n::trf!(
-        "{seconds:.0} 秒内没出现包含 \"{text}\" 的元素,截图看看屏幕",
-        "No element containing \"{text}\" appeared within {seconds:.0} s; take a screenshot to look at the screen"
-    )
+    if composite {
+        ictl_l10n::trf!(
+            "{seconds:.0} 秒内没出现匹配 {text} 的元素,截图看看屏幕",
+            "No element matching {text} appeared within {seconds:.0} s; take a screenshot to look at the screen"
+        )
+    } else {
+        ictl_l10n::trf!(
+            "{seconds:.0} 秒内没出现包含 \"{text}\" 的元素,截图看看屏幕",
+            "No element containing \"{text}\" appeared within {seconds:.0} s; take a screenshot to look at the screen"
+        )
+    }
     .into()
 }
 
@@ -425,9 +461,37 @@ mod wait_tests {
         // read even though cut short: it is still there
         assert_eq!(Waited::after(&tree, "Clock", true), Waited::Present);
         assert_eq!(Waited::after(&Tree::default(), "Timer", true), Waited::Unread);
-        let msg = |w| wait_timeout("Clock", Duration::from_secs(2), w).to_string();
+        let msg = |w| wait_timeout("Clock", false, Duration::from_secs(2), w).to_string();
         let all = [Waited::NotAppeared, Waited::Present, Waited::Unread, Waited::Covered].map(msg);
         assert!(all.iter().collect::<std::collections::HashSet<_>>().len() == 4, "{all:?}");
+        let composite_msg = wait_timeout("kind=Button", true, Duration::from_secs(2), Waited::NotAppeared).to_string();
+        assert!(
+            !composite_msg.contains("\"kind=Button\""),
+            "composite selector should not be double-quoted: {composite_msg}"
+        );
+        assert!(composite_msg.contains("kind=Button"), "{composite_msg}");
+    }
+
+    #[test]
+    fn incomplete_note_reports_each_native_ax_cutoff_reason() {
+        let mut tree = Tree::default();
+        assert_eq!(incomplete_note(&tree), None);
+        tree.incomplete = true;
+        let generic = incomplete_note(&tree).unwrap();
+        let mut seen = std::collections::HashSet::from([generic]);
+        for reason in [
+            elements::IncompleteReason::ElementLimit,
+            elements::IncompleteReason::Timeout,
+            elements::IncompleteReason::DepthLimit,
+            elements::IncompleteReason::Unreadable,
+            elements::IncompleteReason::OverlaysIncomplete,
+        ] {
+            tree.incomplete_reason = Some(reason);
+            let note = incomplete_note(&tree).unwrap();
+            assert!(!note.is_empty());
+            seen.insert(note);
+        }
+        assert_eq!(seen.len(), 6, "each cutoff reason produces a distinct note");
     }
 }
 
@@ -654,6 +718,42 @@ pub(super) const TAP_ALERT_EN: &str = "first tap a button on the alert with ipho
 /// 「屏幕上有系统弹窗「…」挡着」（客户端据 [`crate::protocol::Outcome::alert_reported`] 判断）
 pub(super) fn blocking(text: &str) -> String {
     ictl_l10n::trf!("屏幕上有系统弹窗「{text}」挡着", "a system alert is on screen: “{text}”")
+}
+
+/// Human-readable note when a native accessibility walk (or truncated tree) stopped before the end.
+pub(super) fn incomplete_note(tree: &Tree) -> Option<String> {
+    if !tree.incomplete && tree.incomplete_reason.is_none() {
+        return None;
+    }
+    Some(
+        match tree.incomplete_reason {
+            Some(elements::IncompleteReason::ElementLimit) => ictl_l10n::tr!(
+                "注意：本次读界面触及元素数上限，后面的元素未读全；没找到目标时请截图确认",
+                "Note: this screen read hit the element limit, so later elements may be missing; take a screenshot if the target is absent"
+            ),
+            Some(elements::IncompleteReason::Timeout) => ictl_l10n::tr!(
+                "注意：本次读界面超时，只读出了一部分元素；没找到目标时请截图确认",
+                "Note: this screen read timed out, so only part of the tree was read; take a screenshot if the target is absent"
+            ),
+            Some(elements::IncompleteReason::DepthLimit) => ictl_l10n::tr!(
+                "注意：界面层级过深，深层元素未读全；没找到目标时请截图确认",
+                "Note: the view hierarchy exceeded the depth limit, so nested elements may be missing; take a screenshot if the target is absent"
+            ),
+            Some(elements::IncompleteReason::Unreadable) => ictl_l10n::tr!(
+                "注意：部分界面元素未能读出，元素树可能不完整；没找到目标时请截图确认",
+                "Note: some elements could not be read, so the tree may be incomplete; take a screenshot if the target is absent"
+            ),
+            Some(elements::IncompleteReason::OverlaysIncomplete) => ictl_l10n::tr!(
+                "注意：系统浮层（弹窗/横幅）未读全；如界面被弹窗挡住，请截图确认",
+                "Note: system overlays (alerts/banners) could not be read in full; take a screenshot if a dialog may be covering the screen"
+            ),
+            None => ictl_l10n::tr!(
+                "注意：本次界面未读全，部分元素可能遗漏；没找到目标时请截图确认",
+                "Note: this screen read was incomplete, so some elements may be missing; take a screenshot if the target is absent"
+            ),
+        }
+        .to_owned(),
+    )
 }
 
 /// 树里有弹窗就返回提醒

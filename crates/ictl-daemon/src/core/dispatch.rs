@@ -518,9 +518,15 @@ impl Daemon {
             }
             Request::Tap { x, y, count } => self.tap(g, x, y, count, view).await,
             Request::TapSequence { points } => self.tap_sequence(g, &points).await,
-            Request::TapElement { ref text, index, max_age_ms, scroll } => {
-                let age = Duration::from_millis(max_age_ms);
-                let r = self.tap_element(g, text, index, age, scroll, &mut || may_continue(&req)).await;
+            Request::TapElement { ref text, index, max_age_ms, scroll, ref selector } => {
+                let target = crate::tools::TapTarget {
+                    text,
+                    index,
+                    max_age: Duration::from_millis(max_age_ms),
+                    scroll,
+                    selector,
+                };
+                let r = self.tap_element(g, target, &mut || may_continue(&req)).await;
                 r.map(|(t, missed)| {
                     outcome.tapped_nothing = missed;
                     // nothing was tapped: there is no "before the action" to compare the screen with, or the next
@@ -576,11 +582,13 @@ impl Daemon {
                 data = Some(crate::protocol::Data::Alert { text: alert });
                 text
             }),
-            Request::WaitFor { ref text, timeout_ms } => {
-                self.wait_for(g, text, Duration::from_millis(timeout_ms), false, &mut || may_continue(&req)).await
+            Request::WaitFor { ref text, timeout_ms, ref selector } => {
+                self.wait_for(g, text, selector, Duration::from_millis(timeout_ms), false, &mut || may_continue(&req))
+                    .await
             }
-            Request::WaitForDisappearance { ref text, timeout_ms } => {
-                self.wait_for(g, text, Duration::from_millis(timeout_ms), true, &mut || may_continue(&req)).await
+            Request::WaitForDisappearance { ref text, timeout_ms, ref selector } => {
+                self.wait_for(g, text, selector, Duration::from_millis(timeout_ms), true, &mut || may_continue(&req))
+                    .await
             }
             Request::UnlockReset => {
                 let _ = std::fs::remove_file(self.cfg.unlock_disabled_flag());
@@ -704,7 +712,9 @@ pub(super) fn with_unlock_note(r: Response, unlocked: Option<Duration>) -> Respo
     };
     match r {
         Response::Text { text, outcome, data } => Response::Text { text: add(text), outcome, data },
-        Response::Image { jpeg_base64, caption } => Response::Image { jpeg_base64, caption: add(caption) },
+        Response::Image { jpeg_base64, caption, geometry } => {
+            Response::Image { jpeg_base64, caption: add(caption), geometry }
+        }
         Response::Error { message, retry_as_gesture, failure } => {
             Response::Error { message: add(message), retry_as_gesture, failure }
         }

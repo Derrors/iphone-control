@@ -56,8 +56,13 @@ pub enum Response {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         data: Option<Data>,
     },
-    /// JPEG base64 + 说明文字（尺寸、放大倍数、坐标换算式）
-    Image { jpeg_base64: String, caption: String },
+    /// JPEG base64 + 说明文字（尺寸、放大倍数、坐标换算式）+ 结构化几何元数据
+    Image {
+        jpeg_base64: String,
+        caption: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        geometry: Option<ImageGeometry>,
+    },
     Error {
         message: String,
         /// The touch Down could not open a HID session and sent no contact report.
@@ -66,6 +71,27 @@ pub enum Response {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         failure: Option<ActionFailure>,
     },
+}
+
+/// A rectangular region in screen points
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct ImageRegion {
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+}
+
+/// Structured coordinate geometry for [`Response::Image`].
+/// An image pixel `(u, v)` corresponds to screen point `(region.x + u / coordinate_scale, region.y + v / coordinate_scale)`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ImageGeometry {
+    pub width: u32,
+    pub height: u32,
+    pub point_width: f64,
+    pub point_height: f64,
+    pub region: ImageRegion,
+    pub coordinate_scale: f64,
 }
 
 /// Delivery of the requested input. Acknowledging the input does not verify its effect on screen.
@@ -123,6 +149,12 @@ pub enum Data {
         matched_count: Option<usize>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         truncated: Option<bool>,
+        /// True when the underlying accessibility read stopped before reaching the end of the tree.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        incomplete: Option<bool>,
+        /// Machine-readable reason when `incomplete` is true (e.g. `element_limit`, `timeout`).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        incomplete_reason: Option<String>,
     },
     ScrollCollection {
         stop_reason: ScrollStop,

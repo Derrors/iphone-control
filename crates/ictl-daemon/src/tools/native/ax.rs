@@ -347,7 +347,7 @@ impl Daemon {
     ) -> crate::error::Result<Tree> {
         let (src, size, _) = self.ax_render(g, s).await?;
         let mut tree = Tree::of(&src, size);
-        tree.incomplete |= !s.app_complete || !s.overlays_complete;
+        apply_ax_completeness(&mut tree, s);
         Ok(tree)
     }
 
@@ -358,7 +358,10 @@ impl Daemon {
         mut s: ictl_device::ax::AxScreen,
     ) -> crate::error::Result<Tree> {
         if let Some(t) = g.tunnel.as_mut() {
-            (s.overlays, s.overlays_complete) = t.ax_overlays(s.app_pid).await;
+            let (overlays, overlays_cutoff) = t.ax_overlays_report(s.app_pid).await;
+            s.overlays = overlays;
+            s.overlays_complete = overlays_cutoff.is_none();
+            s.overlays_cutoff = overlays_cutoff;
         }
         self.snapshot_tree(g, &s).await
     }
@@ -408,25 +411,28 @@ impl Daemon {
         (note, None)
     }
 
-    /// Text appearing on screen, natively: the tree read again every 0.3 s
+    /// Text (or selector match) appearing on screen, natively: the tree read again every 0.3 s
     pub(crate) async fn native_wait_for(
         &self,
         g: &mut Inner,
         text: &str,
+        selector: &crate::protocol::ElementSelector,
         timeout: Duration,
         disappeared: bool,
         may_continue: &mut dyn FnMut() -> bool,
     ) -> crate::error::Result<String> {
         use super::observe::Waited;
         let t0 = Instant::now();
+        let sel = ui_selector(text, selector);
+        let desc = describe_selector(text, selector);
         // lockdown's last answer, and when (None: it failed)
         let mut lock: Option<(Instant, Option<bool>)> = None;
         loop {
             let screen = self.ax_snapshot(g, AX_WAIT, true).await?;
             let (src, size, _) = self.ax_render(g, &screen).await?;
             let mut tree = Tree::of(&src, size);
-            tree.incomplete |= !screen.app_complete || !screen.overlays_complete;
-            let why = match super::observe::wait_match(&tree, text, disappeared, t0.elapsed()) {
+            apply_ax_completeness(&mut tree, &screen);
+            let why = match super::observe::wait_match_matching(&tree, sel, &desc, disappeared, t0.elapsed()) {
                 Some(result) if !disappeared => return Ok(result),
                 Some(result) => {
                     // the read first (costs nothing more), then lockdown: it says locked before the read shows the
@@ -440,7 +446,7 @@ impl Daemon {
                         Some((at, answer)) if at.elapsed() < LOCK_ASK_EVERY => answer,
                         _ => {
                             let answer = self.native_locked(g).await.inspect_err(|e| {
-                                tracing::debug!("lock state while waiting for {text:?} to disappear: {e}")
+                                tracing::debug!("lock state while waiting for {desc:?} to disappear: {e}")
                             });
                             let answer = answer.ok();
                             lock = Some((Instant::now(), answer));
@@ -453,13 +459,13 @@ impl Daemon {
                         _ => Waited::Covered,
                     }
                 }
-                None => Waited::after(&tree, text, disappeared),
+                None => Waited::after_matching(&tree, sel, disappeared),
             };
             if t0.elapsed() >= timeout {
-                return Err(super::observe::wait_timeout(text, timeout, why));
+                return Err(super::observe::wait_timeout(&desc, !selector.is_empty(), timeout, why));
             }
             if !may_continue() {
-                return Err(super::observe::wait_interrupted(text, t0.elapsed()));
+                return Err(super::observe::wait_interrupted(&desc, t0.elapsed()));
             }
             tokio::time::sleep(Duration::from_millis(300).min(timeout.saturating_sub(t0.elapsed()))).await;
         }
@@ -472,6 +478,27 @@ impl Daemon {
             Some(text) => (alert_msg(&text), Some(text)),
             None => (String::new(), None),
         })
+    }
+}
+
+pub(super) fn apply_ax_completeness(tree: &mut Tree, s: &ictl_device::ax::AxScreen) {
+    tree.app_pid = Some(s.app_pid);
+    tree.incomplete |= !s.app_complete || !s.overlays_complete;
+    if tree.incomplete_reason.is_none() {
+        tree.incomplete_reason = s
+            .app_cutoff
+            .map(cutoff_reason)
+            .or_else(|| (!s.app_complete).then_some(elements::IncompleteReason::Unreadable))
+            .or_else(|| (!s.overlays_complete).then_some(elements::IncompleteReason::OverlaysIncomplete));
+    }
+}
+
+fn cutoff_reason(c: ictl_ax::WalkCutoff) -> elements::IncompleteReason {
+    match c {
+        ictl_ax::WalkCutoff::ElementLimit => elements::IncompleteReason::ElementLimit,
+        ictl_ax::WalkCutoff::Timeout => elements::IncompleteReason::Timeout,
+        ictl_ax::WalkCutoff::DepthLimit => elements::IncompleteReason::DepthLimit,
+        ictl_ax::WalkCutoff::Unreadable => elements::IncompleteReason::Unreadable,
     }
 }
 

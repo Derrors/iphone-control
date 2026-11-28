@@ -18,6 +18,21 @@ const STARTING_HINT = {
 };
 let statusTimerId = 0, statusSequence = 0;
 function refreshStatusSoon() { clearTimeout(statusTimerId); statusTimerId = setTimeout(loadDeviceState, 600); }
+function renderDeviceStateUI() {
+  $('#pane-dev').dataset.noDevice = String(S.mode === 'live' && !S.udid);
+  renderDevices(); renderChips(); renderFeed(); if (S.devTab === 'status') renderStatusPanel();
+}
+function applyDaemonState(v) {
+  S.daemon = v;
+  S.devices = v?.devices || []; S.devicesFixed = !!v?.fixed; S.devicesErr = ''; S.statusErr = '';
+  renderDeviceStateUI();
+}
+function applyStatusState(v) {
+  if (v?.busy) { refreshStatusSoon(); return; }
+  S.dstatus = v;
+  S.statusErr = '';
+  renderDeviceStateUI();
+}
 async function loadDeviceState() {
   if (S.mode === 'demo') {
     S.daemon = { state: 'Ready', device: demoDev, auto_unlock: true };
@@ -37,8 +52,7 @@ async function loadDeviceState() {
     S.statusErr = d.status === 'rejected' ? String(d.reason.message) : s.status === 'rejected' ? String(s.reason.message) : '';
     if (l.status === 'fulfilled') { S.devices = l.value.devices || []; S.devicesFixed = !!l.value.fixed; S.devicesErr = ''; } else { S.devices = []; S.devicesErr = String(l.reason.message); }
   }
-  $('#pane-dev').dataset.noDevice = String(S.mode === 'live' && !S.udid);
-  renderDevices(); renderChips(); renderFeed(); if (S.devTab === 'status') renderStatusPanel();
+  renderDeviceStateUI();
 }
 /* 新设备上还没装 WDA：用已登录的 Apple ID 签名并安装，大约 1–2 分钟 */
 async function signWda() {

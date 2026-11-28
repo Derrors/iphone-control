@@ -7,7 +7,7 @@ mod native;
 mod observe;
 mod scroll;
 
-pub(crate) use input::Stroke;
+pub(crate) use input::{Stroke, TapTarget};
 
 use std::time::{Duration, Instant};
 
@@ -57,6 +57,39 @@ pub(crate) const PASTE_RESTORE_AFTER: Duration = Duration::from_secs(45);
 const HOME_SETTLE: Duration = Duration::from_secs(2);
 /// 按电源键后最多等这么久，等 WDA 报锁屏（iPhone 12 mini 实测约 1 秒）
 const LOCK_WAIT: Duration = Duration::from_secs(3);
+
+/// Converts a protocol [`crate::protocol::ElementSelector`] + `text` into an [`elements::Selector`]
+pub(super) fn ui_selector<'a>(text: &'a str, sel: &'a crate::protocol::ElementSelector) -> elements::Selector<'a> {
+    let mode = match sel.mode {
+        crate::protocol::MatchMode::Auto => elements::MatchMode::Auto,
+        crate::protocol::MatchMode::Exact => elements::MatchMode::Exact,
+        crate::protocol::MatchMode::Contains => elements::MatchMode::Contains,
+    };
+    elements::Selector { text, kind: sel.kind.as_deref(), id: sel.id.as_deref(), mode }
+}
+
+/// Human-readable description of a selector target; matches plain `text` verbatim when no extra filters are set
+pub(super) fn describe_selector(text: &str, sel: &crate::protocol::ElementSelector) -> String {
+    if sel.is_empty() {
+        return text.to_owned();
+    }
+    let mut parts = Vec::new();
+    if !text.is_empty() {
+        parts.push(format!("\"{text}\""));
+    }
+    if let Some(kind) = sel.kind.as_deref().filter(|s| !s.is_empty()) {
+        parts.push(format!("kind={kind}"));
+    }
+    if let Some(id) = sel.id.as_deref().filter(|s| !s.is_empty()) {
+        parts.push(format!("id=\"{id}\""));
+    }
+    match sel.mode {
+        crate::protocol::MatchMode::Auto => {}
+        crate::protocol::MatchMode::Exact => parts.push("match=exact".to_owned()),
+        crate::protocol::MatchMode::Contains => parts.push("match=contains".to_owned()),
+    }
+    parts.join(", ")
+}
 
 impl Daemon {
     /// 配置了密码就在锁屏时自动解锁；没配置而手机锁着则报错（与 toolkit 一致）
@@ -381,7 +414,7 @@ impl Daemon {
         let lang = ictl_l10n::lang();
         let (png_len, processed) = (png.len(), Instant::now());
         let fetch_ms = processed.duration_since(fetched).as_millis();
-        let (jpeg, caption, thumb) = tokio::task::spawn_blocking(move || {
+        let (jpeg, caption, geometry, thumb) = tokio::task::spawn_blocking(move || {
             ictl_l10n::with_lang(lang, || imaging::answer(&png, screen, region, via))
         })
         .await
@@ -392,7 +425,11 @@ impl Daemon {
         );
         // 区域放大也记整屏：下一个操作做完后比的是整个画面
         g.dev.seen.saw_thumb(thumb);
-        Ok(Response::Image { jpeg_base64: base64::engine::general_purpose::STANDARD.encode(jpeg), caption })
+        Ok(Response::Image {
+            jpeg_base64: base64::engine::general_purpose::STANDARD.encode(jpeg),
+            caption,
+            geometry: Some(geometry),
+        })
     }
 }
 

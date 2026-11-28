@@ -149,13 +149,17 @@ async function detect() {
   if (S.mode === 'live') {
     connect(); loadAgents();
     setInterval(refreshFrame, 250);
+    startStateEvents();
     setTimeout(pollInfo, 2000);
     alertLoop();
-    setInterval(() => { if (!document.hidden) loadDeviceState(); }, 10000);
-    // 之后的任务列表随 /api/info 的轮询来
+    setInterval(() => { if (!document.hidden && !stateEventsOpen) loadDeviceState(); }, 10000);
+    // 之后的任务列表随 /api/events（或回退 /api/info）来
     adoptTask();
-    // 后台标签页不轮询（pollInfo、上面的设备状态、alertLoop 都看 document.hidden）：回到前台时马上补一次
-    document.addEventListener('visibilitychange', () => { if (!document.hidden) { loadInfo(); loadDeviceState(); } });
+    // 后台标签页断开状态流并暂停轮询（所有页面都在后台时服务端休眠），回到前台立即重连并补一次
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) { stopStateEvents(); }
+      else { startStateEvents(); loadInfo(); loadDeviceState(); }
+    });
   } else {
     S.tasks.filter(t => t.reattach).forEach(lostTask);
   }

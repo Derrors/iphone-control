@@ -81,7 +81,9 @@ pub(crate) fn elements_output_schema() -> Map<String, Value> {
             "elements": {"type": "array", "items": element,
                 "description": "the elements listed, at most limit; x/y the top left corner in points"},
             "matched_count": {"type": "integer", "description": "how many elements matched filter in this read, before limit"},
-            "truncated": {"type": "boolean", "description": "matched_count is more than limit: some weren't listed"}
+            "truncated": {"type": "boolean", "description": "matched_count is more than limit: some weren't listed"},
+            "incomplete": {"type": "boolean", "description": "the accessibility walk stopped before reading the whole screen"},
+            "incomplete_reason": {"type": "string", "description": "why the accessibility walk was incomplete (element_limit, timeout, depth_limit, unreadable, overlays_incomplete)"}
         },
         "required": ["elements"]
     });
@@ -101,8 +103,23 @@ pub fn to_result(r: Response) -> CallToolResult {
         Response::Text { text, data, .. } => {
             with_element_data(CallToolResult::success(vec![ContentBlock::text(text)]), data)
         }
-        Response::Image { jpeg_base64, caption } => {
-            CallToolResult::success(vec![ContentBlock::image(jpeg_base64, "image/jpeg"), ContentBlock::text(caption)])
+        Response::Image { jpeg_base64, caption, geometry } => {
+            let mut result = CallToolResult::success(vec![
+                ContentBlock::image(jpeg_base64, "image/jpeg"),
+                ContentBlock::text(caption),
+            ]);
+            if let Some(g) = geometry {
+                result.structured_content = Some(json!({
+                    "type": "screenshot",
+                    "width": g.width,
+                    "height": g.height,
+                    "point_width": g.point_width,
+                    "point_height": g.point_height,
+                    "region": g.region,
+                    "coordinate_scale": g.coordinate_scale,
+                }));
+            }
+            result
         }
         Response::Error { message, .. } => CallToolResult::error(vec![ContentBlock::text(message)]),
     }

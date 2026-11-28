@@ -64,6 +64,7 @@ language.addEventListener('change', () => {
  * 画面与手动操作，都经守护进程，和 MCP 工具一样排队、自动解锁、只作用于这个页面跟着的设备：
  *   GET  /stream                  → WebDriverAgent 的 MJPEG 画面
  *   GET  /api/info                → { width, height, udid, device, warning?, tasks? }  // ?tasks=1 时带上任务列表（同 GET /api/agent/tasks 的 tasks）
+ *   GET  /api/events              SSE：info | daemon | status | tasks（有订阅者时按需采样并仅在变化时推送）
  *   POST /api/tap | swipe | long_press | type | button | launch_app | terminate_app | open_url | tap_element | wait_for
  *                                 → { ok, message }
  *

@@ -52,9 +52,13 @@ pub struct AxScreen {
     pub app: Vec<Element>,
     /// Whether the walk reached the end rather than a node or time limit.
     pub app_complete: bool,
+    /// Why [`Self::app_complete`] is false, when the walk stopped early
+    pub app_cutoff: Option<ictl_ax::WalkCutoff>,
     /// What SpringBoard shows over the app (alerts, banners, its status bar); empty when SpringBoard is the app
     pub overlays: Vec<Element>,
     pub overlays_complete: bool,
+    /// Why [`Self::overlays_complete`] is false, when reading overlays stopped early
+    pub overlays_cutoff: Option<ictl_ax::WalkCutoff>,
     pub app_pid: i64,
     /// SpringBoard is the app in front (the home screen, the lock screen, or a question it asks over an app)
     pub springboard_front: bool,
@@ -122,10 +126,10 @@ impl Tunnel {
     /// accessibility tree first)
     pub async fn ax_screen(&mut self, wait: Duration, overlays: bool) -> Result<AxScreen> {
         let sb = self.springboard_pid().await;
-        let (mut app, (mut elements, mut complete)) = {
+        let (mut app, (mut elements, mut app_cutoff)) = {
             let s = self.ax().await?;
             let app = frontmost(s, wait).await?;
-            (app, s.walk(app, WALK_LIMIT, WALK_BUDGET, 0).await?)
+            (app, s.walk_report(app, WALK_LIMIT, WALK_BUDGET, 0).await?)
         };
         // A session that lived through the phone locking reads the app's element alone from then on (the passcode
         // keypad up, a new session read 15 elements): read again on a new one
@@ -134,23 +138,26 @@ impl Tunnel {
             self.close_ax().await;
             let s = self.ax().await?;
             app = frontmost(s, wait).await?;
-            (elements, complete) = s.walk(app, WALK_LIMIT, WALK_BUDGET, 0).await?;
+            (elements, app_cutoff) = s.walk_report(app, WALK_LIMIT, WALK_BUDGET, 0).await?;
         }
-        if !complete {
-            tracing::debug!("remoteAXService: walk cut at {} elements", elements.len());
+        if let Some(reason) = app_cutoff {
+            tracing::debug!("remoteAXService: walk cut ({reason:?}) at {} elements", elements.len());
         }
         if elements.is_empty() {
             tracing::debug!("remoteAXService: app {} reads no elements on a new session either", app.pid);
             return Err(nothing_read());
         }
-        let (overlays, overlays_complete) = if overlays { self.ax_overlays(app.pid).await } else { (Vec::new(), true) };
+        let (overlays, overlays_cutoff) =
+            if overlays { self.ax_overlays_report(app.pid).await } else { (Vec::new(), None) };
         // reading the overlays may have found SpringBoard's number anew (it had restarted)
         let sb = self.springboard.map(|(_, p)| p).or(sb);
         Ok(AxScreen {
             app: elements,
-            app_complete: complete,
+            app_complete: app_cutoff.is_none(),
+            app_cutoff,
             overlays,
-            overlays_complete,
+            overlays_complete: overlays_cutoff.is_none(),
+            overlays_cutoff,
             app_pid: app.pid,
             springboard_front: sb == Some(app.pid),
             at: Instant::now(),
@@ -160,15 +167,23 @@ impl Tunnel {
     /// What SpringBoard shows over the app of process `app_pid` (alerts, banners, its status bar); empty when
     /// SpringBoard is that app, or can't be read
     pub async fn ax_overlays(&mut self, app_pid: i64) -> (Vec<Element>, bool) {
+        let (els, cutoff) = self.ax_overlays_report(app_pid).await;
+        (els, cutoff.is_none())
+    }
+
+    /// Same as [`Self::ax_overlays`], returning the specific [`ictl_ax::WalkCutoff`] when the walk stopped early
+    pub async fn ax_overlays_report(&mut self, app_pid: i64) -> (Vec<Element>, Option<ictl_ax::WalkCutoff>) {
         let mut tried = None;
         loop {
-            let Some(sb) = self.springboard_pid().await else { return (Vec::new(), false) };
+            let Some(sb) = self.springboard_pid().await else {
+                return (Vec::new(), Some(ictl_ax::WalkCutoff::Unreadable));
+            };
             if sb == app_pid {
-                return (Vec::new(), true);
+                return (Vec::new(), None);
             }
             // found again under the same number: it didn't restart, and reading it again would only fail again
             if tried == Some(sb) {
-                return (Vec::new(), false);
+                return (Vec::new(), Some(ictl_ax::WalkCutoff::Unreadable));
             }
             match self.springboard_elements(sb).await {
                 Ok(r) => return r,
@@ -178,7 +193,7 @@ impl Tunnel {
                     // it may have restarted under another number: found again, and read once more if so
                     self.springboard = None;
                     if tried.replace(sb).is_some() {
-                        return (Vec::new(), false);
+                        return (Vec::new(), Some(ictl_ax::WalkCutoff::Unreadable));
                     }
                 }
             }
@@ -186,7 +201,7 @@ impl Tunnel {
     }
 
     /// The elements SpringBoard (process `sb`) shows: alerts, banners, the status bar
-    async fn springboard_elements(&mut self, sb: i64) -> Result<(Vec<Element>, bool)> {
+    async fn springboard_elements(&mut self, sb: i64) -> Result<(Vec<Element>, Option<ictl_ax::WalkCutoff>)> {
         let root = match self.springboard_app {
             Some(o) => o,
             None => {
@@ -196,7 +211,7 @@ impl Tunnel {
             }
         };
         let s = self.ax().await?;
-        Ok(s.walk_children(root, OVERLAY_LIMIT, OVERLAY_BUDGET, ictl_ax::tree::trait_bit::STATUS_BAR).await?)
+        Ok(s.walk_children_report(root, OVERLAY_LIMIT, OVERLAY_BUDGET, ictl_ax::tree::trait_bit::STATUS_BAR).await?)
     }
 
     /// Ends axauditd, the phone's process behind remoteAXService; the next connection starts it again. It can get stuck

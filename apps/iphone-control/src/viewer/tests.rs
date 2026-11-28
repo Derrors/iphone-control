@@ -38,6 +38,7 @@ fn test_ctx(dir: &Path, socket: &Path) -> Ctx {
         tls: None,
         mcp: None,
         auth: None,
+        events: events::StateHub::default(),
     }
 }
 
@@ -1027,12 +1028,46 @@ fn page_actions_map_to_daemon_requests() {
     assert_eq!(action("button", &json!({"button": "home"})), Some(Request::PressButton { button: "home".into() }));
     assert_eq!(
         action("tap_element", &json!({"text": "通用", "index": 1})),
-        Some(Request::TapElement { text: "通用".into(), index: 1, max_age_ms: 0, scroll: None })
+        Some(Request::TapElement {
+            text: "通用".into(),
+            index: 1,
+            max_age_ms: 0,
+            scroll: None,
+            selector: protocol::ElementSelector::default(),
+        })
     );
     assert_eq!(
-        action("wait_for", &json!({"text": "x", "timeout": 99})),
-        Some(Request::WaitFor { text: "x".into(), timeout_ms: 30_000 })
+        action("tap_element", &json!({"kind": "Button", "match": "exact"})),
+        Some(Request::TapElement {
+            text: String::new(),
+            index: 0,
+            max_age_ms: 0,
+            scroll: None,
+            selector: protocol::ElementSelector {
+                kind: Some("Button".into()),
+                id: None,
+                mode: protocol::MatchMode::Exact,
+            },
+        })
     );
+    assert_eq!(action("tap_element", &json!({})), None);
+    assert_eq!(
+        action("wait_for", &json!({"text": "x", "timeout": 99})),
+        Some(Request::WaitFor { text: "x".into(), timeout_ms: 30_000, selector: protocol::ElementSelector::default() })
+    );
+    assert_eq!(
+        action("wait_for", &json!({"id": "login.btn"})),
+        Some(Request::WaitFor {
+            text: String::new(),
+            timeout_ms: 5_000,
+            selector: protocol::ElementSelector {
+                kind: None,
+                id: Some("login.btn".into()),
+                mode: protocol::MatchMode::Auto,
+            },
+        })
+    );
+    assert_eq!(action("wait_for", &json!({})), None);
     assert_eq!(action("launch_app", &json!({"app": " 设置 "})), Some(Request::LaunchApp { app: "设置".into() }));
     assert_eq!(
         action("touch", &json!({"phase": "move", "x": 3, "y": 4.5})),
@@ -1162,7 +1197,14 @@ fn a_system_alert_with_its_own_buttons() {
             height: h,
         })
         .collect();
-    let els = element_list(Some(protocol::Data::Elements { elements, matched_count: None, truncated: None })).elements;
+    let els = element_list(Some(protocol::Data::Elements {
+        elements,
+        matched_count: None,
+        truncated: None,
+        incomplete: None,
+        incomplete_reason: None,
+    }))
+    .elements;
     assert_eq!(
         els[0],
         json!({"type": "Button", "label": "今天", "x": 33.0, "y": 861.0, "width": 56.0, "height": 38.0})
@@ -1234,4 +1276,74 @@ async fn login_form_referrer_policy_and_null_origin_checks() {
     assert_eq!(status(&r), "403", "cross-site Origin: null must be refused: {r}");
     let r = exchange(&ctx, form("Sec-Fetch-Site: same-site\r\n")).await;
     assert_eq!(status(&r), "403", "same-site Origin: null must be refused: {r}");
+}
+
+/// `GET /api/events` streams SSE only while clients subscribe, allows read-only (`view`) tokens, and refuses
+/// cross-site reads and keep-alive reuse.
+#[tokio::test]
+async fn state_events_stream_lifecycle_and_permissions() {
+    let temp = tempfile::tempdir_in("/tmp").unwrap();
+    let mut ctx = test_ctx(temp.path(), &temp.path().join("none.sock"));
+    ctx.port = 8202;
+    let view_tok = "v".repeat(64);
+    ctx.auth = Some(auth::Auth::fixed(
+        vec![auth::Entry { name: "viewer".into(), role: auth::Role::View, token: view_tok.clone(), created: 0 }],
+        8202,
+    ));
+    let ctx = Arc::new(ctx);
+    assert!(!ctx.events.is_running(), "sampler stays idle before any subscriber");
+
+    // Cross-site read is refused before opening the stream.
+    let cross = exchange(
+        &ctx,
+        format!(
+            "GET /api/events HTTP/1.1\r\nHost: 127.0.0.1:8202\r\nAuthorization: Bearer {view_tok}\r\nSec-Fetch-Site: cross-site\r\n\r\n"
+        ),
+    )
+    .await;
+    assert!(cross.starts_with("HTTP/1.1 403"), "{cross}");
+    assert!(!ctx.events.is_running());
+
+    // Keep-alive check treats /api/events as a stream, not a short request.
+    let head = Head::parse(b"GET /api/events HTTP/1.1\r\nHost: 127.0.0.1:8202\r\n\r\n").unwrap();
+    assert!(!keepable(&head));
+
+    // A read-only token can subscribe, receives SSE headers, and dropping the client lets the sampler stop.
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server_ctx = ctx.clone();
+    let server = tokio::spawn(async move {
+        let (tcp, _) = listener.accept().await.unwrap();
+        let _ = serve(Conn::Plain(tcp), &server_ctx, None, None).await;
+    });
+    let mut client = tokio::net::TcpStream::connect(addr).await.unwrap();
+    let req = format!("GET /api/events HTTP/1.1\r\nHost: 127.0.0.1:8202\r\nAuthorization: Bearer {view_tok}\r\n\r\n");
+    client.write_all(req.as_bytes()).await.unwrap();
+    let mut buf = Vec::new();
+    let mut b = [0u8; 1];
+    while !buf.ends_with(b"\r\n\r\n") {
+        assert_eq!(client.read(&mut b).await.unwrap(), 1);
+        buf.push(b[0]);
+    }
+    let resp_head = String::from_utf8(buf).unwrap();
+    assert!(resp_head.starts_with("HTTP/1.1 200"), "{resp_head}");
+    assert!(resp_head.to_ascii_lowercase().contains("text/event-stream"), "{resp_head}");
+    // Sampler started when subscribed.
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while !ctx.events.is_running() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("sampler starts on subscribe");
+    drop(client);
+    let _ = server.await;
+    // Once the last subscriber disconnects, the sampler stops on its next tick.
+    tokio::time::timeout(Duration::from_secs(4), async {
+        while ctx.events.is_running() {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("sampler stops when no subscribers remain");
 }

@@ -94,6 +94,24 @@ pub(crate) fn checked_scroll(dir: &str, max: usize) -> Result<protocol::ScrollSe
     Ok(protocol::ScrollSearch { down, max: max as u32 })
 }
 
+pub(crate) fn element_selector(a: &Args) -> Result<protocol::ElementSelector, String> {
+    let kind = a.s_or("kind", "")?.trim().to_owned();
+    let id = a.s_or("id", "")?;
+    let mode = match a.s_or("match", "auto")?.as_str() {
+        "auto" => protocol::MatchMode::Auto,
+        "exact" => protocol::MatchMode::Exact,
+        "contains" => protocol::MatchMode::Contains,
+        _ => {
+            return Err(ictl_l10n::tr!(
+                "参数 match 只能是 auto、exact 或 contains",
+                "parameter match must be auto, exact, or contains"
+            )
+            .into());
+        }
+    };
+    Ok(protocol::ElementSelector { kind: (!kind.is_empty()).then_some(kind), id: (!id.is_empty()).then_some(id), mode })
+}
+
 pub fn to_request(name: &str, args: &Map<String, Value>) -> Result<Request, String> {
     let a = Args(args);
     Ok(match name {
@@ -148,6 +166,7 @@ pub fn to_request(name: &str, args: &Map<String, Value>) -> Result<Request, Stri
             index: a.u_or("index", 0)?,
             max_age_ms: 0,
             scroll: scroll_search(&a)?,
+            selector: element_selector(&a)?,
         },
         "iphone_long_press" => Request::LongPress { x: a.f("x")?, y: a.f("y")?, seconds: a.f_or("seconds", 1.0)? },
         "iphone_swipe" => Request::Swipe {
@@ -204,10 +223,11 @@ pub fn to_request(name: &str, args: &Map<String, Value>) -> Result<Request, Stri
                 );
             }
             let text = a.s("text")?;
+            let selector = element_selector(&a)?;
             let timeout_ms = (secs * 1000.0) as u64;
             match a.s_or("state", "appeared")?.as_str() {
-                "appeared" => Request::WaitFor { text, timeout_ms },
-                "disappeared" => Request::WaitForDisappearance { text, timeout_ms },
+                "appeared" => Request::WaitFor { text, timeout_ms, selector },
+                "disappeared" => Request::WaitForDisappearance { text, timeout_ms, selector },
                 _ => {
                     return Err(ictl_l10n::tr!(
                         "state 只能是 appeared 或 disappeared",

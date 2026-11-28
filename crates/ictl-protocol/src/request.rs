@@ -15,6 +15,50 @@ pub struct ScrollSearch {
     pub max: u32,
 }
 
+/// How `text` is matched in [`ElementSelector`]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MatchMode {
+    /// Exact label/name first, falling back to case-insensitive substring match (default)
+    #[default]
+    Auto,
+    /// Exact label or name match only
+    Exact,
+    /// Case-insensitive substring match in label, name, or value
+    Contains,
+}
+
+impl MatchMode {
+    pub fn is_auto(&self) -> bool {
+        matches!(self, Self::Auto)
+    }
+}
+
+/// Optional structural and matching constraints for [`Request::TapElement`], [`Request::WaitFor`], and
+/// [`Request::WaitForDisappearance`]. Omitted from JSON when empty so older daemons accept plain requests unchanged
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ElementSelector {
+    /// Element type (e.g. `Button`, `TextField`, `SearchField`), case-insensitive
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    /// Accessibility identifier (`name`), exact match
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    /// How `text` is matched (`auto`, `exact`, or `contains`)
+    #[serde(default, skip_serializing_if = "MatchMode::is_auto")]
+    pub mode: MatchMode,
+}
+
+impl ElementSelector {
+    pub fn is_empty(&self) -> bool {
+        self.kind.is_none() && self.id.is_none() && self.mode.is_auto()
+    }
+
+    pub fn has_structure(&self) -> bool {
+        self.kind.as_deref().is_some_and(|s| !s.is_empty()) || self.id.as_deref().is_some_and(|s| !s.is_empty())
+    }
+}
+
 /// [`ScrollSearch::max`] 的上限：每次慢滑加等列表停下约 2.5 秒，滑满 15 次也就半分钟出头
 pub const MAX_SEARCH_SCROLLS: u32 = 15;
 pub const MAX_SCROLL_ROWS: usize = 150;
@@ -113,6 +157,9 @@ pub enum Request {
         /// 屏幕上没有时边滑边找。旧版本守护进程不认识这个字段，只在当前屏幕上找
         #[serde(default, skip_serializing_if = "Option::is_none")]
         scroll: Option<ScrollSearch>,
+        /// Optional type/id/match constraints; omitted when empty for compatibility with older daemons
+        #[serde(default, skip_serializing_if = "ElementSelector::is_empty")]
+        selector: ElementSelector,
     },
     LongPress {
         x: f64,
@@ -167,14 +214,18 @@ pub enum Request {
     },
     /// 查屏幕上有没有挡着的系统弹窗：有就返回提醒文字，没有返回空文字。不带 then 的操作做完后调
     AlertCheck,
-    /// 等包含 `text` 的元素出现，最多等 `timeout_ms`（代替 agent 反复截图轮询）
+    /// 等包含 `text`（或满足 `selector`）的元素出现，最多等 `timeout_ms`（代替 agent 反复截图轮询）
     WaitFor {
         text: String,
         timeout_ms: u64,
+        #[serde(default, skip_serializing_if = "ElementSelector::is_empty")]
+        selector: ElementSelector,
     },
     WaitForDisappearance {
         text: String,
         timeout_ms: u64,
+        #[serde(default, skip_serializing_if = "ElementSelector::is_empty")]
+        selector: ElementSelector,
     },
     /// 运维：守护进程和设备的状态快照（JSON 文本）
     Daemon,
@@ -323,9 +374,15 @@ impl Request {
     pub fn check_required_text(&self) -> Result<(), String> {
         match self {
             // an empty ReplaceText empties the field
-            Self::WaitFor { text, .. } | Self::WaitForDisappearance { text, .. } if text.is_empty() => {
+            Self::WaitFor { text, selector, .. } | Self::WaitForDisappearance { text, selector, .. }
+                if text.is_empty() && !selector.has_structure() =>
+            {
                 Err(ictl_l10n::tr!("text 不能为空", "text can't be empty").into())
             }
+            Self::TapElement { text, selector, .. } if text.is_empty() && !selector.has_structure() => Err(
+                ictl_l10n::tr!("text 不能为空(或指定 kind / id)", "text can't be empty (unless kind or id is given)")
+                    .into(),
+            ),
             _ => Ok(()),
         }
     }

@@ -64,6 +64,19 @@ impl Response {
     }
 }
 
+/// Why [`Session::walk_report`] stopped before visiting the whole tree
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WalkCutoff {
+    /// Reached the element count limit
+    ElementLimit,
+    /// Reached the time budget
+    Timeout,
+    /// Reached the max nesting depth
+    DepthLimit,
+    /// One or more live elements could not be read
+    Unreadable,
+}
+
 /// A pushed tree and when it came
 #[derive(Debug, Clone)]
 pub struct PushedAt {
@@ -478,15 +491,31 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> Session<S> {
         budget: Duration,
         prune: u64,
     ) -> Result<(Vec<Element>, bool)> {
+        let (els, cutoff) = self.walk_report(root, limit, budget, prune).await?;
+        Ok((els, cutoff.is_none()))
+    }
+
+    /// Same as [`Self::walk`], returning the specific [`WalkCutoff`] reason when the walk stopped early
+    pub async fn walk_report(
+        &self,
+        root: ObjectRef,
+        limit: usize,
+        budget: Duration,
+        prune: u64,
+    ) -> Result<(Vec<Element>, Option<WalkCutoff>)> {
         let deadline = Instant::now() + budget;
         let mut attrs: HashMap<ObjectRef, Obj> = HashMap::new();
         let mut seen = HashSet::from([(root.pid, root.id)]);
         let mut frontier = VecDeque::from([(root, 0, None)]);
         let mut missing = Vec::new();
-        let mut complete = true;
+        let mut cutoff = None;
         while !frontier.is_empty() {
-            if attrs.len() >= limit || Instant::now() >= deadline {
-                complete = false;
+            if attrs.len() >= limit {
+                cutoff = Some(WalkCutoff::ElementLimit);
+                break;
+            }
+            if Instant::now() >= deadline {
+                cutoff = Some(WalkCutoff::Timeout);
                 break;
             }
             let n = frontier.len().min(BATCH).min(limit - attrs.len());
@@ -498,7 +527,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> Session<S> {
                     if let Some(parent) = parent {
                         missing.push((parent, o));
                     } else {
-                        complete = false;
+                        cutoff.get_or_insert(WalkCutoff::Unreadable);
                     }
                     continue;
                 };
@@ -507,7 +536,9 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> Session<S> {
                     continue;
                 }
                 if depth >= 40 {
-                    complete &= kids.is_empty();
+                    if !kids.is_empty() {
+                        cutoff.get_or_insert(WalkCutoff::DepthLimit);
+                    }
                     continue;
                 }
                 for k in kids {
@@ -520,21 +551,25 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> Session<S> {
         }
         // An attribute error alone cannot distinguish a removed child from an unreadable live one.
         // Re-read each affected parent once, only when the rest of the walk completed within budget.
-        if complete && !missing.is_empty() {
-            complete = false;
+        if cutoff.is_none() && !missing.is_empty() {
             if Instant::now() < deadline {
                 let parents: HashSet<_> = missing.iter().map(|(parent, _)| *parent).collect();
                 let parents: Vec<_> = parents.into_iter().collect();
                 let fresh = self.attributes_of(&parents).await?;
-                complete = missing.iter().all(|(parent, child)| {
+                let all_gone = missing.iter().all(|(parent, child)| {
                     fresh.get(parent).is_some_and(|a| {
                         let (_, kids) = tree::element(Some(*parent), a, None, 0);
                         !kids.contains(child) && kids.iter().all(|k| seen.contains(&(k.pid, k.id)))
                     })
                 });
+                if !all_gone {
+                    cutoff = Some(WalkCutoff::Unreadable);
+                }
+            } else {
+                cutoff = Some(WalkCutoff::Timeout);
             }
         }
-        Ok((tree::assemble(root, &attrs), complete))
+        Ok((tree::assemble(root, &attrs), cutoff))
     }
 
     /// The elements under `root` as [`Self::walk`] reads them, without the root: the `parent` indexes point into the
@@ -546,14 +581,26 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> Session<S> {
         budget: Duration,
         prune: u64,
     ) -> Result<(Vec<Element>, bool)> {
-        let (mut els, complete) = self.walk(root, limit + 1, budget, prune).await?;
+        let (els, cutoff) = self.walk_children_report(root, limit, budget, prune).await?;
+        Ok((els, cutoff.is_none()))
+    }
+
+    /// Same as [`Self::walk_children`], returning the specific [`WalkCutoff`] reason when the walk stopped early
+    pub async fn walk_children_report(
+        &self,
+        root: ObjectRef,
+        limit: usize,
+        budget: Duration,
+        prune: u64,
+    ) -> Result<(Vec<Element>, Option<WalkCutoff>)> {
+        let (mut els, cutoff) = self.walk_report(root, limit + 1, budget, prune).await?;
         if !els.is_empty() {
             els.remove(0);
         }
         for e in &mut els {
             e.parent = e.parent.and_then(|p| p.checked_sub(1));
         }
-        Ok((els, complete))
+        Ok((els, cutoff))
     }
 
     /// Tells the phone this client no longer needs accessibility (it then closes the connection)

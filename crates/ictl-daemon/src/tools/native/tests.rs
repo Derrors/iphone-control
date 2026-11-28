@@ -34,8 +34,10 @@ fn only_a_recognisable_unlocked_springboard_can_confirm_absence() {
     let screen = |springboard_front| ictl_device::ax::AxScreen {
         app: Vec::new(),
         app_complete: true,
+        app_cutoff: None,
         overlays: Vec::new(),
         overlays_complete: true,
+        overlays_cutoff: None,
         app_pid: 1,
         springboard_front,
         at: Instant::now(),
@@ -72,6 +74,40 @@ fn only_a_recognisable_unlocked_springboard_can_confirm_absence() {
 }
 
 #[test]
+fn apply_ax_completeness_records_app_and_overlay_cutoffs() {
+    let make = |app_cutoff: Option<ictl_ax::WalkCutoff>, overlays_cutoff: Option<ictl_ax::WalkCutoff>| {
+        ictl_device::ax::AxScreen {
+            app: Vec::new(),
+            app_complete: app_cutoff.is_none(),
+            app_cutoff,
+            overlays: Vec::new(),
+            overlays_complete: overlays_cutoff.is_none(),
+            overlays_cutoff,
+            app_pid: 1,
+            springboard_front: false,
+            at: Instant::now(),
+        }
+    };
+    let mut tree = Tree::default();
+    apply_ax_completeness(&mut tree, &make(None, None));
+    assert!(!tree.incomplete);
+    assert_eq!(tree.incomplete_reason, None);
+
+    let mut tree = Tree::default();
+    apply_ax_completeness(
+        &mut tree,
+        &make(Some(ictl_ax::WalkCutoff::ElementLimit), Some(ictl_ax::WalkCutoff::Timeout)),
+    );
+    assert!(tree.incomplete);
+    assert_eq!(tree.incomplete_reason, Some(elements::IncompleteReason::ElementLimit));
+
+    let mut tree = Tree::default();
+    apply_ax_completeness(&mut tree, &make(None, Some(ictl_ax::WalkCutoff::Unreadable)));
+    assert!(tree.incomplete);
+    assert_eq!(tree.incomplete_reason, Some(elements::IncompleteReason::OverlaysIncomplete));
+}
+
+#[test]
 fn replacing_text_requires_one_readable_focused_field() {
     let mut screen = ictl_device::ax::AxScreen {
         app: vec![
@@ -86,8 +122,10 @@ fn replacing_text_requires_one_readable_focused_field() {
             },
         ],
         app_complete: true,
+        app_cutoff: None,
         overlays: Vec::new(),
         overlays_complete: true,
+        overlays_cutoff: None,
         app_pid: 1,
         springboard_front: false,
         at: Instant::now(),

@@ -136,34 +136,104 @@ impl Daemon {
         // the lock goes with the check: a daemon stopping meanwhile doesn't let go of it before the check ends
         let (outcome, lead) = self.check_session_with(lead).await;
         drop(maintenance);
-        let mut st = CheckState::load(&dir);
-        if account.credentials_generation().await.ok() != Some(g0) {
-            // signed in again meanwhile: this result is the old credentials'; checked again with the new ones
-            st.due = now_secs();
-            if let Err(e) = st.save(&dir) {
-                tracing::warn!("saving the session check's state failed: {e}");
+        // the generation checked and the result written (with the notification claimed) in one step, under the
+        // account lock: a sign-in again can't come in between; the device lock and the notification after it
+        let (notify, keep) = match settle(&account, &dir, g0, round, &outcome, self.cfg.session_check).await {
+            Ok(Settled::Stale) => return lead,
+            Ok(Settled::Done { notify, keep }) => (notify, keep),
+            Err(e) => {
+                tracing::warn!("recording the session check's result failed: {e}");
+                return lead;
             }
-            return lead;
-        }
-        let notify = matches!(outcome, SessionCheckOutcome::Expired(_)) && st.claim(g0, round);
-        let claimed = !notify || st.save(&dir).is_ok();
-        let (next, keep) = {
-            let mut g = self.inner.lock().await;
-            self.apply_session_check(&mut g, outcome.clone(), Instant::now(), notify && claimed)
         };
-        st.due = now_secs() + next.as_secs();
-        st.last = Some(outcome.describe());
-        st.last_at = Some(now_secs());
-        if let Err(e) = st.save(&dir) {
-            tracing::warn!("saving the session check's state failed: {e}");
+        {
+            let mut g = self.inner.lock().await;
+            self.apply_session_check(&mut g, outcome, Instant::now(), notify);
         }
         lead.filter(|_| keep)
     }
 }
 
+/// What [`settle`] did with a check's result
+#[derive(Debug, PartialEq, Eq)]
+enum Settled {
+    /// The credentials changed since the check began (signed in again): dropped, checked again at once
+    Stale,
+    /// Recorded; `notify`: the session-expired notification is this round's to send (claimed); `keep`: still leads
+    Done { notify: bool, keep: bool },
+}
+
+/// A check's result recorded, with the account lock held: the credentials generation read again (with its digest)
+/// and compared with the one the check began with, then the result, the next due time and the notification's claim
+/// written in one save. Nothing else is waited for with the lock held
+async fn settle(
+    account: &ictl_sign::AccountDir,
+    dir: &Path,
+    g0: u64,
+    round: u64,
+    outcome: &SessionCheckOutcome,
+    every: Duration,
+) -> std::io::Result<Settled> {
+    let lock = account.lock().await.map_err(std::io::Error::other)?;
+    let now = account.generation_locked(&lock).map_err(std::io::Error::other)?;
+    let mut st = CheckState::load(dir);
+    if now != g0 {
+        st.due = now_secs();
+        st.save(dir)?;
+        return Ok(Settled::Stale);
+    }
+    let (next, keep) = outcome.schedule(every);
+    let notify = matches!(outcome, SessionCheckOutcome::Expired(_)) && st.claim(g0, round);
+    st.due = now_secs() + next.as_secs();
+    st.last = Some(outcome.describe());
+    st.last_at = Some(now_secs());
+    // a claim that isn't on disk isn't sent: a leader taking over would send it again
+    st.save(dir)?;
+    drop(lock);
+    Ok(Settled::Done { notify, keep })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn account() -> (ictl_sign::AccountDir, std::path::PathBuf) {
+        let dir = std::env::temp_dir().join(format!("ictl-session-settle-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        (ictl_sign::AccountDir { dir: dir.clone(), anisette_url: None, require_known_origin: false }, dir)
+    }
+
+    /// A result of the credentials of before (signed in again after the check began, before its result is
+    /// recorded) is dropped and checked again; one of the credentials of now is recorded with its claim, once
+    #[tokio::test]
+    async fn a_result_is_recorded_only_for_the_credentials_it_checked() {
+        let (a, dir) = account();
+        let every = Duration::from_secs(24 * 3600);
+        let expired = SessionCheckOutcome::Expired("code 1100".into());
+        let g0 = a.credentials_generation().await.unwrap();
+        // signed in again between the check and its result
+        std::fs::write(dir.join("accounts.json"), b"{\"a\":2}").unwrap();
+        assert_eq!(settle(&a, &dir, g0, 1, &expired, every).await.unwrap(), Settled::Stale);
+        let st = CheckState::load(&dir);
+        assert!(st.notified.is_empty() && st.due <= now_secs(), "nothing claimed, due again");
+        let g1 = a.credentials_generation().await.unwrap();
+        assert_eq!(settle(&a, &dir, g1, 2, &expired, every).await.unwrap(), Settled::Done { notify: true, keep: true });
+        assert_eq!(
+            settle(&a, &dir, g1, 2, &expired, every).await.unwrap(),
+            Settled::Done { notify: false, keep: true }
+        );
+        // the account lock is held while it is recorded: a sign-in's commit waits for it
+        let held = a.lock().await.unwrap();
+        let t = tokio::spawn({
+            let (a, dir) = (a.clone(), dir.clone());
+            async move { settle(&a, &dir, g1, 3, &SessionCheckOutcome::Ok(None), every).await.unwrap() }
+        });
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert!(!t.is_finished(), "waits for the account lock");
+        drop(held);
+        assert_eq!(t.await.unwrap(), Settled::Done { notify: false, keep: true });
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     /// A notification is claimed once per generation and round, across leaders (the state is read again), and only a
     /// bounded number are kept

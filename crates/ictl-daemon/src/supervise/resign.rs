@@ -169,6 +169,7 @@ impl Daemon {
         notify: bool,
     ) -> (Duration, bool) {
         let every = self.cfg.session_check;
+        let schedule = outcome.schedule(every);
         match outcome {
             SessionCheckOutcome::Ok(listed) => {
                 g.dedup.clear("session");
@@ -181,9 +182,8 @@ impl Daemon {
                         ));
                     }
                 }
-                (every, true)
             }
-            SessionCheckOutcome::NotLoggedIn => (every, true),
+            SessionCheckOutcome::NotLoggedIn => {}
             SessionCheckOutcome::Transient(e) => {
                 let retry = every.min(SESSION_CHECK_TRANSIENT_RETRY);
                 let mins = (retry.as_secs() / 60).max(1);
@@ -191,7 +191,6 @@ impl Daemon {
                     "Apple ID 会话检查遇到临时网络/Anisette 故障，{mins} 分钟后重试（暂不视为会话失效）：{e}",
                     "Apple ID session check hit a transient network/Anisette failure; retrying in {mins} min (not treating the session as expired): {e}"
                 ));
-                (retry, true)
             }
             // this instance may not use the session as configured: another one that may takes over
             SessionCheckOutcome::Misconfigured(e) => {
@@ -199,7 +198,6 @@ impl Daemon {
                     "Apple ID 会话检查没有执行：{e}",
                     "The Apple ID session check wasn't run: {e}"
                 ));
-                (every, false)
             }
             SessionCheckOutcome::Expired(e) => {
                 self.log.log(&ictl_l10n::log_trf!(
@@ -209,9 +207,9 @@ impl Daemon {
                 if notify {
                     self.notify(g, Event::SessionExpired(e));
                 }
-                (every, true)
             }
         }
+        schedule
     }
 
     /// 检查描述文件并按需重签（`force` 立即重签）。分三段：持锁取参数 → 不持锁签名、安装（几十秒）→ 持锁写结果。
@@ -415,6 +413,17 @@ pub(crate) enum SessionCheckOutcome {
 }
 
 impl SessionCheckOutcome {
+    /// When the next check is due (`every` the usual interval), and whether the instance that checked still leads
+    /// (one that may not use the session as configured leaves it to another): what [`Daemon::apply_session_check`]
+    /// returns, without the device lock
+    pub(crate) fn schedule(&self, every: Duration) -> (Duration, bool) {
+        match self {
+            Self::Transient(_) => (every.min(SESSION_CHECK_TRANSIENT_RETRY), true),
+            Self::Misconfigured(_) => (every, false),
+            Self::Ok(_) | Self::NotLoggedIn | Self::Expired(_) => (every, true),
+        }
+    }
+
     /// As kept in the shared state ([`super::session::CheckState::last`]), in the daemon's own language
     pub(crate) fn describe(&self) -> String {
         match self {

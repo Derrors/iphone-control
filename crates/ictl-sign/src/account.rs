@@ -146,6 +146,12 @@ impl AccountDir {
         self.commit_locked()
     }
 
+    /// The credentials generation now, with the account lock held (moved on, as [`Self::credentials_generation`] does,
+    /// when the credentials on disk aren't the ones it was counted for): it can't change while the lock is
+    pub fn generation_locked(&self, _lock: &AccountLock) -> Result<u64> {
+        self.commit_locked()
+    }
+
     /// After the credentials were written, with the account lock held: the generation moved on, written with the
     /// digest of what is on disk now. Also when nothing changed since the last count, so it's never behind
     pub(crate) fn commit_locked(&self) -> Result<u64> {
@@ -307,6 +313,49 @@ mod tests {
         assert!(matches!(e, omnisette::AnisetteError::OriginUnknown), "{e}");
         let mapped = SignError::from(plume_core::Error::Anisette(e));
         assert!(matches!(mapped, SignError::AnisetteOriginUnknown) && mapped.is_configuration());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// A login that waited (for its verification code) while the same Apple ID was signed in again elsewhere doesn't
+    /// write its older result over the newer one; another Apple ID's merges as it is
+    #[tokio::test]
+    async fn an_older_login_doesn_t_overwrite_a_newer_one() {
+        use plume_store::{AccountStore, GsaAccount};
+        let (a, dir) = acct(false);
+        let path = dir.join("accounts.json");
+        let gsa =
+            |email: &str, token: &str| GsaAccount::new(email.into(), "A".into(), "id".into(), token.into(), "T".into());
+        let add = |g: GsaAccount| {
+            let mut s = AccountStore::load_sync(&Some(path.clone())).unwrap_or_else(|_| {
+                std::fs::write(&path, br#"{"selected_account":null,"accounts":{}}"#).unwrap();
+                AccountStore::load_sync(&Some(path.clone())).unwrap()
+            });
+            s.accounts_add_sync(g).unwrap();
+        };
+        add(gsa("a@b.c", "old"));
+        let origin = a.anisette_origin().unwrap();
+        // A begins: what it saw. B signs the same Apple ID in again meanwhile (new token, same team)
+        let seen = a.credentials_of("a@b.c").unwrap();
+        add(gsa("a@b.c", "newer"));
+        let e = a.commit_login(gsa("a@b.c", "older-login"), &seen, &origin).await.unwrap_err();
+        assert!(matches!(e, SignError::LoginSuperseded), "{e}");
+        assert_eq!(a.credentials_of("a@b.c").unwrap().unwrap().1, "newer", "kept");
+        assert!(!e.is_transient() && !e.is_configuration());
+        // another Apple ID: merged, the first one's kept
+        let none = a.credentials_of("x@y.z").unwrap();
+        a.commit_login(gsa("x@y.z", "t"), &none, &origin).await.unwrap();
+        assert_eq!(a.credentials_of("a@b.c").unwrap().unwrap().1, "newer");
+        assert!(a.credentials_of("x@y.z").unwrap().is_some());
+        // the anisette state changed meanwhile (provisioned again): refused too
+        let now = a.credentials_of("x@y.z").unwrap();
+        std::fs::write(
+            dir.join("state.plist"),
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?><plist version=\"1.0\"><dict>\
+             <key>keychain_identifier</key><data>AAAAAAAAAAAAAAAAAAAAAA==</data>\
+             <key>adi_pb</key><data>AQID</data></dict></plist>",
+        )
+        .unwrap();
+        assert!(matches!(a.commit_login(gsa("x@y.z", "t2"), &now, &origin).await, Err(SignError::LoginSuperseded)));
         std::fs::remove_dir_all(dir).unwrap();
     }
 

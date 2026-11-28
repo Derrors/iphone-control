@@ -64,6 +64,10 @@ pub enum SignError {
     /// The anisette state was provisioned with another address than the one configured: never sent to this one
     #[error("{}", ictl_l10n::trf!("Anisette 状态是用 {recorded} 生成的，现在配置的是 {configured}：不会发给另一个地址。改回原来的地址，或运行 iphone-control login --reprovision-anisette 用现在的地址重新生成", "The anisette state was made with {recorded}, but {configured} is configured now: it isn't sent to another address. Set the old address again, or run iphone-control login --reprovision-anisette to make a new one with the current address"))]
     AnisetteOriginMismatch { recorded: String, configured: String },
+    /// While this login waited (for a verification code), the same Apple ID was signed in again elsewhere, or the
+    /// anisette state changed: its result isn't written over the newer one
+    #[error("{}", ictl_l10n::tr!("等待验证码期间，同一个 Apple ID 在别处（另一个命令或实例）重新登录过，或者 Anisette 状态变了：这次登录的结果没有写入，以免覆盖更新的凭据；需要的话重新登录", "While this login waited for the verification code, the same Apple ID was signed in again elsewhere (another command or instance), or the anisette state changed: this login's result wasn't written, so the newer credentials aren't overwritten; sign in again if needed"))]
+    LoginSuperseded,
     #[error("{}", ictl_l10n::trf!("签名失败：{0}", "Signing failed: {0}", .0))]
     Codesign(ictl_l10n::Text),
     #[error("{}", ictl_l10n::trf!("开发者服务：{0}", "Developer services: {0}", .0))]
@@ -245,23 +249,48 @@ impl AccountDir {
     ) -> Result<String> {
         restrict_dir(&self.dir)?;
         self.check_origin()?;
+        // what this Apple ID's credentials are before (another login may replace them while this one waits)
+        let before = self.credentials_of(email)?;
         // the anisette state is provisioned, if it has to be, under its own lock (omnisette's state_file)
         let anisette =
             self.fetch_anisette_with(&SESSION_RETRY_DELAYS, SESSION_ATTEMPT_TIMEOUT, tokio::time::sleep).await?;
+        // and where the state this login uses came from
+        let origin = self.anisette_origin()?;
         let (e, p) = (email.to_owned(), password.to_owned());
         // not under the account lock: this waits for the user to type a verification code
         let account =
             PlumeAccount::login_with_anisette(move || Ok((e.clone(), p.clone())), two_factor, anisette).await?;
         let gsa = plume_store::account_from_session(email.to_owned(), account).await?;
-        // merged into the credentials as they are on disk now (another process may have changed them while this one
-        // waited), then counted
+        self.commit_login(gsa, &before, &origin).await?;
+        Ok(email.to_owned())
+    }
+
+    /// An Apple ID's credentials on disk now, as a login compares them: its ADSID and GS token
+    fn credentials_of(&self, email: &str) -> Result<Option<(String, String)>> {
+        let store = AccountStore::load_sync(&Some(self.store_path()))
+            .map_err(|e| SignError::Developer(e.to_string().into()))?;
+        Ok(store.get_account(email).map(|a| (a.adsid().clone(), a.xcode_gs_token().clone())))
+    }
+
+    /// A login's result merged into the credentials as they are on disk now, under the account lock, then counted.
+    /// The same Apple ID changed since the login began (signed in again elsewhere), or the anisette state it used:
+    /// refused, the newer one kept. Other Apple IDs merge as they are
+    async fn commit_login(
+        &self,
+        gsa: plume_store::GsaAccount,
+        before: &Option<(String, String)>,
+        origin: &account::OriginCheck,
+    ) -> Result<()> {
         let _lock = self.lock().await?;
+        if self.credentials_of(gsa.email())? != *before || self.anisette_origin()? != *origin {
+            return Err(SignError::LoginSuperseded);
+        }
         let mut store = AccountStore::load_sync(&Some(self.store_path()))
             .map_err(|e| SignError::Developer(e.to_string().into()))?;
         store.accounts_add_sync(gsa).map_err(|e| SignError::Developer(e.to_string().into()))?;
         self.commit_locked()?;
         restrict_tree(&self.dir)?;
-        Ok(email.to_owned())
+        Ok(())
     }
 
     /// 本机签名私钥（`keys/<团队>/key.pem`）的公钥，PKCS#1 DER，可以和 [`certificate_public_key`] 比。还没签过名时为空

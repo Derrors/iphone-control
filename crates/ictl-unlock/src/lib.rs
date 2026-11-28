@@ -482,7 +482,9 @@ mod tests {
             unlock_confirm: Duration::from_millis(20),
             poll: Duration::from_millis(1),
         };
-        let store = DisableStore::new(dir.join("unlock-disabled"), dir.join("UNLOCK-DISABLED"));
+        // the daemon's layout: the records and the shadow in different directories. Side by side they would be one
+        // name on a case-insensitive file system (macOS)
+        let store = DisableStore::new(dir.join("secrets/unlock-disabled"), dir.join("logs/UNLOCK-DISABLED"));
         (UnlockConfig { passcode_file: dir.join("passcode"), disabled: store.device("TEST-DEVICE"), timing }, dir)
     }
 

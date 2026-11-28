@@ -59,6 +59,23 @@ pub fn create_dir_all(dir: &Path) -> io::Result<()> {
     Ok(())
 }
 
+/// [`create_dir_all`] for `dir` inside `base`, and every directory from `base` down to `dir` kept in its parent, made
+/// now or not: one made earlier by something that didn't sync its parent (a plain `create_dir_all`, an older
+/// version) would otherwise still be lost with a power cut, taking whatever is written inside it along
+pub fn create_dir_all_from(base: &Path, dir: &Path) -> io::Result<()> {
+    let rest = dir.strip_prefix(base).map_err(|_| {
+        io::Error::new(io::ErrorKind::InvalidInput, format!("{} is not inside {}", dir.display(), base.display()))
+    })?;
+    create_dir_all(dir)?;
+    let mut p = base.to_path_buf();
+    sync_dir(parent(&p))?;
+    for c in rest.components() {
+        sync_dir(&p)?;
+        p.push(c);
+    }
+    Ok(())
+}
+
 /// `name` in `dir` replaced whole by `data` with permissions `mode`, on disk (data and name) when it returns. The
 /// temporary file it is written to first is created with `mode` and set to exactly `mode` on its descriptor before
 /// anything is written (the umask could leave it different), and named after `name`
@@ -139,6 +156,23 @@ pub(crate) mod tests {
 
     pub(crate) fn synced() -> Vec<PathBuf> {
         SYNCED.with(|s| std::mem::take(&mut *s.borrow_mut()))
+    }
+
+    /// Directories made earlier without syncing (a plain `create_dir_all`) are kept too, from the base down
+    #[test]
+    fn directories_made_earlier_are_kept_from_the_base_down() {
+        let root = std::env::temp_dir().join(format!("ictl-durable-from-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(root.join("data/secrets")).unwrap();
+        synced();
+        create_dir_all_from(&root.join("data"), &root.join("data/secrets/passcodes")).unwrap();
+        let got = synced();
+        let at = |p: &Path| {
+            got.iter().rposition(|q| q == p).unwrap_or_else(|| panic!("{} not synced: {got:?}", p.display()))
+        };
+        assert!(at(&root) < at(&root.join("data")), "data/ in its parent, then secrets/ in data/");
+        assert!(at(&root.join("data")) < at(&root.join("data/secrets")), "then passcodes/ in secrets/");
+        assert!(create_dir_all_from(&root.join("data"), &root.join("elsewhere")).is_err());
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     /// Every directory made is followed by a sync of its parent, top down, before anything is written inside it

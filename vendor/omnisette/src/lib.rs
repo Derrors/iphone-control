@@ -19,6 +19,8 @@ pub mod store_services_core;
 
 #[cfg(feature = "remote-anisette-v3")]
 pub mod remote_anisette_v3;
+#[cfg(feature = "remote-anisette-v3")]
+pub mod state_file;
 
 #[allow(dead_code)]
 pub struct AnisetteHeaders;

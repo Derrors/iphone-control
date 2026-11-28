@@ -177,6 +177,12 @@ impl Daemon {
                     "Apple ID session check hit a transient network/Anisette failure; retrying in {mins} min (not treating the session as expired): {e}"
                 ));
             }
+            SessionCheckOutcome::Misconfigured(e) => {
+                self.log.log(&ictl_l10n::log_trf!(
+                    "Apple ID 会话检查没有执行：{e}",
+                    "The Apple ID session check wasn't run: {e}"
+                ));
+            }
             SessionCheckOutcome::Expired(e) => {
                 self.log.log(&ictl_l10n::log_trf!(
                     "Apple ID 会话检查失败：{e}",
@@ -341,6 +347,9 @@ enum SessionCheckOutcome {
     Ok(Option<bool>),
     NotLoggedIn,
     Transient(String),
+    /// The configuration keeps the session from being used (the anisette state's origin): logged, never reported as
+    /// expired, checked again on the usual schedule
+    Misconfigured(String),
     Expired(String),
 }
 
@@ -352,6 +361,9 @@ fn classify_session_check_result(
         Ok(Err(ictl_sign::SignError::NotLoggedIn)) => SessionCheckOutcome::NotLoggedIn,
         Ok(Err(e)) if e.is_transient() || matches!(e, ictl_sign::SignError::Io(_)) => {
             SessionCheckOutcome::Transient(ictl_l10n::in_own_lang(|| e.to_string()))
+        }
+        Ok(Err(e)) if e.is_configuration() => {
+            SessionCheckOutcome::Misconfigured(ictl_l10n::in_own_lang(|| e.to_string()))
         }
         Ok(Err(e)) => SessionCheckOutcome::Expired(ictl_l10n::in_own_lang(|| e.to_string())),
         Err(_) => SessionCheckOutcome::Transient(ictl_l10n::log_trf!(

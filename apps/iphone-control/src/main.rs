@@ -105,6 +105,10 @@ enum Command {
     Login {
         #[arg(help = ictl_l10n::tr!("Apple ID 邮箱；不给就交互输入", "Apple ID email; asked for interactively if not given"))]
         email: Option<String>,
+        #[arg(long, conflicts_with_all = ["email", "confirm_anisette_origin"], help = ictl_l10n::tr!("不登录：丢掉 anisette 状态，用现在配置的地址重新生成（旧版本生成的状态没记来源，多实例下要先做这一步或 --confirm-anisette-origin）", "Don't sign in: discard the anisette state and make a new one with the address configured now (a state an older version made has no recorded origin; with several instances do this or --confirm-anisette-origin first)"))]
+        reprovision_anisette: bool,
+        #[arg(long, conflicts_with = "email", help = ictl_l10n::tr!("不登录：确认现在的 anisette 状态就是用现在配置的地址生成的，记下来（只在确知时用；拿不准就用 --reprovision-anisette）", "Don't sign in: confirm the anisette state was made with the address configured now, and record it (only if you know; otherwise use --reprovision-anisette)"))]
+        confirm_anisette_origin: bool,
     },
     #[command(about = ictl_l10n::tr!("立即签名并安装 WDA", "Sign and install WDA now"))]
     Sign,
@@ -421,7 +425,9 @@ async fn run() -> anyhow::Result<()> {
         Command::Doctor => print_text(&cli.socket, Request::Doctor).await,
         Command::Setup { reconfigure } => guide::setup(&cli, reconfigure).await,
         Command::Service { action } => service_cmd(&cli.socket, &cli.data_dir, action).await,
-        Command::Login { email } => login(&cli.data_dir, email).await,
+        Command::Login { reprovision_anisette: true, .. } => account::reprovision_anisette(&cli.data_dir).await,
+        Command::Login { confirm_anisette_origin: true, .. } => account::confirm_anisette_origin(&cli.data_dir).await,
+        Command::Login { email, .. } => login(&cli.data_dir, email).await,
         Command::Sign => print_text(&cli.socket, Request::Resign { force: true }).await,
         Command::Resign { force } => print_text(&cli.socket, Request::Resign { force }).await,
         Command::Passcode { action } => passcode(&cli.data_dir, &cli.socket, action).await,

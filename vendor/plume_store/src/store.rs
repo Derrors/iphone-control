@@ -50,24 +50,21 @@ impl AccountStore {
         }
     }
 
+    // iphone-control: written whole and synchronously (no await in between), so a caller giving up on the future
+    // can't leave a write half done, and a reader without the account lock reads the old file or the new one
     pub async fn save(&self) -> Result<(), Error> {
-        if let Some(path) = &self.path {
-            if let Some(parent) = path.parent() {
-                tokio::fs::create_dir_all(parent).await?;
-            }
-
-            tokio::fs::write(path, serde_json::to_string_pretty(self)?).await?;
-        }
-        Ok(())
+        self.save_sync()
     }
 
+    // iphone-control: to a private temporary file, synced, renamed over the old one, the directory synced
     pub fn save_sync(&self) -> Result<(), Error> {
         if let Some(path) = &self.path {
-            if let Some(parent) = path.parent() {
-                std::fs::create_dir_all(parent)?;
-            }
-
-            std::fs::write(path, serde_json::to_string_pretty(self)?)?;
+            let parent = match path.parent() {
+                Some(p) if !p.as_os_str().is_empty() => p.to_path_buf(),
+                _ => std::path::PathBuf::from("."),
+            };
+            std::fs::create_dir_all(&parent)?;
+            write_whole(&parent, path, serde_json::to_string_pretty(self)?.as_bytes())?;
         }
         Ok(())
     }
@@ -224,4 +221,26 @@ impl AccountStore {
         self.refreshes.remove(udid);
         self.save_sync()
     }
+}
+
+// iphone-control: `path` in `dir` replaced whole by `data`, 0600 from the start, on disk (data and name)
+fn write_whole(dir: &std::path::Path, path: &std::path::Path, data: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("accounts.json");
+    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let tmp = dir.join(format!(".{name}.tmp-{}-{n}", std::process::id()));
+    let r = (|| {
+        let mut f = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&tmp)?;
+        f.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+        f.write_all(data)?;
+        f.sync_all()?;
+        std::fs::rename(&tmp, path)?;
+        std::fs::File::open(dir)?.sync_all()
+    })();
+    if r.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    r
 }

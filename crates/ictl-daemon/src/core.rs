@@ -677,7 +677,7 @@ impl Daemon {
     }
 
     pub(crate) fn account(&self) -> ictl_sign::AccountDir {
-        ictl_sign::AccountDir { dir: self.cfg.account_dir(), anisette_url: self.cfg.anisette_url.clone() }
+        self.cfg.account()
     }
 
     /// The device being controlled, from the last published snapshot (no lock)

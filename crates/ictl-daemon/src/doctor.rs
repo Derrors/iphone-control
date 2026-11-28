@@ -13,6 +13,7 @@ impl Daemon {
             usbmuxd: ictl_device::list_devices().await.map(|_| ()).map_err(|e| e.to_string()),
             usb: ictl_device::host_ios_usb_present().await,
             signed_in: self.account().selected_email().await.is_ok(),
+            anisette: self.account().anisette_origin().map_err(|e| e.to_string()),
             picture: viewer_picture().await,
             removed_env: crate::protocol::env::active_removed(),
         }
@@ -134,6 +135,30 @@ impl Daemon {
                     .into(),
                 );
                 fails += 1;
+            }
+        }
+        if host.signed_in {
+            use ictl_sign::account::OriginCheck;
+            match &host.anisette {
+                Ok(OriginCheck::Fresh | OriginCheck::Known) => {}
+                Ok(OriginCheck::Unknown) => out.push(
+                    ictl_l10n::tr!(
+                        "⚠️  Anisette 状态是旧版本生成的，没记是用哪个地址生成的（单实例照旧能用；要加命名实例时先处理）\n     → iphone-control login --reprovision-anisette（确知就是现在的地址：--confirm-anisette-origin）",
+                        "⚠️  The anisette state was made by an older version, without recording with which address (fine for a single instance; deal with it before adding a named instance)\n     → iphone-control login --reprovision-anisette (or --confirm-anisette-origin if you know it was the current address)"
+                    )
+                    .into(),
+                ),
+                Ok(OriginCheck::Mismatch { recorded, configured }) => {
+                    out.push(ictl_l10n::trf!(
+                        "❌ Anisette 状态是用 {recorded} 生成的，现在配置的是 {configured}：会话检查和签名都不会用它\n     → 改回原来的地址，或 iphone-control login --reprovision-anisette",
+                        "❌ The anisette state was made with {recorded}, but {configured} is configured: session checks and signing won't use it\n     → set the old address again, or iphone-control login --reprovision-anisette"
+                    ));
+                    fails += 1;
+                }
+                Err(e) => {
+                    out.push(ictl_l10n::trf!("❌ 读不了 Anisette 状态：{e}", "❌ Can't read the anisette state: {e}"));
+                    fails += 1;
+                }
             }
         }
         match &g.persisted.wda_bundle {
@@ -338,6 +363,7 @@ pub(crate) struct DoctorHost {
     usbmuxd: Result<(), String>,
     usb: Option<bool>,
     signed_in: bool,
+    anisette: Result<ictl_sign::account::OriginCheck, String>,
     picture: String,
     removed_env: Vec<&'static crate::protocol::env::RemovedVar>,
 }

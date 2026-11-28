@@ -49,7 +49,7 @@ pub async fn snapshot(socket: &Path) -> anyhow::Result<ictl_daemon::Snapshot> {
 /// 账号目录和 anisette 地址：与守护进程同一份配置（路径、环境变量的读法都在 Config 里）
 pub fn account_dir(data_dir: &Path) -> ictl_sign::AccountDir {
     let cfg = ictl_daemon::Config::from_env(data_dir);
-    ictl_sign::AccountDir { dir: cfg.account_dir(), anisette_url: cfg.anisette_url }
+    cfg.account()
 }
 
 /// 命令要针对哪台设备：`IPHONE_UDID` > 守护进程正在控制的（或选定的）> USB 上唯一的一台。

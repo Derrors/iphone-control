@@ -158,6 +158,14 @@ impl Config {
     pub fn account_dir(&self) -> PathBuf {
         self.data_dir.join("account")
     }
+    /// The Apple ID account as this installation uses it ([`ictl_sign::account`])
+    pub fn account(&self) -> ictl_sign::AccountDir {
+        ictl_sign::AccountDir {
+            dir: self.account_dir(),
+            anisette_url: self.anisette_url.clone(),
+            require_known_origin: false,
+        }
+    }
     pub fn wda_dir(&self) -> PathBuf {
         self.data_dir.join("wda")
     }

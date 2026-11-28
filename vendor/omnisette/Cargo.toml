@@ -21,6 +21,7 @@ remote-anisette-v3 = [
     "dep:tokio-tungstenite",
     "dep:futures-util",
     "dep:chrono",
+    "dep:tokio",
 ]
 aos-kit = []
 
@@ -47,6 +48,8 @@ tokio-tungstenite = { version = "0.27.0", optional = true, features = [
 futures-util = { version = "0.3.28", optional = true }
 chrono = { version = "0.4", default-features = false, features = ["std", "serde"], optional = true }
 anyhow = "1.0"
+# iphone-control: polling the state lock without blocking the caller's thread (src/state_file.rs)
+tokio = { version = "1", default-features = false, features = ["time"], optional = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 dlopen2 = "0.4"

@@ -123,7 +123,7 @@ impl CertificateIdentity {
                 .unwrap();
                 let key_pem = priv_key.to_pkcs8_pem(Default::default())?.to_string();
 
-                fs::write(&key_path, &key_pem)?;
+                write_private(&key_path, key_pem.as_bytes())?;
                 identity.new = true;
                 [cert_pem.into_bytes(), key_pem.into_bytes()]
             }
@@ -147,7 +147,7 @@ impl CertificateIdentity {
             .unwrap();
             let key_pem = priv_key.to_pkcs8_pem(Default::default())?.to_string();
 
-            fs::write(&key_path, &key_pem)?;
+            write_private(&key_path, key_pem.as_bytes())?;
             identity.new = true;
             [cert_pem.into_bytes(), key_pem.into_bytes()]
         };
@@ -391,4 +391,28 @@ impl CertificateIdentity {
 
         Ok(())
     }
+}
+
+// iphone-control: the private key written whole and private from the start (it was written in place with the
+// default umask, 0644, and could be left half written)
+fn write_private(path: &std::path::Path, data: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+    let dir = match path.parent() {
+        Some(p) if !p.as_os_str().is_empty() => p.to_path_buf(),
+        _ => std::path::PathBuf::from("."),
+    };
+    let tmp = dir.join(format!(".key.pem.tmp-{}-{}", std::process::id(), uuid::Uuid::new_v4()));
+    let r = (|| {
+        let mut f = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&tmp)?;
+        f.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+        f.write_all(data)?;
+        f.sync_all()?;
+        std::fs::rename(&tmp, path)?;
+        std::fs::File::open(&dir)?.sync_all()
+    })();
+    if r.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    r
 }

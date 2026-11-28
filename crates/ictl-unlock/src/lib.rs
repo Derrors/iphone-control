@@ -21,6 +21,7 @@ use std::time::Duration;
 use ictl_ui as elements;
 
 mod disable;
+pub mod durable;
 mod wda;
 
 pub use disable::{DeviceFlag, DisableStore, Migration, Reset};
@@ -373,8 +374,8 @@ async fn unlock<D: Screen>(wda: &mut D, cfg: &UnlockConfig, code: &[u8]) -> Resu
             tracing::warn!(
                 "{}",
                 ictl_l10n::log_trf!(
-                    "撤掉停用标记失败，自动解锁保持停用：{e}",
-                    "Removing the disabled flag failed, auto-unlock stays disabled: {e}"
+                    "撤掉停用记录时出错，没有确认落盘（这台可能已恢复，也可能仍停用，下次启动会核对）：{e}",
+                    "Removing the disabled record failed before it was confirmed on disk (this device may be enabled or still disabled; checked again at the next start): {e}"
                 )
             );
         }

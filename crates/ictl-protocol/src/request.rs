@@ -234,9 +234,13 @@ pub enum Request {
     Resign {
         force: bool,
     },
-    /// Re-enables auto-unlock for `udid`, or for the device being controlled when it isn't given (older clients
-    /// don't send it). Only that device's record goes: the others stay disabled
-    UnlockReset {
+    /// What clients of 0.3.2 and earlier send for `unlock-reset`. Answered as [`Request::UnlockResetDevice`] for
+    /// the device being controlled: auto-unlock is disabled per device now, and this re-enables that one only
+    UnlockReset,
+    /// Re-enables auto-unlock for `udid`, or for the device being controlled when it isn't given; the other devices
+    /// stay disabled. A request of its own, not a field on [`Request::UnlockReset`]: a daemon of 0.3.2 or earlier
+    /// would drop the field and re-enable every device, while an unknown request is refused
+    UnlockResetDevice {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         udid: Option<String>,
     },
@@ -428,7 +432,8 @@ impl Request {
             | Self::Daemon
             | Self::Doctor
             | Self::Resign { .. }
-            | Self::UnlockReset { .. }
+            | Self::UnlockReset
+            | Self::UnlockResetDevice { .. }
             | Self::ListDevices
             | Self::AppLogs { .. }
             | Self::CrashReports { .. }

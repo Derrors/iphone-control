@@ -124,8 +124,7 @@ pub(crate) async fn passcode(data_dir: &Path, socket: &Path, action: PasscodeAct
     let cfg = ictl_daemon::Config::from_env(data_dir);
     match action {
         PasscodeAction::Clear { all: true, .. } => {
-            let _ = std::fs::remove_dir_all(cfg.passcodes_dir());
-            let _ = std::fs::remove_file(cfg.legacy_passcode_file());
+            cfg.clear_all_passcodes()?;
             println!(
                 "{}",
                 ictl_l10n::tr!(

@@ -184,12 +184,26 @@ fn extra_cancel_key_is_ignored_when_parsing() {
     }
 }
 
-/// `unlock_reset` without a device is what it always was on the wire, so older daemons and clients see no change
+/// The per-device reset is a request of its own: a daemon of 0.3.2 or earlier can't parse it, so it refuses it
+/// instead of dropping the device and re-enabling every one; what older clients send still parses
 #[test]
-fn unlock_reset_names_its_device_only_when_given() {
-    let plain = Request::UnlockReset { udid: None };
-    assert_eq!(serde_json::to_string(&plain).unwrap(), r#"{"op":"unlock_reset"}"#);
-    assert_eq!(serde_json::from_str::<Request>(r#"{"op":"unlock_reset"}"#).unwrap(), plain);
-    let one = Request::UnlockReset { udid: Some("00008130-0019295E012B803A".into()) };
-    assert_eq!(serde_json::from_str::<Request>(&serde_json::to_string(&one).unwrap()).unwrap(), one);
+fn a_reset_for_one_device_is_refused_by_older_daemons() {
+    #[derive(Debug, Deserialize)]
+    #[serde(tag = "op", rename_all = "snake_case")]
+    #[allow(dead_code)]
+    enum OldRequest {
+        Status,
+        UnlockReset,
+    }
+    for r in [Request::UnlockResetDevice { udid: None }, Request::UnlockResetDevice { udid: Some("A".into()) }] {
+        let s = serde_json::to_string(&r).unwrap();
+        assert!(serde_json::from_str::<OldRequest>(&s).is_err(), "{s}");
+        assert_eq!(serde_json::from_str::<Request>(&s).unwrap(), r);
+    }
+    assert_eq!(serde_json::from_str::<Request>(r#"{"op":"unlock_reset"}"#).unwrap(), Request::UnlockReset);
+    // and a field on the old request, as #231 first had it, is what an older daemon would drop
+    assert!(matches!(
+        serde_json::from_str::<OldRequest>(r#"{"op":"unlock_reset","udid":"A"}"#),
+        Ok(OldRequest::UnlockReset)
+    ));
 }

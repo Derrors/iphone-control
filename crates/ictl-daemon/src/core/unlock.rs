@@ -23,11 +23,12 @@ pub(super) fn migrate_unlock_disabled(cfg: &Config, log: &EventLog) {
         Ok(ictl_unlock::Migration::Shadow) => {
             tracing::info!("auto-unlock disabled records had no shadow flag; written again")
         }
-        // nothing changed: the records still say what they said, and an unreadable one disables
-        Err(e) => tracing::warn!(
-            "{}",
-            ictl_l10n::log_trf!("整理自动解锁停用标记失败：{e}", "Tidying the auto-unlock disabled records failed: {e}")
-        ),
+        // nothing is trusted until it works: every device counts as disabled (`DisableStore::settled`), no record is
+        // changed, and the next change (or start) tries again
+        Err(e) => log.log(&ictl_l10n::log_trf!(
+            "整理自动解锁停用记录失败，所有设备暂时停用自动解锁（修好后重启守护进程或运行 unlock-reset）：{e}",
+            "Tidying the auto-unlock disabled records failed, so auto-unlock is off for every device for now (restart the daemon or run unlock-reset once fixed): {e}"
+        )),
     }
 }
 
@@ -84,14 +85,13 @@ impl Daemon {
     }
 
     /// 旧版本那份不知道是哪台的密码：USB 上只接着一台、正好是要控制的这台、这台还没有自己的密码时，归到它名下。
-    /// 接着多台时不动它（也不用它）
+    /// 接着多台时不动它（也不用它）。上次归到这台时中断了的，不管接着几台都由这台接着做完（`Config::adopt_legacy_passcode`）
     pub(crate) fn adopt_legacy_passcode(&self, g: &Inner) {
-        let legacy = self.cfg.legacy_passcode_file();
-        let ([only], Some(d)) = (&g.connected[..], &g.device) else { return };
-        if only.udid != d.udid || !legacy.is_file() {
-            return;
-        }
-        if self.cfg.passcode_file_for(&d.udid).exists() {
+        let Some(d) = &g.device else { return };
+        // set aside for this device by an adoption cut short: it finishes, whatever else is connected
+        let staged = self.cfg.legacy_passcode_staged_for(&d.udid);
+        let alone = matches!(&g.connected[..], [only] if only.udid == d.udid);
+        if !staged && !(alone && self.cfg.legacy_passcode_file().is_file()) {
             return;
         }
         match self.cfg.adopt_legacy_passcode(&d.udid) {

@@ -43,7 +43,8 @@ pub fn wants_alert_check(req: &Request) -> bool {
         | Request::Daemon
         | Request::Doctor
         | Request::Resign { .. }
-        | Request::UnlockReset { .. }
+        | Request::UnlockReset
+        | Request::UnlockResetDevice { .. }
         | Request::ListDevices
         | Request::AppLogs { .. }
         | Request::CrashReports { .. }

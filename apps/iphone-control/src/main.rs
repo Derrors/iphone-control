@@ -431,7 +431,7 @@ async fn run() -> anyhow::Result<()> {
                 Some(q) => Some(client::target_device(&cli.socket, Some(&q)).await?.udid),
                 None => None,
             };
-            print_text(&cli.socket, Request::UnlockReset { udid }).await
+            print_text(&cli.socket, Request::UnlockResetDevice { udid }).await
         }
         Command::Devices => print_text(&cli.socket, Request::ListDevices).await,
         Command::Select { device } => print_text(&cli.socket, Request::SelectDevice { device }).await,

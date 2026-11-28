@@ -14,20 +14,28 @@
 //!   does, so a downgraded daemon keeps every device disabled rather than entering a passcode again. This version
 //!   writes `ictl-shadow v2 <UDID>` on its first line; a shadow without that line was written by an older version.
 //!
-//! Each new file is written to a temporary name, synced and renamed, and the directory is synced after every rename
-//! and removal: syncing the file alone doesn't keep its name across a power cut.
+//! Every change first brings the files into line ([`DisableStore::migrate`]) under the lock, and fails if that can't
+//! be done: an older version's flag is never written over or removed before it is kept as `LEGACY`. Until the files
+//! are in line every device counts as disabled ([`DeviceFlag::is_disabled`]), so a migration that failed at start-up
+//! (a read-only directory, a full disk) keeps auto-unlock off instead of trusting half of what is there.
+//!
+//! Files and directories are written as [`crate::durable`] describes: each change is on disk, names included, before
+//! the next step.
 
 use std::fs::{File, OpenOptions};
-use std::io::{self, Write};
+use std::io;
 use std::os::fd::AsRawFd;
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
+
+use crate::durable::{self, remove};
 
 const LEGACY: &str = "LEGACY";
 const RELEASED: &str = ".legacy-released";
 const LOCK: &str = ".lock";
 const SHADOW_MARK: &str = "ictl-shadow v2";
 
-/// What [`DisableStore::migrate`] found and did at start-up
+/// What [`DisableStore::migrate`] found and did
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Migration {
     /// Nothing to do
@@ -83,10 +91,33 @@ impl DisableStore {
         present(&self.dir.join(LEGACY))
     }
 
-    /// Brings what an older version or an interrupted change left into line. Run once at start-up, before any
-    /// device is unlocked
+    /// Whether the files are in line, so that a device without a record of its own may be trusted to be enabled: no
+    /// shadow at all, or this version's shadow with a record or `LEGACY` behind it, everything readable. An older
+    /// version's shadow not migrated yet, or a shadow left alone by a cut-short change, is not
+    pub fn settled(&self) -> bool {
+        let text = match std::fs::read_to_string(&self.shadow) {
+            Ok(t) => t,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return true,
+            Err(_) => return false,
+        };
+        if !text.lines().next().unwrap_or_default().starts_with(SHADOW_MARK) {
+            return false;
+        }
+        match (self.records(), self.dir.join(LEGACY).try_exists()) {
+            (Ok(r), Ok(legacy)) => !r.is_empty() || legacy,
+            _ => false,
+        }
+    }
+
+    /// Brings what an older version or an interrupted change left into line. Run at start-up, before any device is
+    /// unlocked; every change runs it too, and fails if it fails
     pub fn migrate(&self) -> io::Result<Migration> {
         let _lock = self.lock()?;
+        self.migrate_locked()
+    }
+
+    /// [`Self::migrate`] with the lock held
+    fn migrate_locked(&self) -> io::Result<Migration> {
         let records = self.records()?;
         let legacy = self.dir.join(LEGACY).try_exists()?;
         let shadow = match std::fs::read_to_string(&self.shadow) {
@@ -105,8 +136,10 @@ impl DisableStore {
         let first = text.lines().next().unwrap_or_default();
         let Some(rest) = first.strip_prefix(SHADOW_MARK) else {
             // an older version's flag (never migrated, or written again after a downgrade): which device failed is
-            // unknown, so all of them are disabled again, and earlier releases from a previous LEGACY don't count
-            write_atomic(&self.dir, LEGACY, &format!("{} {}\n", now(), text.trim()))?;
+            // unknown, so all of them are disabled again, and earlier releases from a previous LEGACY don't count.
+            // The flag itself is replaced last, once LEGACY and the releases are dealt with: cut short before that,
+            // it is still an older version's flag and the next try starts over
+            write(&self.dir, LEGACY, &format!("{} {}\n", now(), text.trim()))?;
             for r in self.released()? {
                 remove(&self.dir, &r)?;
             }
@@ -120,11 +153,11 @@ impl DisableStore {
         // names stays disabled (or all of them, if it names none)
         let udid = rest.trim();
         if udid.is_empty() {
-            write_atomic(&self.dir, LEGACY, &format!("{} orphaned shadow without a device\n", now()))?;
+            write(&self.dir, LEGACY, &format!("{} orphaned shadow without a device\n", now()))?;
             Ok(Migration::Orphan(None))
         } else {
             let name = file_name(udid);
-            write_atomic(&self.dir, &name, &format!("{} orphaned shadow: an interrupted change\n", now()))?;
+            write(&self.dir, &name, &format!("{} orphaned shadow: an interrupted change\n", now()))?;
             Ok(Migration::Orphan(Some(name)))
         }
     }
@@ -132,19 +165,26 @@ impl DisableStore {
     /// Re-enables auto-unlock for `udid`. The caller makes sure nothing is entering its passcode now
     pub fn reset(&self, udid: &str) -> io::Result<Reset> {
         let flag = self.device(udid);
-        let was = flag.is_disabled();
         let _lock = self.lock()?;
+        self.migrate_locked()?;
+        let was = flag.is_disabled();
         remove(&self.dir, &flag.name)?;
         if self.dir.join(LEGACY).try_exists()? {
-            write_atomic(&self.dir, &format!("{}{RELEASED}", flag.name), &format!("{}\n", now()))?;
+            write(&self.dir, &format!("{}{RELEASED}", flag.name), &format!("{}\n", now()))?;
         }
         self.drop_shadow_if_unused()?;
         Ok(if was { Reset::Cleared } else { Reset::WasEnabled })
     }
 
     fn lock(&self) -> io::Result<File> {
-        std::fs::create_dir_all(&self.dir)?;
-        let f = OpenOptions::new().read(true).write(true).create(true).truncate(false).open(self.dir.join(LOCK))?;
+        durable::create_dir_all(&self.dir)?;
+        let f = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .mode(0o600)
+            .open(self.dir.join(LOCK))?;
         // short sections only (a few small writes), so waiting for it is fine
         // SAFETY: a valid descriptor, owned by `f` for as long as the lock is used
         if unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX) } != 0 {
@@ -162,60 +202,85 @@ impl DisableStore {
         Ok(self.names()?.into_iter().filter(|n| n.ends_with(RELEASED)).collect())
     }
 
+    /// Every name in [`Self::dir`]. An entry that can't be read is an error, never left out: a listing cut short
+    /// would look like a device without a record
     fn names(&self) -> io::Result<Vec<String>> {
         let entries = match std::fs::read_dir(&self.dir) {
             Ok(e) => e,
             Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
             Err(e) => return Err(e),
         };
-        let mut v: Vec<String> = entries.flatten().filter_map(|e| e.file_name().into_string().ok()).collect();
+        let mut v = Vec::new();
+        for e in entries {
+            // not UTF-8: no name this module writes
+            if let Ok(n) = e?.file_name().into_string() {
+                v.push(n);
+            }
+        }
         v.sort();
         Ok(v)
     }
 
     fn write_shadow(&self, udid: Option<&str>, why: &str) -> io::Result<()> {
-        let dir = self.shadow.parent().unwrap_or(Path::new("."));
-        let name = self.shadow.file_name().and_then(|n| n.to_str()).unwrap_or("UNLOCK-DISABLED");
+        let (dir, name) = self.shadow_parts();
         let head = match udid {
             Some(u) => format!("{SHADOW_MARK} {u}"),
             None => SHADOW_MARK.to_owned(),
         };
-        write_atomic(dir, name, &format!("{head}\n{} {why}\n", now()))
+        write(dir, name, &format!("{head}\n{} {why}\n", now()))
     }
 
     /// The shadow goes only once no record is left: until then an older version must still see it
     fn drop_shadow_if_unused(&self) -> io::Result<()> {
         if self.records()?.is_empty() && !self.dir.join(LEGACY).try_exists()? {
-            let dir = self.shadow.parent().unwrap_or(Path::new("."));
-            let name = self.shadow.file_name().and_then(|n| n.to_str()).unwrap_or("UNLOCK-DISABLED");
+            let (dir, name) = self.shadow_parts();
             remove(dir, name)?;
         }
         Ok(())
     }
+
+    fn shadow_parts(&self) -> (&Path, &str) {
+        let dir = match self.shadow.parent() {
+            Some(d) if !d.as_os_str().is_empty() => d,
+            _ => Path::new("."),
+        };
+        (dir, self.shadow.file_name().and_then(|n| n.to_str()).unwrap_or("UNLOCK-DISABLED"))
+    }
 }
 
 impl DeviceFlag {
-    /// Whether auto-unlock is disabled for this device. When the records can't be read it counts as disabled
+    /// Whether auto-unlock is disabled for this device: by its own record, by an older version's flag it wasn't
+    /// released from, or because the files aren't in line ([`DisableStore::settled`]). Whatever can't be read counts
+    /// as disabled
     pub fn is_disabled(&self) -> bool {
         let dir = &self.store.dir;
         if present(&dir.join(&self.name)) {
             return true;
         }
-        present(&dir.join(LEGACY)) && !matches!(dir.join(format!("{}{RELEASED}", self.name)).try_exists(), Ok(true))
+        if present(&dir.join(LEGACY)) && !matches!(dir.join(format!("{}{RELEASED}", self.name)).try_exists(), Ok(true))
+        {
+            return true;
+        }
+        !self.store.settled()
     }
 
     /// Records this device as disabled: the shadow first, then its own record, both on disk before this returns.
-    /// Only after that may a digit that could complete the passcode be entered
+    /// Only after that may a digit that could complete the passcode be entered. Fails, writing nothing, if the
+    /// files can't be brought into line first
     pub(crate) fn disable(&self, why: &str) -> io::Result<()> {
         let _lock = self.store.lock()?;
+        self.store.migrate_locked()?;
         self.store.write_shadow(Some(&self.name), why)?;
-        write_atomic(&self.store.dir, &self.name, &format!("{} {why}\n", now()))
+        write(&self.store.dir, &self.name, &format!("{} {why}\n", now()))
     }
 
     /// Removes this device's record once the passcode was confirmed to have unlocked the phone, or confirmed not to
-    /// have been submitted. Its own record goes first, the shadow last
+    /// have been submitted. Its own record goes first, the shadow last. An error may come after the record is gone
+    /// (syncing, the shadow): the device may then be enabled already, and the shadow left keeps it disabled for an
+    /// older version only
     pub(crate) fn clear(&self) -> io::Result<()> {
         let _lock = self.store.lock()?;
+        self.store.migrate_locked()?;
         remove(&self.store.dir, &self.name)?;
         self.store.drop_shadow_if_unused()
     }
@@ -243,39 +308,15 @@ fn now() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs()
 }
 
-/// `name` in `dir` replaced by `text`, on disk (file and name) when it returns
-fn write_atomic(dir: &Path, name: &str, text: &str) -> io::Result<()> {
-    std::fs::create_dir_all(dir)?;
-    let tmp = dir.join(format!(".{name}.tmp-{}", std::process::id()));
-    let r = (|| {
-        let mut f = OpenOptions::new().write(true).create(true).truncate(true).open(&tmp)?;
-        f.write_all(text.as_bytes())?;
-        f.sync_all()?;
-        std::fs::rename(&tmp, dir.join(name))?;
-        sync_dir(dir)
-    })();
-    if r.is_err() {
-        let _ = std::fs::remove_file(&tmp);
-    }
-    r
-}
-
-/// `name` in `dir` removed, on disk when it returns; not being there is fine
-fn remove(dir: &Path, name: &str) -> io::Result<()> {
-    match std::fs::remove_file(dir.join(name)) {
-        Ok(()) => sync_dir(dir),
-        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
-        Err(e) => Err(e),
-    }
-}
-
-fn sync_dir(dir: &Path) -> io::Result<()> {
-    File::open(dir)?.sync_all()
+/// `name` in `dir` replaced by `text`, private, on disk (file and name) when it returns
+fn write(dir: &Path, name: &str, text: &str) -> io::Result<()> {
+    durable::write_atomic(dir, name, text.as_bytes(), 0o600)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::durable::remove;
 
     fn store() -> (DisableStore, PathBuf) {
         let root = std::env::temp_dir().join(format!("ictl-disable-{}", uuid::Uuid::new_v4()));
@@ -408,6 +449,79 @@ mod tests {
         if unreadable {
             assert!(disabled);
         }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// An older version's flag that can't be kept as LEGACY (here: something in the way of its name) stays as it
+    /// is, every device stays disabled, and no change gets through until the migration does
+    #[test]
+    fn a_migration_that_cannot_finish_keeps_every_device_disabled() {
+        let (s, root) = store();
+        let old = "1700000000 still locked after entering the whole passcode\n";
+        std::fs::write(&s.shadow, old).unwrap();
+        std::fs::create_dir_all(s.dir.join("LEGACY/in-the-way")).unwrap();
+        assert!(s.migrate().is_err());
+        assert!(s.device(A).is_disabled() && s.device(B).is_disabled());
+        assert!(s.device(A).disable("wrong").is_err(), "not before the old flag is kept");
+        assert!(s.reset(A).is_err(), "nor reset");
+        assert_eq!(std::fs::read_to_string(&s.shadow).unwrap(), old, "the old flag untouched");
+        std::fs::remove_dir_all(s.dir.join("LEGACY")).unwrap();
+        assert_eq!(s.migrate().unwrap(), Migration::Legacy);
+        assert!(s.device(A).is_disabled() && s.device(B).is_disabled());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// The same when the releases from an earlier LEGACY can't be cleared (an older version wrote its flag again
+    /// after a downgrade): the old flag stays, and the release doesn't let the device through
+    #[test]
+    fn releases_that_cannot_be_cleared_keep_the_old_flag() {
+        let (s, root) = store();
+        std::fs::write(&s.shadow, "1700000000 x\n").unwrap();
+        s.migrate().unwrap();
+        s.reset(A).unwrap();
+        assert!(!s.device(A).is_disabled());
+        // downgraded, failed again; and A's release can't be removed (a directory with something in it)
+        let old = "1700000100 entering the passcode\n";
+        std::fs::write(&s.shadow, old).unwrap();
+        let released = s.dir.join(format!("{}{RELEASED}", file_name(A)));
+        std::fs::remove_file(&released).unwrap();
+        std::fs::create_dir_all(released.join("in-the-way")).unwrap();
+        assert!(s.migrate().is_err());
+        assert!(s.device(A).is_disabled(), "the old flag, not the release, decides");
+        assert_eq!(std::fs::read_to_string(&s.shadow).unwrap(), old);
+        std::fs::remove_dir_all(&released).unwrap();
+        assert_eq!(s.migrate().unwrap(), Migration::Legacy);
+        assert!(s.device(A).is_disabled());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// Before a start-up migration has run, a shadow left alone by a cut-short change disables every device
+    #[test]
+    fn a_shadow_left_alone_disables_every_device_until_migrated() {
+        let (s, root) = store();
+        s.write_shadow(Some(&file_name(A)), "entering").unwrap();
+        assert!(s.device(A).is_disabled() && s.device(B).is_disabled());
+        s.migrate().unwrap();
+        assert!(s.device(A).is_disabled() && !s.device(B).is_disabled());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// Made from nothing, the records' directory and the directory above it are kept by syncing their parents before
+    /// the first record is written; the shadow is on disk before the record
+    #[test]
+    fn the_first_record_keeps_the_directories_it_made() {
+        let (s, root) = store();
+        crate::durable::tests::synced();
+        s.device(A).disable("wrong").unwrap();
+        let synced = crate::durable::tests::synced();
+        let at = |p: &Path| {
+            synced.iter().position(|q| q == p).unwrap_or_else(|| panic!("{} not synced: {synced:?}", p.display()))
+        };
+        assert!(at(&root) < at(&root.join("secrets")), "secrets/ named in the root first");
+        assert!(at(&root.join("secrets")) < at(&s.dir), "then unlock-disabled/ in secrets/");
+        let shadow = synced.iter().rposition(|q| q == &root.join("logs")).unwrap();
+        let record = synced.iter().rposition(|q| q == &s.dir).unwrap();
+        assert!(shadow < record, "the shadow before the record");
         std::fs::remove_dir_all(root).unwrap();
     }
 }

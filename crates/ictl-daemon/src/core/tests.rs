@@ -655,3 +655,26 @@ async fn unlock_reset_re_enables_only_its_device() {
     drop(g);
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+/// unlock-reset never waits behind what holds the device (it may be entering a passcode whose wrong entry it would
+/// clear), and an AI task can't send it
+#[tokio::test]
+async fn unlock_reset_is_refused_while_busy_and_to_tasks() {
+    use ictl_l10n::Lang;
+    let (d, dir) = test_daemon("unlock-reset-busy");
+    let req = || Request::UnlockResetDevice { udid: Some("00008130-0019295E012B803A".into()) };
+    let refused = |r: &Response| matches!(r, Response::Error { .. });
+    let held = d.inner.lock().await;
+    let r = tokio::time::timeout(Duration::from_secs(2), d.handle(req(), Instant::now(), CallCtx::default()))
+        .await
+        .expect("answered at once, not queued");
+    assert!(refused(&r), "{r:?}");
+    drop(held);
+    assert!(!refused(&d.handle(req(), Instant::now(), CallCtx::default()).await));
+    // what older clients send means the controlled device: with none, there is nothing to re-enable
+    let old = ictl_l10n::scope(Lang::En, d.handle(Request::UnlockReset, Instant::now(), CallCtx::default())).await;
+    assert!(matches!(&old, Response::Error { message, .. } if message.contains("--device")), "{old:?}");
+    let task = CallCtx { task: Some("some-task-token".into()), ..Default::default() };
+    assert!(refused(&d.handle(req(), Instant::now(), task).await));
+    std::fs::remove_dir_all(dir).unwrap();
+}

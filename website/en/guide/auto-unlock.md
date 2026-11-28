@@ -52,7 +52,7 @@ If it stopped because of an error during entry or a killed process, the passcode
 
 `unlock-reset` re-enables the device the daemon controls; for another one add `--device <UDID>` (it must be connected; a UDID only, not a name, since names change: see `iphone-control devices`). It is refused while the daemon is busy with the device (it may be entering the passcode): run it again in a moment. AI tasks can't run it. A daemon of 0.3.2 or earlier refuses the new `unlock-reset`: upgrade the daemon first.
 
-When you upgrade from 0.3.2 or earlier and the old version had disabled auto-unlock, it didn't record which device failed, so after the upgrade **every device stays disabled**: check each one's passcode and run `unlock-reset` for each (`doctor` says so).
+When you upgrade from 0.3.2 or earlier and the old version had disabled auto-unlock, it didn't record which device failed, so after the upgrade **every device stays disabled**: check each one's passcode and run `unlock-reset` for each (`doctor` says so). Once every device with a saved passcode is re-enabled, the old version's flag is removed, and devices connected later aren't affected.
 
 ::: tip Don't need auto-unlock?
 Set *Settings → Display & Brightness → Auto-Lock* to *Never* on the phone, and it won't lock by itself.

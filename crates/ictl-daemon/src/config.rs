@@ -215,7 +215,41 @@ impl Config {
         let name = passcode_name(udid);
         ictl_unlock::durable::remove(&dir, &format!("{LEGACY_STAGED}{name}"))?;
         ictl_unlock::durable::remove_temps(&dir, &name)?;
-        ictl_unlock::durable::remove(&dir, &name)
+        ictl_unlock::durable::remove(&dir, &name)?;
+        // the device that held up an older version's flag may have been this one. Not retiring it is the safe way
+        // to fail: the passcode is cleared all the same
+        let _ = self.retire_legacy_locked();
+        Ok(())
+    }
+    /// An older version's flag on auto-unlock ([`ictl_unlock::DisableStore::retire_legacy`]) removed once every
+    /// device with a saved passcode was released from it, unless a passcode whose device isn't known is still there
+    /// (the old single one, or one set aside by an adoption cut short). Under the passcodes lock, so no passcode is
+    /// saved meanwhile. `Ok(true)`: removed
+    pub fn retire_legacy_unlock_disabled(&self) -> std::io::Result<bool> {
+        let _lock = self.passcodes_lock()?;
+        self.retire_legacy_locked()
+    }
+    fn retire_legacy_locked(&self) -> std::io::Result<bool> {
+        if self.legacy_passcode_file().try_exists()? {
+            return Ok(false);
+        }
+        let mut devices = Vec::new();
+        match std::fs::read_dir(self.passcodes_dir()) {
+            Ok(entries) => {
+                for e in entries {
+                    let name = e?.file_name().to_string_lossy().into_owned();
+                    if name.starts_with(LEGACY_STAGED) {
+                        return Ok(false);
+                    }
+                    if !name.starts_with('.') {
+                        devices.push(name);
+                    }
+                }
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e),
+        }
+        self.unlock_disabled().retire_legacy(&devices)
     }
     /// `passcode clear --all`: every device's passcode and the one an older version saved, under the same lock as
     /// [`Self::adopt_legacy_passcode`], so an adoption under way can't publish the old one again afterwards
@@ -229,7 +263,12 @@ impl Config {
         let legacy = self.legacy_passcode_file();
         let secrets = legacy.parent().unwrap_or(Path::new("."));
         ictl_unlock::durable::remove(secrets, "passcode")?;
-        if secrets.is_dir() { ictl_unlock::durable::sync_dir(secrets) } else { Ok(()) }
+        if secrets.is_dir() {
+            ictl_unlock::durable::sync_dir(secrets)?;
+        }
+        // no passcode left: no device is unlocked automatically, so an older version's flag has nothing to guard
+        let _ = self.retire_legacy_locked();
+        Ok(())
     }
     /// Whether the passcode an older version saved was set aside for `udid` by an adoption cut short: only `udid`
     /// may finish it
@@ -398,6 +437,40 @@ mod tests {
         cfg.clear_passcode("A").unwrap();
         assert!(!stray.exists() && !cfg.passcode_file_for("A").exists());
         assert!(cfg.passcode_file_for("B").exists(), "B's stays");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// An older version's flag goes once every device with a saved passcode is released from it, not while a
+    /// passcode whose device isn't known is there; clearing the passcode of the one left also retires it
+    #[test]
+    fn an_older_versions_flag_goes_once_every_device_with_a_passcode_is_released() {
+        let dir = std::env::temp_dir().join(format!("ictl-config-retire-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let cfg = Config::from_env(&dir);
+        cfg.prepare_dirs().unwrap();
+        cfg.write_passcode("A", "1111").unwrap();
+        cfg.write_passcode("B", "2222").unwrap();
+        std::fs::write(cfg.unlock_disabled_flag(), "1700000000 x\n").unwrap();
+        let store = cfg.unlock_disabled();
+        store.migrate().unwrap();
+        store.reset("A").unwrap();
+        assert!(!cfg.retire_legacy_unlock_disabled().unwrap(), "B isn't released");
+        store.reset("B").unwrap();
+        std::fs::write(cfg.legacy_passcode_file(), "3333").unwrap();
+        assert!(!cfg.retire_legacy_unlock_disabled().unwrap(), "an old passcode of an unknown device");
+        std::fs::remove_file(cfg.legacy_passcode_file()).unwrap();
+        std::fs::write(cfg.passcodes_dir().join(format!("{LEGACY_STAGED}C")), "3333").unwrap();
+        assert!(!cfg.retire_legacy_unlock_disabled().unwrap(), "one set aside for C, not adopted yet");
+        std::fs::remove_file(cfg.passcodes_dir().join(format!("{LEGACY_STAGED}C"))).unwrap();
+        assert!(cfg.retire_legacy_unlock_disabled().unwrap());
+        assert!(!store.legacy() && !cfg.unlock_disabled_flag().exists());
+
+        // B left unreleased, then its passcode cleared: nothing holds the flag up any more
+        std::fs::write(cfg.unlock_disabled_flag(), "1700000100 x\n").unwrap();
+        store.migrate().unwrap();
+        store.reset("A").unwrap();
+        cfg.clear_passcode("B").unwrap();
+        assert!(!store.legacy() && !cfg.unlock_disabled_flag().exists());
         std::fs::remove_dir_all(dir).unwrap();
     }
 

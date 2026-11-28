@@ -128,7 +128,26 @@ impl Daemon {
                 ictl_l10n::trf!("{label} 的自动解锁没有停用", "Auto-unlock wasn't disabled for {label}")
             }
         };
-        if store.legacy() {
+        let retired = self.cfg.retire_legacy_unlock_disabled().unwrap_or_else(|e| {
+            tracing::warn!(
+                "{}",
+                ictl_l10n::log_trf!(
+                    "撤掉旧版本的停用标记失败，它照旧生效：{e}",
+                    "Removing the older version's flag failed; it still applies: {e}"
+                )
+            );
+            false
+        });
+        if retired {
+            self.log.log(ictl_l10n::log_tr!(
+                "存了锁屏密码的设备都已逐台恢复，撤掉了旧版本留下的停用标记",
+                "Every device with a saved passcode was re-enabled one by one: the flag an older version left is removed"
+            ));
+            text += ictl_l10n::tr!(
+                "；存了锁屏密码的设备都已恢复，旧版本留下的停用标记已撤掉",
+                "; every device with a saved passcode is re-enabled, so the flag an older version left is removed"
+            );
+        } else if store.legacy() {
             text += ictl_l10n::tr!(
                 "；旧版本留下的停用标记还在，其他设备在各自运行 unlock-reset 之前仍是停用的",
                 "; the flag an older version left is still there: other devices stay disabled until unlock-reset is run for each"

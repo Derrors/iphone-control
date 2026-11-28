@@ -144,7 +144,7 @@ iOS 27 及以上默认走 `tools/native/`（详见 [ios27-native.md](dev/ios27-n
 | `wda/` | 签好名的 `WDA-signed.ipa` 与未签名包 `WDA-unsigned.ipa`（首次签名前从 Appium 官方 Release 下载并校验 sha256） | 默认 | 否 |
 | `secrets/passcodes/<UDID>` | 各设备独立存放的锁屏密码（仅开启自动解锁时，原子写入；旧版单文件 `secrets/passcode` 在仅连一台设备时认领：先改名为只属于这台的 `.legacy-for-<UDID>`，再硬链接发布，中断后只由这台做完；`secrets/passcodes.lock` 让认领和 `passcode clear --all` 串行） | 0600 | 否 |
 | `logs/` | 事件日志 `daemon.log`（超 5 MB 轮转 `.1`）；`UNLOCK-DISABLED`：给 0.3.2 及更早版本看的影子，有任何停用记录时都在 | 默认 | 否 |
-| `secrets/unlock-disabled/` | 按设备的自动解锁停用记录 `<UDID>`；`LEGACY` 是旧版本留下、不知道是哪台的停用（每台都停用，`<UDID>.legacy-released` 表示这台已解除） | 0700（在 `secrets/` 里） | 否 |
+| `secrets/unlock-disabled/` | 按设备的自动解锁停用记录 `<UDID>`；`LEGACY` 是旧版本留下、不知道是哪台的停用（每台都停用，`<UDID>.legacy-released` 表示这台已解除；存了锁屏密码的设备都解除、也没有归属不明的旧密码时自动撤掉） | 0700（在 `secrets/` 里） | 否 |
 | `state.json` | 最近签名信息（Team ID / Bundle ID / 到期时间）、选定设备、每台设备竖放屏幕尺寸、上次重签结果、后台 WDA 进程记录（`detached_wdas` / `loopback_wdas`）、按键策略缓存（`button_ways`） | 默认 | 否 |
 | `run-state.json` | 守护进程运行标记（正常退出时清除）、看门狗退出记录及异常重启告警持久化冷却状态（`watchdog.rs`），独立于 `state.json` 与设备锁 | 默认 | 否 |
 | `viewer-tokens.json` | 控制台命名登录令牌（名称、权限 `operate`/`view`、令牌） | 0600 | 否 |

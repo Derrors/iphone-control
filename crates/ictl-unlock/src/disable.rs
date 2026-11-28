@@ -9,7 +9,9 @@
 //! - `<UDID>`: this device is disabled. The text says when and why.
 //! - `LEGACY`: a record from a version that kept one flag for all devices. Nobody knows which device failed, so every
 //!   device counts as disabled while it exists, except one released from it by `unlock-reset`
-//!   (`<UDID>.legacy-released`).
+//!   (`<UDID>.legacy-released`). It goes once every device that could be unlocked automatically is released
+//!   ([`DisableStore::retire_legacy`]): kept for good, it would disable every device connected later and keep the
+//!   shadow, with nothing the user could do about it.
 //! - The shadow, `logs/UNLOCK-DISABLED`: the single flag older versions read. It exists whenever any record above
 //!   does, so a downgraded daemon keeps every device disabled rather than entering a passcode again. This version
 //!   writes `ictl-shadow v2 <UDID>` on its first line; a shadow without that line was written by an older version.
@@ -174,6 +176,31 @@ impl DisableStore {
         }
         self.drop_shadow_if_unused()?;
         Ok(if was { Reset::Cleared } else { Reset::WasEnabled })
+    }
+
+    /// Removes `LEGACY` (and the releases from it, and the shadow if no record is left) once every one of `devices`
+    /// was released from it: the caller passes every device auto-unlock could be used for (those with a saved
+    /// passcode), and doesn't call it while there is a passcode whose device isn't known. A device without a passcode
+    /// isn't unlocked automatically anyway, and saving one later is the user's own decision. A device's own record is
+    /// left as it is. `Ok(true)`: removed; `Ok(false)`: there was none, or a device isn't released yet
+    pub fn retire_legacy(&self, devices: &[String]) -> io::Result<bool> {
+        let _lock = self.lock()?;
+        self.migrate_locked()?;
+        if !self.dir.join(LEGACY).try_exists()? {
+            return Ok(false);
+        }
+        for d in devices {
+            if !self.dir.join(format!("{}{RELEASED}", file_name(d))).try_exists()? {
+                return Ok(false);
+            }
+        }
+        // LEGACY first: cut short after it, the releases left behind mean nothing (a new LEGACY clears them)
+        remove(&self.dir, LEGACY)?;
+        for r in self.released()? {
+            remove(&self.dir, &r)?;
+        }
+        self.drop_shadow_if_unused()?;
+        Ok(true)
     }
 
     fn lock(&self) -> io::Result<File> {
@@ -449,6 +476,38 @@ mod tests {
         if unreadable {
             assert!(disabled);
         }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// LEGACY goes once every device given is released: then a device connected later isn't disabled, and the shadow
+    /// goes unless a device's own record is left
+    #[test]
+    fn legacy_is_retired_once_every_device_with_a_passcode_is_released() {
+        let (s, root) = store();
+        std::fs::write(&s.shadow, "1700000000 x\n").unwrap();
+        s.migrate().unwrap();
+        let both = [A.to_lowercase(), B.to_owned()];
+        assert!(!s.retire_legacy(&both).unwrap(), "neither released");
+        s.reset(A).unwrap();
+        assert!(!s.retire_legacy(&both).unwrap(), "B isn't");
+        assert!(s.device(B).is_disabled() && s.device("NEW-DEVICE").is_disabled());
+        s.reset(B).unwrap();
+        assert!(s.retire_legacy(&both).unwrap());
+        assert!(!s.legacy() && !s.shadow.exists());
+        assert!(!s.device(A).is_disabled() && !s.device(B).is_disabled() && !s.device("NEW-DEVICE").is_disabled());
+        assert!(!s.retire_legacy(&both).unwrap(), "nothing left to retire");
+        let left: Vec<_> = std::fs::read_dir(&s.dir).unwrap().flatten().map(|e| e.file_name()).collect();
+        assert_eq!(left.len(), 1, "only the lock: {left:?}");
+        std::fs::remove_dir_all(&root).unwrap();
+
+        // a device's own record stays, and so does the shadow for it
+        let (s, root) = store();
+        std::fs::write(&s.shadow, "1700000000 x\n").unwrap();
+        s.migrate().unwrap();
+        s.reset(A).unwrap();
+        s.device(B).disable("wrong").unwrap();
+        assert!(s.retire_legacy(&[A.to_owned()]).unwrap());
+        assert!(!s.device(A).is_disabled() && s.device(B).is_disabled() && s.shadow.is_file());
         std::fs::remove_dir_all(root).unwrap();
     }
 

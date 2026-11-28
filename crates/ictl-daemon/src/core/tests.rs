@@ -644,6 +644,8 @@ async fn unlock_reset_re_enables_only_its_device() {
     std::fs::write(dir.join("logs/UNLOCK-DISABLED"), "1700000000 still locked after entering the whole passcode\n")
         .unwrap();
     let d = Daemon::new(Config::from_env(&dir));
+    d.cfg.write_passcode(A, "1111").unwrap();
+    d.cfg.write_passcode(B, "2222").unwrap();
     assert!(d.unlock_cfg(Some(A)).disabled_by_failure() && d.unlock_cfg(Some(B)).disabled_by_failure());
     let mut g = d.inner.lock().await;
     assert!(d.unlock_reset(&g, None, None).is_err(), "no device controlled, none named");
@@ -653,6 +655,11 @@ async fn unlock_reset_re_enables_only_its_device() {
     assert!(!d.unlock_cfg(Some(A)).disabled_by_failure());
     assert!(d.unlock_cfg(Some(B)).disabled_by_failure(), "B wasn't reset");
     assert!(dir.join("logs/UNLOCK-DISABLED").is_file(), "a downgraded daemon still sees B disabled");
+    // B, the last device with a passcode: the older version's flag goes, a device connected later isn't disabled
+    connect(&mut g, B, "iPad");
+    let text = with_lang(Lang::En, || d.unlock_reset(&g, Some(B), None)).unwrap();
+    assert!(text.contains("is removed"), "{text}");
+    assert!(!dir.join("logs/UNLOCK-DISABLED").exists() && !d.unlock_cfg(Some("NEW-DEVICE")).disabled_by_failure());
     drop(g);
     std::fs::remove_dir_all(dir).unwrap();
 }
@@ -701,6 +708,8 @@ async fn unlock_reset_takes_a_connected_udid_only() {
     std::fs::create_dir_all(d.cfg.logs()).unwrap();
     std::fs::write(d.cfg.unlock_disabled_flag(), "1700000000 x\n").unwrap();
     d.cfg.unlock_disabled().migrate().unwrap();
+    d.cfg.write_passcode(A, "1111").unwrap();
+    d.cfg.write_passcode(B, "2222").unwrap();
     let mut g = d.inner.lock().await;
     assert!(d.unlock_reset(&g, Some(B), None).is_err(), "not connected");
     connect(&mut g, B, "iPad");

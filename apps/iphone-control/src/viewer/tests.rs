@@ -1037,9 +1037,37 @@ fn page_actions_map_to_daemon_requests() {
         })
     );
     assert_eq!(
+        action("tap_element", &json!({"kind": "Button", "match": "exact"})),
+        Some(Request::TapElement {
+            text: String::new(),
+            index: 0,
+            max_age_ms: 0,
+            scroll: None,
+            selector: protocol::ElementSelector {
+                kind: Some("Button".into()),
+                id: None,
+                mode: protocol::MatchMode::Exact,
+            },
+        })
+    );
+    assert_eq!(action("tap_element", &json!({})), None);
+    assert_eq!(
         action("wait_for", &json!({"text": "x", "timeout": 99})),
         Some(Request::WaitFor { text: "x".into(), timeout_ms: 30_000, selector: protocol::ElementSelector::default() })
     );
+    assert_eq!(
+        action("wait_for", &json!({"id": "login.btn"})),
+        Some(Request::WaitFor {
+            text: String::new(),
+            timeout_ms: 5_000,
+            selector: protocol::ElementSelector {
+                kind: None,
+                id: Some("login.btn".into()),
+                mode: protocol::MatchMode::Auto,
+            },
+        })
+    );
+    assert_eq!(action("wait_for", &json!({})), None);
     assert_eq!(action("launch_app", &json!({"app": " 设置 "})), Some(Request::LaunchApp { app: "设置".into() }));
     assert_eq!(
         action("touch", &json!({"phase": "move", "x": 3, "y": 4.5})),

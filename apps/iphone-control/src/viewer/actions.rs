@@ -158,18 +158,34 @@ pub(super) fn action(name: &str, b: &Value) -> Option<Request> {
         "launch_app" => Request::LaunchApp { app: text("app")?.trim().to_owned() },
         "terminate_app" => Request::TerminateApp { app: text("app")?.trim().to_owned() },
         "open_url" => Request::OpenUrl { url: text("url")?.trim().to_owned() },
-        "tap_element" => Request::TapElement {
-            text: text("text")?,
-            index: b.get("index").and_then(Value::as_u64).unwrap_or(0) as usize,
-            max_age_ms: 0,
-            scroll: None,
-            selector: selector_of(b),
-        },
-        "wait_for" => Request::WaitFor {
-            text: text("text")?,
-            timeout_ms: (num("timeout").unwrap_or(5.0).clamp(0.5, 30.0) * 1000.0) as u64,
-            selector: selector_of(b),
-        },
+        "tap_element" => {
+            let selector = selector_of(b);
+            let t = match text("text") {
+                Some(t) => t,
+                None if selector.has_structure() => String::new(),
+                None => return None,
+            };
+            Request::TapElement {
+                text: t,
+                index: b.get("index").and_then(Value::as_u64).unwrap_or(0) as usize,
+                max_age_ms: 0,
+                scroll: None,
+                selector,
+            }
+        }
+        "wait_for" => {
+            let selector = selector_of(b);
+            let t = match text("text") {
+                Some(t) => t,
+                None if selector.has_structure() => String::new(),
+                None => return None,
+            };
+            Request::WaitFor {
+                text: t,
+                timeout_ms: (num("timeout").unwrap_or(5.0).clamp(0.5, 30.0) * 1000.0) as u64,
+                selector,
+            }
+        }
         _ => return None,
     })
 }

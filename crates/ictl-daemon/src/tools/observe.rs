@@ -301,7 +301,7 @@ impl Daemon {
                     None => Waited::after_matching(&tree, sel, disappeared),
                 };
                 if t0.elapsed() >= timeout {
-                    return Err(wait_timeout(&desc, timeout, why));
+                    return Err(wait_timeout(&desc, !selector.is_empty(), timeout, why));
                 }
                 if !may_continue() {
                     return Err(wait_interrupted(&desc, t0.elapsed()));
@@ -384,36 +384,44 @@ impl Waited {
     }
 }
 
-pub(super) fn wait_timeout(text: &str, timeout: Duration, why: Waited) -> crate::error::Error {
+pub(super) fn wait_timeout(text: &str, composite: bool, timeout: Duration, why: Waited) -> crate::error::Error {
     let seconds = timeout.as_secs_f64();
+    let target_en = if composite { text.to_owned() } else { format!("\"{text}\"") };
     match why {
         Waited::NotAppeared => {}
         Waited::Present => {
             return ictl_l10n::trf!(
                 "{seconds:.1} 秒内「{text}」没消失,截图看看屏幕",
-                "\"{text}\" did not disappear within {seconds:.1} s; take a screenshot"
+                "{target_en} did not disappear within {seconds:.1} s; take a screenshot"
             )
             .into();
         }
         Waited::Unread => {
             return ictl_l10n::trf!(
                 "{seconds:.1} 秒内无法确认「{text}」已消失:界面没读到或没读全(元素太多、读得太慢),截图看看屏幕",
-                "Couldn't confirm within {seconds:.1} s that \"{text}\" disappeared: the screen wasn't read, or not in full (too many elements, a slow read); take a screenshot"
+                "Couldn't confirm within {seconds:.1} s that {target_en} disappeared: the screen wasn't read, or not in full (too many elements, a slow read); take a screenshot"
             )
             .into();
         }
         Waited::Covered => {
             return ictl_l10n::trf!(
                 "{seconds:.1} 秒内无法确认「{text}」已消失:屏幕被通知中心、控制中心或锁屏挡着,或查不到是否锁屏,截图看看屏幕",
-                "Couldn't confirm within {seconds:.1} s that \"{text}\" disappeared: notification center, control center or the lock screen is over the screen, or the lock state couldn't be found out; take a screenshot"
+                "Couldn't confirm within {seconds:.1} s that {target_en} disappeared: notification center, control center or the lock screen is over the screen, or the lock state couldn't be found out; take a screenshot"
             )
             .into();
         }
     }
-    ictl_l10n::trf!(
-        "{seconds:.0} 秒内没出现包含 \"{text}\" 的元素,截图看看屏幕",
-        "No element containing \"{text}\" appeared within {seconds:.0} s; take a screenshot to look at the screen"
-    )
+    if composite {
+        ictl_l10n::trf!(
+            "{seconds:.0} 秒内没出现匹配 {text} 的元素,截图看看屏幕",
+            "No element matching {text} appeared within {seconds:.0} s; take a screenshot to look at the screen"
+        )
+    } else {
+        ictl_l10n::trf!(
+            "{seconds:.0} 秒内没出现包含 \"{text}\" 的元素,截图看看屏幕",
+            "No element containing \"{text}\" appeared within {seconds:.0} s; take a screenshot to look at the screen"
+        )
+    }
     .into()
 }
 
@@ -453,9 +461,15 @@ mod wait_tests {
         // read even though cut short: it is still there
         assert_eq!(Waited::after(&tree, "Clock", true), Waited::Present);
         assert_eq!(Waited::after(&Tree::default(), "Timer", true), Waited::Unread);
-        let msg = |w| wait_timeout("Clock", Duration::from_secs(2), w).to_string();
+        let msg = |w| wait_timeout("Clock", false, Duration::from_secs(2), w).to_string();
         let all = [Waited::NotAppeared, Waited::Present, Waited::Unread, Waited::Covered].map(msg);
         assert!(all.iter().collect::<std::collections::HashSet<_>>().len() == 4, "{all:?}");
+        let composite_msg = wait_timeout("kind=Button", true, Duration::from_secs(2), Waited::NotAppeared).to_string();
+        assert!(
+            !composite_msg.contains("\"kind=Button\""),
+            "composite selector should not be double-quoted: {composite_msg}"
+        );
+        assert!(composite_msg.contains("kind=Button"), "{composite_msg}");
     }
 
     #[test]

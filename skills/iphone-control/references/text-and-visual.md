@@ -13,6 +13,7 @@
 - For tiny icons, dense text, or game boards, pass `x`, `y`, `width`, `height` (in screen points) to crop from the full-resolution Retina capture and enlarge cleanly.
 - Every `iphone_screenshot` returns both a human-readable caption and structured geometry (`width`, `height`, `point_width`, `point_height`, `region`, `coordinate_scale`). Convert any pixel `(u, v)` in a zoomed image back to screen points via:
   `(region.x + u / coordinate_scale, region.y + v / coordinate_scale)`.
+- In MCP `structuredContent`, `iphone_screenshot` places those fields at the top level alongside `type: "screenshot"`, whereas action tools invoked with `then: "screenshot"` nest the geometry object under `structuredContent.screenshot` alongside `delivery` and `readback`.
 - Coordinates follow the current screen orientation. After rotating the phone or iPad, always take a fresh screenshot or element read before tapping coordinates.
 
 ## Dragging & Long-Press Gestures

@@ -184,7 +184,11 @@ impl<'a> Selector<'a> {
     /// Whether `e` satisfies the structural constraints (`kind` and `id`), ignoring `text`
     pub fn matches_structure(&self, e: &Element) -> bool {
         if let Some(kind) = self.kind.filter(|k| !k.is_empty()) {
-            let wanted = kind.strip_prefix("XCUIElementType").unwrap_or(kind);
+            const PREFIX: &str = "XCUIElementType";
+            let wanted = kind
+                .get(..PREFIX.len())
+                .filter(|p| p.eq_ignore_ascii_case(PREFIX))
+                .map_or(kind, |_| &kind[PREFIX.len()..]);
             if !e.kind.eq_ignore_ascii_case(wanted) {
                 return false;
             }

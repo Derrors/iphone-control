@@ -462,7 +462,7 @@ impl Daemon {
                 None => Waited::after_matching(&tree, sel, disappeared),
             };
             if t0.elapsed() >= timeout {
-                return Err(super::observe::wait_timeout(&desc, timeout, why));
+                return Err(super::observe::wait_timeout(&desc, !selector.is_empty(), timeout, why));
             }
             if !may_continue() {
                 return Err(super::observe::wait_interrupted(&desc, t0.elapsed()));

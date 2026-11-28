@@ -493,6 +493,21 @@ fn selector_combines_kind_id_and_match_mode() {
         Selector { text: "搜索", kind: Some("XCUIElementTypeButton"), id: None, mode: MatchMode::Contains },
     );
     assert_eq!(by_prefix_kind.iter().map(|e| e.name.as_str()).collect::<Vec<_>>(), ["btn.search", "btn.history"]);
+    let by_lowercase_prefix = find_matching(
+        &els,
+        Selector { text: "搜索", kind: Some("xcuielementtypebutton"), id: None, mode: MatchMode::Exact },
+    );
+    assert_eq!(by_lowercase_prefix.iter().map(|e| e.name.as_str()).collect::<Vec<_>>(), ["btn.search"]);
+    // Multi-byte UTF-8 kind string crossing byte 15 must not panic
+    assert!(
+        find_matching(
+            &els,
+            Selector {
+                text: "搜索", kind: Some("这是一个很长的中文类型名"), id: None, mode: MatchMode::Auto
+            }
+        )
+        .is_empty()
+    );
     let by_id_only =
         find_matching(&els, Selector { text: "", kind: None, id: Some("field.search"), mode: MatchMode::Auto });
     assert_eq!(by_id_only.iter().map(|e| e.kind.as_str()).collect::<Vec<_>>(), ["SearchField"]);

@@ -451,7 +451,8 @@ fn login_page(v: auth::Verdict) -> Reply {
         status,
         "text/html; charset=utf-8",
         page,
-        &[("Content-Security-Policy", &csp), ("Referrer-Policy", "same-origin")],
+        // says what answers here without logging in: an update checks a viewer it started again is up (`fleet`)
+        &[("Content-Security-Policy", &csp), ("Referrer-Policy", "same-origin"), ("X-Iphone-Control", "viewer")],
     )
 }
 

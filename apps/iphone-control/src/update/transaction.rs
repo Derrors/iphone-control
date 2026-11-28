@@ -218,7 +218,9 @@ fn process_path(pid: u32) -> Result<PathBuf> {
     Ok(fs::read_link(format!("/proc/{pid}/exe"))?)
 }
 
-fn check_clients(daemon: Option<u32>) -> Result<()> {
+/// `allowed`: the named instances' daemons going through the update (`fleet`), by the PIDs their service manager
+/// reports; any other iphone-control process is still refused
+fn check_clients(daemon: Option<u32>, allowed: &[u32]) -> Result<()> {
     // Older binaries don't take a shared lease. Refuse an existing client (also an installation
     // using a different socket) before restarting the service.
     let output = std::process::Command::new("ps").args(["-A", "-o", "uid=,pid=,comm="]).env("LC_ALL", "C").output()?;
@@ -227,8 +229,18 @@ fn check_clients(daemon: Option<u32>) -> Result<()> {
         "{}",
         ictl_l10n::tr!("列不出正在运行的客户端", "cannot enumerate running clients")
     );
-    let uid = unsafe { libc::geteuid() };
-    for line in std::str::from_utf8(&output.stdout)?.lines() {
+    busy_client(std::str::from_utf8(&output.stdout)?, unsafe { libc::geteuid() }, daemon, allowed, process_args)
+}
+
+/// The `ps -A -o uid=,pid=,comm=` lines of `uid` that are an iphone-control process this update can't go past
+fn busy_client(
+    ps: &str,
+    uid: u32,
+    daemon: Option<u32>,
+    allowed: &[u32],
+    args_of: impl Fn(u32) -> Option<String>,
+) -> Result<()> {
+    for line in ps.lines() {
         let mut parts = line.split_whitespace();
         if parts.next().and_then(|s| s.parse::<u32>().ok()) != Some(uid) {
             continue;
@@ -237,7 +249,7 @@ fn check_clients(daemon: Option<u32>) -> Result<()> {
             .next()
             .and_then(|s| s.parse::<u32>().ok())
             .context(ictl_l10n::tr!("进程列表读不懂", "invalid process list"))?;
-        if daemon == Some(pid) || pid == std::process::id() {
+        if daemon == Some(pid) || pid == std::process::id() || allowed.contains(&pid) {
             continue;
         }
         let command = parts.collect::<Vec<_>>().join(" ");
@@ -246,7 +258,7 @@ fn check_clients(daemon: Option<u32>) -> Result<()> {
         }
         // an MCP server of this version holds the lease only during a tool call, which the exclusive lease already
         // waited for; idle, it just reconnects to the new daemon on the next call
-        if process_args(pid).is_some_and(|a| idles_without_lease(&a)) {
+        if args_of(pid).is_some_and(|a| idles_without_lease(&a)) {
             continue;
         }
         bail!(
@@ -270,16 +282,16 @@ fn process_args(pid: u32) -> Option<String> {
     out.status.success().then(|| String::from_utf8_lossy(&out.stdout).trim().to_owned())
 }
 
-/// `iphone-control [--data-dir D] [--socket S] mcp …`: the MCP server, which from this version on takes the
-/// maintenance lease for each tool call only. Older ones hold it for their whole life, so they never get this far
+/// `iphone-control [--data-dir D] [--socket S] [--instance N] mcp …`: the MCP server, which from this version on takes
+/// the maintenance lease for each tool call only. Older ones hold it for their whole life, so they never get this far
 fn idles_without_lease(args: &str) -> bool {
     let mut words = args.split_whitespace().skip(1);
     while let Some(w) = words.next() {
         match w {
-            "--data-dir" | "--socket" => {
+            "--data-dir" | "--socket" | "--instance" => {
                 words.next();
             }
-            w if w.starts_with("--data-dir=") || w.starts_with("--socket=") => {}
+            w if w.starts_with("--data-dir=") || w.starts_with("--socket=") || w.starts_with("--instance=") => {}
             w => return w == "mcp",
         }
     }
@@ -339,7 +351,7 @@ impl Services for Host<'_> {
     async fn idle(&self, current: &Receipt) -> Result<bool> {
         service::managed(self.binary, &current.service)?;
         let pid = service::managed_pid(&self.service, false)?;
-        check_clients(pid)?;
+        check_clients(pid, &member_pids(&self.members))?;
         if let Some(pid) = pid {
             ensure!(
                 self.socket_owner().await? == Some(pid) && self.healthy(pid, &current.version).await,
@@ -422,6 +434,11 @@ impl Services for Host<'_> {
     }
 }
 
+/// The PIDs of the named instances' daemons going through the update, as their service manager reports them
+fn member_pids(members: &[super::fleet::Member]) -> Vec<u32> {
+    members.iter().filter_map(|m| service::main_pid(&service::instance_services(&m.name).0)).collect()
+}
+
 async fn restore(store: &Store, host: &impl Services, tx: &Transaction, why: &str) -> Result<()> {
     let current = digest(&store.binary)?;
     ensure!(
@@ -501,6 +518,8 @@ async fn replace(
         if running {
             host.stop().await?;
         }
+        // the named daemons, now that the exclusive lease is held (their viewers were stopped before it)
+        host.stop_members().await?;
         store.link(candidate, &store.binary)?;
         tx.phase = Phase::Replaced;
         write_json(&store.journal(), &tx)?;
@@ -619,7 +638,7 @@ pub async fn apply(socket: &Path, background: bool, report: super::Report) -> Re
         }
     };
     let stopped = match fleet.as_mut() {
-        Some(f) => f.stop_all(),
+        Some(f) => f.stop_viewers(),
         None => Ok(()),
     };
     let old_version = receipt.version.clone();
@@ -683,14 +702,14 @@ pub async fn apply(socket: &Path, background: bool, report: super::Report) -> Re
     }
     crate::service::resume_viewer(paused);
     if let Some(f) = fleet.as_ref().filter(|_| settled) {
-        let up = f.start_viewers();
+        let up = f.start_viewers().await;
         f.finish(up)?;
     }
     result
 }
 
 /// [`service::pause_viewer`], unless an AI task is running
-async fn pause_viewer(socket: &Path) -> Result<Option<Service>> {
+pub(super) async fn pause_viewer(socket: &Path) -> Result<Option<Service>> {
     if crate::service::viewer_find().is_some_and(|s| crate::service::running(&s))
         && ictl_daemon::protocol::task_list(socket).await.is_ok_and(|l| l.iter().any(|t| t.active()))
     {
@@ -778,7 +797,9 @@ pub async fn recover(socket: &Path, scheduled: bool) -> Result<()> {
     let service = service::managed(&store.binary, &receipt.service)?;
     let paused = pause_viewer(socket).await?;
     let result = async {
-        check_clients(service::managed_pid(&service, true)?)?;
+        // the named daemons the update recorded may run (some started on the new program before it was killed):
+        // they are let past, and stopped by the recovery with the program
+        check_clients(service::managed_pid(&service, true)?, &member_pids(&members))?;
         let host = Host { service, socket, binary: &store.binary, members };
         resume(&store, &host, &tx).await
     }

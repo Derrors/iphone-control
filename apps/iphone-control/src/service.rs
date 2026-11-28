@@ -448,6 +448,33 @@ pub fn viewer_find() -> Option<Service> {
     viewer_unit_file().is_file().then(|| Service::Systemd { unit: VIEWER_UNIT.into(), ours: true })
 }
 
+/// The service's main process, as the service manager reports it (`None`: not running, or it doesn't say)
+pub fn main_pid(s: &Service) -> Option<u32> {
+    let pid = match s {
+        Service::Systemd { unit, .. } => {
+            let out = Command::new("systemctl")
+                .args(["--user", "show", unit, "-p", "MainPID", "--value"])
+                .stderr(Stdio::null())
+                .output()
+                .ok()?;
+            String::from_utf8_lossy(&out.stdout).trim().parse::<u32>().ok()
+        }
+        Service::Launchd { label, .. } => {
+            let out = Command::new("launchctl")
+                .arg("print")
+                .arg(format!("gui/{}/{label}", uid()))
+                .env("LC_ALL", "C")
+                .stderr(Stdio::null())
+                .output()
+                .ok()?;
+            String::from_utf8_lossy(&out.stdout)
+                .lines()
+                .find_map(|l| l.trim().strip_prefix("pid = ").and_then(|p| p.parse::<u32>().ok()))
+        }
+    };
+    pid.filter(|p| *p > 0)
+}
+
 /// The service's process is running now
 pub fn running(s: &Service) -> bool {
     match s {

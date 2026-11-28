@@ -25,19 +25,34 @@ pub(super) async fn apply(socket: &Path, report: &Report) -> Result<()> {
         "{}",
         ictl_l10n::tr!("正式版的版本号不对", "invalid stable release version")
     );
-    // with named instances, all of them go through the update (`fleet`): their services stopped while the package
-    // manager runs, started again afterwards as they were
-    let mut fleet = super::fleet::Fleet::begin(socket, latest, false).await?;
-    if let Some(f) = fleet.as_mut() {
-        if let Err(e) = f.stop_all() {
-            let _ = f.start_daemons(env!("CARGO_PKG_VERSION")).await;
-            let up = f.start_viewers();
-            f.finish(up)?;
+    // with named instances, all of them go through the update (`fleet`): the viewers stopped (they hold the
+    // maintenance lease while they run), the daemons once the exclusive lease is held, all started again afterwards
+    let default_viewer = crate::service::viewer_find().is_some_and(|s| crate::service::running(&s));
+    let mut fleet = super::fleet::Fleet::begin(socket, latest, default_viewer).await?;
+    // the default instance's viewer too: running, it would keep the exclusive lease from ever being had
+    let paused = match super::transaction::pause_viewer(socket).await {
+        Ok(p) => p,
+        Err(e) => {
+            if let Some(f) = &fleet {
+                f.finish(true)?;
+            }
             return Err(e);
         }
+    };
+    if let Some(f) = fleet.as_mut()
+        && let Err(e) = f.stop_viewers()
+    {
+        crate::service::resume_viewer(paused);
+        let up = f.start_viewers().await;
+        f.finish(up)?;
+        return Err(e);
+    }
+    let members = fleet.as_ref().map(|f| f.members()).unwrap_or_default();
+    if let Some(f) = fleet.as_mut() {
         f.at(super::fleet::Phase::Package)?;
     }
-    let result = apply_package(socket, report, exe, latest).await;
+    let result = apply_package(socket, report, exe, latest, &members).await;
+    crate::service::resume_viewer(paused);
     let Some(f) = fleet.as_mut() else { return result };
     // the named daemons on what is installed now: the new version, or still the old one
     let installed = if result.is_ok() { latest } else { env!("CARGO_PKG_VERSION") };
@@ -55,9 +70,22 @@ pub(super) async fn apply(socket: &Path, report: &Report) -> Result<()> {
             )
         );
     }
-    let up = f.start_viewers();
+    let up = f.start_viewers().await;
     f.finish(up)?;
     result
+}
+
+/// The package manager's run, under the maintenance lock's exclusive lease, with the named daemons stopped once it
+/// is held
+async fn exclusive_package<T>(
+    members: &[super::fleet::Member],
+    run: impl std::future::Future<Output = Result<T>>,
+) -> Result<T> {
+    let exclusive = exclusive_within(Duration::from_secs(30)).await?;
+    super::fleet::stop_daemons(members).await?;
+    let r = run.await;
+    drop(exclusive);
+    r
 }
 
 /// The maintenance lock's exclusive lease, tried for a while: the package manager replaces the program only while
@@ -80,7 +108,13 @@ async fn exclusive_within(wait: Duration) -> Result<File> {
     }
 }
 
-async fn apply_package(socket: &Path, report: &Report, exe: &Path, latest: &str) -> Result<()> {
+async fn apply_package(
+    socket: &Path,
+    report: &Report,
+    exe: &Path,
+    latest: &str,
+    members: &[super::fleet::Member],
+) -> Result<()> {
     match (report.install_method, report.availability) {
         (InstallMethod::Homebrew, Availability::BrewCheck) => {
             let cellar = exe
@@ -90,9 +124,7 @@ async fn apply_package(socket: &Path, report: &Report, exe: &Path, latest: &str)
             let tap = tap().context(ictl_l10n::tr!("缺少 Homebrew tap", "missing Homebrew tap"))?;
             let brew = install::brew_program(cellar)
                 .context(ictl_l10n::tr!("找不到 Homebrew 程序", "cannot locate the Homebrew executable"))?;
-            let exclusive = exclusive_within(Duration::from_secs(30)).await?;
-            let upgraded = homebrew(&brew, cellar, tap, latest).await?;
-            drop(exclusive);
+            let upgraded = exclusive_package(members, homebrew(&brew, cellar, tap, latest)).await?;
             if upgraded {
                 let running = brew_service_running(&brew).await;
                 restart(
@@ -110,9 +142,7 @@ async fn apply_package(socket: &Path, report: &Report, exe: &Path, latest: &str)
             let repo = publisher().context(ictl_l10n::tr!("缺少发布者", "missing release publisher"))?;
             let target =
                 super::target().context(ictl_l10n::tr!("不支持的 Debian 架构", "unsupported Debian architecture"))?;
-            let exclusive = exclusive_within(Duration::from_secs(30)).await?;
-            let upgraded = debian(repo, target, latest, exe).await?;
-            drop(exclusive);
+            let upgraded = exclusive_package(members, debian(repo, target, latest, exe)).await?;
             if upgraded {
                 let running = deb_service_running().await;
                 restart(

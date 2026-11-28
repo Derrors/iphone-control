@@ -43,6 +43,9 @@ pub(crate) struct Member {
     pub socket: PathBuf,
     pub daemon_running: bool,
     pub viewer_running: bool,
+    /// Its control page's port: a viewer counts as started again once it answers there ([`viewer_answers`])
+    #[serde(default)]
+    pub port: u16,
 }
 
 /// Where the update is ([`Record::phase`])
@@ -66,6 +69,53 @@ pub(crate) struct Record {
     pub members: Vec<Member>,
     /// The default instance's viewer was running
     pub default_viewer: bool,
+    #[serde(default = "default_port")]
+    pub default_port: u16,
+}
+
+fn default_port() -> u16 {
+    std::env::var(ictl_daemon::protocol::env::VIEWER_PORT).ok().and_then(|p| p.parse().ok()).unwrap_or(8200)
+}
+
+/// How long a viewer started again gets to answer on its port
+const VIEWER_WAIT: Duration = Duration::from_secs(20);
+
+/// An iphone-control viewer answers on `port` (without logging in: the login page says it is one,
+/// `X-Iphone-Control: viewer`). A service manager reporting the service started isn't enough: the process may still
+/// fail to bind its port (taken by something else)
+pub(crate) async fn viewer_answers(port: u16) -> bool {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let ask = async {
+        let mut s = tokio::net::TcpStream::connect(("127.0.0.1", port)).await.ok()?;
+        s.write_all(b"GET / HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n").await.ok()?;
+        let mut buf = vec![0u8; 8192];
+        let mut n = 0;
+        while n < buf.len() {
+            let got = s.read(&mut buf[n..]).await.ok()?;
+            if got == 0 {
+                break;
+            }
+            n += got;
+            if buf[..n].windows(4).any(|w| w == b"\r\n\r\n") {
+                break;
+            }
+        }
+        let head = String::from_utf8_lossy(&buf[..n]).to_ascii_lowercase();
+        Some(head.starts_with("http/1.") && head.lines().any(|l| l.trim() == "x-iphone-control: viewer"))
+    };
+    tokio::time::timeout(Duration::from_secs(2), ask).await.ok().flatten().unwrap_or(false)
+}
+
+/// `s` started again and answering on `port` within [`VIEWER_WAIT`]
+async fn viewer_up(s: &service::Service, port: u16) -> bool {
+    let deadline = tokio::time::Instant::now() + VIEWER_WAIT;
+    while tokio::time::Instant::now() < deadline {
+        if service::running(s) && viewer_answers(port).await {
+            return true;
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+    false
 }
 
 /// The update's hold on the host: the updater's lock, the record and the intent. Dropped without [`Self::finish`],
@@ -141,6 +191,7 @@ fn inventory() -> Result<Vec<Member>> {
                 socket: r.managed.socket,
                 daemon_running: service::running(&d),
                 viewer_running: service::running(&v),
+                port: r.managed.port,
             }
         })
         .collect())
@@ -182,7 +233,13 @@ impl Fleet {
                 )
             );
         }
-        let record = Record { phase: Phase::Intent, target: target.into(), members, default_viewer };
+        let record = Record {
+            phase: Phase::Intent,
+            target: target.into(),
+            members,
+            default_viewer,
+            default_port: default_port(),
+        };
         write(&root, RECORD, &serde_json::to_vec_pretty(&record)?)?;
         write(&root, INTENT, target.as_bytes())?;
         let fleet = Self { root, record, _lock: lock, _registry: registry };
@@ -202,9 +259,10 @@ impl Fleet {
         for (name, socket) in &sockets {
             let running = self.record.members.iter().find(|m| &m.name == name).is_none_or(|m| m.daemon_running);
             let deadline = tokio::time::Instant::now() + OPENING_WAIT;
-            loop {
+            // whether it answers: then its tasks must be known, a list that can't be read isn't "none"
+            let answers = loop {
                 match tokio::time::timeout(Duration::from_secs(2), crate::client::snapshot(socket)).await {
-                    Ok(Ok(s)) if s.task_opening == 0 => break,
+                    Ok(Ok(s)) if s.task_opening == 0 => break true,
                     Ok(Ok(_)) if tokio::time::Instant::now() < deadline => {
                         tokio::time::sleep(Duration::from_millis(200)).await
                     }
@@ -216,7 +274,7 @@ impl Fleet {
                         )
                     ),
                     // the default instance may well not run; a named one recorded as running must answer
-                    _ if !running || name == ictl_daemon::instance::DEFAULT => break,
+                    _ if !running || name == ictl_daemon::instance::DEFAULT => break false,
                     _ => bail!(
                         "{}",
                         ictl_l10n::trf!(
@@ -225,10 +283,20 @@ impl Fleet {
                         )
                     ),
                 }
+            };
+            if !answers {
+                continue;
             }
-            if let Ok(list) = ictl_daemon::protocol::task_list(socket).await
-                && list.iter().any(|t| t.active())
-            {
+            let list = ictl_daemon::protocol::task_list(socket).await.map_err(|e| {
+                anyhow::anyhow!(
+                    "{}",
+                    ictl_l10n::trf!(
+                        "查不了实例 {name} 的任务（{e}），没有升级",
+                        "The instance {name}'s tasks can't be listed ({e}); not updated"
+                    )
+                )
+            })?;
+            if list.iter().any(|t| t.active()) {
                 bail!(
                     "{}",
                     ictl_l10n::trf!(
@@ -247,28 +315,23 @@ impl Fleet {
         write(&self.root, RECORD, &serde_json::to_vec_pretty(&self.record)?)
     }
 
-    /// The named instances' viewers and daemons stopped (the viewers first: they hold the maintenance lease), each
-    /// confirmed stopped
-    pub fn stop_all(&mut self) -> Result<()> {
+    /// The named instances' viewers stopped and confirmed stopped: each holds the maintenance lease for as long as it
+    /// runs. Their daemons are stopped only once the exclusive lease is held ([`stop_daemons`])
+    pub fn stop_viewers(&mut self) -> Result<()> {
         self.at(Phase::Stopping)?;
         for m in &self.record.members {
-            let (d, v) = service::instance_services(&m.name);
-            for s in [&v, &d] {
-                if service::running(s) {
-                    service::stop(s)?;
-                }
+            let v = service::instance_services(&m.name).1;
+            if service::running(&v) {
+                service::stop(&v)?;
             }
         }
         for _ in 0..150 {
-            if self.record.members.iter().all(|m| {
-                let (d, v) = service::instance_services(&m.name);
-                !service::running(&d) && !service::running(&v)
-            }) {
+            if self.record.members.iter().all(|m| !service::running(&service::instance_services(&m.name).1)) {
                 return Ok(());
             }
             std::thread::sleep(Duration::from_millis(200));
         }
-        bail!("{}", ictl_l10n::tr!("命名实例的服务没有停下", "the named instances' services didn't stop"))
+        bail!("{}", ictl_l10n::tr!("命名实例的控制台没有停下", "the named instances' viewers didn't stop"))
     }
 
     /// The named daemons that were running started again, each checked to answer as itself with `version`
@@ -281,9 +344,10 @@ impl Fleet {
         self.record.members.clone()
     }
 
-    /// The viewers that were running started again; whether they all are (one that isn't is reported, not undone)
-    pub fn start_viewers(&self) -> bool {
-        start_viewers(&self.record)
+    /// The viewers that were running started again; whether they all answer (one that doesn't is reported, not
+    /// undone)
+    pub async fn start_viewers(&self) -> bool {
+        start_viewers(&self.record).await
     }
 
     /// Done: the intent goes, new tasks can be opened again; the record too, unless `viewers_up` is false (then
@@ -341,11 +405,24 @@ pub(crate) async fn start_daemons(members: &[Member], version: &str) -> Result<(
     Ok(())
 }
 
-fn start_viewers(record: &Record) -> bool {
+async fn start_viewers(record: &Record) -> bool {
     let mut up = true;
     for m in record.members.iter().filter(|m| m.viewer_running) {
         let (_, v) = service::instance_services(&m.name);
-        if let Err(e) = service::start_managed(&v) {
+        let started = match service::start_managed(&v) {
+            Ok(()) if viewer_up(&v, m.port).await => Ok(()),
+            Ok(()) => Err(anyhow::anyhow!(
+                "{}",
+                ictl_l10n::trf!(
+                    "{} 秒内没在端口 {} 上应答",
+                    "it didn't answer on the port {} within {} s",
+                    VIEWER_WAIT.as_secs(),
+                    m.port
+                )
+            )),
+            Err(e) => Err(e),
+        };
+        if let Err(e) = started {
             up = false;
             eprintln!(
                 "{}",
@@ -359,10 +436,26 @@ fn start_viewers(record: &Record) -> bool {
     }
     if record.default_viewer
         && let Some(v) = service::viewer_find()
-        && let Err(e) = service::start_managed(&v)
     {
-        up = false;
-        eprintln!("{e:#}");
+        match service::start_managed(&v) {
+            Ok(()) if viewer_up(&v, record.default_port).await => {}
+            Ok(()) => {
+                up = false;
+                eprintln!(
+                    "{}",
+                    ictl_l10n::trf!(
+                        "默认实例的控制台 {} 秒内没在端口 {} 上应答（update recover 可以再试）",
+                        "The default instance's viewer didn't answer on the port {} within {} s (update recover tries again)",
+                        VIEWER_WAIT.as_secs(),
+                        record.default_port
+                    )
+                );
+            }
+            Err(e) => {
+                up = false;
+                eprintln!("{e:#}");
+            }
+        }
     }
     up
 }
@@ -405,7 +498,7 @@ pub(crate) async fn recover(installed: &str) -> Result<()> {
     if record.phase != Phase::Intent {
         start_daemons(&record.members, installed).await?;
     }
-    if start_viewers(&record) {
+    if start_viewers(&record).await {
         remove(&root, RECORD)?;
     } else {
         bail!(
@@ -428,4 +521,33 @@ fn package_manager_running() -> bool {
         let c = Path::new(c.trim()).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
         matches!(c.as_str(), "apt" | "apt-get" | "dpkg" | "brew" | "unattended-upgr")
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    /// Something else on the port (it took it first: the viewer couldn't bind) isn't a viewer started again; one
+    /// whose login page says so is
+    #[tokio::test]
+    async fn a_viewer_counts_as_up_only_when_it_answers_as_one() {
+        let serve = |reply: &'static [u8]| async move {
+            let l = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+            let port = l.local_addr().unwrap().port();
+            tokio::spawn(async move {
+                while let Ok((mut c, _)) = l.accept().await {
+                    let mut b = [0u8; 1024];
+                    let _ = c.read(&mut b).await;
+                    let _ = c.write_all(reply).await;
+                }
+            });
+            port
+        };
+        let other = serve(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n").await;
+        assert!(!super::viewer_answers(other).await, "another program on the port");
+        let viewer = serve(b"HTTP/1.1 401 Unauthorized\r\nX-Iphone-Control: viewer\r\nContent-Length: 0\r\n\r\n").await;
+        assert!(super::viewer_answers(viewer).await);
+        let free = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap().local_addr().unwrap().port();
+        assert!(!super::viewer_answers(free).await, "nothing listening");
+    }
 }

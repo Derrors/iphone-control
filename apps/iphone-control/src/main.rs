@@ -425,14 +425,8 @@ async fn run() -> anyhow::Result<()> {
         Command::Sign => print_text(&cli.socket, Request::Resign { force: true }).await,
         Command::Resign { force } => print_text(&cli.socket, Request::Resign { force }).await,
         Command::Passcode { action } => passcode(&cli.data_dir, &cli.socket, action).await,
-        Command::UnlockReset { device } => {
-            // a device named by the user is looked up here, like passcode --device; none: the daemon's own
-            let udid = match device {
-                Some(q) => Some(client::target_device(&cli.socket, Some(&q)).await?.udid),
-                None => None,
-            };
-            print_text(&cli.socket, Request::UnlockResetDevice { udid }).await
-        }
+        // the daemon looks the device up among those connected when it gets the request, not from a snapshot here
+        Command::UnlockReset { device } => print_text(&cli.socket, Request::UnlockResetDevice { device }).await,
         Command::Devices => print_text(&cli.socket, Request::ListDevices).await,
         Command::Select { device } => print_text(&cli.socket, Request::SelectDevice { device }).await,
         Command::WdaBridge { port } => wda_bridge(&cli.socket, port).await,

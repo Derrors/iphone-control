@@ -237,12 +237,13 @@ pub enum Request {
     /// What clients of 0.3.2 and earlier send for `unlock-reset`. Answered as [`Request::UnlockResetDevice`] for
     /// the device being controlled: auto-unlock is disabled per device now, and this re-enables that one only
     UnlockReset,
-    /// Re-enables auto-unlock for `udid`, or for the device being controlled when it isn't given; the other devices
-    /// stay disabled. A request of its own, not a field on [`Request::UnlockReset`]: a daemon of 0.3.2 or earlier
-    /// would drop the field and re-enable every device, while an unknown request is refused
+    /// Re-enables auto-unlock for `device` (a UDID or a name, looked up by the daemon among the devices connected
+    /// now), or for the device being controlled when it isn't given; the other devices stay disabled. A request of its
+    /// own, not a field on [`Request::UnlockReset`]: a daemon of 0.3.2 or earlier would drop the field and re-enable
+    /// every device, while an unknown request is refused
     UnlockResetDevice {
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        udid: Option<String>,
+        device: Option<String>,
     },
     /// 列出 USB 上接着的全部设备，标出正在控制哪台
     ListDevices,

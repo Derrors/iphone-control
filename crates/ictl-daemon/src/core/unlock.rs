@@ -45,9 +45,40 @@ impl Daemon {
 
     /// `unlock-reset`: re-enables auto-unlock for `udid`, or for the device being controlled. Runs under the device
     /// lock, so this daemon isn't entering a passcode meanwhile; only that device's record goes
-    pub(crate) fn unlock_reset(&self, g: &Inner, udid: Option<&str>) -> crate::error::Result<String> {
-        let udid = match udid.or(g.device.as_ref().map(|d| d.udid.as_str())) {
-            Some(u) => u.to_owned(),
+    /// `unlock-reset` as a request: a path of its own, not the device lane's. Not queued behind what holds the device,
+    /// which may be entering a passcode (a reset waiting for it would clear the record a wrong entry just wrote), and
+    /// nothing of the device lane is done on the way (no WDA restart, no cache cleared): it only changes files
+    pub(super) fn unlock_reset_now(&self, req: &Request) -> Response {
+        let device = match req {
+            Request::UnlockResetDevice { device } => device.as_deref(),
+            _ => None,
+        };
+        let Ok(g) = self.inner.try_lock() else {
+            return Response::error(ictl_l10n::tr!(
+                "守护进程正在操作这台设备（可能正在输入锁屏密码），没有恢复自动解锁；稍后再运行 unlock-reset",
+                "The daemon is busy with the device (it may be entering the passcode), so auto-unlock wasn't re-enabled; run unlock-reset again in a moment"
+            ))
+            .with_failure(Delivery::NotSent, FailureStage::Preflight);
+        };
+        match self.unlock_reset(&g, device) {
+            Ok(text) => Response::text_with(text, crate::protocol::Outcome::default()),
+            Err(e) => Response::error(e.to_string()),
+        }
+    }
+
+    pub(crate) fn unlock_reset(&self, g: &Inner, device: Option<&str>) -> crate::error::Result<String> {
+        let named = match device {
+            // among the devices connected now: a name another device had in an older listing doesn't count, and a
+            // name two devices share is refused (`resolve_device`)
+            Some(q) => {
+                let infos = self.connected_infos(g);
+                let i = crate::devices::resolve_device(&infos, q)?;
+                Some(infos[i].udid.clone())
+            }
+            None => None,
+        };
+        let udid = match named.or_else(|| g.device.as_ref().map(|d| d.udid.clone())) {
+            Some(u) => u,
             None => {
                 return Err(ictl_l10n::tr!(
                     "没在控制哪台设备，不知道要恢复哪台的自动解锁：用 --device 指定",

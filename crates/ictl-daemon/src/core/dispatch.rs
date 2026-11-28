@@ -39,6 +39,9 @@ impl Daemon {
                 Ok(a) => a,
                 Err(r) => return r.with_failure(Delivery::NotSent, FailureStage::Preflight),
             };
+        if reset {
+            return self.unlock_reset_now(&req);
+        }
         // a task limited to some apps: outside them, the action waits for the user (docs/task-control.md §2.6)
         let mut gated = Gated::default();
         if let crate::tasks::Admission::Actor(t) = &admission
@@ -412,19 +415,6 @@ impl Daemon {
                 Ok(g) if self.waiting.load(std::sync::atomic::Ordering::SeqCst) == 0 => g,
                 _ => return gave_way(),
             }
-        } else if matches!(req, Request::UnlockReset | Request::UnlockResetDevice { .. }) {
-            // not queued behind what holds the phone now, which may be entering a passcode: a reset waiting for it
-            // would clear the record a wrong entry just wrote
-            match self.inner.try_lock() {
-                Ok(g) => g,
-                Err(_) => {
-                    return Response::error(ictl_l10n::tr!(
-                        "守护进程正在操作这台设备（可能正在输入锁屏密码），没有恢复自动解锁；稍后再运行 unlock-reset",
-                        "The daemon is busy with the device (it may be entering the passcode), so auto-unlock wasn't re-enabled; run unlock-reset again in a moment"
-                    ))
-                    .with_failure(Delivery::NotSent, FailureStage::Preflight);
-                }
-            }
         } else {
             // still let through now that it holds the lock: the task may have been paused or taken over meanwhile
             match self.lock_admitted(&self.inner, &req, admission, &mut queued_at, &mut ctx.gone, true).await {
@@ -613,8 +603,8 @@ impl Daemon {
                 self.wait_for(g, text, selector, Duration::from_millis(timeout_ms), true, &mut || may_continue(&req))
                     .await
             }
-            Request::UnlockReset => self.unlock_reset(g, None),
-            Request::UnlockResetDevice { udid } => self.unlock_reset(g, udid.as_deref()),
+            // answered before the device lock is waited for (`Daemon::unlock_reset_now`)
+            Request::UnlockReset | Request::UnlockResetDevice { .. } => unreachable!("unlock_reset_now"),
             Request::ListDevices => Ok(self.list_devices_text(g)),
             Request::SelectDevice { device } => self.select_device(g, &device).await,
             Request::AppLogs { process, grep, since_secs, limit, errors_only } => {

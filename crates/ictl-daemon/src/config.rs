@@ -200,8 +200,19 @@ impl Config {
     /// Saves `udid`'s passcode in place of the one it had: a crash leaves the old one or the new one whole, never a
     /// truncated file (which would read as no passcode, or as a shorter one)
     pub fn write_passcode(&self, udid: &str, code: &str) -> std::io::Result<()> {
+        let _lock = self.passcodes_lock()?;
         let dir = self.ensure_passcodes_dir()?;
-        ictl_unlock::durable::write_atomic(&dir, &passcode_name(udid), code.as_bytes(), 0o600)
+        let name = passcode_name(udid);
+        ictl_unlock::durable::remove_temps(&dir, &name)?;
+        ictl_unlock::durable::write_atomic(&dir, &name, code.as_bytes(), 0o600)
+    }
+    /// `passcode clear --device`: `udid`'s passcode gone, with any copy of it a crash left while it was being written
+    pub fn clear_passcode(&self, udid: &str) -> std::io::Result<()> {
+        let _lock = self.passcodes_lock()?;
+        let dir = self.passcodes_dir();
+        let name = passcode_name(udid);
+        ictl_unlock::durable::remove_temps(&dir, &name)?;
+        ictl_unlock::durable::remove(&dir, &name)
     }
     /// `passcode clear --all`: every device's passcode and the one an older version saved, under the same lock as
     /// [`Self::adopt_legacy_passcode`], so an adoption under way can't publish the old one again afterwards
@@ -349,6 +360,13 @@ mod tests {
         assert!(!cfg.legacy_passcode_file().exists());
         let left: Vec<_> = std::fs::read_dir(cfg.passcodes_dir()).unwrap().flatten().map(|e| e.file_name()).collect();
         assert_eq!(left.len(), 2, "no temporary file left: {left:?}");
+
+        // a copy a crash left while writing A's passcode goes with `passcode clear --device`
+        let stray = cfg.passcodes_dir().join(".A.tmp-1-0");
+        std::fs::write(&stray, "9999").unwrap();
+        cfg.clear_passcode("A").unwrap();
+        assert!(!stray.exists() && !cfg.passcode_file_for("A").exists());
+        assert!(cfg.passcode_file_for("B").exists(), "B's stays");
         std::fs::remove_dir_all(dir).unwrap();
     }
 

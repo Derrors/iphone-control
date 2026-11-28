@@ -135,7 +135,7 @@ pub(crate) async fn passcode(data_dir: &Path, socket: &Path, action: PasscodeAct
         }
         PasscodeAction::Clear { device, .. } => {
             let d = target_device(socket, device.as_deref()).await?;
-            let _ = std::fs::remove_file(cfg.passcode_file_for(&d.udid));
+            cfg.clear_passcode(&d.udid)?;
             println!(
                 "{}",
                 ictl_l10n::trf!(

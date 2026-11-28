@@ -645,8 +645,9 @@ async fn unlock_reset_re_enables_only_its_device() {
         .unwrap();
     let d = Daemon::new(Config::from_env(&dir));
     assert!(d.unlock_cfg(Some(A)).disabled_by_failure() && d.unlock_cfg(Some(B)).disabled_by_failure());
-    let g = d.inner.lock().await;
+    let mut g = d.inner.lock().await;
     assert!(d.unlock_reset(&g, None).is_err(), "no device controlled, none named");
+    connect(&mut g, A, "phone");
     let text = with_lang(Lang::En, || d.unlock_reset(&g, Some(A))).unwrap();
     assert!(text.contains("re-enabled") && text.contains("older version"), "{text}");
     assert!(!d.unlock_cfg(Some(A)).disabled_by_failure());
@@ -656,13 +657,21 @@ async fn unlock_reset_re_enables_only_its_device() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+fn connect(g: &mut Inner, udid: &str, name: &str) {
+    g.connected.push(ictl_device::UsbDevice { udid: udid.into(), device_id: g.connected.len() as u32 + 1 });
+    g.infos.entry(udid.into()).or_default().value =
+        Some(ictl_device::DeviceInfo { udid: udid.into(), name: name.into(), ..Default::default() });
+}
+
 /// unlock-reset never waits behind what holds the device (it may be entering a passcode whose wrong entry it would
 /// clear), and an AI task can't send it
 #[tokio::test]
 async fn unlock_reset_is_refused_while_busy_and_to_tasks() {
     use ictl_l10n::Lang;
+    const A: &str = "00008130-0019295E012B803A";
     let (d, dir) = test_daemon("unlock-reset-busy");
-    let req = || Request::UnlockResetDevice { udid: Some("00008130-0019295E012B803A".into()) };
+    connect(&mut *d.inner.lock().await, A, "phone");
+    let req = || Request::UnlockResetDevice { device: Some(A.into()) };
     let refused = |r: &Response| matches!(r, Response::Error { .. });
     let held = d.inner.lock().await;
     let r = tokio::time::timeout(Duration::from_secs(2), d.handle(req(), Instant::now(), CallCtx::default()))
@@ -670,11 +679,37 @@ async fn unlock_reset_is_refused_while_busy_and_to_tasks() {
         .expect("answered at once, not queued");
     assert!(refused(&r), "{r:?}");
     drop(held);
-    assert!(!refused(&d.handle(req(), Instant::now(), CallCtx::default()).await));
+    let r = d.handle(req(), Instant::now(), CallCtx::default()).await;
+    assert!(!refused(&r), "{r:?}");
     // what older clients send means the controlled device: with none, there is nothing to re-enable
     let old = ictl_l10n::scope(Lang::En, d.handle(Request::UnlockReset, Instant::now(), CallCtx::default())).await;
     assert!(matches!(&old, Response::Error { message, .. } if message.contains("--device")), "{old:?}");
     let task = CallCtx { task: Some("some-task-token".into()), ..Default::default() };
     assert!(refused(&d.handle(req(), Instant::now(), task).await));
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// A device named for unlock-reset is looked up among those connected now: a name no connected device has, or one
+/// two of them share, is refused, and the reset goes to the device the name is that of now
+#[tokio::test]
+async fn unlock_reset_names_a_device_connected_now() {
+    const A: &str = "00008130-0019295E012B803A";
+    const B: &str = "00008020-000925043499002E";
+    let (d, dir) = test_daemon("unlock-reset-name");
+    // an older version's flag: every device disabled until reset one by one
+    std::fs::create_dir_all(d.cfg.logs()).unwrap();
+    std::fs::write(d.cfg.unlock_disabled_flag(), "1700000000 x\n").unwrap();
+    d.cfg.unlock_disabled().migrate().unwrap();
+    let mut g = d.inner.lock().await;
+    assert!(d.unlock_reset(&g, Some("iPad")).is_err(), "nothing connected");
+    connect(&mut g, B, "iPad");
+    d.unlock_reset(&g, Some("iPad")).unwrap();
+    assert!(!d.unlock_cfg(Some(B)).disabled_by_failure() && d.unlock_cfg(Some(A)).disabled_by_failure());
+    connect(&mut g, A, "iPad");
+    assert!(d.unlock_reset(&g, Some("iPad")).is_err(), "two devices are called that");
+    assert!(d.unlock_cfg(Some(A)).disabled_by_failure());
+    d.unlock_reset(&g, Some(A)).unwrap();
+    assert!(!d.unlock_cfg(Some(A)).disabled_by_failure());
+    drop(g);
     std::fs::remove_dir_all(dir).unwrap();
 }

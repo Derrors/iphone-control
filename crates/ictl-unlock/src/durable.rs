@@ -60,14 +60,18 @@ pub fn create_dir_all(dir: &Path) -> io::Result<()> {
 }
 
 /// `name` in `dir` replaced whole by `data` with permissions `mode`, on disk (data and name) when it returns. The
-/// temporary file it is written to first has `mode` from the start and a name no other call uses
+/// temporary file it is written to first is created with `mode` and set to exactly `mode` on its descriptor before
+/// anything is written (the umask could leave it different), and named after `name`
+/// (`.<name>.tmp-<pid>-<n>`), so a copy a crash left behind is found by [`remove_temps`]
 pub fn write_atomic(dir: &Path, name: &str, data: &[u8], mode: u32) -> io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
     static SEQ: AtomicU64 = AtomicU64::new(0);
     create_dir_all(dir)?;
     let n = SEQ.fetch_add(1, Ordering::Relaxed);
-    let tmp = dir.join(format!(".{name}.tmp-{}-{n}", std::process::id()));
+    let tmp = dir.join(format!("{}{}-{n}", temp_prefix(name), std::process::id()));
     let r = (|| {
         let mut f = OpenOptions::new().write(true).create_new(true).mode(mode).open(&tmp)?;
+        f.set_permissions(std::fs::Permissions::from_mode(mode))?;
         f.write_all(data)?;
         f.sync_all()?;
         std::fs::rename(&tmp, dir.join(name))?;
@@ -77,6 +81,33 @@ pub fn write_atomic(dir: &Path, name: &str, data: &[u8], mode: u32) -> io::Resul
         let _ = std::fs::remove_file(&tmp);
     }
     r
+}
+
+/// The temporaries [`write_atomic`] left for `name` in `dir` (a crash between writing one and renaming it) removed,
+/// on disk when it returns. The caller makes sure no write of `name` is under way
+pub fn remove_temps(dir: &Path, name: &str) -> io::Result<()> {
+    let prefix = temp_prefix(name);
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(e),
+    };
+    let mut removed = false;
+    for e in entries {
+        let e = e?;
+        if e.file_name().to_str().is_some_and(|n| n.starts_with(&prefix)) {
+            match std::fs::remove_file(e.path()) {
+                Ok(()) => removed = true,
+                Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+                Err(e) => return Err(e),
+            }
+        }
+    }
+    if removed { sync_dir(dir) } else { Ok(()) }
+}
+
+fn temp_prefix(name: &str) -> String {
+    format!(".{name}.tmp-")
 }
 
 /// `name` in `dir` removed, on disk when it returns; not being there is fine

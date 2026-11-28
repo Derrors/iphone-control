@@ -307,6 +307,10 @@ impl Daemon {
             }
         }
 
+        let (lines, failed) = self.instance_lines();
+        out.extend(lines);
+        fails += failed;
+
         out.push(ictl_l10n::tr!("== 附加功能", "== Extras").into());
         if self.cfg.notify.any() {
             out.push(ictl_l10n::tr!("✅ 通知已配置", "✅ Notifications configured").into());
@@ -355,6 +359,113 @@ impl Daemon {
             ictl_l10n::trf!("{fails} 项需要处理", "{fails} item(s) need attention")
         });
         out.join("\n")
+    }
+}
+
+impl Daemon {
+    /// The instances' part (docs/dev/multi-instance-plan.md 5.5), only when there are named ones: the output of a
+    /// lone default instance stays as it was
+    fn instance_lines(&self) -> (Vec<String>, u32) {
+        let (mut out, mut fails) = (Vec::new(), 0);
+        let scan = match crate::instance::scan(&self.cfg.registry) {
+            Ok(s) => s,
+            Err(e) => {
+                out.push(ictl_l10n::tr!("== 实例", "== Instances").into());
+                out.push(ictl_l10n::trf!(
+                    "❌ 读不了实例登记（{}）：{e}",
+                    "❌ The instance registry can't be read ({}): {e}",
+                    self.cfg.registry.display()
+                ));
+                return (out, 1);
+            }
+        };
+        if !scan.any() && self.cfg.instance.is_none() {
+            return (out, 0);
+        }
+        out.push(ictl_l10n::tr!("== 实例", "== Instances").into());
+        let names: Vec<&str> = scan.registered.iter().map(|r| r.name.as_str()).collect();
+        out.push(ictl_l10n::trf!(
+            "✅ 这是实例 {}；登记的命名实例：{}",
+            "✅ This is the instance {}; named instances registered: {}",
+            self.cfg.instance_name(),
+            if names.is_empty() { "-".into() } else { names.join(", ") }
+        ));
+        let mut seen_udid: Vec<(String, &str)> = Vec::new();
+        let mut seen_port: Vec<(u16, &str)> = Vec::new();
+        for r in &scan.registered {
+            let u = r.managed.udid.to_ascii_uppercase();
+            if let Some((_, other)) = seen_udid.iter().find(|(x, _)| *x == u) {
+                out.push(ictl_l10n::trf!(
+                    "❌ 实例 {} 和 {other} 登记了同一台设备 {u}",
+                    "❌ The instances {} and {other} have the same device {u}",
+                    r.name
+                ));
+                fails += 1;
+            }
+            if let Some((_, other)) = seen_port.iter().find(|(p, _)| *p == r.managed.port) {
+                out.push(ictl_l10n::trf!(
+                    "❌ 实例 {} 和 {other} 登记了同一个端口 {}",
+                    "❌ The instances {} and {other} have the same port {}",
+                    r.name,
+                    r.managed.port
+                ));
+                fails += 1;
+            }
+            seen_udid.push((u, &r.name));
+            seen_port.push((r.managed.port, &r.name));
+        }
+        if self.cfg.instance.is_none()
+            && let Some(u) = &self.cfg.udid
+            && let Some(by) = scan.reserved_by(u)
+        {
+            out.push(ictl_l10n::trf!(
+                "❌ 共用设置里的 IPHONE_UDID={u} 是实例 {by} 的设备\n     → 从 ~/.config/iphone-control/env 删掉它，用 iphone-control select 给默认实例选另一台",
+                "❌ IPHONE_UDID={u} in the shared settings is the instance {by}'s device\n     → remove it from ~/.config/iphone-control/env and select another device for the default instance with iphone-control select"
+            ));
+            fails += 1;
+        }
+        for p in &scan.pending {
+            out.push(ictl_l10n::trf!(
+                "⚠️  实例 {} 的添加没做完\n     → iphone-control instance add --resume {} 继续，或 instance remove {} 清掉",
+                "⚠️  Adding the instance {} didn't finish\n     → continue with iphone-control instance add --resume {}, or clear it with instance remove {}",
+                p.name, p.name, p.name
+            ));
+        }
+        for (udid, r) in crate::adopt::all(&self.cfg.adopt_dir()) {
+            if r.cleanup_pending {
+                out.push(ictl_l10n::trf!(
+                    "⚠️  {udid} 上的后台 WDA（进程 {}）该结束而没结束：下一个控制这台的实例会结束它",
+                    "⚠️  The background WDA on {udid} (pid {}) was to be ended and wasn't: the next instance to control the device ends it",
+                    r.pid
+                ));
+            }
+        }
+        if self.cfg.unlock_disabled().legacy() {
+            out.push(
+                ictl_l10n::tr!(
+                    "⚠️  有旧版本的自动解锁停用记录，不知道是哪台：所有设备都停用\n     → 核对每台的密码后 iphone-control unlock-reset --device <UDID>",
+                    "⚠️  There is an older version's auto-unlock disabled record, of no known device: every device is disabled\n     → check each device's passcode, then iphone-control unlock-reset --device <UDID>"
+                )
+                .into(),
+            );
+        }
+        if !crate::protocol::running_as_root() && std::path::Path::new("/run/iphone-control/ctl.sock").exists() {
+            out.push(
+                ictl_l10n::tr!(
+                    "⚠️  root 的守护进程也在运行：它和本用户的实例会争同一批设备",
+                    "⚠️  A daemon of root's is running too: it and this user's instances would compete for the same devices"
+                )
+                .into(),
+            );
+        }
+        out.push(
+            ictl_l10n::tr!(
+                "ℹ️  有命名实例时不要降级到 0.3.2：先 instance remove 掉所有命名实例",
+                "ℹ️  With named instances don't downgrade to 0.3.2: instance remove every named instance first"
+            )
+            .into(),
+        );
+        (out, fails)
     }
 }
 

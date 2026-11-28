@@ -246,6 +246,7 @@ fn acts(req: &Request) -> bool {
                 | Request::UnlockResetDevice { .. }
                 | Request::SetupStep { .. }
                 | Request::WdaForward { .. }
+                | Request::PinCurrent { .. }
         )
 }
 

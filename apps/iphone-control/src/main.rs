@@ -28,6 +28,7 @@ mod completions;
 mod debug;
 mod envfile;
 mod guide;
+mod instance_cmd;
 mod mcp_bridge;
 mod procgroup;
 mod remote;
@@ -96,7 +97,15 @@ enum Command {
     #[command(about = ictl_l10n::tr!("打印把 MCP 注册到 Claude Code 的命令", "Print the command that registers the MCP server with Claude Code"))]
     McpConfig,
     #[command(about = ictl_l10n::tr!("守护进程和设备状态、最近的日志", "Daemon and device state, recent log"))]
-    Status,
+    Status {
+        #[arg(long, help = ictl_l10n::tr!("所有实例，各一行", "Every instance, one line each"))]
+        all: bool,
+    },
+    #[command(about = ictl_l10n::tr!("命名实例（一台设备一个守护进程）：add / list / remove", "Named instances (one daemon per device): add / list / remove"))]
+    Instance {
+        #[command(subcommand)]
+        action: instance_cmd::InstanceAction,
+    },
     #[command(about = ictl_l10n::tr!("逐层诊断，每项失败都给出修复办法", "Layer-by-layer health check with a fix for each failure"))]
     Doctor,
     #[command(about = ictl_l10n::tr!("设置引导：语言、代理、后台服务、配对、开发者模式、Apple ID、安装 WDA、自动解锁、通知、注册 MCP（可重复运行，做过的步骤跳过）", "Guided setup: language, proxy, background service, pairing, Developer Mode, Apple ID, WDA, auto-unlock, notifications, MCP registration (safe to re-run; done steps are skipped)"))]
@@ -363,7 +372,7 @@ fn prints_and_exits(command: Option<&Command>) -> bool {
     matches!(
         command,
         Some(
-            Command::Status
+            Command::Status { .. }
                 | Command::Doctor
                 | Command::Devices
                 | Command::McpConfig
@@ -432,7 +441,8 @@ async fn run(named: Option<String>) -> anyhow::Result<()> {
             | Command::Update { .. }
             | Command::McpConfig
             | Command::Mcp { .. }
-            | Command::Status
+            | Command::Status { .. }
+            | Command::Instance { action: instance_cmd::InstanceAction::Check { .. } }
             | Command::Completions { .. },
         ) => None,
         _ => Some(ictl_daemon::maintenance::shared()?),
@@ -459,7 +469,11 @@ async fn run(named: Option<String>) -> anyhow::Result<()> {
             println!("{}", mcp_config(&cli.socket, named.as_deref())?);
             Ok(())
         }
-        Command::Status => status(&cli.socket).await,
+        Command::Status { all: false } => status(&cli.socket).await,
+        Command::Status { all: true } => {
+            instance_cmd::run(&cli.socket, named.as_deref(), instance_cmd::InstanceAction::List).await
+        }
+        Command::Instance { action } => instance_cmd::run(&cli.socket, named.as_deref(), action).await,
         Command::Doctor => print_text(&cli.socket, Request::Doctor).await,
         Command::Setup { reconfigure } => guide::setup(&cli, reconfigure).await,
         Command::Service { action } => {

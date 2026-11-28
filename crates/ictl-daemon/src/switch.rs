@@ -99,6 +99,50 @@ impl Daemon {
         Ok(self.switched(&g, &target, &label))
     }
 
+    /// The token a selection compare-and-set is made against ([`crate::protocol::Request::PinCurrent`]): this start's
+    /// id and the selection generation. A restart makes every earlier one stale, whatever the generation
+    pub(crate) fn selection_token(&self) -> String {
+        format!("{}:{}", self.boot_id, self.selection_generation.load(std::sync::atomic::Ordering::SeqCst))
+    }
+
+    /// `instance add`'s compare-and-set (docs/dev/multi-instance-plan.md 4.4): the default instance selects for good
+    /// the device it controls or has selected now, if that is `udid` and nothing changed since `token`. Under the
+    /// selection latch, so no switch is under way and none starts before it is written
+    pub(crate) async fn pin_current(&self, udid: &str, token: &str) -> Result<String> {
+        if self.cfg.instance.is_some() {
+            return Err(ictl_l10n::tr!("只有默认实例要固定设备", "Only the default instance pins its device").into());
+        }
+        let _latch = self.select_latch.lock().await;
+        self.gate.check_open()?;
+        let mut g = self.inner.lock().await;
+        if self.selection_token() != token {
+            return Err(ictl_l10n::tr!(
+                "默认实例的设备选择在确认之后变了（或者它重启过），没有固定；重新运行 instance add",
+                "The default instance's device selection changed since it was confirmed (or it restarted); nothing was pinned. Run instance add again"
+            )
+            .into());
+        }
+        let current = g.device.as_ref().map(|d| d.udid.clone()).or_else(|| self.pinned(&g));
+        if !current.as_deref().is_some_and(|c| c.eq_ignore_ascii_case(udid)) {
+            return Err(ictl_l10n::trf!(
+                "默认实例现在控制的不是 {udid}，没有固定",
+                "The default instance doesn't control {udid} now; nothing was pinned"
+            )
+            .into());
+        }
+        let udid = current.unwrap_or_default();
+        if g.persisted.selected_udid.as_deref() != Some(udid.as_str()) && self.cfg.udid.is_none() {
+            let before = g.persisted.selected_udid.replace(udid.clone());
+            if let Err(e) = g.persisted.try_save(&self.cfg.state_file()) {
+                g.persisted.selected_udid = before;
+                return Err(not_saved(&e).into());
+            }
+        }
+        // moved on even when it was selected already: the token confirmed is spent
+        self.selection_generation.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(self.selection_token())
+    }
+
     /// `select auto`, which a default instance sharing the host with named ones doesn't have
     fn select_auto(&self, g: &mut Inner) -> Result<String> {
         if let Some(u) = &self.cfg.udid {
@@ -333,8 +377,15 @@ mod tests {
             assert_eq!(g.persisted.selected_udid.as_deref(), Some(B));
             drop(g);
             assert!(free(&d, A), "the old lease went");
+            // instance add's compare-and-set: against the token of now only, for the device controlled
+            let token = d.selection_token();
+            assert!(d.pin_current(A, &token).await.is_err(), "not the device controlled");
+            let next = d.pin_current(B, &token).await.unwrap();
+            assert_ne!(next, token);
+            assert!(d.pin_current(B, &token).await.is_err(), "a token is spent once");
+            assert!(d.pin_current(B, &format!("other-boot:{}", d.identity().selection_generation)).await.is_err());
             assert!(!free(&d, B));
-            assert_eq!(d.identity().selection_generation, 1);
+            assert_eq!(d.identity().selection_generation, 2);
             d.gate.check_open().unwrap();
             std::fs::remove_dir_all(dir).unwrap();
         })

@@ -602,6 +602,177 @@ pub fn viewer_uninstall() -> anyhow::Result<()> {
     Ok(())
 }
 
+// ------------------------------------------------------------------ named instances (docs/dev/multi-instance-plan.md 5.1)
+
+/// launchd labels of named instances: a prefix of their own, apart from the two above
+pub const INSTANCE_LABEL: &str = "io.github.derrors.iphone-control.instance.";
+const INSTANCE_UNIT: &str = "iphone-control@";
+const INSTANCE_VIEWER_UNIT: &str = "iphone-control-viewer@";
+
+/// A named instance's daemon and control page services
+pub fn instance_services(name: &str) -> (Service, Service) {
+    if cfg!(target_os = "macos") {
+        let label = format!("{INSTANCE_LABEL}{name}");
+        let viewer = format!("{label}.viewer");
+        (
+            Service::Launchd { plist: launch_agents().join(format!("{label}.plist")), label, ours: true },
+            Service::Launchd { plist: launch_agents().join(format!("{viewer}.plist")), label: viewer, ours: true },
+        )
+    } else {
+        (
+            Service::Systemd { unit: format!("{INSTANCE_UNIT}{name}"), ours: true },
+            Service::Systemd { unit: format!("{INSTANCE_VIEWER_UNIT}{name}"), ours: true },
+        )
+    }
+}
+
+/// The template units every named instance shares: started only once `instance check` finds its registration (a
+/// program that doesn't know the command, 0.3.2, ends with 2 there: the unit is skipped, not failed), with the
+/// instance's settings read by `--instance` itself
+fn instance_unit_text(exe: &str) -> String {
+    format!(
+        "# Written by iphone-control instance add: one per named instance (iphone-control@<name>).\n\
+         # Settings: ~/.config/iphone-control/env, then ~/.config/iphone-control/instances/<name>.env\n[Unit]\n\
+         Description=iphone-control daemon, instance %i\nAfter=network-online.target\n\n[Service]\n\
+         ExecCondition={exe} instance check %i\nExecStart={exe} --instance %i daemon\nEnvironment=MALLOC_ARENA_MAX=2\n\
+         Restart=on-failure\nRestartSec=10\nTimeoutStopSec=30\n\n[Install]\nWantedBy=default.target\n",
+        exe = exec_path(exe)
+    )
+}
+
+fn instance_viewer_unit_text(exe: &str, path: &str) -> anyhow::Result<String> {
+    let path = service_path(path)?.replace('%', "%%");
+    Ok(format!(
+        "# Written by iphone-control instance add: the control page of a named instance (iphone-control-viewer@<name>)\n\
+         [Unit]\nDescription=iphone-control viewer, instance %i\nAfter=iphone-control@%i.service\n\n[Service]\n\
+         ExecCondition={exe} instance check %i\nExecStart={exe} --instance %i viewer\nEnvironment=\"PATH={path}\"\n\
+         Restart=on-failure\nRestartSec=10\n\n[Install]\nWantedBy=default.target\n",
+        exe = exec_path(exe)
+    ))
+}
+
+/// A named instance's launch agent: the shell line stops (exit 0, launchd doesn't start it again) unless `instance
+/// check` finds the registration
+fn instance_plist_text(exe: &str, name: &str, what: &str, path: Option<&str>, log: &Path) -> anyhow::Result<String> {
+    let label =
+        if what == "viewer" { format!("{INSTANCE_LABEL}{name}.viewer") } else { format!("{INSTANCE_LABEL}{name}") };
+    let env = match path {
+        Some(p) => format!(
+            "\n  <key>EnvironmentVariables</key>\n  <dict><key>PATH</key><string>{}</string></dict>",
+            xml(service_path(p)?)
+        ),
+        None => String::new(),
+    };
+    Ok(format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>{label}</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/sh</string>
+    <string>-c</string>
+    <string>"{exe}" instance check {name} &gt;/dev/null 2&gt;&amp;1 || exit 0; exec "{exe}" --instance {name} {what}</string>
+  </array>{env}
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
+  <key>ThrottleInterval</key><integer>10</integer>
+  <key>ExitTimeOut</key><integer>30</integer>
+  <key>StandardOutPath</key><string>{log}</string>
+  <key>StandardErrorPath</key><string>{log}</string>
+</dict>
+</plist>
+"#,
+        exe = xml(exe),
+        log = xml(&log.to_string_lossy())
+    ))
+}
+
+/// Sets up and starts a named instance's daemon and control page (`instance add`). `name` is a valid instance name
+/// ([`ictl_daemon::instance::valid_name`]): nothing in it a unit or a shell line reads as its own
+pub fn instance_install(name: &str) -> anyhow::Result<(Service, Service)> {
+    ensure!(ictl_daemon::instance::valid_name(name), "invalid instance name");
+    let exe = stable_exe()?;
+    let exe = exe.to_string_lossy();
+    check_exe(&exe)?;
+    let path = std::env::var("PATH").unwrap_or_default();
+    let (daemon, viewer) = instance_services(name);
+    if cfg!(target_os = "macos") {
+        let logs = home().join("Library/Logs/iphone-control");
+        std::fs::create_dir_all(&logs)?;
+        std::fs::create_dir_all(launch_agents())?;
+        for (s, what, p) in [(&daemon, "daemon", None), (&viewer, "viewer", Some(path.as_str()))] {
+            let Service::Launchd { plist, .. } = s else { unreachable!("launchd") };
+            let log = logs.join(format!("{name}-{what}.log"));
+            std::fs::write(plist, instance_plist_text(&exe, name, what, p, &log)?)?;
+        }
+    } else {
+        ensure!(
+            has_systemd_user(),
+            "{}",
+            ictl_l10n::tr!(
+                "没有可用的 systemd 用户会话，装不了实例的服务",
+                "No systemd user session, so the instance's services can't be set up"
+            )
+        );
+        let dir = our_unit().parent().unwrap_or(Path::new("/")).to_owned();
+        std::fs::create_dir_all(&dir)?;
+        std::fs::write(dir.join(format!("{INSTANCE_UNIT}.service")), instance_unit_text(&exe))?;
+        std::fs::write(dir.join(format!("{INSTANCE_VIEWER_UNIT}.service")), instance_viewer_unit_text(&exe, &path)?)?;
+        systemctl(&["daemon-reload"]);
+    }
+    start(&daemon)?;
+    start(&viewer)?;
+    Ok((daemon, viewer))
+}
+
+/// Stops a named instance's services and disables them; `true` once both are confirmed stopped. Their files (the
+/// plists, not the templates) are removed only then
+pub fn instance_stop(name: &str) -> bool {
+    let (daemon, viewer) = instance_services(name);
+    for s in [&viewer, &daemon] {
+        match s {
+            Service::Systemd { unit, .. } => {
+                systemctl(&["disable", "--now", unit]);
+            }
+            Service::Launchd { .. } => {
+                let _ = stop(s);
+            }
+        }
+    }
+    for _ in 0..50 {
+        if !running(&daemon) && !running(&viewer) {
+            return true;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(200));
+    }
+    false
+}
+
+/// A named instance's service files removed, once [`instance_stop`] confirmed them stopped. The systemd templates
+/// stay while other instances use them
+pub fn instance_remove_files(name: &str, others_left: bool) -> anyhow::Result<()> {
+    if cfg!(target_os = "macos") {
+        let (daemon, viewer) = instance_services(name);
+        for s in [daemon, viewer] {
+            if let Service::Launchd { plist, .. } = s {
+                match std::fs::remove_file(&plist) {
+                    Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e.into()),
+                    _ => {}
+                }
+            }
+        }
+    } else if !others_left {
+        let dir = our_unit().parent().unwrap_or(Path::new("/")).to_owned();
+        for u in [INSTANCE_UNIT, INSTANCE_VIEWER_UNIT] {
+            let _ = std::fs::remove_file(dir.join(format!("{u}.service")));
+        }
+        systemctl(&["daemon-reload"]);
+    }
+    Ok(())
+}
+
 /// For an update: stops the control page's service if it is running (it is an `iphone-control` process holding a
 /// client lease, so the update would wait for it forever) and waits until it is gone. `Some` to start it again
 /// with [`resume_viewer`]
@@ -700,6 +871,26 @@ mod tests {
         assert!(plist.contains("<key>PATH</key><string>/a&amp;b:/usr/bin</string>"));
         assert!(plist.contains(&format!("<string>{VIEWER_LABEL}</string>")));
         assert!(plist::Value::from_reader_xml(plist.as_bytes()).is_ok(), "a valid plist");
+    }
+
+    /// A named instance's units and agents: started only once `instance check` passes, as that instance, with the
+    /// labels apart from the default instance's
+    #[test]
+    fn a_named_instance_s_services() {
+        let unit = instance_unit_text("/usr/bin/iphone-control");
+        assert!(unit.contains("ExecCondition=/usr/bin/iphone-control instance check %i\n"), "{unit}");
+        assert!(unit.contains("ExecStart=/usr/bin/iphone-control --instance %i daemon\n"), "{unit}");
+        assert!(!unit.contains("EnvironmentFile"), "the instance's own settings are read by --instance");
+        let viewer = instance_viewer_unit_text("/opt/i c/iphone-control", "/usr/bin:/x%y").unwrap();
+        assert!(viewer.contains("ExecStart=\"/opt/i c/iphone-control\" --instance %i viewer\n"), "{viewer}");
+        assert!(viewer.contains("PATH=/usr/bin:/x%%y"), "{viewer}");
+        let plist = instance_plist_text("/b/iphone-control", "ipad", "daemon", None, Path::new("/l/ipad.log")).unwrap();
+        assert!(plist.contains("<string>io.github.derrors.iphone-control.instance.ipad</string>"));
+        assert!(plist.contains(r#""/b/iphone-control" instance check ipad &gt;/dev/null 2&gt;&amp;1 || exit 0; exec "/b/iphone-control" --instance ipad daemon"#), "{plist}");
+        let v = instance_plist_text("/b/iphone-control", "ipad", "viewer", Some("/usr/bin"), Path::new("/l/v.log"))
+            .unwrap();
+        assert!(v.contains("instance.ipad.viewer</string>") && v.contains("<key>PATH</key>"));
+        plist::Value::from_reader_xml(plist.as_bytes()).unwrap();
     }
 
     #[test]

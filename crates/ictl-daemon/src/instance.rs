@@ -84,6 +84,11 @@ pub fn write_anchor(a: &Anchor) -> io::Result<()> {
     )
 }
 
+/// `name` in the registry directory `dir` replaced whole, private, on disk (`<n>.env`, `<n>.pending`)
+pub fn write_file(dir: &Path, name: &str, data: &[u8]) -> io::Result<()> {
+    ictl_unlock::durable::write_atomic(dir, name, data, 0o600)
+}
+
 /// The registry directory: the anchor's, or the one next to the settings file. An anchor that can't be read is an
 /// error: the registry it names could be another one
 pub fn registry_dir() -> io::Result<PathBuf> {

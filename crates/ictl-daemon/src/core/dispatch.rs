@@ -255,6 +255,14 @@ impl Daemon {
                 }
                 return text(self.setup_step(udid, *step).await);
             }
+            Lane::Select if matches!(req, Request::PinCurrent { .. }) => {
+                let Request::PinCurrent { expect_udid, expect_token } = &req else { unreachable!("lane") };
+                if ctx.task.is_some() {
+                    return Response::error(ictl_l10n::tr!("AI 任务不能固定设备", "An AI task can't pin the device"))
+                        .with_failure(Delivery::NotSent, FailureStage::Preflight);
+                }
+                return text(self.pin_current(expect_udid, expect_token).await);
+            }
             Lane::Select => {
                 let Request::SelectDevice { device } = &req else { unreachable!("lane") };
                 let controlled = self.inner.lock().await.device.as_ref().map(|d| d.udid.clone());
@@ -682,7 +690,8 @@ impl Daemon {
             | Request::TaskFinish { .. }
             | Request::SelectDevice { .. }
             | Request::SetupStep { .. }
-            | Request::WdaForward { .. } => unreachable!("other lanes"),
+            | Request::WdaForward { .. }
+            | Request::PinCurrent { .. } => unreachable!("other lanes"),
         };
         let r = r.map(|t| Response::text_data(t, outcome, data)).unwrap_or_else(crate::error::Error::response);
         with_unlock_note(r, g.dev.unlocked.take())
@@ -763,6 +772,7 @@ pub(super) fn lane(req: &Request) -> Lane {
         | Request::AppLogs { .. } => Lane::Device,
         Request::SelectDevice { .. } => Lane::Select,
         Request::SetupStep { .. } => Lane::Setup,
+        Request::PinCurrent { .. } => Lane::Select,
         // a stream, served by the connection (`lib::serve_conn`)
         Request::WdaForward { .. } => Lane::Task,
     }

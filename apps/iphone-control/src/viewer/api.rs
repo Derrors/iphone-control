@@ -89,6 +89,8 @@ pub(super) async fn daemon(ctx: &Ctx) -> Result<Value, String> {
         "auto_unlock": s.auto_unlock && !s.unlock_disabled,
         // the page offers to sign and install WDA (NeedsSigning) only with an Apple ID to sign with
         "signed_in": crate::client::account_dir(&ctx.data_dir).selected_email().await.is_ok(),
+        // whose viewer this is (`instance add` checks it reaches its own daemon)
+        "instance": s.instance.as_ref().map(|i| json!({ "name": i.name, "id": i.id })),
     });
     let list = devices_of(&s);
     for k in ["devices", "fixed", "auto"] {

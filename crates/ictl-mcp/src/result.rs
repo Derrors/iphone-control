@@ -47,6 +47,7 @@ pub fn wants_alert_check(req: &Request) -> bool {
         | Request::UnlockResetDevice { .. }
         | Request::SetupStep { .. }
         | Request::WdaForward { .. }
+        | Request::PinCurrent { .. }
         | Request::ListDevices
         | Request::AppLogs { .. }
         | Request::CrashReports { .. }

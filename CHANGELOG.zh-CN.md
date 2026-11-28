@@ -6,6 +6,21 @@
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-11-28
+
+### 新功能
+
+- `iphone_tap_element` 和 `iphone_wait_for`（以及 `iphone_batch` 步骤和控制台）现在支持可选的 `kind`、`id` 和 `match`（`auto`、`exact`、`contains`）复合选择器，可以精准区分同名控件；提供了 `kind` 或 `id` 时允许留空或省略 `text`（#229）。
+- `iphone_screenshot` 以及带 `then: "screenshot"` 的操作现在会随截图返回结构化几何信息（`width`、`height`、`point_width`、`point_height`、`region`、`coordinate_scale`），MCP 客户端无需解析文字即可把放大截图中的像素换算回屏幕坐标（#229）。
+- 新增官方分层 Agent Skill（`skills/iphone-control/`），提供核心操作闭环、选择器指南、输入与视觉技巧以及排错参考（#229）。
+
+### 改进
+
+- iOS 27 起：无障碍界面树因元素上限、超时、深度上限或系统浮层未读全而提前截断时，列元素和找元素工具现在会明确标出界面未读全及原因，不再静默漏掉元素（#229）。
+- `iphone_tap_element` 在真正点击前会复核目标仍在屏幕范围内、屏幕方向未变化，且（iOS 27 起）前台 App 未切换；界面刚变时会中止点击，避免误点到新页面（#229）。
+- 控制台打开多个标签页时现在共用一路按需推送的状态流，连接期间暂停冗余轮询并在无人观看或切到后台时休眠，降低守护进程后台开销（#229）。
+- macOS：内置 VideoToolbox H.264 编码器现已显式标注 sRGB/BT.709 色彩信息，避免浏览器按 Rec.601 解码导致实时画面偏色（#229）。
+
 ## [0.3.1] - 2026-11-28
 
 ### 改进
@@ -473,7 +488,8 @@
 - `setup`、`doctor`、`status`、`mcp-config`。
 - Docker 镜像和预编译的 Linux 二进制。
 
-[Unreleased]: https://github.com/Derrors/iphone-control/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/Derrors/iphone-control/compare/v0.3.2...HEAD
+[0.3.2]: https://github.com/Derrors/iphone-control/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/Derrors/iphone-control/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/Derrors/iphone-control/compare/v0.2.14...v0.3.0
 [0.2.14]: https://github.com/Derrors/iphone-control/compare/v0.2.13...v0.2.14

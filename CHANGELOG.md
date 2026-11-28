@@ -6,6 +6,21 @@ What changed in each release, one line per change. Versions follow [Semantic Ver
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-11-28
+
+### New
+
+- `iphone_tap_element` and `iphone_wait_for` (as well as `iphone_batch` steps and the control page) now accept optional `kind`, `id`, and `match` (`auto`, `exact`, `contains`) selectors to distinguish controls with the same label, and allow omitting `text` when `kind` or `id` is provided (#229).
+- `iphone_screenshot` and actions with `then: "screenshot"` now include structured image geometry (`width`, `height`, `point_width`, `point_height`, `region`, `coordinate_scale`) alongside the image so MCP clients can map zoomed pixels back to screen points without parsing captions (#229).
+- Added an official layered Agent Skill (`skills/iphone-control/`) with core workflows, selector guides, text/visual tips and troubleshooting references (#229).
+
+### Improvements
+
+- iOS 27+: when an accessibility tree read stops early due to an element limit, timeout, depth limit or incomplete overlays, element tools now report that the read is incomplete and why instead of silently omitting unseen controls (#229).
+- `iphone_tap_element` now checks right before tapping that the target is still within screen bounds and that orientation and (on iOS 27+) the foreground app have not changed, aborting instead of tapping a different screen (#229).
+- Multiple open control page tabs now share an on-demand state push stream that pauses redundant polling and sleeps when no tab is active, reducing background load on the daemon (#229).
+- macOS: the built-in VideoToolbox H.264 encoder now tags frames with explicit sRGB/BT.709 colorimetry so browsers render live screen colors accurately instead of decoding them as Rec.601 (#229).
+
 ## [0.3.1] - 2026-11-28
 
 ### Improvements
@@ -473,7 +488,8 @@ First public release.
 - `setup`, `doctor`, `status` and `mcp-config`.
 - Docker image and prebuilt Linux binaries.
 
-[Unreleased]: https://github.com/Derrors/iphone-control/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/Derrors/iphone-control/compare/v0.3.2...HEAD
+[0.3.2]: https://github.com/Derrors/iphone-control/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/Derrors/iphone-control/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/Derrors/iphone-control/compare/v0.2.14...v0.3.0
 [0.2.14]: https://github.com/Derrors/iphone-control/compare/v0.2.13...v0.2.14

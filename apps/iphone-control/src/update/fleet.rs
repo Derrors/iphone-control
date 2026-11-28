@@ -546,8 +546,9 @@ impl<M: Machine> Fleet<M> {
                     // without `brew services`) with nothing listening on its socket; anything else can't be told
                     _ if name == ictl_daemon::instance::DEFAULT
                         && match default_daemon_state(m) {
-                            Default::Stopped => true,
-                            Default::Absent => m.listening(socket).await == Some(false),
+                            // stopped or never set up: and nothing listening on its socket for sure (a daemon started
+                            // by hand there, whose answer only timed out, isn't taken for none)
+                            Default::Stopped | Default::Absent => m.listening(socket).await == Some(false),
                             Default::Running | Default::Unknown => false,
                         } =>
                     {
@@ -1359,6 +1360,14 @@ mod tests {
         assert!(
             Fleet::begin_with(f, Path::new("/run/default.sock"), "1.1.0", false, true).await.is_err(),
             "the manager can't tell"
+        );
+        // its service stopped, but something on its socket that doesn't answer in time (a daemon started by hand)
+        let (mut f, _tmp) = two();
+        silent(&f);
+        f.listening_unknown.insert("/run/default.sock".into());
+        assert!(
+            Fleet::begin_with(f, Path::new("/run/default.sock"), "1.1.0", false, true).await.is_err(),
+            "stopped, socket not known"
         );
     }
 

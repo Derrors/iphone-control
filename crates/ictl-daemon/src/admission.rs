@@ -34,6 +34,8 @@ impl Long {
 #[derive(Debug, Default)]
 struct State {
     generation: u64,
+    /// The lease of this generation, held by every pass taken under it ([`crate::lease::Hold`])
+    hold: Option<crate::lease::Hold>,
     closed: bool,
     short: usize,
     long: Vec<(u64, Long)>,
@@ -65,6 +67,8 @@ pub struct Pass {
     generation: u64,
     epoch: u64,
     long: Option<u64>,
+    /// The lease the work runs under stays held until it ends, even once the instance let go of it
+    _hold: Option<crate::lease::Hold>,
 }
 
 /// The answer for work refused while switching devices
@@ -86,10 +90,11 @@ impl Gate {
         self.lock().generation
     }
 
-    /// A new lease was taken: what is let in from now on belongs to it
-    pub fn advance(&self) -> u64 {
+    /// A new lease was taken (`hold`), or the one held let go of (`None`): what is let in from now on belongs to it
+    pub fn advance(&self, hold: Option<crate::lease::Hold>) -> u64 {
         let mut s = self.lock();
         s.generation += 1;
+        s.hold = hold;
         s.generation
     }
 
@@ -113,7 +118,8 @@ impl Gate {
         if id.is_none() {
             s.short += 1;
         }
-        Ok(Pass { gate: self.clone(), generation: s.generation, epoch: *self.revoked.borrow(), long: id })
+        let hold = s.hold.clone();
+        Ok(Pass { gate: self.clone(), generation: s.generation, epoch: *self.revoked.borrow(), long: id, _hold: hold })
     }
 
     /// Closes the gate for a switch. Returns the long work under way: a switch doesn't wait for it
@@ -131,6 +137,12 @@ impl Gate {
     /// Ends the streams of the passes held now
     pub fn revoke_streams(&self) {
         self.revoked.send_modify(|e| *e += 1);
+    }
+
+    /// The work let in that is still going on, short and long
+    pub fn in_progress(&self) -> usize {
+        let s = self.lock();
+        s.short + s.long.len()
     }
 
     /// The short work let in that is still going on
@@ -222,7 +234,7 @@ mod tests {
         assert!(ended.is_err(), "not revoked yet");
         gate.revoke_streams();
         tokio::time::timeout(Duration::from_secs(1), p.revoked()).await.unwrap();
-        gate.advance();
+        gate.advance(None);
         assert!(!p.current());
         let later = gate.admit(None).unwrap();
         assert!(later.current());

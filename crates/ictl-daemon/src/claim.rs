@@ -91,7 +91,7 @@ impl Daemon {
         let (mut elsewhere, mut not_now) = (None, false);
         for i in order {
             let d = g.connected[i].clone();
-            match self.lease_for(g, &d.udid) {
+            match self.lease_for(g, &d.udid).await {
                 Leased::Yes => {
                     self.read_leased(g, &d).await;
                     return Round::Device(d);
@@ -120,14 +120,22 @@ impl Daemon {
         {
             tracing::info!("let go of the lease of {}", l.udid());
             self.gate.revoke_streams();
-            self.gate.advance();
+            self.gate.advance(None);
         }
     }
 
     /// This instance's lease of `udid`, taken now if no one holds it
-    fn lease_for(self: &Arc<Self>, g: &mut Inner, udid: &str) -> Leased {
+    async fn lease_for(self: &Arc<Self>, g: &mut Inner, udid: &str) -> Leased {
         if g.lease.as_ref().is_some_and(|l| l.is_for(udid)) {
             return Leased::Yes;
+        }
+        // automatic, the device of before gone: its session and lease go first, and another device is taken only
+        // once the work let in on that one has ended (a switch's steps 2 to 6, docs/dev/multi-instance-plan.md 4.1)
+        if g.lease.is_some() {
+            self.let_go(g).await;
+        }
+        if self.gate.in_progress() > 0 {
+            return Leased::NotNow;
         }
         let waited = self.claimed.lock().unwrap_or_else(|p| p.into_inner()).take();
         let claim = match waited {
@@ -139,6 +147,8 @@ impl Daemon {
                 self.took(g, lease);
                 Leased::Yes
             }
+            // this process's own: work under a lease let go of still holds it (`crate::lease::Hold`)
+            Ok(Claim::Held(Some(h))) if h.is_own(self.cfg.instance_name()) => Leased::NotNow,
             Ok(Claim::Held(Some(h))) if h.instance_name().is_some() => {
                 Leased::Elsewhere(h.instance_name().unwrap_or_default().to_owned())
             }
@@ -157,10 +167,12 @@ impl Daemon {
     /// instance left on the phone is looked for again (docs/dev/multi-instance-plan.md 4.6)
     pub(crate) fn took(&self, g: &mut Inner, lease: crate::lease::Lease) {
         let udid = lease.udid().to_owned();
+        let hold = lease.hold();
         if let Some(old) = g.lease.replace(lease) {
             tracing::info!("let go of the lease of {}", old.udid());
+            self.gate.revoke_streams();
         }
-        let generation = self.gate.advance();
+        let generation = self.gate.advance(Some(hold));
         tracing::info!("took the lease of {udid} (generation {generation})");
         if crate::hidmark::is_left(&self.cfg.hid_marker_dir(), &udid) {
             g.hid_orphans.entry(udid).or_insert(0);
@@ -206,7 +218,7 @@ impl Daemon {
         if let Some(l) = g.lease.take() {
             tracing::info!("let go of the lease of {}", l.udid());
             self.gate.revoke_streams();
-            self.gate.advance();
+            self.gate.advance(None);
         }
     }
 

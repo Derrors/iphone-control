@@ -38,6 +38,8 @@ impl Daemon {
             return Err(why.into());
         }
         let mut g = self.inner.lock().await;
+        // unit tests set the devices themselves: a host's usbmuxd (macOS has one) would list none
+        #[cfg(not(test))]
         if let Ok(d) = ictl_device::list_devices().await {
             self.note_connected(&mut g, d).await;
         }
@@ -217,6 +219,14 @@ impl Daemon {
         loop {
             match crate::lease::try_claim(&self.cfg.devices_dir(), udid, holder.clone()) {
                 Ok(Claim::Got(l)) => return Ok(l),
+                // this process's own, held by work still going on there since it was let go of
+                Ok(Claim::Held(Some(h))) if h.is_own(self.cfg.instance_name()) => {
+                    return Err(ictl_l10n::trf!(
+                        "{label} 上还有之前的操作在进行（比如重签），稍后再试",
+                        "Work from before is still under way on {label} (a re-signing, say); try again shortly"
+                    )
+                    .into());
+                }
                 Ok(Claim::Held(Some(h))) if h.instance_name().is_some() => {
                     return Err(held_by(label, h.instance_name().unwrap_or_default()).into());
                 }
@@ -387,6 +397,28 @@ mod tests {
             assert!(!free(&d, B));
             assert_eq!(d.identity().selection_generation, 2);
             d.gate.check_open().unwrap();
+            std::fs::remove_dir_all(dir).unwrap();
+        })
+        .await;
+    }
+
+    /// Work let in on a device keeps its lease held after the instance let go of it (the device gone in automatic
+    /// mode, say), and no other device is taken until that work ends (docs/dev/multi-instance-plan.md 10.5)
+    #[tokio::test]
+    async fn work_on_a_device_let_go_of_keeps_its_lease_until_it_ends() {
+        local(async {
+            let (d, dir) = controlling_a("hold-after-let-go").await;
+            let resign = d.gate.admit(Some(crate::admission::Long::Resign)).unwrap();
+            let mut g = d.inner.lock().await;
+            d.let_go(&mut g).await;
+            assert!(!free(&d, A), "still held by the re-signing");
+            g.connected = vec![usb(B, 2)];
+            assert!(matches!(d.round_target(&mut g).await, crate::claim::Round::Offline));
+            assert!(g.lease.is_none(), "B isn't taken while A's work goes on");
+            drop(resign);
+            assert!(free(&d, A));
+            assert!(matches!(d.round_target(&mut g).await, crate::claim::Round::Device(u) if u.udid == B));
+            drop(g);
             std::fs::remove_dir_all(dir).unwrap();
         })
         .await;

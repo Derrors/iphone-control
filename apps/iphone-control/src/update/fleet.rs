@@ -10,7 +10,12 @@
 //! - It is kept apart from the transaction's journal: while that exists, `maintenance.pending` refuses every shared
 //!   lease, the viewers' too, so the viewers to start again after the commit must be known without it.
 //! - `<data root>/updater.lock` is held for the whole update: `update recover` that gets it knows no updater is
-//!   alive, and picks up from the record ([`recover`]).
+//!   alive, and picks up from the record ([`recover`]). Before it, `registry.lock` (the order every command that
+//!   changes the registry or the services keeps): the inventory doesn't change under the update.
+//! - The named daemons are part of the program's transaction (`transaction.rs`): the new program is committed only
+//!   once they answer with it too, and put back, with them started again on the old one, when they don't.
+//! - The record stays until every viewer it lists is running again: one that doesn't start is left for `update
+//!   recover` to start, while the intent is gone already (tasks can be opened again).
 
 use std::fs::File;
 use std::os::fd::AsRawFd;
@@ -69,10 +74,25 @@ pub(crate) struct Fleet {
     root: PathBuf,
     pub record: Record,
     _lock: File,
+    _registry: File,
 }
 
 fn root() -> PathBuf {
     ictl_daemon::Config::from_env(&ictl_daemon::protocol::default_data_dir()).root
+}
+
+fn lock_registry() -> Result<File> {
+    ictl_daemon::instance::lock_registry(&ictl_daemon::instance::registry_dir()?, Duration::from_secs(10)).context(
+        ictl_l10n::tr!(
+            "拿不到实例登记的锁（另一个 instance 命令在运行？）",
+            "can't lock the instance registry (another instance command running?)"
+        ),
+    )
+}
+
+/// The named instances an interrupted update recorded, for `update recover` to stop and start with the program
+pub(crate) fn recorded_members() -> Vec<Member> {
+    read_record(&root()).ok().flatten().map(|r| r.members).unwrap_or_default()
 }
 
 /// The updater's lock; `None` when another updater holds it
@@ -130,9 +150,25 @@ impl Fleet {
     /// The update begins: lock, inventory, record, intent; then the tasks of every instance checked (`default_socket`
     /// is the default instance's). `None`: no named instance, nothing to do beyond the single service of before
     pub async fn begin(default_socket: &Path, target: &str, default_viewer: bool) -> Result<Option<Self>> {
+        let registry = lock_registry()?;
         let members = inventory()?;
         if members.is_empty() {
             return Ok(None);
+        }
+        // the socket given is the default instance's: one another instance answers on would leave the default
+        // instance's tasks unchecked
+        if let Ok(Ok(s)) = tokio::time::timeout(Duration::from_secs(2), crate::client::snapshot(default_socket)).await
+            && let Some(i) = s.instance.filter(|i| i.name != ictl_daemon::instance::DEFAULT)
+        {
+            bail!(
+                "{}",
+                ictl_l10n::trf!(
+                    "{} 上的是实例 {}：升级在默认实例上运行（不带 --instance、--socket）",
+                    "{} is the instance {}: an update runs on the default instance (without --instance or --socket)",
+                    default_socket.display(),
+                    i.name
+                )
+            );
         }
         let root = root();
         let lock = take_lock(&root)?.context(ictl_l10n::tr!("另一个升级正在进行", "another update is under way"))?;
@@ -149,9 +185,9 @@ impl Fleet {
         let record = Record { phase: Phase::Intent, target: target.into(), members, default_viewer };
         write(&root, RECORD, &serde_json::to_vec_pretty(&record)?)?;
         write(&root, INTENT, target.as_bytes())?;
-        let fleet = Self { root, record, _lock: lock };
+        let fleet = Self { root, record, _lock: lock, _registry: registry };
         if let Err(e) = fleet.check_tasks(default_socket).await {
-            fleet.finish()?;
+            fleet.finish(true)?;
             return Err(e);
         }
         Ok(Some(fleet))
@@ -240,19 +276,42 @@ impl Fleet {
         start_daemons(&self.record.members, version).await
     }
 
-    /// The viewers that were running started again; one that doesn't is reported, not undone
-    pub fn start_viewers(&self) {
-        start_viewers(&self.record);
+    /// The instances' members, for the program's transaction to stop and start with it
+    pub fn members(&self) -> Vec<Member> {
+        self.record.members.clone()
     }
 
-    /// Done: the intent and the record go, new tasks can be opened again
-    pub fn finish(&self) -> Result<()> {
+    /// The viewers that were running started again; whether they all are (one that isn't is reported, not undone)
+    pub fn start_viewers(&self) -> bool {
+        start_viewers(&self.record)
+    }
+
+    /// Done: the intent goes, new tasks can be opened again; the record too, unless `viewers_up` is false (then
+    /// `update recover` starts the viewers it lists)
+    pub fn finish(&self, viewers_up: bool) -> Result<()> {
         remove(&self.root, INTENT)?;
-        remove(&self.root, RECORD)
+        if viewers_up { remove(&self.root, RECORD) } else { Ok(()) }
     }
 }
 
-async fn start_daemons(members: &[Member], version: &str) -> Result<()> {
+/// The named daemons stopped and confirmed stopped (the viewers are already)
+pub(crate) async fn stop_daemons(members: &[Member]) -> Result<()> {
+    for m in members {
+        let (d, _) = service::instance_services(&m.name);
+        if service::running(&d) {
+            service::stop(&d)?;
+        }
+    }
+    for _ in 0..150 {
+        if members.iter().all(|m| !service::running(&service::instance_services(&m.name).0)) {
+            return Ok(());
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    bail!("{}", ictl_l10n::tr!("命名实例的守护进程没有停下", "the named instances' daemons didn't stop"))
+}
+
+pub(crate) async fn start_daemons(members: &[Member], version: &str) -> Result<()> {
     for m in members.iter().filter(|m| m.daemon_running) {
         let (d, _) = service::instance_services(&m.name);
         service::start_managed(&d)?;
@@ -282,10 +341,12 @@ async fn start_daemons(members: &[Member], version: &str) -> Result<()> {
     Ok(())
 }
 
-fn start_viewers(record: &Record) {
+fn start_viewers(record: &Record) -> bool {
+    let mut up = true;
     for m in record.members.iter().filter(|m| m.viewer_running) {
         let (_, v) = service::instance_services(&m.name);
         if let Err(e) = service::start_managed(&v) {
+            up = false;
             eprintln!(
                 "{}",
                 ictl_l10n::trf!(
@@ -300,8 +361,10 @@ fn start_viewers(record: &Record) {
         && let Some(v) = service::viewer_find()
         && let Err(e) = service::start_managed(&v)
     {
+        up = false;
         eprintln!("{e:#}");
     }
+    up
 }
 
 /// `update recover`'s part for the instances, once the transaction of the program itself is settled (put back or
@@ -309,6 +372,7 @@ fn start_viewers(record: &Record) {
 /// go. A package manager that may still run (an interrupted `apt`, `brew`) leaves it pending
 pub(crate) async fn recover(installed: &str) -> Result<()> {
     let root = root();
+    let _registry = lock_registry()?;
     let Some(_lock) = take_lock(&root)? else {
         bail!("{}", ictl_l10n::tr!("升级程序还在运行，没有动手", "An updater is still running; nothing done"))
     };
@@ -341,8 +405,18 @@ pub(crate) async fn recover(installed: &str) -> Result<()> {
     if record.phase != Phase::Intent {
         start_daemons(&record.members, installed).await?;
     }
-    start_viewers(&record);
-    remove(&root, RECORD)
+    if start_viewers(&record) {
+        remove(&root, RECORD)?;
+    } else {
+        bail!(
+            "{}",
+            ictl_l10n::tr!(
+                "有控制台没起来，记录留着：处理后再运行 update recover",
+                "A viewer didn't start, so the record stays: deal with it, then run update recover again"
+            )
+        );
+    }
+    Ok(())
 }
 
 /// An `apt`, `dpkg` or `brew` process of this machine is running

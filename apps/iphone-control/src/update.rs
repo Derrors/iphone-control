@@ -3,6 +3,12 @@
 mod archive;
 mod channel;
 mod fleet;
+
+/// `update recover` without a receipt (a package manager's installation): what an update of the instances left
+/// (`fleet`), with the program as it is installed now
+pub async fn recover_fleet() -> anyhow::Result<()> {
+    fleet::recover(env!("CARGO_PKG_VERSION")).await
+}
 mod install;
 mod release;
 pub mod transaction;

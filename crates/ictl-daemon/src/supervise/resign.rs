@@ -222,7 +222,7 @@ impl Daemon {
         force: bool,
         expect: Option<&str>,
     ) -> crate::error::Result<String> {
-        let _lease = crate::maintenance::shared()?;
+        let maintenance = crate::maintenance::shared()?;
         let (device, name, pass) = {
             let mut g = self.inner.lock().await;
             let g = &mut *g;
@@ -289,8 +289,12 @@ impl Daemon {
         }
         // plume_core 的签名 future 不是 Send（持有 &mut dyn FnMut 和非 Send 的私钥），放到阻塞线程里 block_on；
         // 错误用 Text 保留双语：日志和落盘按守护进程自己的语言，返回给调用方再按请求语言，不会互相串味
-        let r: Result<ictl_sign::Signed, ictl_l10n::Text> = tokio::task::spawn_blocking(move || {
-            tokio::runtime::Handle::current()
+        // the maintenance lease and the pass (with the device's lease it holds) go into the blocking thread and come
+        // back with its result: should this future be dropped (the caller gone, the daemon stopping), they are let go
+        // of only once the thread is done with the device, not before
+        let joined = tokio::task::spawn_blocking(move || {
+            let held = (maintenance, pass);
+            let r = tokio::runtime::Handle::current()
                 .block_on(tokio::time::timeout(RESIGN_TIMEOUT, async move {
                     if fetch {
                         crate::wda_pkg::ensure(&unsigned).await?;
@@ -316,10 +320,18 @@ impl Daemon {
                         "not finished within {} minutes (Apple's servers or the install got stuck)",
                         RESIGN_TIMEOUT.as_secs() / 60
                     ))
-                })
+                });
+            (r, held)
         })
-        .await
-        .unwrap_or_else(|e| Err(ictl_l10n::textf!("签名任务异常退出：{e}", "The signing task exited abnormally: {e}")));
+        .await;
+        let (r, pass): (Result<ictl_sign::Signed, ictl_l10n::Text>, _) = match joined {
+            Ok((r, (_maintenance, pass))) => (r, Some(pass)),
+            Err(e) => {
+                (Err(ictl_l10n::textf!("签名任务异常退出：{e}", "The signing task exited abnormally: {e}")), None)
+            }
+        };
+        // the device signed for is still the one this instance holds (no switch, no other lease since)
+        let current = pass.as_ref().is_some_and(|p| p.current());
 
         let mut g = self.inner.lock().await;
         let g = &mut *g;
@@ -343,13 +355,23 @@ impl Daemon {
                 // 刚用它签成功，本机的证书肯定在团队里
                 g.own_cert = Some((Instant::now(), true));
                 let exp = s.profile.expires.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
-                g.persisted.team_id = Some(s.team_id);
-                g.persisted.wda_bundle = Some(s.bundle_id);
-                g.persisted.profile_expires = Some(exp);
                 g.persisted.record_resign(now_secs(), None);
+                // what was signed describes that device: written only while it is still the one held (the lease of
+                // then); otherwise the device controlled now keeps its own, and the next check looks at it again
+                let here = current && g.device.as_ref().is_some_and(|d| d.udid == signed_udid);
+                if here {
+                    g.persisted.team_id = Some(s.team_id);
+                    g.persisted.wda_bundle = Some(s.bundle_id);
+                    g.persisted.profile_expires = Some(exp);
+                } else {
+                    self.log.log(&ictl_l10n::log_trf!(
+                        "重签的 {signed_udid} 已经不是正在控制的设备，签名结果没有记到现在这台上",
+                        "{signed_udid}, re-signed, is no longer the device controlled: the result isn't recorded for the one controlled now"
+                    ));
+                }
                 g.persisted.save(&self.cfg.state_file());
                 // 新包装上后旧的 runner 会失效，下一轮巡检重新拉起。签名期间切到了别的设备就不动它的会话
-                if pass.current() && g.device.as_ref().is_some_and(|d| d.udid == signed_udid) {
+                if here {
                     // 装新包时旧的后台 WDA 已被结束：忘掉它（进程号可能被别的进程用上），巡检马上重新拉起
                     self.forget_detached_here(g);
                     self.drop_session(g).await;

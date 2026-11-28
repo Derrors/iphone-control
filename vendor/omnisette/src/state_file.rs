@@ -41,6 +41,11 @@ pub enum Origin {
     Url(String),
 }
 
+/// The same address written with or without a trailing slash, in either case
+pub fn same_address(a: &str, b: &str) -> bool {
+    a.trim_end_matches('/').eq_ignore_ascii_case(b.trim_end_matches('/'))
+}
+
 /// Where the state in `dir` came from. A state that can't be read is an error, never taken for missing
 pub fn origin(dir: &Path) -> Result<Origin, AnisetteError> {
     match read(dir)? {

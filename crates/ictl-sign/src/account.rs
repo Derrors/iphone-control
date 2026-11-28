@@ -67,7 +67,7 @@ impl AccountDir {
         Ok(match omnisette::state_file::origin(&self.dir).map_err(|e| SignError::Transient(e.to_string()))? {
             Origin::Missing | Origin::Unprovisioned => OriginCheck::Fresh,
             Origin::Unknown => OriginCheck::Unknown,
-            Origin::Url(u) if same_address(&u, &configured) => OriginCheck::Known,
+            Origin::Url(u) if omnisette::state_file::same_address(&u, &configured) => OriginCheck::Known,
             Origin::Url(recorded) => OriginCheck::Mismatch { recorded, configured },
         })
     }
@@ -174,11 +174,6 @@ impl AccountDir {
     }
 }
 
-/// The same address written with or without a trailing slash
-fn same_address(a: &str, b: &str) -> bool {
-    a.trim_end_matches('/').eq_ignore_ascii_case(b.trim_end_matches('/'))
-}
-
 fn hex(b: &[u8]) -> String {
     b.iter().map(|x| format!("{x:02x}")).collect()
 }
@@ -280,6 +275,38 @@ mod tests {
         assert!(!SignError::AnisetteOriginUnknown.is_transient());
         std::fs::write(dir.join("state.plist"), state(Some("https://ani.example.com/"))).unwrap();
         assert_eq!(lone.anisette_origin().unwrap(), OriginCheck::Known, "a trailing slash is the same address");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// The provider itself checks the state it is about to send (docs/dev/multi-instance-plan.md 10.5): a state of
+    /// another address, or of none recorded while one is required, is refused before anything is sent, even when
+    /// the check made earlier on the disk saw another state
+    #[tokio::test]
+    async fn the_state_sent_is_the_one_checked() {
+        use omnisette::anisette_headers_provider::AnisetteHeadersProvider;
+        let state = |by: Option<&str>| {
+            let by = by.map(|u| format!("<key>provisioned_by</key><string>{u}</string>")).unwrap_or_default();
+            format!(
+                "<?xml version=\"1.0\" encoding=\"UTF-8\"?><plist version=\"1.0\"><dict>\
+                 <key>keychain_identifier</key><data>AAAAAAAAAAAAAAAAAAAAAA==</data>\
+                 <key>adi_pb</key><data>AQID</data>{by}</dict></plist>"
+            )
+        };
+        let (a, dir) = acct(true);
+        // what the earlier check saw: none yet. Then another process wrote one of another address
+        a.check_origin().unwrap();
+        std::fs::write(dir.join("state.plist"), state(Some("https://other.example.com"))).unwrap();
+        let provider = |required: bool| {
+            omnisette::remote_anisette_v3::RemoteAnisetteProviderV3::new(a.anisette_address(), dir.clone(), "0".into())
+                .requiring_known_origin(required)
+        };
+        let e = provider(false).get_anisette_headers(false).await.unwrap_err();
+        assert!(matches!(e, omnisette::AnisetteError::OriginMismatch { .. }), "{e}");
+        std::fs::write(dir.join("state.plist"), state(None)).unwrap();
+        let e = provider(true).get_anisette_headers(false).await.unwrap_err();
+        assert!(matches!(e, omnisette::AnisetteError::OriginUnknown), "{e}");
+        let mapped = SignError::from(plume_core::Error::Anisette(e));
+        assert!(matches!(mapped, SignError::AnisetteOriginUnknown) && mapped.is_configuration());
         std::fs::remove_dir_all(dir).unwrap();
     }
 

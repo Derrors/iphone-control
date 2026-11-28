@@ -12,8 +12,6 @@
 //! stopped and the registration removed again.
 
 use std::fs::File;
-use std::os::fd::AsRawFd;
-use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -110,31 +108,19 @@ fn check(name: &str) -> anyhow::Result<()> {
 
 /// `registry.lock`, waited for a while
 fn lock_registry(dir: &Path) -> anyhow::Result<File> {
-    use std::os::unix::fs::DirBuilderExt;
-    std::fs::DirBuilder::new().recursive(true).mode(0o700).create(dir)?;
-    let f = std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .mode(0o600)
-        .open(dir.join("registry.lock"))?;
-    let deadline = std::time::Instant::now() + LOCK_WAIT;
-    loop {
-        // SAFETY: a valid descriptor, owned by `f` for as long as the lock is held
-        if unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
-            return Ok(f);
-        }
-        ensure!(
-            std::time::Instant::now() < deadline,
-            "{}",
-            ictl_l10n::tr!(
-                "另一个 instance 命令正在改登记，稍后再试",
-                "Another instance command is changing the registry; try again shortly"
+    instance::lock_registry(dir, LOCK_WAIT).map_err(|e| {
+        if e.kind() == std::io::ErrorKind::WouldBlock {
+            anyhow::anyhow!(
+                "{}",
+                ictl_l10n::tr!(
+                    "另一个 instance 命令或升级正在改登记，稍后再试",
+                    "Another instance command or an update is changing the registry; try again shortly"
+                )
             )
-        );
-        std::thread::sleep(Duration::from_millis(100));
-    }
+        } else {
+            e.into()
+        }
+    })
 }
 
 /// What the default instance reports, for `add` to confirm and compare-and-set against

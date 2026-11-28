@@ -185,12 +185,23 @@ trait Services {
     async fn idle(&self, current: &Receipt) -> Result<bool>;
     async fn stop(&self) -> Result<()>;
     async fn start_healthy(&self, version: &str) -> Result<()>;
+    /// The named instances' daemons (`fleet`), stopped with the program's own before it is put back
+    async fn stop_members(&self) -> Result<()> {
+        Ok(())
+    }
+    /// Those that were running started again on `version`, each checked to answer with it: the program is
+    /// committed only once they are
+    async fn start_members(&self, _version: &str) -> Result<()> {
+        Ok(())
+    }
 }
 
 struct Host<'a> {
     service: Service,
     socket: &'a Path,
     binary: &'a Path,
+    /// The named instances going through the update with the default one (`fleet`)
+    members: Vec<super::fleet::Member>,
 }
 
 #[cfg(target_os = "macos")]
@@ -401,6 +412,14 @@ impl Services for Host<'_> {
             .context(ictl_l10n::tr!("守护进程健康检查超时", "daemon health check timed out"))?;
         Ok(())
     }
+
+    async fn stop_members(&self) -> Result<()> {
+        super::fleet::stop_daemons(&self.members).await
+    }
+
+    async fn start_members(&self, version: &str) -> Result<()> {
+        super::fleet::start_daemons(&self.members, version).await
+    }
 }
 
 async fn restore(store: &Store, host: &impl Services, tx: &Transaction, why: &str) -> Result<()> {
@@ -417,12 +436,14 @@ async fn restore(store: &Store, host: &impl Services, tx: &Transaction, why: &st
         ictl_l10n::tr!("用来恢复的程序摘要对不上", "recovery executable digest mismatch")
     );
     host.stop().await?;
+    host.stop_members().await?;
     if current != tx.old.sha256 {
         store.link(&backup, &store.binary)?;
     }
     if tx.was_running {
         host.start_healthy(&tx.old.version).await?;
     }
+    host.start_members(&tx.old.version).await?;
     write_json(&store.receipt, &tx.old)?;
     store.record("restored", &tx.new.version, why, Some(tx.new.version.clone()))?;
     store.clear()
@@ -487,6 +508,8 @@ async fn replace(
         if !running {
             host.stop().await?;
         }
+        // the named instances' daemons too: one that doesn't come up with it puts the old program back for all
+        host.start_members(&tx.new.version).await?;
         Ok::<_, anyhow::Error>(())
     }
     .await;
@@ -578,18 +601,19 @@ pub async fn apply(socket: &Path, background: bool, report: super::Report) -> Re
     let version =
         report.available_version.context(ictl_l10n::tr!("没有可用的正式版", "no stable release is available"))?;
     eligible(&receipt.version, &version, background)?;
-    let host = Host { service, socket, binary: &store.binary };
     // with named instances, all of them go through the update (`fleet`): the intent first, every instance's tasks
-    // checked, their services stopped, started again afterwards as they were
+    // checked, their services stopped, their daemons part of the transaction, the viewers started again as they were
     let default_viewer = crate::service::viewer_find().is_some_and(|s| crate::service::running(&s));
     let mut fleet = super::fleet::Fleet::begin(socket, &version, default_viewer).await?;
+    let members = fleet.as_ref().map(|f| f.members()).unwrap_or_default();
+    let host = Host { service, socket, binary: &store.binary, members };
     // the control page's service is an always-running client: it would keep the update busy forever, so it stops
     // for the update and starts again afterwards (not while it runs an AI task: that would end the task)
     let paused = match pause_viewer(socket).await {
         Ok(p) => p,
         Err(e) => {
             if let Some(f) = &fleet {
-                f.finish()?;
+                f.finish(true)?;
             }
             return Err(e);
         }
@@ -598,6 +622,7 @@ pub async fn apply(socket: &Path, background: bool, report: super::Report) -> Re
         Some(f) => f.stop_all(),
         None => Ok(()),
     };
+    let old_version = receipt.version.clone();
     let result = async {
         stopped?;
         if background {
@@ -644,20 +669,22 @@ pub async fn apply(socket: &Path, background: bool, report: super::Report) -> Re
         work
     }
     .await;
-    if let Some(f) = fleet.as_mut() {
-        // the named daemons run what is installed now: the new version, or the old one put back
-        let installed = read_receipt().map(|r| r.version).unwrap_or_else(|_| env!("CARGO_PKG_VERSION").into());
+    // an interrupted transaction (the journal still there, its recovery failed) is `update recover`'s, the instances'
+    // record with it
+    let settled = !store.journal().try_exists().unwrap_or(true);
+    if let Some(f) = fleet.as_mut().filter(|_| settled) {
         if result.is_ok() {
             f.at(super::fleet::Phase::Committed)?;
-        }
-        if let Err(e) = f.start_daemons(&installed).await {
+        } else if let Err(e) = f.start_daemons(&old_version).await {
+            // stopped for an update that didn't get as far as the program (a download that failed): started again
+            // on the program of before; the transaction put back and started them already when it got that far
             eprintln!("{e:#}");
         }
     }
     crate::service::resume_viewer(paused);
-    if let Some(f) = &fleet {
-        f.start_viewers();
-        f.finish()?;
+    if let Some(f) = fleet.as_ref().filter(|_| settled) {
+        let up = f.start_viewers();
+        f.finish(up)?;
     }
     result
 }
@@ -721,6 +748,8 @@ pub async fn recover(socket: &Path, scheduled: bool) -> Result<()> {
         drop(store);
         return super::fleet::recover(&receipt.version).await;
     };
+    // the named daemons an interrupted update recorded: stopped and started again with the program
+    let members = super::fleet::recorded_members();
     if scheduled
         && outcome(&store.binary)?.is_some_and(|o| o.status == "recovery_failed" && o.target_version == tx.new.version)
     {
@@ -750,7 +779,7 @@ pub async fn recover(socket: &Path, scheduled: bool) -> Result<()> {
     let paused = pause_viewer(socket).await?;
     let result = async {
         check_clients(service::managed_pid(&service, true)?)?;
-        let host = Host { service, socket, binary: &store.binary };
+        let host = Host { service, socket, binary: &store.binary, members };
         resume(&store, &host, &tx).await
     }
     .await;

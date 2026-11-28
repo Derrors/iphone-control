@@ -52,6 +52,11 @@ impl Holder {
         self.by.strip_prefix(INSTANCE)
     }
 
+    /// Written by this process as the instance `name`: a lease it let go of, still held by its own work
+    pub fn is_own(&self, name: &str) -> bool {
+        self.pid == std::process::id() && self.instance_name() == Some(name)
+    }
+
     pub fn is_probe(&self) -> bool {
         self.by.starts_with(PROBE)
     }
@@ -72,15 +77,26 @@ fn cap(s: &str) -> String {
     s.chars().take(96).collect()
 }
 
-/// A held lease; let go of when dropped
+/// A held lease; let go of when dropped, and every [`Hold`] of it with it
 #[derive(Debug)]
 pub struct Lease {
-    file: File,
+    file: std::sync::Arc<File>,
     udid: String,
     described: Holder,
 }
 
+/// What keeps a lease held for work still going on after the instance let go of it (docs/dev/multi-instance-plan.md
+/// 10.5): the kernel lets go of the lock once the last descriptor of it closes, so a re-signing's thread still
+/// installing on the device keeps it from another instance until it ends
+#[derive(Debug, Clone)]
+pub struct Hold(#[allow(dead_code)] std::sync::Arc<File>);
+
 impl Lease {
+    /// Keeps the lease held for as long as the `Hold` is
+    pub fn hold(&self) -> Hold {
+        Hold(self.file.clone())
+    }
+
     /// The device, as it was named when the lease was taken
     pub fn udid(&self) -> &str {
         &self.udid
@@ -156,7 +172,7 @@ pub fn try_claim(dir: &Path, udid: &str, holder: Holder) -> io::Result<Claim> {
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
     write_hint(&file, &holder)?;
-    Ok(Claim::Got(Lease { file, udid: udid.to_owned(), described: holder }))
+    Ok(Claim::Got(Lease { file: std::sync::Arc::new(file), udid: udid.to_owned(), described: holder }))
 }
 
 /// What the holder of `udid`'s lease says of itself, without taking it; `None` when no one holds it or the hint can't
@@ -216,6 +232,14 @@ mod tests {
         assert_eq!((h.name.as_str(), h.ios.as_str(), h.pid), ("iPad", "26.1", std::process::id()));
         drop(a);
         assert_eq!(holder(&d, "00008020-000925043499002E"), None, "no one holds it");
+        // work going on under it keeps it held after the lease itself went
+        let Claim::Got(again) = try_claim(&d, "00008020-000925043499002E", Holder::instance("ipad")).unwrap() else {
+            panic!("free")
+        };
+        let hold = again.hold();
+        drop(again);
+        assert!(matches!(try_claim(&d, "00008020-000925043499002E", Holder::probe("x")).unwrap(), Claim::Held(_)));
+        drop(hold);
         assert!(matches!(try_claim(&d, "00008020-000925043499002E", Holder::probe("default")).unwrap(), Claim::Got(_)));
         assert_eq!(std::fs::read_dir(&d).unwrap().count(), 1, "one file per device");
         std::fs::remove_dir_all(d).unwrap();

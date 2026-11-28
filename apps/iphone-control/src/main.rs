@@ -453,6 +453,15 @@ async fn run(named: Option<String>) -> anyhow::Result<()> {
     };
     match command {
         Command::Completions { shell } => completions::write(shell, &mut std::io::stdout().lock()),
+        // the program and the services of every instance: from the default instance only (its socket is the one
+        // checked for tasks), not one named instance's
+        Command::Update { .. } if named.is_some() => anyhow::bail!(
+            "{}",
+            ictl_l10n::tr!(
+                "升级在默认实例上运行，会一起处理所有实例：去掉 --instance（和 IPHONE_CONTROL_INSTANCE）再运行",
+                "An update runs on the default instance and takes every instance through it: run it without --instance (and IPHONE_CONTROL_INSTANCE)"
+            )
+        ),
         Command::Update { action: None, yes } => update::upgrade(&cli.socket, update::check(false).await?, yes).await,
         Command::Update { action: Some(action), .. } => update_command(action, &cli.socket).await,
         Command::Daemon => {
@@ -537,6 +546,8 @@ async fn update_command(action: UpdateAction, socket: &Path) -> anyhow::Result<(
         UpdateAction::Schedule => schedule::configure(socket),
         UpdateAction::Apply => transaction::apply(socket, false, update::check(false).await?).await,
         UpdateAction::Unpin => transaction::unpin(),
+        // a package manager's installation (APT, Homebrew) has no receipt: only the instances' part is left to recover
+        UpdateAction::Recover { .. } if !update::receipt_path().exists() => update::recover_fleet().await,
         UpdateAction::Recover { scheduled } => transaction::recover(socket, scheduled).await,
         UpdateAction::Run => {
             let report = update::check(true).await?;

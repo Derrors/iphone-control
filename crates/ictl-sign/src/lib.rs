@@ -105,6 +105,9 @@ fn is_transient_plume_error(e: &plume_core::Error) -> bool {
 }
 
 fn classify_session_error(e: plume_core::Error) -> SignError {
+    if let Some(o) = origin_error(&e) {
+        return o;
+    }
     if is_transient_plume_error(&e) {
         SignError::Transient(e.to_string())
     } else {
@@ -143,8 +146,23 @@ where
     unreachable!("loop always returns on attempt == total")
 }
 
+/// The anisette provider refused to send a state of another (or an unknown) origin: a configuration to fix, never
+/// a transient failure or an expired session
+fn origin_error(e: &plume_core::Error) -> Option<SignError> {
+    match e {
+        plume_core::Error::Anisette(omnisette::AnisetteError::OriginMismatch { recorded, configured }) => {
+            Some(SignError::AnisetteOriginMismatch { recorded: recorded.clone(), configured: configured.clone() })
+        }
+        plume_core::Error::Anisette(omnisette::AnisetteError::OriginUnknown) => Some(SignError::AnisetteOriginUnknown),
+        _ => None,
+    }
+}
+
 impl From<plume_core::Error> for SignError {
     fn from(e: plume_core::Error) -> Self {
+        if let Some(o) = origin_error(&e) {
+            return o;
+        }
         if is_transient_plume_error(&e) {
             Self::Transient(e.to_string())
         } else {
@@ -177,7 +195,10 @@ impl AccountDir {
     }
 
     fn anisette(&self) -> AnisetteConfiguration {
-        let c = AnisetteConfiguration::default().set_configuration_path(self.dir.clone());
+        // the origin is checked again by the provider on the very state it sends ([`account`])
+        let c = AnisetteConfiguration::default()
+            .set_configuration_path(self.dir.clone())
+            .set_require_known_origin(self.require_known_origin);
         // 启用的是 v3 provider，它只看 v3 地址；原来设的是用不到的 v1 地址，自建服务不生效
         match &self.anisette_url {
             Some(url) => c.set_anisette_url_v3(url.clone()),

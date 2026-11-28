@@ -69,6 +69,10 @@ struct TestService {
     binary: PathBuf,
     child: RefCell<Option<Child>>,
     busy: Cell<bool>,
+    /// The named instances' daemons don't come up with this version
+    members_fail_on: RefCell<Option<String>>,
+    /// What the named instances' daemons were asked to do, in order
+    members: RefCell<Vec<String>>,
 }
 
 impl TestService {
@@ -130,6 +134,15 @@ impl Services for TestService {
         }
         Ok(())
     }
+    async fn stop_members(&self) -> Result<()> {
+        self.members.borrow_mut().push("stop".into());
+        Ok(())
+    }
+    async fn start_members(&self, version: &str) -> Result<()> {
+        self.members.borrow_mut().push(format!("start {version}"));
+        ensure!(self.members_fail_on.borrow().as_deref() != Some(version), "a named daemon didn't come up");
+        Ok(())
+    }
 }
 
 /// Starts a fixture binary that was just written. Another test that spawns a process meanwhile can leave a copy of the
@@ -176,6 +189,8 @@ impl Fixture {
             binary: bin,
             child: RefCell::default(),
             busy: Cell::new(false),
+            members_fail_on: RefCell::default(),
+            members: RefCell::default(),
         };
         Self { _dir: dir, host, store, old, new, candidate }
     }
@@ -227,6 +242,26 @@ async fn unhealthy_daemon_restores_last_verified_executable_and_service() {
     let result = outcome(&f.store.binary).unwrap().unwrap();
     assert_eq!(result.status, "restored");
     assert_eq!(result.suppressed_version.unwrap(), f.new.version);
+}
+
+/// The named instances' daemons are part of the transaction: one that doesn't come up with the new program puts the
+/// old one back for every instance, started again on it, and the update fails (docs/dev/multi-instance-plan.md 5.3)
+#[tokio::test]
+async fn a_named_daemon_that_does_not_come_up_puts_the_old_program_back() {
+    if unsafe { libc::geteuid() } == 0 {
+        return;
+    }
+    let f = Fixture::new("0.2.1");
+    f.host.start_healthy(&f.old.version).await.unwrap();
+    f.host.members_fail_on.replace(Some(f.new.version.clone()));
+    assert!(f.apply().await.is_err());
+    f.assert_installed(&f.old);
+    assert_eq!(crate::client::snapshot(&f.host.socket).await.unwrap().version.unwrap(), f.old.version);
+    assert_eq!(
+        *f.host.members.borrow(),
+        [format!("start {}", f.new.version), "stop".into(), format!("start {}", f.old.version)]
+    );
+    assert_eq!(outcome(&f.store.binary).unwrap().unwrap().status, "restored");
 }
 
 #[tokio::test]
@@ -288,6 +323,8 @@ async fn interrupted_worker() {
             binary: b,
             child: RefCell::default(),
             busy: Cell::new(false),
+            members_fail_on: RefCell::default(),
+            members: RefCell::default(),
         },
     };
     replace(&store, &host, old, new, &c, false).await.unwrap();

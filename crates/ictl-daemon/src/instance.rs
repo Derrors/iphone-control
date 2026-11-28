@@ -84,6 +84,33 @@ pub fn write_anchor(a: &Anchor) -> io::Result<()> {
     )
 }
 
+/// `registry.lock` in the registry directory, waited for up to `wait` (an error of kind `WouldBlock` then). Taken by
+/// every command that changes the registry or the services, and by an update for its whole run; never by a daemon
+pub fn lock_registry(dir: &Path, wait: std::time::Duration) -> io::Result<std::fs::File> {
+    use std::os::fd::AsRawFd;
+    use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
+    std::fs::DirBuilder::new().recursive(true).mode(0o700).create(dir)?;
+    let f = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .mode(0o600)
+        .open(dir.join("registry.lock"))?;
+    let deadline = std::time::Instant::now() + wait;
+    loop {
+        // SAFETY: a valid descriptor, owned by `f` for as long as the lock is held
+        if unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
+            return Ok(f);
+        }
+        let e = io::Error::last_os_error();
+        if e.kind() != io::ErrorKind::WouldBlock || std::time::Instant::now() >= deadline {
+            return Err(e);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+}
+
 /// `name` in the registry directory `dir` replaced whole, private, on disk (`<n>.env`, `<n>.pending`)
 pub fn write_file(dir: &Path, name: &str, data: &[u8]) -> io::Result<()> {
     ictl_unlock::durable::write_atomic(dir, name, data, 0o600)

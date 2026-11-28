@@ -55,6 +55,12 @@ pub enum AnisetteError {
     Misc,
     #[error("Missing Libraries")]
     MissingLibraries,
+    // iphone-control: the state about to be sent wasn't provisioned with the address it would be sent to
+    #[error("the anisette state was provisioned with {recorded}, not {configured}")]
+    OriginMismatch { recorded: String, configured: String },
+    // iphone-control: the state about to be sent has no recorded origin, and one is required
+    #[error("the anisette state's origin isn't recorded")]
+    OriginUnknown,
     #[error("{0}")]
     Anyhow(#[from] anyhow::Error),
 }
@@ -69,6 +75,8 @@ pub struct AnisetteConfiguration {
     anisette_url_v3: String,
     configuration_path: PathBuf,
     macos_serial: String,
+    // iphone-control: a state without a recorded origin (an older version's) isn't sent
+    require_known_origin: bool,
 }
 
 impl Default for AnisetteConfiguration {
@@ -84,6 +92,7 @@ impl AnisetteConfiguration {
             anisette_url_v3: DEFAULT_ANISETTE_URL_V3.to_string(),
             configuration_path: PathBuf::new(),
             macos_serial: "0".to_string(),
+            require_known_origin: false,
         }
     }
 
@@ -119,6 +128,12 @@ impl AnisetteConfiguration {
 
     pub fn set_configuration_path(mut self, configuration_path: PathBuf) -> AnisetteConfiguration {
         self.configuration_path = configuration_path;
+        self
+    }
+
+    // iphone-control: see `require_known_origin` above
+    pub fn set_require_known_origin(mut self, required: bool) -> AnisetteConfiguration {
+        self.require_known_origin = required;
         self
     }
 }
@@ -167,7 +182,8 @@ impl AnisetteHeaders {
                 configuration.anisette_url_v3,
                 configuration.configuration_path.clone(),
                 configuration.macos_serial.clone(),
-            ),
+            )
+            .requiring_known_origin(configuration.require_known_origin),
         )));
     }
 

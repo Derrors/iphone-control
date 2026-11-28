@@ -86,6 +86,12 @@ pub(crate) struct Record {
     /// manager's run, which starts it again only once it is done
     #[serde(default)]
     pub default_daemon: bool,
+    /// The default instance's socket, where it is checked to answer with the program installed
+    #[serde(default)]
+    pub default_socket: Option<PathBuf>,
+    /// A Homebrew installation's prefix: its locks say whether `brew` is still at work
+    #[serde(default)]
+    pub brew_prefix: Option<PathBuf>,
 }
 
 fn default_port() -> u16 {
@@ -163,14 +169,16 @@ pub(crate) trait Machine {
     fn default_viewer(&self) -> Option<Service>;
     fn default_socket(&self) -> PathBuf;
     fn services(&self, name: &str) -> (Service, Service);
-    fn running(&self, s: &Service) -> bool;
+    /// Whether `s` runs: `None` when its manager can't tell (never taken for stopped)
+    fn state(&self, s: &Service) -> Option<bool>;
     fn start(&self, s: &Service) -> Result<()>;
     fn stop(&self, s: &Service) -> Result<()>;
     fn restart(&self, s: &Service) -> Result<()>;
     async fn snapshot(&self, socket: &Path) -> Result<ictl_daemon::Snapshot>;
     async fn tasks(&self, socket: &Path) -> std::result::Result<Vec<ictl_daemon::protocol::TaskInfo>, String>;
     async fn viewer_identity(&self, port: u16) -> Option<(String, String)>;
-    fn package_busy(&self) -> bool;
+    /// A package manager may still be at work (`brew_prefix`: the Homebrew installation's, whose locks are looked at)
+    fn package_busy(&self, brew_prefix: Option<&Path>) -> bool;
     async fn sleep(&self, d: Duration) {
         tokio::time::sleep(d).await
     }
@@ -202,11 +210,23 @@ impl Machine for Real {
                 // only the services of this installation: their unit names this program, and the processes running
                 // now are this program (a unit changed since, not reloaded, could run another)
                 let (d, v) = service::instance_services(&r.name);
-                let runs_this = |s: &Service| {
-                    !service::running(s) || service::main_pid(s).is_some_and(|pid| same_program(pid, &exe))
+                // not known whether it runs: the update doesn't go on (it would neither check its process nor know
+                // what to start again)
+                let state = |s: &Service| {
+                    service::state(s).with_context(|| {
+                        ictl_l10n::trf!(
+                            "查不了实例 {} 的服务状态，没有升级",
+                            "The instance {}'s service state can't be read; not updated",
+                            r.name
+                        )
+                    })
+                };
+                let (dr, vr) = (state(&d)?, state(&v)?);
+                let runs_this = |s: &Service, running: bool| {
+                    !running || service::main_pid(s).is_some_and(|pid| same_program(pid, &exe))
                 };
                 ensure!(
-                    service::instance_runs(&r.name, &exe) && runs_this(&d) && runs_this(&v),
+                    service::instance_runs(&r.name, &exe) && runs_this(&d, dr) && runs_this(&v, vr),
                     "{}",
                     ictl_l10n::trf!(
                         "实例 {} 的服务运行的不是 {}：没有升级（先 instance remove 掉它，或用它自己的程序升级）",
@@ -218,8 +238,8 @@ impl Machine for Real {
                 Ok(Member {
                     name: r.name,
                     socket: r.managed.socket,
-                    daemon_running: service::running(&d),
-                    viewer_running: service::running(&v),
+                    daemon_running: dr,
+                    viewer_running: vr,
                     port: r.managed.port,
                     id: r.managed.id,
                     udid: r.managed.udid,
@@ -244,8 +264,8 @@ impl Machine for Real {
         service::instance_services(name)
     }
 
-    fn running(&self, s: &Service) -> bool {
-        service::running(s)
+    fn state(&self, s: &Service) -> Option<bool> {
+        service::state(s)
     }
 
     fn start(&self, s: &Service) -> Result<()> {
@@ -274,8 +294,8 @@ impl Machine for Real {
         viewer_identity(port).await
     }
 
-    fn package_busy(&self) -> bool {
-        package_manager_busy()
+    fn package_busy(&self, brew_prefix: Option<&Path>) -> bool {
+        package_manager_busy(brew_prefix)
     }
 }
 
@@ -292,7 +312,9 @@ fn same_program(pid: u32, exe: &Path) -> bool {
 async fn viewer_up(m: &impl Machine, s: &Service, port: u16, name: &str, id: &str) -> bool {
     let deadline = tokio::time::Instant::now() + VIEWER_WAIT;
     while tokio::time::Instant::now() < deadline {
-        if m.running(s) && m.viewer_identity(port).await.is_some_and(|(n, i)| n == name && (id.is_empty() || i == id)) {
+        if m.state(s) == Some(true)
+            && m.viewer_identity(port).await.is_some_and(|(n, i)| n == name && (id.is_empty() || i == id))
+        {
             return true;
         }
         m.sleep(Duration::from_millis(50)).await;
@@ -350,7 +372,7 @@ fn remove(root: &Path, name: &str) -> Result<()> {
 
 /// The default instance's daemon service runs now; `None`: not known (no service found, a foreground daemon may run)
 fn default_daemon_running(m: &impl Machine) -> Option<bool> {
-    m.default_daemon().map(|s| m.running(&s))
+    m.default_daemon().and_then(|s| m.state(&s))
 }
 
 /// A package manager is about to replace the program (with the maintenance lock's exclusive lease held): from now on
@@ -371,7 +393,15 @@ impl Fleet<Real> {
     /// The update begins: lock, inventory, record, intent; then the tasks of every instance checked (`default_socket`
     /// is the default instance's). `None`: no named instance, nothing to do beyond the single service of before
     pub async fn begin(default_socket: &Path, target: &str, default_viewer: bool) -> Result<Option<Self>> {
-        Self::begin_with(Real, default_socket, target, default_viewer).await
+        Self::begin_with(Real, default_socket, target, default_viewer, false).await
+    }
+
+    /// [`Self::begin`] for a package manager's run: a record also without named instances, of the default instance's
+    /// services as they were (the package manager has no transaction of its own to start them again from)
+    pub async fn begin_package(default_socket: &Path, target: &str, default_viewer: bool) -> Result<Self> {
+        Self::begin_with(Real, default_socket, target, default_viewer, true)
+            .await?
+            .context("a record is always made for a package manager's run")
     }
 }
 
@@ -381,10 +411,11 @@ impl<M: Machine> Fleet<M> {
         default_socket: &Path,
         target: &str,
         default_viewer: bool,
+        always: bool,
     ) -> Result<Option<Self>> {
         let registry = m.lock_registry()?;
         let members = m.inventory()?;
-        if members.is_empty() {
+        if members.is_empty() && !always {
             return Ok(None);
         }
         // the socket given is the default instance's: one another instance answers on would leave the default
@@ -420,7 +451,19 @@ impl<M: Machine> Fleet<M> {
             members,
             default_viewer,
             default_port: default_port(),
-            default_daemon: default_daemon_running(&m).unwrap_or(false),
+            // set up but its state not known: what to start again wouldn't be either
+            default_daemon: match (m.default_daemon(), default_daemon_running(&m)) {
+                (Some(_), None) => bail!(
+                    "{}",
+                    ictl_l10n::tr!(
+                        "查不了默认实例的服务状态，没有升级",
+                        "The default instance's service state can't be read; not updated"
+                    )
+                ),
+                (_, r) => r.unwrap_or(false),
+            },
+            default_socket: Some(default_socket.to_owned()),
+            brew_prefix: None,
         };
         write(&root, RECORD, &serde_json::to_vec_pretty(&record)?)?;
         write(&root, INTENT, target.as_bytes())?;
@@ -501,6 +544,12 @@ impl<M: Machine> Fleet<M> {
         Ok(())
     }
 
+    /// The package manager is about to run (a Homebrew one with this prefix)
+    pub fn package(&mut self, brew_prefix: Option<PathBuf>) -> Result<()> {
+        self.record.brew_prefix = brew_prefix;
+        self.at(Phase::Package)
+    }
+
     /// Moves the record on
     pub fn at(&mut self, phase: Phase) -> Result<()> {
         self.record.phase = phase;
@@ -514,12 +563,12 @@ impl<M: Machine> Fleet<M> {
         let m = &self.m;
         for member in &self.record.members {
             let v = m.services(&member.name).1;
-            if m.running(&v) {
+            if m.state(&v) != Some(false) {
                 m.stop(&v)?;
             }
         }
         for _ in 0..STOP_TRIES {
-            if self.record.members.iter().all(|member| !m.running(&m.services(&member.name).1)) {
+            if self.record.members.iter().all(|member| m.state(&m.services(&member.name).1) == Some(false)) {
                 return Ok(());
             }
             m.sleep(Duration::from_millis(200)).await;
@@ -559,12 +608,12 @@ pub(crate) async fn stop_daemons(members: &[Member]) -> Result<()> {
 async fn stop_daemons_with(m: &impl Machine, members: &[Member]) -> Result<()> {
     for member in members {
         let d = m.services(&member.name).0;
-        if m.running(&d) {
+        if m.state(&d) != Some(false) {
             m.stop(&d)?;
         }
     }
     for _ in 0..STOP_TRIES {
-        if members.iter().all(|member| !m.running(&m.services(&member.name).0)) {
+        if members.iter().all(|member| m.state(&m.services(&member.name).0) == Some(false)) {
             return Ok(());
         }
         m.sleep(Duration::from_millis(200)).await;
@@ -686,17 +735,19 @@ async fn recover_with(m: &impl Machine, installed: &str) -> Result<()> {
             )
         )
     };
+    let record = read_record(&root)?;
+    let brew = record.as_ref().and_then(|r| r.brew_prefix.clone());
     // a package manager's run the updater didn't see end: leases stay refused until it is done
     if root.join(PACKAGE).exists() {
-        ensure!(!m.package_busy(), busy());
+        ensure!(!m.package_busy(brew.as_deref()), busy());
         remove(&root, PACKAGE)?;
     }
-    let Some(record) = read_record(&root)? else {
+    let Some(record) = record else {
         // an intent without a record: written by nothing this version does; it would block every new task
         return remove(&root, INTENT);
     };
     if record.phase == Phase::Package {
-        ensure!(!m.package_busy(), busy());
+        ensure!(!m.package_busy(brew.as_deref()), busy());
         if installed != record.target {
             eprintln!(
                 "{}",
@@ -721,7 +772,7 @@ async fn recover_with(m: &impl Machine, installed: &str) -> Result<()> {
     {
         m.restart(&s)?;
         ensure!(
-            default_answers_with(m, installed).await,
+            default_answers_with(m, record.default_socket.as_deref(), installed).await,
             "{}",
             ictl_l10n::trf!(
                 "默认实例的守护进程没有以 {installed} 起来，记录留着：查看后再运行 update recover",
@@ -744,8 +795,8 @@ async fn recover_with(m: &impl Machine, installed: &str) -> Result<()> {
 }
 
 /// The default instance's daemon answers with `version`, within [`START_WAIT`]
-async fn default_answers_with(m: &impl Machine, version: &str) -> bool {
-    let socket = m.default_socket();
+async fn default_answers_with(m: &impl Machine, socket: Option<&Path>, version: &str) -> bool {
+    let socket = socket.map(Path::to_owned).unwrap_or_else(|| m.default_socket());
     let deadline = tokio::time::Instant::now() + START_WAIT;
     while tokio::time::Instant::now() < deadline {
         if let Ok(s) = m.snapshot(&socket).await
@@ -758,10 +809,11 @@ async fn default_answers_with(m: &impl Machine, version: &str) -> bool {
     false
 }
 
-/// A package manager may still be at work, or left its work unfinished: an `apt`, `dpkg` or `brew` process runs, the
-/// process list can't be read, dpkg's lock is held or dpkg was interrupted (`/var/lib/dpkg/updates` isn't empty), or a
-/// Homebrew lock is held. Not known counts as busy: the update stays to be recovered
-fn package_manager_busy() -> bool {
+/// A package manager may still be at work, or left its work unfinished: an `apt`, `dpkg` or `brew` process runs, dpkg
+/// was interrupted (`/var/lib/dpkg/updates` isn't empty) or its lock is held, a Homebrew lock is held. Anything that
+/// can't be read (the process list, a lock, a directory, other than one that isn't there) counts as busy: the update
+/// stays to be recovered
+fn package_manager_busy(brew_prefix: Option<&Path>) -> bool {
     let out = match std::process::Command::new("ps").args(["-A", "-o", "comm="]).env("LC_ALL", "C").output() {
         Ok(o) if o.status.success() => o,
         _ => return true,
@@ -769,24 +821,43 @@ fn package_manager_busy() -> bool {
     if busy_in(&String::from_utf8_lossy(&out.stdout)) {
         return true;
     }
-    let interrupted = std::fs::read_dir("/var/lib/dpkg/updates").is_ok_and(|mut d| d.next().is_some());
-    interrupted || dpkg_locked().unwrap_or(true) || brew_locked()
+    let dpkg = Path::new("/var/lib/dpkg");
+    let brew_locks = brew_prefix.map(|p| p.join("var/homebrew/locks"));
+    let checks = [
+        dir_not_empty(&dpkg.join("updates")),
+        dpkg_locked(&[dpkg.join("lock-frontend"), dpkg.join("lock")], Path::new("/proc/locks")),
+        brew_locks.as_deref().map_or(Some(false), brew_locked),
+    ];
+    checks.iter().any(|c| c.unwrap_or(true))
 }
 
-/// Whether dpkg's locks are held: by `/proc/locks` (dpkg's lock files are root's alone, but their locks are listed
-/// there with the file's device and inode). `Some(false)` where there is no dpkg; `None`: not known
-fn dpkg_locked() -> Option<bool> {
+/// Whether a directory has anything in it; `Some(false)` when it isn't there, `None` when it can't be read
+fn dir_not_empty(dir: &Path) -> Option<bool> {
+    match std::fs::read_dir(dir) {
+        Ok(mut d) => Some(d.next().is_some()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Some(false),
+        Err(_) => None,
+    }
+}
+
+/// Whether one of dpkg's lock `files` is held, by `locks` (`/proc/locks`: dpkg's lock files are root's alone, but
+/// their locks are listed there with the file's device and inode). `Some(false)` where there is no dpkg; `None`: not
+/// known (a file or the list that can't be read)
+fn dpkg_locked(files: &[PathBuf], locks: &Path) -> Option<bool> {
     use std::os::unix::fs::MetadataExt;
-    let files: Vec<_> = ["/var/lib/dpkg/lock-frontend", "/var/lib/dpkg/lock"]
-        .iter()
-        .filter_map(|f| std::fs::metadata(f).ok())
-        .map(|m| (libc::major(m.dev()) as u64, libc::minor(m.dev()) as u64, m.ino()))
-        .collect();
-    if files.is_empty() {
+    let mut ids = Vec::new();
+    for f in files {
+        match std::fs::metadata(f) {
+            Ok(m) => ids.push((libc::major(m.dev()) as u64, libc::minor(m.dev()) as u64, m.ino())),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => return None,
+        }
+    }
+    if ids.is_empty() {
         return Some(false);
     }
-    let locks = std::fs::read_to_string("/proc/locks").ok()?;
-    Some(locks_hold(&locks, &files))
+    let list = std::fs::read_to_string(locks).ok()?;
+    Some(locks_hold(&list, &ids))
 }
 
 /// Whether `/proc/locks` lists a lock on one of `files` (major, minor, inode)
@@ -807,21 +878,24 @@ fn locks_hold(locks: &str, files: &[(u64, u64, u64)]) -> bool {
     })
 }
 
-/// Whether one of Homebrew's locks (`var/homebrew/locks/*.lock`, flocked while it works) is held
-fn brew_locked() -> bool {
+/// Whether one of the Homebrew installation's locks (`<prefix>/var/homebrew/locks/*.lock`, flocked while `brew`
+/// works) is held. `Some(false)` with no such directory; `None` when it, or a lock in it, can't be read or tried
+fn brew_locked(dir: &Path) -> Option<bool> {
     use std::os::fd::AsRawFd;
-    [
-        "/opt/homebrew/var/homebrew/locks",
-        "/usr/local/var/homebrew/locks",
-        "/home/linuxbrew/.linuxbrew/var/homebrew/locks",
-    ]
-    .iter()
-    .filter_map(|d| std::fs::read_dir(d).ok())
-    .flatten()
-    .flatten()
-    .filter_map(|e| std::fs::File::open(e.path()).ok())
-    // SAFETY: a valid descriptor, owned by the file; a shared lock taken and let go of at once
-    .any(|f| unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_SH | libc::LOCK_NB) } != 0)
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Some(false),
+        Err(_) => return None,
+    };
+    for e in entries {
+        let f = std::fs::File::open(e.ok()?.path()).ok()?;
+        // SAFETY: a valid descriptor, owned by `f`; a shared lock taken and let go of with it
+        if unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_SH | libc::LOCK_NB) } != 0 {
+            let err = std::io::Error::last_os_error();
+            return if err.kind() == std::io::ErrorKind::WouldBlock { Some(true) } else { None };
+        }
+    }
+    Some(false)
 }
 
 /// Whether `ps -A -o comm=` lists a package manager
@@ -854,6 +928,8 @@ mod tests {
         running: RefCell<HashSet<String>>,
         /// Services that don't start
         no_start: HashSet<String>,
+        /// Services whose state their manager can't tell
+        unknown: HashSet<String>,
         /// What answers on each socket: (version, instance name, instance id, pinned device); none: nothing answers
         answers: RefCell<HashMap<PathBuf, Answer>>,
         /// Sockets whose task list can't be read; sockets with an active task
@@ -901,8 +977,11 @@ mod tests {
         fn services(&self, n: &str) -> (Service, Service) {
             (svc(&format!("iphone-control@{n}")), svc(&format!("iphone-control-viewer@{n}")))
         }
-        fn running(&self, s: &Service) -> bool {
-            self.running.borrow().contains(&name(s))
+        fn state(&self, s: &Service) -> Option<bool> {
+            if self.unknown.contains(&name(s)) {
+                return None;
+            }
+            Some(self.running.borrow().contains(&name(s)))
         }
         fn start(&self, s: &Service) -> Result<()> {
             self.log.borrow_mut().push(format!("start {}", name(s)));
@@ -951,7 +1030,7 @@ mod tests {
         async fn viewer_identity(&self, port: u16) -> Option<(String, String)> {
             self.viewers.get(&port).cloned()
         }
-        fn package_busy(&self) -> bool {
+        fn package_busy(&self, _: Option<&Path>) -> bool {
             self.package_busy
         }
         async fn sleep(&self, d: Duration) {
@@ -998,7 +1077,7 @@ mod tests {
     async fn a_task_on_the_default_instance_alone_refuses_the_update() {
         let (mut f, tmp) = two();
         f.tasks_active.insert("/run/default.sock".into());
-        let e = Fleet::begin_with(f, Path::new("/run/default.sock"), "1.1.0", false).await.err().unwrap();
+        let e = Fleet::begin_with(f, Path::new("/run/default.sock"), "1.1.0", false, false).await.err().unwrap();
         assert!(e.to_string().contains("default"), "{e}");
         assert!(!tmp.path().join(INTENT).exists() && !tmp.path().join(RECORD).exists());
     }
@@ -1009,15 +1088,18 @@ mod tests {
     async fn the_default_instance_s_tasks_not_known_refuse_the_update() {
         let (mut f, tmp) = two();
         f.tasks_fail.insert("/run/default.sock".into());
-        assert!(Fleet::begin_with(f, Path::new("/run/default.sock"), "1.1.0", false).await.is_err());
+        assert!(Fleet::begin_with(f, Path::new("/run/default.sock"), "1.1.0", false, false).await.is_err());
         assert!(!tmp.path().join(INTENT).exists());
         let (f, _tmp) = two();
         f.answers.borrow_mut().remove(Path::new("/run/default.sock"));
-        assert!(Fleet::begin_with(f, Path::new("/run/default.sock"), "1.1.0", false).await.is_err(), "running, silent");
+        assert!(
+            Fleet::begin_with(f, Path::new("/run/default.sock"), "1.1.0", false, false).await.is_err(),
+            "running, silent"
+        );
         let (f, _tmp) = two();
         f.answers.borrow_mut().remove(Path::new("/run/default.sock"));
         f.running.borrow_mut().remove("iphone-control");
-        let fleet = Fleet::begin_with(f, Path::new("/run/default.sock"), "1.1.0", false).await.unwrap().unwrap();
+        let fleet = Fleet::begin_with(f, Path::new("/run/default.sock"), "1.1.0", false, false).await.unwrap().unwrap();
         assert!(fleet.root.join(INTENT).exists(), "begun: the intent written");
     }
 
@@ -1028,7 +1110,8 @@ mod tests {
         let (mut f, tmp) = two();
         f.viewers.insert(8203, ("ipad".into(), "id-ipad".into()));
         f.viewers.insert(8204, ("phone".into(), "id-phone".into()));
-        let mut fleet = Fleet::begin_with(f, Path::new("/run/default.sock"), "1.1.0", false).await.unwrap().unwrap();
+        let mut fleet =
+            Fleet::begin_with(f, Path::new("/run/default.sock"), "1.1.0", false, false).await.unwrap().unwrap();
         fleet.stop_viewers().await.unwrap();
         stop_daemons_with(&fleet.m, &fleet.members()).await.unwrap();
         fleet.at(Phase::Package).unwrap();
@@ -1062,7 +1145,8 @@ mod tests {
         f.viewers.insert(8203, ("ipad".into(), "id-ipad".into()));
         // on 8204: another instance's viewer (an old one, say), not phone's
         f.viewers.insert(8204, ("phone".into(), "another-id".into()));
-        let mut fleet = Fleet::begin_with(f, Path::new("/run/default.sock"), "1.1.0", false).await.unwrap().unwrap();
+        let mut fleet =
+            Fleet::begin_with(f, Path::new("/run/default.sock"), "1.1.0", false, false).await.unwrap().unwrap();
         fleet.stop_viewers().await.unwrap();
         fleet.at(Phase::Committed).unwrap();
         let up = fleet.start_viewers().await;
@@ -1084,6 +1168,97 @@ mod tests {
         m.viewers.insert(8204, ("phone".into(), "id-phone".into()));
         recover_with(&m, "1.1.0").await.unwrap();
         assert!(!tmp.path().join(RECORD).exists());
+    }
+
+    /// The default instance's service state not known (its manager can't be asked) while its socket doesn't answer:
+    /// not taken for stopped, the update refused
+    #[tokio::test]
+    async fn a_service_state_not_known_isn_t_taken_for_stopped() {
+        let (mut f, tmp) = two();
+        f.answers.borrow_mut().remove(Path::new("/run/default.sock"));
+        f.unknown.insert("iphone-control".into());
+        assert!(Fleet::begin_with(f, Path::new("/run/default.sock"), "1.1.0", false, false).await.is_err());
+        assert!(!tmp.path().join(INTENT).exists());
+        // a named viewer whose state can't be told isn't taken for stopped either
+        let (mut f, _tmp) = two();
+        f.unknown.insert("iphone-control-viewer@ipad".into());
+        let mut fleet =
+            Fleet::begin_with(f, Path::new("/run/default.sock"), "1.1.0", false, false).await.unwrap().unwrap();
+        assert!(fleet.stop_viewers().await.is_err());
+    }
+
+    /// No named instance, only the default one's services: a package manager's run still records them, and an
+    /// updater killed after the package was installed and before it started them again leaves `update recover` to
+    /// start the default daemon (checked on its version) and its viewer (checked as itself)
+    #[tokio::test]
+    async fn a_package_run_without_named_instances_is_recovered_too() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut f = Fake { root: tmp.path().to_owned(), ..Fake::default() };
+        f.answers
+            .borrow_mut()
+            .insert("/run/default.sock".into(), ("1.0.0".into(), "default".into(), "default".into(), None));
+        f.running.borrow_mut().insert("iphone-control".into());
+        f.running.borrow_mut().insert("iphone-control-viewer".into());
+        f.viewers.insert(default_port(), ("default".into(), "default".into()));
+        f.default_restarts_with = Some("1.1.0".into());
+        assert!(Fleet::begin_with(f, Path::new("/run/default.sock"), "1.1.0", true, false).await.unwrap().is_none());
+        let (mut f2, tmp) = {
+            let mut f = Fake { root: tmp.path().to_owned(), ..Fake::default() };
+            f.answers
+                .borrow_mut()
+                .insert("/run/default.sock".into(), ("1.0.0".into(), "default".into(), "default".into(), None));
+            f.running.borrow_mut().insert("iphone-control".into());
+            f.running.borrow_mut().insert("iphone-control-viewer".into());
+            f.viewers.insert(default_port(), ("default".into(), "default".into()));
+            (f, tmp)
+        };
+        f2.default_restarts_with = Some("1.1.0".into());
+        let mut fleet =
+            Fleet::begin_with(f2, Path::new("/run/default.sock"), "1.1.0", true, true).await.unwrap().unwrap();
+        assert!(fleet.record.default_daemon && fleet.record.default_viewer);
+        fleet.package(Some("/opt/homebrew".into())).unwrap();
+        // the package installed; the updater killed with the default daemon stopped and still the old program, its
+        // viewer stopped
+        let Fleet { m, _lock: lock, .. } = fleet;
+        drop(lock);
+        m.running.borrow_mut().clear();
+        recover_with(&m, "1.1.0").await.unwrap();
+        let log = m.log.borrow();
+        assert!(log.contains(&"restart iphone-control".to_string()), "{log:?}");
+        assert!(log.contains(&"start iphone-control-viewer".to_string()), "{log:?}");
+        assert!(!tmp.path().join(RECORD).exists());
+    }
+
+    /// A lock or a directory that can't be read isn't taken for none: only one that isn't there is
+    #[test]
+    fn package_locks_that_can_t_be_read_count_as_held() {
+        use std::os::fd::AsRawFd;
+        let tmp = tempfile::tempdir().unwrap();
+        let file = tmp.path().join("file");
+        std::fs::write(&file, b"").unwrap();
+        // under a file: not a directory, an error other than "not there"
+        let under = file.join("x");
+        assert_eq!(dir_not_empty(&tmp.path().join("none")), Some(false));
+        assert_eq!(dir_not_empty(&under), None);
+        assert_eq!(dpkg_locked(&[tmp.path().join("none")], Path::new("/nonexistent")), Some(false), "no dpkg");
+        assert_eq!(
+            dpkg_locked(std::slice::from_ref(&under), Path::new("/proc/locks")),
+            None,
+            "a lock file that can't be read"
+        );
+        assert_eq!(
+            dpkg_locked(std::slice::from_ref(&file), &tmp.path().join("no-locks")),
+            None,
+            "the lock list can't be read"
+        );
+        let locks = tmp.path().join("locks");
+        assert_eq!(brew_locked(&locks), Some(false), "no Homebrew locks");
+        assert_eq!(brew_locked(&under), None);
+        std::fs::create_dir(&locks).unwrap();
+        let held = std::fs::File::create(locks.join("update.lock")).unwrap();
+        assert_eq!(brew_locked(&locks), Some(false));
+        assert_eq!(unsafe { libc::flock(held.as_raw_fd(), libc::LOCK_EX) }, 0);
+        assert_eq!(brew_locked(&locks), Some(true), "brew at work");
     }
 
     /// A named daemon started again must answer as itself: another instance id, or another pinned device, isn't it

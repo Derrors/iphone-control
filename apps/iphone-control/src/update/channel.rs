@@ -27,8 +27,20 @@ pub(super) async fn apply(socket: &Path, report: &Report) -> Result<()> {
     );
     // with named instances, all of them go through the update (`fleet`): the viewers stopped (they hold the
     // maintenance lease while they run), the daemons once the exclusive lease is held, all started again afterwards
-    let default_viewer = crate::service::viewer_find().is_some_and(|s| crate::service::running(&s));
-    let mut fleet = super::fleet::Fleet::begin(socket, latest, default_viewer).await?;
+    // a record even without named instances: the default instance's services, to be started again by `update
+    // recover` should this updater die after the package manager replaced the program. A state that can't be read
+    // isn't taken for stopped
+    let default_viewer = match crate::service::viewer_find() {
+        Some(v) => crate::service::state(&v).context(ictl_l10n::tr!(
+            "查不了默认实例控制台的服务状态，没有升级",
+            "The default instance's viewer service state can't be read; not updated"
+        ))?,
+        None => false,
+    };
+    let brew_prefix = (report.install_method == InstallMethod::Homebrew)
+        .then(|| exe.ancestors().nth(4).and_then(Path::parent).map(Path::to_owned))
+        .flatten();
+    let mut fleet = Some(super::fleet::Fleet::begin_package(socket, latest, default_viewer).await?);
     // the default instance's viewer too: running, it would keep the exclusive lease from ever being had
     let paused = match super::transaction::pause_viewer(socket).await {
         Ok(p) => p,
@@ -49,7 +61,7 @@ pub(super) async fn apply(socket: &Path, report: &Report) -> Result<()> {
     }
     let members = fleet.as_ref().map(|f| f.members()).unwrap_or_default();
     if let Some(f) = fleet.as_mut() {
-        f.at(super::fleet::Phase::Package)?;
+        f.package(brew_prefix)?;
     }
     let result = apply_package(socket, report, exe, latest, &members).await;
     crate::service::resume_viewer(paused);

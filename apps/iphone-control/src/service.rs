@@ -475,6 +475,49 @@ pub fn main_pid(s: &Service) -> Option<u32> {
     pid.filter(|p| *p > 0)
 }
 
+/// Whether the service runs now, as its manager says: `None` when that isn't known (the manager can't be asked, or
+/// answers with something else than running or stopped). For what must not take "can't tell" for "stopped"
+pub fn state(s: &Service) -> Option<bool> {
+    match s {
+        Service::Systemd { unit, .. } => {
+            let out =
+                Command::new("systemctl").args(["--user", "is-active", unit]).stderr(Stdio::null()).output().ok()?;
+            systemd_state(String::from_utf8_lossy(&out.stdout).trim())
+        }
+        Service::Launchd { label, .. } => {
+            let out = Command::new("launchctl")
+                .arg("print")
+                .arg(format!("gui/{}/{label}", uid()))
+                .env("LC_ALL", "C")
+                .output()
+                .ok()?;
+            launchd_state(
+                out.status.success(),
+                &String::from_utf8_lossy(&out.stdout),
+                &String::from_utf8_lossy(&out.stderr),
+            )
+        }
+    }
+}
+
+/// `systemctl is-active`'s answer: running, stopped, or not known
+fn systemd_state(answer: &str) -> Option<bool> {
+    match answer {
+        "active" | "activating" | "deactivating" | "reloading" | "refreshing" => Some(true),
+        "inactive" | "failed" => Some(false),
+        _ => None,
+    }
+}
+
+/// `launchctl print`'s answer: a job not loaded is stopped; one loaded runs or not by its state; any other failure
+/// isn't known
+fn launchd_state(ok: bool, out: &str, err: &str) -> Option<bool> {
+    if ok {
+        return Some(out.contains("state = running"));
+    }
+    (err.contains("Could not find service") || out.contains("Could not find service")).then_some(false)
+}
+
 /// The service's process is running now
 pub fn running(s: &Service) -> bool {
     match s {
@@ -919,6 +962,20 @@ mod tests {
         assert!(plist.contains("<key>PATH</key><string>/a&amp;b:/usr/bin</string>"));
         assert!(plist.contains(&format!("<string>{VIEWER_LABEL}</string>")));
         assert!(plist::Value::from_reader_xml(plist.as_bytes()).is_ok(), "a valid plist");
+    }
+
+    /// What the service managers answer, read as running, stopped or not known
+    #[test]
+    fn a_manager_that_can_t_tell_isn_t_taken_for_stopped() {
+        assert_eq!(systemd_state("active"), Some(true));
+        assert_eq!(systemd_state("inactive"), Some(false));
+        assert_eq!(systemd_state("failed"), Some(false));
+        assert_eq!(systemd_state(""), None, "systemctl didn't answer");
+        assert_eq!(systemd_state("unknown"), None);
+        assert_eq!(launchd_state(true, "\tstate = running\n", ""), Some(true));
+        assert_eq!(launchd_state(true, "\tstate = not running\n", ""), Some(false));
+        assert_eq!(launchd_state(false, "", "Could not find service \"x\" in domain"), Some(false));
+        assert_eq!(launchd_state(false, "", "Bootstrap failed: 5: Input/output error"), None);
     }
 
     /// A named instance's units and agents: started only once `instance check` passes, as that instance, with the

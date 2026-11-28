@@ -183,3 +183,13 @@ fn extra_cancel_key_is_ignored_when_parsing() {
         serde_json::from_str::<Request>(s).unwrap_or_else(|e| panic!("{s}: {e}"));
     }
 }
+
+/// `unlock_reset` without a device is what it always was on the wire, so older daemons and clients see no change
+#[test]
+fn unlock_reset_names_its_device_only_when_given() {
+    let plain = Request::UnlockReset { udid: None };
+    assert_eq!(serde_json::to_string(&plain).unwrap(), r#"{"op":"unlock_reset"}"#);
+    assert_eq!(serde_json::from_str::<Request>(r#"{"op":"unlock_reset"}"#).unwrap(), plain);
+    let one = Request::UnlockReset { udid: Some("00008130-0019295E012B803A".into()) };
+    assert_eq!(serde_json::from_str::<Request>(&serde_json::to_string(&one).unwrap()).unwrap(), one);
+}

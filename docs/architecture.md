@@ -122,7 +122,7 @@ iOS 27 及以上默认走 `tools/native/`（详见 [ios27-native.md](dev/ios27-n
 | `ictl-device` | usbmuxd 枚举与 `Listen` 热插拔流（`watch.rs`）、配对、lockdown、CoreDeviceProxy 用户态隧道、DDI 下载与挂载、HID 与按键、截图、HEVC 屏幕媒体流（`media.rs`）、App 管理、os_trace 日志、崩溃报告、型号表 | `idevice`、`ictl-ax`、`ictl-webinspector`、`ictl-ui`、`ictl-l10n`、`reqwest`、`image` |
 | `ictl-wda` | 后台 WDA 启动/接管与密码框识别、WDA HTTP 客户端（区分写前/写后失败防误重放）、XML `/source` 解析为 `ictl_ui::Tree` | `ictl-device`、`ictl-ui`、`ictl-l10n`、`quick-xml` |
 | `ictl-sign` | Apple ID 登录（含 2FA）、会话持久化、设备注册、App ID 与描述文件、`.app`/`.ipa` 签名（含 `.xctest` 修复）、签后自检、Anisette / 苹果服务瞬断分类与退避重试 | vendored `plume_core` / `plume_store` / `omnisette` / `apple-codesign` |
-| `ictl-unlock` | 锁屏密码键盘定位、逐位输入核对、第 2 位前落盘全局 `UNLOCK-DISABLED` 停用标记；通过 `Screen` trait 抽象，分别由 WDA（`wda.rs`）与原生控制（守护进程）实现 | `ictl-ui`、`ictl-wda`（仅 `wda.rs`） |
+| `ictl-unlock` | 锁屏密码键盘定位、逐位输入核对、第 2 位前落盘这台设备的停用记录（`disable.rs`：按设备、加锁、目录也 fsync，中途断掉只会多停用）；通过 `Screen` trait 抽象，分别由 WDA（`wda.rs`）与原生控制（守护进程）实现 | `ictl-ui`、`ictl-wda`（仅 `wda.rs`） |
 | `ictl-daemon` | `core/{persist,dispatch}`、`supervise/{native,wda,resign}`、`watch`、`watchdog`、`tools/{observe,input/*,keys,launch,scroll,native/*}`、`tasks/{task,scope,store}`、`screen`、`mjpeg`、`hidmark`、`detached`、`maintenance`、`devtools`、`web`、`devices`、`doctor`、`notify` | 以上全部、`tokio`、`reqwest`、`image` |
 | `ictl-mcp` | MCP 服务（18 核心 + 6 可选开发者工具 + 任务内 `iphone_confirm`，支持 `then` 回读），同时提供 stdio 与给控制台复用的 Streamable HTTP（`http_service`）；完全不依赖设备与守护进程 crate | `ictl-protocol`、`ictl-l10n`、`rmcp`、`http` |
 | `apps/iphone-control` | 单一可执行入口：`guide`、`setup`、`service`、`daemon`、`mcp` / `mcp_bridge`、`status`、`doctor`、`account`、`bridge`、`task` / `remote`、`update/`（签名校验与事务式替换）、`completions`、`viewer/`（`hyper` 服务、`head`/`io`/`routes`/`actions`/`stream`/`pipe`/`auth`/`lan`/`tls`/`mcp`/`peer`）、`video/`（`hub`/`mjpeg`/`ffmpeg`/`vt/`/`device`/`transcode`/`flv`/`sps`）、`agent`、`web/`（`build.rs` 构建期拼装前端）及 `debug-cmds` 特性 | `clap`、`hyper`、`ictl-daemon`、`ictl-mcp` 等 |
@@ -143,7 +143,8 @@ iOS 27 及以上默认走 `tools/native/`（详见 [ios27-native.md](dev/ios27-n
 | `ddi/` | 开发者镜像缓存（iOS 17–18 为 `ddi/personalized/`）；设了 `ICTL_DDI_DIR` 时不用此处 | 默认 | **否，不得分发** |
 | `wda/` | 签好名的 `WDA-signed.ipa` 与未签名包 `WDA-unsigned.ipa`（首次签名前从 Appium 官方 Release 下载并校验 sha256） | 默认 | 否 |
 | `secrets/passcodes/<UDID>` | 各设备独立存放的锁屏密码（仅开启自动解锁时；旧版单文件 `secrets/passcode` 在仅连一台设备时自动迁移认领） | 0600 | 否 |
-| `logs/` | 事件日志 `daemon.log`（超 5 MB 轮转 `.1`）；全局自动解锁停用标记 `UNLOCK-DISABLED` | 默认 | 否 |
+| `logs/` | 事件日志 `daemon.log`（超 5 MB 轮转 `.1`）；`UNLOCK-DISABLED`：给 0.3.2 及更早版本看的影子，有任何停用记录时都在 | 默认 | 否 |
+| `secrets/unlock-disabled/` | 按设备的自动解锁停用记录 `<UDID>`；`LEGACY` 是旧版本留下、不知道是哪台的停用（每台都停用，`<UDID>.legacy-released` 表示这台已解除） | 0700（在 `secrets/` 里） | 否 |
 | `state.json` | 最近签名信息（Team ID / Bundle ID / 到期时间）、选定设备、每台设备竖放屏幕尺寸、上次重签结果、后台 WDA 进程记录（`detached_wdas` / `loopback_wdas`）、按键策略缓存（`button_ways`） | 默认 | 否 |
 | `run-state.json` | 守护进程运行标记（正常退出时清除）、看门狗退出记录及异常重启告警持久化冷却状态（`watchdog.rs`），独立于 `state.json` 与设备锁 | 默认 | 否 |
 | `viewer-tokens.json` | 控制台命名登录令牌（名称、权限 `operate`/`view`、令牌） | 0600 | 否 |
@@ -163,6 +164,6 @@ iOS 27 及以上默认走 `tools/native/`（详见 [ios27-native.md](dev/ios27-n
 - **通知与去重**：支持 Bark 与 Telegram。设备相关通知标题均带设备名（无名时回退为设备类型，离线取离线前记录）：
   - `resign` / `session`：20 小时内不重复；
   - `pin` / `offline`：触发一次直至恢复（且仅这两类有恢复通知 `WdaRecovered` / `DeviceOnline`）；
-  - `unlock`：停用后推一次，`unlock-reset` 后重置；
+  - `unlock`：每台设备停用时推一次（停用后这台不再尝试，直到 `unlock-reset`）；
   - `cert`：每次证书变更均推；
   - `daemon`（异常退出 / 看门狗重启）：去重状态持久化于 `run-state.json`，30 分钟冷却防崩溃循环刷屏，冷却结束后汇总合并次数与近 1 小时总重启次数。若守护进程异常退出后未被服务管理器拉起或宿主机宕机，仍需宿主机侧外部监控。

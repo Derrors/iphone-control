@@ -45,6 +45,7 @@ mod dispatch;
 mod persist;
 #[cfg(test)]
 pub(crate) mod tests;
+mod unlock;
 
 pub(crate) use dispatch::in_background;
 pub use persist::{ButtonWays, DetachedWda, DeviceProfile, Persisted, ResignRecord, wda_profile, wda_profile_expiry};
@@ -458,6 +459,7 @@ pub(crate) fn hid_supported(info: Option<&DeviceInfo>) -> bool {
 impl Daemon {
     pub fn new(cfg: Config) -> Arc<Self> {
         let log = EventLog::new(&cfg.logs());
+        unlock::migrate_unlock_disabled(&cfg, &log);
         let persisted = Persisted::load(&cfg.state_file());
         let now = Instant::now();
         let inner = Inner {
@@ -509,7 +511,10 @@ impl Daemon {
             device_profile: DeviceProfile::NotChecked,
             native: false,
             auto_unlock: false,
-            unlock_disabled: cfg.unlock_disabled_flag().exists(),
+            unlock_disabled: cfg
+                .unlock_disabled()
+                .device(cfg.udid.as_deref().or(inner.persisted.selected_udid.as_deref()).unwrap_or(unlock::NO_DEVICE))
+                .is_disabled(),
             notify_configured: cfg.notify.any(),
             log_tail: Vec::new(),
         };
@@ -533,15 +538,6 @@ impl Daemon {
         })
     }
 
-    /// 自动解锁配置：用设备 `udid` 自己的密码。没接设备时密码文件不存在（自动解锁不可用）
-    pub(crate) fn unlock_cfg(&self, udid: Option<&str>) -> UnlockConfig {
-        UnlockConfig {
-            passcode_file: self.cfg.passcode_file_for(udid.unwrap_or("_none")),
-            disabled_flag: self.cfg.unlock_disabled_flag(),
-            timing: Default::default(),
-        }
-    }
-
     /// 选定的设备：`IPHONE_UDID` 优先，其次是运行中选的
     pub(crate) fn pinned(&self, g: &Inner) -> Option<String> {
         self.cfg.udid.clone().or_else(|| g.persisted.selected_udid.clone())
@@ -558,25 +554,6 @@ impl Daemon {
                     .unwrap_or_else(|| DeviceInfo { udid: d.udid.clone(), ..Default::default() })
             })
             .collect()
-    }
-
-    /// 旧版本那份不知道是哪台的密码：USB 上只接着一台、正好是要控制的这台、这台还没有自己的密码时，归到它名下。
-    /// 接着多台时不动它（也不用它）
-    pub(crate) fn adopt_legacy_passcode(&self, g: &Inner) {
-        let legacy = self.cfg.legacy_passcode_file();
-        let ([only], Some(d)) = (&g.connected[..], &g.device) else { return };
-        if only.udid != d.udid || !legacy.is_file() {
-            return;
-        }
-        let dst = self.cfg.passcode_file_for(&d.udid);
-        if dst.exists() {
-            return;
-        }
-        let r = self.cfg.ensure_passcodes_dir().and_then(|_| std::fs::rename(&legacy, &dst));
-        match r {
-            Ok(()) => self.log.log(&ictl_l10n::log_trf!("旧的锁屏密码只有一份，USB 上只接着 {}，归到它名下", "There is a single passcode saved by an older version and only {} is on USB; assigning it to that device", d.udid)),
-            Err(e) => tracing::warn!("{}", ictl_l10n::log_trf!("把旧的锁屏密码归到 {} 名下失败：{e}", "Assigning the old passcode to {} failed: {e}", d.udid)),
-        }
     }
 
     pub(crate) fn notify(&self, g: &mut Inner, e: Event) {

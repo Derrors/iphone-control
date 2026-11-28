@@ -301,6 +301,11 @@ impl Daemon {
                 ictl_l10n::tr!("❌ 自动解锁已停用(之前输错过或输入中途出错)\n     → 核对密码后 iphone-control unlock-reset", "❌ Auto-unlock is disabled (a wrong passcode or an error while entering it)\n     → check the passcode, then iphone-control unlock-reset").into(),
             );
             fails += 1;
+            if self.cfg.unlock_disabled().legacy() {
+                out.push(
+                    ictl_l10n::tr!("   旧版本停用过自动解锁、没记是哪台设备，所以每台设备都停用着:逐台核对密码后各运行一次 unlock-reset(别的设备加 --device)", "   An older version disabled auto-unlock without saying for which device, so every device is disabled: check each one's passcode and run unlock-reset for each (--device for another one)").into(),
+                );
+            }
         } else if unlock.enabled() {
             out.push(ictl_l10n::tr!("✅ 自动解锁已启用(这台设备)", "✅ Auto-unlock enabled (this device)").into());
         } else if g.device.is_some() {

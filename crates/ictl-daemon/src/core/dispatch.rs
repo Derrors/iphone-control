@@ -590,11 +590,7 @@ impl Daemon {
                 self.wait_for(g, text, selector, Duration::from_millis(timeout_ms), true, &mut || may_continue(&req))
                     .await
             }
-            Request::UnlockReset => {
-                let _ = std::fs::remove_file(self.cfg.unlock_disabled_flag());
-                g.dedup.clear("unlock");
-                Ok(ictl_l10n::tr!("已恢复自动解锁", "Auto-unlock re-enabled").into())
-            }
+            Request::UnlockReset { udid } => self.unlock_reset(g, udid.as_deref()),
             Request::ListDevices => Ok(self.list_devices_text(g)),
             Request::SelectDevice { device } => self.select_device(g, &device).await,
             Request::AppLogs { process, grep, since_secs, limit, errors_only } => {
@@ -689,7 +685,7 @@ pub(super) fn lane(req: &Request) -> Lane {
         | Request::AlertCheck
         | Request::WaitFor { .. }
         | Request::WaitForDisappearance { .. }
-        | Request::UnlockReset
+        | Request::UnlockReset { .. }
         | Request::ListDevices
         | Request::SelectDevice { .. }
         | Request::AppLogs { .. } => Lane::Device,

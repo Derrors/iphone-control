@@ -105,6 +105,28 @@ fn wda_unsigned_cache(data_dir: &Path) -> PathBuf {
     data_dir.join("wda/WDA-unsigned.ipa")
 }
 
+/// A new file in `dir` holding `text`, private (0600 from the start) and synced; its name is unique to this call
+fn secret_tmp(dir: &Path, text: &str) -> std::io::Result<PathBuf> {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let tmp = dir.join(format!(".tmp-{}-{n}", std::process::id()));
+    let r = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&tmp).and_then(|mut f| {
+        f.write_all(text.as_bytes())?;
+        f.sync_all()
+    });
+    if let Err(e) = r {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e);
+    }
+    Ok(tmp)
+}
+
+fn sync_dir(dir: &Path) -> std::io::Result<()> {
+    std::fs::File::open(dir)?.sync_all()
+}
+
 fn env_num<T: std::str::FromStr>(k: &str, default: T) -> T {
     env(k).and_then(|v| v.parse().ok()).unwrap_or(default)
 }
@@ -190,8 +212,45 @@ impl Config {
         let name: String = udid.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '_' }).collect();
         self.passcodes_dir().join(name)
     }
+    /// Saves `udid`'s passcode in place of the one it had: a crash leaves the old one or the new one whole, never a
+    /// truncated file (which would read as no passcode, or as a shorter one)
+    pub fn write_passcode(&self, udid: &str, code: &str) -> std::io::Result<()> {
+        let dir = self.ensure_passcodes_dir()?;
+        let tmp = secret_tmp(&dir, code)?;
+        let r = std::fs::rename(&tmp, self.passcode_file_for(udid)).and_then(|_| sync_dir(&dir));
+        if r.is_err() {
+            let _ = std::fs::remove_file(&tmp);
+        }
+        r
+    }
+    /// The single passcode an older version saved, given to `udid` unless it has one of its own already (one set
+    /// with `passcode set` a moment ago is never overwritten). Published whole: a hard link to a synced copy, which
+    /// fails if the name is taken. `Ok(false)`: `udid` had a passcode, the old one is left alone
+    pub fn adopt_legacy_passcode(&self, udid: &str) -> std::io::Result<bool> {
+        let legacy = self.legacy_passcode_file();
+        let code = std::fs::read_to_string(&legacy)?;
+        let dir = self.ensure_passcodes_dir()?;
+        let tmp = secret_tmp(&dir, &code)?;
+        let r = std::fs::hard_link(&tmp, self.passcode_file_for(udid));
+        let _ = std::fs::remove_file(&tmp);
+        match r {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => return Ok(false),
+            Err(e) => return Err(e),
+        }
+        sync_dir(&dir)?;
+        std::fs::remove_file(&legacy)?;
+        sync_dir(legacy.parent().unwrap_or(Path::new(".")))?;
+        Ok(true)
+    }
+    /// The single flag 0.3.2 and earlier kept for all devices; still written, as the shadow of
+    /// [`Self::unlock_disabled`], so a downgraded daemon keeps every device disabled
     pub fn unlock_disabled_flag(&self) -> PathBuf {
         self.logs().join("UNLOCK-DISABLED")
+    }
+    /// Auto-unlock disabled after a failure, per device ([`ictl_unlock::DisableStore`])
+    pub fn unlock_disabled(&self) -> ictl_unlock::DisableStore {
+        ictl_unlock::DisableStore::new(self.data_dir.join("secrets/unlock-disabled"), self.unlock_disabled_flag())
     }
     pub fn state_file(&self) -> PathBuf {
         self.data_dir.join("state.json")
@@ -221,6 +280,32 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A passcode set again replaces the old one whole and stays private; the single passcode an older version
+    /// saved is given to a device only if it has none, and never written over one set meanwhile
+    #[test]
+    fn passcodes_are_written_whole_and_an_old_one_never_replaces_a_new_one() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("ictl-config-passcode-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let cfg = Config::from_env(&dir);
+        cfg.write_passcode("A", "123456").unwrap();
+        cfg.write_passcode("A", "2468").unwrap();
+        let f = cfg.passcode_file_for("A");
+        assert_eq!(std::fs::read_to_string(&f).unwrap(), "2468");
+        assert_eq!(std::fs::metadata(&f).unwrap().permissions().mode() & 0o777, 0o600);
+
+        std::fs::write(cfg.legacy_passcode_file(), "1111").unwrap();
+        assert!(!cfg.adopt_legacy_passcode("A").unwrap(), "A has its own");
+        assert_eq!(std::fs::read_to_string(&f).unwrap(), "2468");
+        assert!(cfg.legacy_passcode_file().is_file(), "kept: nobody got it");
+        assert!(cfg.adopt_legacy_passcode("B").unwrap());
+        assert_eq!(std::fs::read_to_string(cfg.passcode_file_for("B")).unwrap(), "1111");
+        assert!(!cfg.legacy_passcode_file().exists());
+        let left: Vec<_> = std::fs::read_dir(cfg.passcodes_dir()).unwrap().flatten().map(|e| e.file_name()).collect();
+        assert_eq!(left.len(), 2, "no temporary file left: {left:?}");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     /// A debug print of the settings shows whether a key is set, never the key
     #[test]

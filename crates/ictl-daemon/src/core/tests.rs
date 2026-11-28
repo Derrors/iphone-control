@@ -630,3 +630,28 @@ fn an_unlock_first_is_said_on_the_answers_first_line() {
     let plain = Response::text_with("已按 home", Default::default());
     assert_eq!(with_unlock_note(plain.clone(), None), plain);
 }
+
+/// An older version's single flag is migrated when the daemon starts: every device counts as disabled, and
+/// unlock-reset re-enables only the device it is for; with no device to go by it refuses
+#[tokio::test]
+async fn unlock_reset_re_enables_only_its_device() {
+    use ictl_l10n::{Lang, with_lang};
+    const A: &str = "00008130-0019295E012B803A";
+    const B: &str = "00008020-000925043499002E";
+    let dir = std::env::temp_dir().join(format!("ictl-core-unlock-reset-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("logs")).unwrap();
+    std::fs::write(dir.join("logs/UNLOCK-DISABLED"), "1700000000 still locked after entering the whole passcode\n")
+        .unwrap();
+    let d = Daemon::new(Config::from_env(&dir));
+    assert!(d.unlock_cfg(Some(A)).disabled_by_failure() && d.unlock_cfg(Some(B)).disabled_by_failure());
+    let g = d.inner.lock().await;
+    assert!(d.unlock_reset(&g, None).is_err(), "no device controlled, none named");
+    let text = with_lang(Lang::En, || d.unlock_reset(&g, Some(A))).unwrap();
+    assert!(text.contains("re-enabled") && text.contains("older version"), "{text}");
+    assert!(!d.unlock_cfg(Some(A)).disabled_by_failure());
+    assert!(d.unlock_cfg(Some(B)).disabled_by_failure(), "B wasn't reset");
+    assert!(dir.join("logs/UNLOCK-DISABLED").is_file(), "a downgraded daemon still sees B disabled");
+    drop(g);
+    std::fs::remove_dir_all(dir).unwrap();
+}

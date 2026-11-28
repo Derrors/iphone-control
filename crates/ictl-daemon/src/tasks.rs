@@ -238,7 +238,7 @@ fn cancelled() -> Response {
 
 /// Requests that change something on or about the phone, beyond [`Request::is_device_action`]
 fn acts(req: &Request) -> bool {
-    req.is_device_action() || matches!(req, Request::Resign { .. } | Request::UnlockReset)
+    req.is_device_action() || matches!(req, Request::Resign { .. } | Request::UnlockReset { .. })
 }
 
 impl Tasks {

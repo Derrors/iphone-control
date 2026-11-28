@@ -81,7 +81,7 @@ pub fn scope_check(req: &Request) -> Option<Check> {
         | Request::Daemon
         | Request::Doctor
         | Request::Resign { .. }
-        | Request::UnlockReset
+        | Request::UnlockReset { .. }
         | Request::ListDevices
         | Request::AppLogs { .. }
         | Request::CrashReports { .. }

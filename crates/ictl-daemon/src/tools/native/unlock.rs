@@ -26,7 +26,7 @@ impl Daemon {
         // Home wakes a dark screen within about 0.3 s; the keypad is looked for as it comes (`reads_cheaply`)
         let cfg = ictl_unlock::UnlockConfig {
             passcode_file: cfg.passcode_file.clone(),
-            disabled_flag: cfg.disabled_flag.clone(),
+            disabled: cfg.disabled.clone(),
             timing: ictl_unlock::Timing { wake_settle: NATIVE_WAKE_SETTLE, ..cfg.timing },
         };
         let mut screen = NativeScreen { d: self, g };

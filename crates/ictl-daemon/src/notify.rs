@@ -197,6 +197,9 @@ fn cooldown(e: &Event) -> Option<Duration> {
         Event::DaemonRestarted { .. } => Some(crate::watchdog::ALERT_COOLDOWN),
         // 证书每换一次都要知道
         Event::WdaRecovered | Event::DeviceOnline { .. } | Event::CertificateChanged { .. } => Some(Duration::ZERO),
+        // each device is disabled once (it isn't unlocked again until unlock-reset), and another device failing later
+        // must be told too
+        Event::UnlockDisabled => Some(Duration::ZERO),
         _ => None,
     }
 }

@@ -234,7 +234,12 @@ pub enum Request {
     Resign {
         force: bool,
     },
-    UnlockReset,
+    /// Re-enables auto-unlock for `udid`, or for the device being controlled when it isn't given (older clients
+    /// don't send it). Only that device's record goes: the others stay disabled
+    UnlockReset {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        udid: Option<String>,
+    },
     /// 列出 USB 上接着的全部设备，标出正在控制哪台
     ListDevices,
     /// 改为控制另一台设备：`device` 是 UDID、设备名或 `auto`（取消选定，改回自动选）
@@ -423,7 +428,7 @@ impl Request {
             | Self::Daemon
             | Self::Doctor
             | Self::Resign { .. }
-            | Self::UnlockReset
+            | Self::UnlockReset { .. }
             | Self::ListDevices
             | Self::AppLogs { .. }
             | Self::CrashReports { .. }

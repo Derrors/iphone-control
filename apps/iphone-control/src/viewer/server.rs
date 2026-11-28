@@ -367,7 +367,7 @@ async fn login_gate(
     {
         return Err(Box::new(match a.try_token(&t) {
             Verdict::Ok(w) => logged_in(a, &w.name, secure),
-            v => login_page(v),
+            v => login_page(a, v),
         }));
     }
     // the login page's form
@@ -394,8 +394,8 @@ async fn login_gate(
         return Err(Box::new(
             match auth::form_token(&form).filter(|t| !t.trim().is_empty()).map(|t| a.try_token(&t)) {
                 Some(Verdict::Ok(w)) => logged_in(a, &w.name, secure),
-                Some(v) => login_page(v),
-                None => login_page(Verdict::Missing),
+                Some(v) => login_page(a, v),
+                None => login_page(a, Verdict::Missing),
             },
         ));
     }
@@ -418,7 +418,7 @@ async fn login_gate(
     }
     let status = if v == Verdict::Limited { 429 } else { 401 };
     Err(Box::new(match (head.method.as_str(), head.path.as_str()) {
-        ("GET", "/") => login_page(v),
+        ("GET", "/") => login_page(a, v),
         // MCP clients: send the token as a bearer token (RFC 6750)
         (_, "/mcp") => reply_with(
             status,
@@ -439,7 +439,7 @@ fn logged_in(a: &auth::Auth, name: &str, secure: bool) -> Reply {
 /// Uses `Referrer-Policy: same-origin` (instead of `no-referrer`) so browsers send the real `Origin` header on
 /// same-origin `<form method="post" action="/login">` submissions (including plain HTTP LAN `--tls off` where
 /// `Sec-Fetch-Site` is omitted), while still never leaking a `Referer` to any other origin.
-fn login_page(v: auth::Verdict) -> Reply {
+fn login_page(a: &auth::Auth, v: auth::Verdict) -> Reply {
     let (status, why) = match v {
         auth::Verdict::Wrong => (401, Some(auth::LoginError::Wrong)),
         auth::Verdict::Limited => (429, Some(auth::LoginError::Limited)),
@@ -451,8 +451,14 @@ fn login_page(v: auth::Verdict) -> Reply {
         status,
         "text/html; charset=utf-8",
         page,
-        // says what answers here without logging in: an update checks a viewer it started again is up (`fleet`)
-        &[("Content-Security-Policy", &csp), ("Referrer-Policy", "same-origin"), ("X-Iphone-Control", "viewer")],
+        // says what answers here without logging in, and whose viewer it is (its instance and id, neither secret):
+        // `instance add` and an update check a viewer is up without sending it a token (`fleet::viewer_answers`)
+        &[
+            ("Content-Security-Policy", &csp),
+            ("Referrer-Policy", "same-origin"),
+            ("X-Iphone-Control", "viewer"),
+            ("X-Iphone-Control-Instance", &a.instance_header()),
+        ],
     )
 }
 

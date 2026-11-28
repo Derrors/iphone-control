@@ -270,7 +270,7 @@ impl Daemon {
                 if let Err(r) = admit(&req, queued_at, &ctx, controlled.as_deref()) {
                     return r.with_failure(Delivery::NotSent, FailureStage::Preflight);
                 }
-                return text(self.select(device).await);
+                return text(self.select(device, &mut ctx.gone).await);
             }
             // 重签自己分段持锁：签名、安装要几十秒，期间不挡住别的请求
             Lane::Resign => {

@@ -98,6 +98,43 @@ pub async fn run(cfg: Config) -> anyhow::Result<()> {
 /// How long a starting daemon waits for the one before it to let go of the socket (it may still be stopping)
 const INSTANCE_WAIT: std::time::Duration = std::time::Duration::from_secs(15);
 
+/// The lock beside `socket` (`ctl.lock`) a daemon holds for as long as it runs, if none does now: whoever holds it
+/// knows no daemon serves that socket (`instance remove` deletes an instance only while holding it). Never waits
+pub fn try_lifecycle_lock(socket: &std::path::Path) -> std::io::Result<Option<std::fs::File>> {
+    use std::os::fd::AsRawFd;
+    use std::os::unix::fs::OpenOptionsExt;
+    let file = match std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(socket.with_extension("lock"))
+    {
+        Ok(f) => f,
+        // never started: nothing runs there; the lock made now keeps one from starting meanwhile
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            use std::os::unix::fs::DirBuilderExt;
+            if let Some(dir) = socket.parent() {
+                std::fs::DirBuilder::new().recursive(true).mode(0o700).create(dir)?;
+            }
+            std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .truncate(false)
+                .mode(0o600)
+                .custom_flags(libc::O_NOFOLLOW)
+                .open(socket.with_extension("lock"))?
+        }
+        Err(e) => return Err(e),
+    };
+    // SAFETY: a valid descriptor, owned by `file` for as long as the lock is held
+    if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
+        return Ok(Some(file));
+    }
+    let e = std::io::Error::last_os_error();
+    if e.kind() == std::io::ErrorKind::WouldBlock { Ok(None) } else { Err(e) }
+}
+
 /// The lock beside the socket (`ctl.lock`), held while the daemon runs; waits up to `wait` for another daemon that is
 /// stopping, and gives up at once when one answers on the socket
 async fn single_instance(socket: &std::path::Path, wait: std::time::Duration) -> anyhow::Result<std::fs::File> {

@@ -80,37 +80,64 @@ fn default_port() -> u16 {
 /// How long a viewer started again gets to answer on its port
 const VIEWER_WAIT: Duration = Duration::from_secs(20);
 
-/// An iphone-control viewer answers on `port` (without logging in: the login page says it is one,
-/// `X-Iphone-Control: viewer`). A service manager reporting the service started isn't enough: the process may still
-/// fail to bind its port (taken by something else)
-pub(crate) async fn viewer_answers(port: u16) -> bool {
+/// Whose viewer answers on `port`, without logging in (the login page says, `X-Iphone-Control: viewer` and
+/// `X-Iphone-Control-Instance: <name> <id>`): `(name, id)`; `None` when nothing does, or something else. A service
+/// manager reporting the service started isn't enough: the process may still fail to bind its port (taken by
+/// something else). No token is sent: what listens there isn't known yet
+pub(crate) async fn viewer_identity(port: u16) -> Option<(String, String)> {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let ask = async {
         let mut s = tokio::net::TcpStream::connect(("127.0.0.1", port)).await.ok()?;
         s.write_all(b"GET / HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n").await.ok()?;
         let mut buf = vec![0u8; 8192];
         let mut n = 0;
-        while n < buf.len() {
+        let end = loop {
+            if let Some(e) = buf[..n].windows(4).position(|w| w == b"\r\n\r\n") {
+                break e;
+            }
+            if n == buf.len() {
+                return None;
+            }
             let got = s.read(&mut buf[n..]).await.ok()?;
             if got == 0 {
-                break;
+                return None;
             }
             n += got;
-            if buf[..n].windows(4).any(|w| w == b"\r\n\r\n") {
-                break;
-            }
-        }
-        let head = String::from_utf8_lossy(&buf[..n]).to_ascii_lowercase();
-        Some(head.starts_with("http/1.") && head.lines().any(|l| l.trim() == "x-iphone-control: viewer"))
+        };
+        parse_identity(&String::from_utf8_lossy(&buf[..end]))
     };
-    tokio::time::timeout(Duration::from_secs(2), ask).await.ok().flatten().unwrap_or(false)
+    tokio::time::timeout(Duration::from_secs(2), ask).await.ok().flatten()
+}
+
+/// The identity in a response's head (the status line and headers, the body excluded)
+fn parse_identity(head: &str) -> Option<(String, String)> {
+    let mut lines = head.split("\r\n");
+    if !lines.next()?.starts_with("HTTP/1.") {
+        return None;
+    }
+    let (mut viewer, mut instance) = (false, None);
+    for l in lines {
+        let Some((k, v)) = l.split_once(':') else { continue };
+        let (k, v) = (k.trim(), v.trim());
+        if k.eq_ignore_ascii_case("x-iphone-control") {
+            viewer = v == "viewer";
+        } else if k.eq_ignore_ascii_case("x-iphone-control-instance") {
+            instance = v.split_once(' ').map(|(n, id)| (n.to_owned(), id.to_owned()));
+        }
+    }
+    instance.filter(|_| viewer)
+}
+
+/// The viewer of the instance `name` answers on `port`
+pub(crate) async fn viewer_answers(port: u16, name: &str) -> bool {
+    viewer_identity(port).await.is_some_and(|(n, _)| n == name)
 }
 
 /// `s` started again and answering on `port` within [`VIEWER_WAIT`]
-async fn viewer_up(s: &service::Service, port: u16) -> bool {
+async fn viewer_up(s: &service::Service, port: u16, name: &str) -> bool {
     let deadline = tokio::time::Instant::now() + VIEWER_WAIT;
     while tokio::time::Instant::now() < deadline {
-        if service::running(s) && viewer_answers(port).await {
+        if service::running(s) && viewer_answers(port, name).await {
             return true;
         }
         tokio::time::sleep(Duration::from_millis(500)).await;
@@ -410,7 +437,7 @@ async fn start_viewers(record: &Record) -> bool {
     for m in record.members.iter().filter(|m| m.viewer_running) {
         let (_, v) = service::instance_services(&m.name);
         let started = match service::start_managed(&v) {
-            Ok(()) if viewer_up(&v, m.port).await => Ok(()),
+            Ok(()) if viewer_up(&v, m.port, &m.name).await => Ok(()),
             Ok(()) => Err(anyhow::anyhow!(
                 "{}",
                 ictl_l10n::trf!(
@@ -438,7 +465,7 @@ async fn start_viewers(record: &Record) -> bool {
         && let Some(v) = service::viewer_find()
     {
         match service::start_managed(&v) {
-            Ok(()) if viewer_up(&v, record.default_port).await => {}
+            Ok(()) if viewer_up(&v, record.default_port, ictl_daemon::instance::DEFAULT).await => {}
             Ok(()) => {
                 up = false;
                 eprintln!(
@@ -544,10 +571,18 @@ mod tests {
             port
         };
         let other = serve(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n").await;
-        assert!(!super::viewer_answers(other).await, "another program on the port");
-        let viewer = serve(b"HTTP/1.1 401 Unauthorized\r\nX-Iphone-Control: viewer\r\nContent-Length: 0\r\n\r\n").await;
-        assert!(super::viewer_answers(viewer).await);
+        assert!(!super::viewer_answers(other, "ipad").await, "another program on the port");
+        // the header only in the body: not a viewer
+        let body = serve(b"HTTP/1.1 200 OK\r\nContent-Length: 64\r\n\r\nX-Iphone-Control: viewer\r\nX-Iphone-Control-Instance: ipad 1\r\n").await;
+        assert!(!super::viewer_answers(body, "ipad").await, "a body isn't a head");
+        let viewer = serve(
+            b"HTTP/1.1 401 Unauthorized\r\nX-Iphone-Control: viewer\r\nX-Iphone-Control-Instance: ipad 3f2a\r\nContent-Length: 0\r\n\r\n",
+        )
+        .await;
+        assert!(super::viewer_answers(viewer, "ipad").await);
+        assert!(!super::viewer_answers(viewer, "default").await, "another instance's viewer");
+        assert_eq!(super::viewer_identity(viewer).await, Some(("ipad".into(), "3f2a".into())));
         let free = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap().local_addr().unwrap().port();
-        assert!(!super::viewer_answers(free).await, "nothing listening");
+        assert!(!super::viewer_answers(free, "ipad").await, "nothing listening");
     }
 }

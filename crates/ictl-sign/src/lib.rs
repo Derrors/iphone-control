@@ -254,8 +254,9 @@ impl AccountDir {
         // the anisette state is provisioned, if it has to be, under its own lock (omnisette's state_file)
         let anisette =
             self.fetch_anisette_with(&SESSION_RETRY_DELAYS, SESSION_ATTEMPT_TIMEOUT, tokio::time::sleep).await?;
-        // and where the state this login uses came from
-        let origin = self.anisette_origin()?;
+        // and which state this login uses: its content, not only where it came from (provisioned again with the
+        // same address is another state)
+        let origin = self.anisette_identity()?;
         let (e, p) = (email.to_owned(), password.to_owned());
         // not under the account lock: this waits for the user to type a verification code
         let account =
@@ -279,10 +280,10 @@ impl AccountDir {
         &self,
         gsa: plume_store::GsaAccount,
         before: &Option<(String, String)>,
-        origin: &account::OriginCheck,
+        origin: &account::StateIdentity,
     ) -> Result<()> {
         let _lock = self.lock().await?;
-        if self.credentials_of(gsa.email())? != *before || self.anisette_origin()? != *origin {
+        if self.credentials_of(gsa.email())? != *before || self.anisette_identity()? != *origin {
             return Err(SignError::LoginSuperseded);
         }
         let mut store = AccountStore::load_sync(&Some(self.store_path()))

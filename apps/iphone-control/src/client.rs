@@ -52,12 +52,23 @@ pub fn account_dir(data_dir: &Path) -> ictl_sign::AccountDir {
     cfg.account()
 }
 
-/// The device leases' directory, as the daemon of this command's instance sees it (`crate::envfile` set the data
-/// directory of a named instance)
+/// The data directory this command was started with (`--data-dir`, `ICTL_DATA_DIR`, a named instance's), set once
+/// clap has read the command line ([`set_data_dir`])
+static DATA_DIR: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+
+/// Records the data directory clap worked out, for whatever works with a device directly ([`devices_dir`])
+pub fn set_data_dir(dir: &Path) {
+    let _ = DATA_DIR.set(dir.to_owned());
+}
+
+/// The device leases' directory, as the daemon of this command's instance and data directory sees it: the one a
+/// daemon started with the same `--data-dir` locks
 pub fn devices_dir() -> std::path::PathBuf {
-    let data = env_nonempty(ictl_daemon::protocol::env::DATA_DIR)
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(protocol::default_data_dir);
+    let data = DATA_DIR.get().cloned().unwrap_or_else(|| {
+        env_nonempty(ictl_daemon::protocol::env::DATA_DIR)
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(protocol::default_data_dir)
+    });
     ictl_daemon::Config::from_env(&data).devices_dir()
 }
 

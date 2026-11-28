@@ -435,7 +435,7 @@ async fn add(
     );
     // 7. the services, started and checked; 8. stopped and the registration removed again when they don't come up
     let started = match crate::service::instance_install(name) {
-        Ok(_) => wait_started(&reg, &root, force).await,
+        Ok(_) => wait_started(&reg, force).await,
         Err(e) => Err(e),
     };
     if let Err(e) = started {
@@ -488,7 +488,7 @@ fn unix_now() -> u64 {
 
 /// The new instance is up: its daemon answers as that instance, of this version, with its device (held, or with
 /// `force` maybe not connected yet), and its control page answers on its port, reaching that daemon
-async fn wait_started(reg: &Registered, root: &Path, force: bool) -> anyhow::Result<()> {
+async fn wait_started(reg: &Registered, force: bool) -> anyhow::Result<()> {
     let deadline = tokio::time::Instant::now() + START_WAIT;
     let m = &reg.managed;
     let mut why = String::new();
@@ -510,30 +510,16 @@ async fn wait_started(reg: &Registered, root: &Path, force: bool) -> anyhow::Res
             why = ictl_l10n::trf!("守护进程状态：{}", "the daemon's state: {}", s.state.describe());
             continue;
         }
-        match viewer_reaches(m.port, root).await {
-            Ok(name) if name == reg.name => return Ok(()),
-            Ok(other) => {
-                why = ictl_l10n::trf!("端口 {} 上的控制台是 {other} 的", "the control page on {} is {other}'s", m.port)
+        // whose viewer answers on the port, asked without a token: what listens there isn't known yet
+        match crate::update::viewer_identity(m.port).await {
+            Some((name, id)) if name == reg.name && id == m.id => return Ok(()),
+            Some((name, _)) => {
+                why = ictl_l10n::trf!("端口 {} 上的控制台是 {name} 的", "the control page on {} is {name}'s", m.port)
             }
-            Err(e) => why = e.to_string(),
+            None => why = ictl_l10n::trf!("端口 {} 上没有控制台应答", "no control page answers on {}", m.port),
         }
     }
     bail!("{}", ictl_l10n::trf!("{} 秒内没起来：{why}", "not up within {} s: {why}", START_WAIT.as_secs()))
-}
-
-/// The instance whose daemon the control page on `port` reaches (logged in with the owner token every viewer shares)
-async fn viewer_reaches(port: u16, root: &Path) -> anyhow::Result<String> {
-    let token = crate::viewer::auth::get(root, crate::viewer::auth::OWNER)?.token;
-    let client = reqwest::Client::builder().no_proxy().timeout(Duration::from_secs(3)).build()?;
-    let v: serde_json::Value = client
-        .get(format!("http://127.0.0.1:{port}/api/daemon"))
-        .bearer_auth(token)
-        .send()
-        .await?
-        .error_for_status()?
-        .json()
-        .await?;
-    v["instance"]["name"].as_str().map(str::to_owned).context("no instance in /api/daemon")
 }
 
 /// `instance list`
@@ -606,20 +592,21 @@ async fn remove(name: &str, purge: bool) -> anyhow::Result<()> {
             )
         );
     }
-    let stopped =
-        tokio::time::timeout(Duration::from_secs(2), snapshot(&reg.managed.socket)).await.map_or(true, |r| r.is_err());
-    ensure!(
-        stopped,
-        "{}",
+    // stopped for sure: its daemon's lifecycle lock held here (a daemon started by hand, or stuck answering
+    // nothing, still holds it), and kept until the registration and its directory are gone
+    let _stopped = held_lifecycle(&reg.managed.socket).await?.with_context(|| {
         ictl_l10n::trf!(
-            "{name} 的守护进程还在应答（不是服务启动的？），登记留着",
-            "{name}'s daemon still answers (not started by its service?), so its registration stays"
+            "{name} 的守护进程还在运行（不是服务启动的，或者卡住了），登记留着",
+            "{name}'s daemon still runs (not started by its service, or stuck), so its registration stays"
         )
-    );
+    })?;
+    // what --purge deletes: the instance's own directory as worked out from the data root and its name, never a
+    // path the registration names elsewhere
+    let root_dir = ictl_daemon::Config::from_env(&ictl_daemon::protocol::default_data_dir()).root;
+    let purge_dir = if purge { Some(purge_target(&root_dir, name, &reg.managed.data_dir)?) } else { None };
     // its background WDAs, as `service stop` ends them: by its id, on the devices whose lease can be taken
-    let root = ictl_daemon::Config::from_env(&ictl_daemon::protocol::default_data_dir()).root;
     let mut cfg = ictl_daemon::Config::from_env(&reg.managed.data_dir);
-    (cfg.instance, cfg.instance_id, cfg.root) = (Some(name.into()), reg.managed.id.clone(), root);
+    (cfg.instance, cfg.instance_id, cfg.root) = (Some(name.into()), reg.managed.id.clone(), root_dir.clone());
     for (udid, s) in ictl_daemon::detached::end_recorded(&cfg).await {
         println!("  WDA {udid}: {s:?}");
     }
@@ -627,10 +614,93 @@ async fn remove(name: &str, purge: bool) -> anyhow::Result<()> {
     crate::service::instance_remove_files(name, left)?;
     std::fs::remove_file(registry.join(format!("{name}.env")))?;
     let _ = std::fs::remove_file(&pending);
-    if purge {
-        std::fs::remove_dir_all(&reg.managed.data_dir)
+    if let Some(dir) = purge_dir {
+        std::fs::remove_dir_all(&dir)
             .or_else(|e| if e.kind() == std::io::ErrorKind::NotFound { Ok(()) } else { Err(e) })?;
     }
     println!("{}", ictl_l10n::trf!("已移除实例 {name}", "Removed the instance {name}"));
     Ok(())
+}
+
+/// The daemon's lifecycle lock beside `socket`, tried for a few seconds (a stopped service's process may take a moment
+/// to end); `None`: a daemon still holds it
+async fn held_lifecycle(socket: &Path) -> anyhow::Result<Option<std::fs::File>> {
+    for _ in 0..50 {
+        if let Some(f) = ictl_daemon::try_lifecycle_lock(socket)? {
+            return Ok(Some(f));
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    Ok(None)
+}
+
+/// The directory `instance remove --purge` may delete: `<root>/instances/<name>`, and only when the registration
+/// names that one, with no link on the way (a registration pointing elsewhere, at the data root say, deletes nothing)
+fn purge_target(root: &Path, name: &str, registered: &Path) -> anyhow::Result<PathBuf> {
+    ensure!(instance::valid_name(name), "invalid instance name");
+    let parent = root.join("instances");
+    let want = parent.join(name);
+    let refuse = || {
+        anyhow::anyhow!(
+            "{}",
+            ictl_l10n::trf!(
+                "登记的数据目录 {} 不是 {}：不删（--purge 只删实例自己的目录）",
+                "The registered data directory {} isn't {}: not deleted (--purge deletes the instance's own directory only)",
+                registered.display(),
+                want.display()
+            )
+        )
+    };
+    ensure!(registered == want, refuse());
+    for p in [root, parent.as_path(), want.as_path()] {
+        match std::fs::symlink_metadata(p) {
+            Ok(m) if m.file_type().is_symlink() || !m.is_dir() => return Err(refuse()),
+            Ok(_) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound && p == want => {}
+            Err(e) => return Err(e.into()),
+        }
+    }
+    Ok(want)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// --purge deletes `<root>/instances/<name>` only: not a registration naming another directory (the data root, a
+    /// sibling, a path with `..`), nor one reached through a link
+    #[test]
+    fn purge_deletes_the_instance_s_own_directory_only() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("data");
+        std::fs::create_dir_all(root.join("instances/ipad")).unwrap();
+        let own = root.join("instances/ipad");
+        assert_eq!(purge_target(&root, "ipad", &own).unwrap(), own);
+        for bad in
+            [root.clone(), root.join("instances"), root.join("instances/phone"), root.join("instances/ipad/../phone")]
+        {
+            assert!(purge_target(&root, "ipad", &bad).is_err(), "{}", bad.display());
+        }
+        std::fs::create_dir_all(tmp.path().join("elsewhere")).unwrap();
+        std::fs::remove_dir(&own).unwrap();
+        std::os::unix::fs::symlink(tmp.path().join("elsewhere"), &own).unwrap();
+        assert!(purge_target(&root, "ipad", &own).is_err(), "a link");
+        std::fs::remove_file(&own).unwrap();
+        assert_eq!(purge_target(&root, "ipad", &own).unwrap(), own, "gone already: nothing to delete, no error");
+    }
+
+    /// A daemon's lifecycle lock held: remove can't take it (so the instance isn't removed under it); let go: it can
+    #[test]
+    fn a_running_daemon_keeps_its_lifecycle_lock() {
+        use std::os::fd::AsRawFd;
+        let tmp = tempfile::tempdir().unwrap();
+        let socket = tmp.path().join("ctl.sock");
+        let held = std::fs::File::create(socket.with_extension("lock")).unwrap();
+        assert_eq!(unsafe { libc::flock(held.as_raw_fd(), libc::LOCK_EX) }, 0);
+        assert!(ictl_daemon::try_lifecycle_lock(&socket).unwrap().is_none());
+        drop(held);
+        assert!(ictl_daemon::try_lifecycle_lock(&socket).unwrap().is_some());
+        let never = tmp.path().join("other/ctl.sock");
+        assert!(ictl_daemon::try_lifecycle_lock(&never).unwrap().is_some(), "never started: free");
+    }
 }

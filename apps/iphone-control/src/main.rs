@@ -417,6 +417,8 @@ async fn run(named: Option<String>) -> anyhow::Result<()> {
     // 依赖树里 rustls 的 ring 和 aws-lc-rs 都开着，不装默认 provider 的话第一个 HTTPS 请求就 panic
     let _ = rustls::crypto::ring::default_provider().install_default();
     let mut cli = Cli::parse();
+    // the leases a command takes itself are where its daemon's are, for the data directory given (`client`)
+    client::set_data_dir(&cli.data_dir);
     if prints_and_exits(cli.command.as_ref()) {
         restore_sigpipe();
     }

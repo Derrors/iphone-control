@@ -29,15 +29,43 @@ const PROBE_WAIT: Duration = Duration::from_secs(2);
 
 type Result<T> = crate::error::Result<T>;
 
+/// The caller's going away ([`crate::core::CallCtx::gone`])
+type Gone = Option<tokio::sync::oneshot::Receiver<()>>;
+
+/// The caller went away (`select` aborted at Ctrl-C): nothing more is done, and nothing written
+fn left(gone: &mut Gone) -> bool {
+    gone.as_mut().is_some_and(|g| g.try_recv().is_ok())
+}
+
+fn cancelled() -> crate::error::Error {
+    ictl_l10n::tr!("调用方已取消，没有切换", "The caller cancelled; not switched").into()
+}
+
+/// `lock`, unless the caller goes away first
+async fn lock_or_gone<'a, T>(
+    lock: &'a tokio::sync::Mutex<T>,
+    gone: &mut Gone,
+) -> Result<tokio::sync::MutexGuard<'a, T>> {
+    match gone {
+        Some(g) => tokio::select! {
+            biased;
+            l = lock.lock() => Ok(l),
+            Ok(()) = &mut *g => Err(cancelled()),
+        },
+        None => Ok(lock.lock().await),
+    }
+}
+
 impl Daemon {
     /// `select <device>` or `select auto`: what to tell the caller
-    pub(crate) async fn select(&self, query: &str) -> Result<String> {
-        let _latch = self.select_latch.lock().await;
+    /// `gone`: the caller going away, checked while waiting and before anything is written
+    pub(crate) async fn select(&self, query: &str, gone: &mut Gone) -> Result<String> {
+        let _latch = lock_or_gone(&self.select_latch, gone).await?;
         // checked again under the latch: the task check before it was made without
         if let Some(why) = self.tasks.switch_refused() {
             return Err(why.into());
         }
-        let mut g = self.inner.lock().await;
+        let mut g = lock_or_gone(&self.inner, gone).await?;
         // unit tests set the devices themselves: a host's usbmuxd (macOS has one) would list none
         #[cfg(not(test))]
         if let Ok(d) = ictl_device::list_devices().await {
@@ -62,6 +90,9 @@ impl Daemon {
         let same = g.lease.as_ref().is_some_and(|l| l.is_for(&target.udid))
             || g.device.as_ref().is_some_and(|d| d.udid.eq_ignore_ascii_case(&target.udid));
         if same {
+            if left(gone) {
+                return Err(cancelled());
+            }
             self.persist_selection(&mut g, &target.udid)?;
             return Ok(ictl_l10n::trf!(
                 "已经在控制 {label},之后固定控制这台",
@@ -81,23 +112,31 @@ impl Daemon {
         let holder = self.holder(&g).with_device(Some(&target));
         drop(g);
         let lease = self.claim_for_switch(&usb.udid, holder, &label).await?;
-        let g = self.inner.lock().await;
+        let g = lock_or_gone(&self.inner, gone).await?;
         if !g.connected.iter().any(|d| d.udid == usb.udid) {
             return Err(ictl_l10n::tr!("设备刚刚断开了", "the device just disconnected").into());
         }
         let g = if g.device.is_some() { self.drain_old(g).await? } else { g };
         let mut g = g;
-        // 7. the registry again, then the selection on disk: otherwise back to the old device (prepared again by the
-        //    next round, its lease still held)
-        if let Err(e) = self.may_take(&usb.udid).and_then(|()| self.persist_selection(&mut g, &usb.udid)) {
+        // 7. the caller still there, the registry again, then the selection on disk: otherwise back to the old device
+        //    (prepared again by the next round, its lease still held)
+        let committed = if left(gone) {
+            Err(cancelled())
+        } else {
+            self.may_take(&usb.udid).and_then(|()| self.persist_selection(&mut g, &usb.udid))
+        };
+        if let Err(e) = committed {
+            self.publish(&g);
             self.gate.reopen();
             return Err(e);
         }
-        // 8. the old lease goes with the new one taken
+        // 8. the old lease goes with the new one taken; the snapshot says the new device before anything is let in
+        //    again (a task opened, or a stream, right after this answer goes by it)
         self.took(&mut g, lease);
-        self.gate.reopen();
         self.online(&mut g, &usb).await;
         self.describe_lease(&mut g);
+        self.publish(&g);
+        self.gate.reopen();
         Ok(self.switched(&g, &target, &label))
     }
 
@@ -381,8 +420,16 @@ mod tests {
     async fn a_switch_moves_the_lease_and_the_selection() {
         local(async {
             let (d, dir) = controlling_a("switch-ok").await;
-            let said = d.select(B).await.unwrap();
+            // a caller gone while it waited: nothing switched, nothing written
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            tx.send(()).unwrap();
+            assert!(d.select(B, &mut Some(rx)).await.is_err());
+            assert_eq!(d.inner.lock().await.persisted.selected_udid, None);
+            assert!(free(&d, B));
+            let said = d.select(B, &mut None).await.unwrap();
             assert!(said.contains(B), "{said}");
+            // the snapshot says B as the answer comes back: a task or a stream opened right after goes by it
+            assert_eq!(d.controlled_udid().as_deref(), Some(B));
             let g = d.inner.lock().await;
             assert!(g.lease.as_ref().is_some_and(|l| l.is_for(B)));
             assert_eq!(g.persisted.selected_udid.as_deref(), Some(B));
@@ -432,12 +479,12 @@ mod tests {
         local(async {
             let (d, dir) = controlling_a("switch-busy").await;
             let resign = d.gate.admit(Some(crate::admission::Long::Resign)).unwrap();
-            let e = d.select(B).await.unwrap_err().to_string();
+            let e = d.select(B, &mut None).await.unwrap_err().to_string();
             assert!(e.contains(crate::admission::Long::Resign.describe()), "{e}");
             drop(resign);
             let short = d.gate.admit(None).unwrap();
             let t = std::time::Instant::now();
-            let e = d.select(B).await.unwrap_err().to_string();
+            let e = d.select(B, &mut None).await.unwrap_err().to_string();
             assert!(t.elapsed() >= super::DRAIN, "waited for it first");
             assert!(e.contains('1'), "{e}");
             assert!(short.current(), "the old lease is still the one held");
@@ -461,12 +508,12 @@ mod tests {
             let Claim::Got(theirs) = try_claim(&d.cfg.devices_dir(), B, Holder::instance("ipad")).unwrap() else {
                 panic!()
             };
-            let e = d.select(B).await.unwrap_err().to_string();
+            let e = d.select(B, &mut None).await.unwrap_err().to_string();
             assert!(e.contains("ipad"), "{e}");
             drop(theirs);
             // state.json can't be replaced: a directory where its temporary file goes
             std::fs::create_dir_all(d.cfg.state_file().with_extension("json.tmp")).unwrap();
-            let e = d.select(B).await.unwrap_err().to_string();
+            let e = d.select(B, &mut None).await.unwrap_err().to_string();
             assert!(e.contains("state.json"), "{e}");
             let g = d.inner.lock().await;
             assert!(g.lease.as_ref().is_some_and(|l| l.is_for(A)));
@@ -504,8 +551,8 @@ mod tests {
             // gone: none other is chosen
             g.device = None;
             drop(g);
-            assert!(d.select("auto").await.is_err());
-            let e = d.select(B).await.unwrap_err().to_string();
+            assert!(d.select("auto", &mut None).await.is_err());
+            let e = d.select(B, &mut None).await.unwrap_err().to_string();
             assert!(e.contains("ipad"), "{e}");
             let mut g = d.inner.lock().await;
             assert!(matches!(d.round_target(&mut g).await, crate::claim::Round::Held));

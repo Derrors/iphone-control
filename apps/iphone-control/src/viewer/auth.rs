@@ -375,6 +375,11 @@ pub struct Auth {
 }
 
 impl Auth {
+    /// `<instance> <id>`: whose viewer this is, for the login page's header
+    pub fn instance_header(&self) -> String {
+        format!("{} {}", self.scope.instance, self.scope.id)
+    }
+
     /// The tokens in `data_dir` ([`load`]), for the default instance's viewer on `port`
     #[cfg(test)]
     pub fn load(data_dir: &Path, port: u16) -> anyhow::Result<Self> {

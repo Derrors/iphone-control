@@ -42,6 +42,14 @@ struct Commit {
     accounts_sha256: String,
 }
 
+/// Which anisette state is on disk: where it came from and a digest of the state itself. Two states provisioned with
+/// the same address differ by the digest
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StateIdentity {
+    pub origin: OriginCheck,
+    digest: Option<String>,
+}
+
 /// What [`AccountDir::anisette_origin`] found, against the address configured now
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OriginCheck {
@@ -70,6 +78,16 @@ impl AccountDir {
             Origin::Url(u) if omnisette::state_file::same_address(&u, &configured) => OriginCheck::Known,
             Origin::Url(recorded) => OriginCheck::Mismatch { recorded, configured },
         })
+    }
+
+    /// The anisette state on disk now ([`StateIdentity`])
+    pub fn anisette_identity(&self) -> Result<StateIdentity> {
+        let digest = match std::fs::read(self.dir.join(omnisette::state_file::STATE_FILE)) {
+            Ok(b) => Some(hex(&Sha256::digest(&b))),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => None,
+            Err(e) => return Err(e.into()),
+        };
+        Ok(StateIdentity { origin: self.anisette_origin()?, digest })
     }
 
     /// Refuses to use the anisette state with the configured address when it came from another one, or from an
@@ -333,7 +351,7 @@ mod tests {
             s.accounts_add_sync(g).unwrap();
         };
         add(gsa("a@b.c", "old"));
-        let origin = a.anisette_origin().unwrap();
+        let origin = a.anisette_identity().unwrap();
         // A begins: what it saw. B signs the same Apple ID in again meanwhile (new token, same team)
         let seen = a.credentials_of("a@b.c").unwrap();
         add(gsa("a@b.c", "newer"));
@@ -356,6 +374,24 @@ mod tests {
         )
         .unwrap();
         assert!(matches!(a.commit_login(gsa("x@y.z", "t2"), &now, &origin).await, Err(SignError::LoginSuperseded)));
+        // the same address both times, the state provisioned again meanwhile: another state, refused too
+        let state = |pb: &str| {
+            format!(
+                "<?xml version=\"1.0\" encoding=\"UTF-8\"?><plist version=\"1.0\"><dict>\
+                 <key>keychain_identifier</key><data>AAAAAAAAAAAAAAAAAAAAAA==</data>\
+                 <key>adi_pb</key><data>{pb}</data>\
+                 <key>provisioned_by</key><string>https://ani.example.com</string></dict></plist>"
+            )
+        };
+        std::fs::write(dir.join("state.plist"), state("AQID")).unwrap();
+        let used = a.anisette_identity().unwrap();
+        assert_eq!(used.origin, OriginCheck::Known);
+        let now = a.credentials_of("x@y.z").unwrap();
+        std::fs::write(dir.join("state.plist"), state("BAUG")).unwrap();
+        assert_eq!(a.anisette_identity().unwrap().origin, OriginCheck::Known, "the same address");
+        assert!(matches!(a.commit_login(gsa("x@y.z", "t3"), &now, &used).await, Err(SignError::LoginSuperseded)));
+        std::fs::write(dir.join("state.plist"), state("AQID")).unwrap();
+        a.commit_login(gsa("x@y.z", "t3"), &now, &used).await.unwrap();
         std::fs::remove_dir_all(dir).unwrap();
     }
 

@@ -195,7 +195,7 @@ fn a_reset_for_one_device_is_refused_by_older_daemons() {
         Status,
         UnlockReset,
     }
-    for r in [Request::UnlockResetDevice { device: None }, Request::UnlockResetDevice { device: Some("A".into()) }] {
+    for r in [Request::UnlockResetDevice { udid: None }, Request::UnlockResetDevice { udid: Some("A".into()) }] {
         let s = serde_json::to_string(&r).unwrap();
         assert!(serde_json::from_str::<OldRequest>(&s).is_err(), "{s}");
         assert_eq!(serde_json::from_str::<Request>(&s).unwrap(), r);

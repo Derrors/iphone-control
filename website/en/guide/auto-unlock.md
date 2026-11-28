@@ -50,7 +50,7 @@ iphone-control unlock-reset
 
 If it stopped because of an error during entry or a killed process, the passcode may be fine; once you've checked, `unlock-reset` alone is enough. `unlock-reset` doesn't check the passcode, and `passcode set` and `passcode clear` don't lift the stop. Don't delete files in the data directory to get going again: that removes this safeguard.
 
-`unlock-reset` re-enables the device the daemon controls; for another one add `--device <UDID or name>` (it must be connected). It is refused while the daemon is busy with the device (it may be entering the passcode): run it again in a moment. AI tasks can't run it. A daemon of 0.3.2 or earlier refuses the new `unlock-reset`: upgrade the daemon first.
+`unlock-reset` re-enables the device the daemon controls; for another one add `--device <UDID>` (it must be connected; a UDID only, not a name, since names change: see `iphone-control devices`). It is refused while the daemon is busy with the device (it may be entering the passcode): run it again in a moment. AI tasks can't run it. A daemon of 0.3.2 or earlier refuses the new `unlock-reset`: upgrade the daemon first.
 
 When you upgrade from 0.3.2 or earlier and the old version had disabled auto-unlock, it didn't record which device failed, so after the upgrade **every device stays disabled**: check each one's passcode and run `unlock-reset` for each (`doctor` says so).
 

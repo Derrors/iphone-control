@@ -646,9 +646,9 @@ async fn unlock_reset_re_enables_only_its_device() {
     let d = Daemon::new(Config::from_env(&dir));
     assert!(d.unlock_cfg(Some(A)).disabled_by_failure() && d.unlock_cfg(Some(B)).disabled_by_failure());
     let mut g = d.inner.lock().await;
-    assert!(d.unlock_reset(&g, None).is_err(), "no device controlled, none named");
+    assert!(d.unlock_reset(&g, None, None).is_err(), "no device controlled, none named");
     connect(&mut g, A, "phone");
-    let text = with_lang(Lang::En, || d.unlock_reset(&g, Some(A))).unwrap();
+    let text = with_lang(Lang::En, || d.unlock_reset(&g, Some(A), None)).unwrap();
     assert!(text.contains("re-enabled") && text.contains("older version"), "{text}");
     assert!(!d.unlock_cfg(Some(A)).disabled_by_failure());
     assert!(d.unlock_cfg(Some(B)).disabled_by_failure(), "B wasn't reset");
@@ -671,7 +671,7 @@ async fn unlock_reset_is_refused_while_busy_and_to_tasks() {
     const A: &str = "00008130-0019295E012B803A";
     let (d, dir) = test_daemon("unlock-reset-busy");
     connect(&mut *d.inner.lock().await, A, "phone");
-    let req = || Request::UnlockResetDevice { device: Some(A.into()) };
+    let req = || Request::UnlockResetDevice { udid: Some(A.into()) };
     let refused = |r: &Response| matches!(r, Response::Error { .. });
     let held = d.inner.lock().await;
     let r = tokio::time::timeout(Duration::from_secs(2), d.handle(req(), Instant::now(), CallCtx::default()))
@@ -689,27 +689,34 @@ async fn unlock_reset_is_refused_while_busy_and_to_tasks() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
-/// A device named for unlock-reset is looked up among those connected now: a name no connected device has, or one
-/// two of them share, is refused, and the reset goes to the device the name is that of now
+/// unlock-reset --device takes the UDID of a device connected now, in either case: never a name (which may be
+/// another device's by now), nor a device that isn't there; the caller's expected device is checked against the one
+/// re-enabled
 #[tokio::test]
-async fn unlock_reset_names_a_device_connected_now() {
+async fn unlock_reset_takes_a_connected_udid_only() {
     const A: &str = "00008130-0019295E012B803A";
     const B: &str = "00008020-000925043499002E";
-    let (d, dir) = test_daemon("unlock-reset-name");
+    let (d, dir) = test_daemon("unlock-reset-udid");
     // an older version's flag: every device disabled until reset one by one
     std::fs::create_dir_all(d.cfg.logs()).unwrap();
     std::fs::write(d.cfg.unlock_disabled_flag(), "1700000000 x\n").unwrap();
     d.cfg.unlock_disabled().migrate().unwrap();
     let mut g = d.inner.lock().await;
-    assert!(d.unlock_reset(&g, Some("iPad")).is_err(), "nothing connected");
+    assert!(d.unlock_reset(&g, Some(B), None).is_err(), "not connected");
     connect(&mut g, B, "iPad");
-    d.unlock_reset(&g, Some("iPad")).unwrap();
+    assert!(d.unlock_reset(&g, Some("iPad"), None).is_err(), "a name, even one that matches now");
+    assert!(d.unlock_cfg(Some(B)).disabled_by_failure());
+    d.unlock_reset(&g, Some(&B.to_lowercase()), None).unwrap();
     assert!(!d.unlock_cfg(Some(B)).disabled_by_failure() && d.unlock_cfg(Some(A)).disabled_by_failure());
-    connect(&mut g, A, "iPad");
-    assert!(d.unlock_reset(&g, Some("iPad")).is_err(), "two devices are called that");
-    assert!(d.unlock_cfg(Some(A)).disabled_by_failure());
-    d.unlock_reset(&g, Some(A)).unwrap();
-    assert!(!d.unlock_cfg(Some(A)).disabled_by_failure());
+    connect(&mut g, A, "phone");
     drop(g);
+    let wrong = CallCtx { expect_udid: Some(B.into()), ..Default::default() };
+    let r = d.handle(Request::UnlockResetDevice { udid: Some(A.into()) }, Instant::now(), wrong).await;
+    assert!(matches!(r, Response::Error { .. }), "{r:?}");
+    assert!(d.unlock_cfg(Some(A)).disabled_by_failure(), "the expected device didn't match: nothing re-enabled");
+    let right = CallCtx { expect_udid: Some(A.into()), ..Default::default() };
+    let r = d.handle(Request::UnlockResetDevice { udid: Some(A.into()) }, Instant::now(), right).await;
+    assert!(!matches!(r, Response::Error { .. }), "{r:?}");
+    assert!(!d.unlock_cfg(Some(A)).disabled_by_failure());
     std::fs::remove_dir_all(dir).unwrap();
 }

@@ -40,7 +40,7 @@ impl Daemon {
                 Err(r) => return r.with_failure(Delivery::NotSent, FailureStage::Preflight),
             };
         if reset {
-            return self.unlock_reset_now(&req);
+            return self.unlock_reset_now(&req, ctx.expect_udid.as_deref());
         }
         // a task limited to some apps: outside them, the action waits for the user (docs/task-control.md §2.6)
         let mut gated = Gated::default();

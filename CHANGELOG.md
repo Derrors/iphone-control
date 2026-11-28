@@ -8,7 +8,7 @@ What changed in each release, one line per change. Versions follow [Semantic Ver
 
 ### Improvements
 
-- When auto-unlock fails on one device, only that device stops unlocking automatically; the others keep going. `iphone-control unlock-reset` re-enables the controlled device, `--device` another one. If an older version had disabled auto-unlock, every device stays disabled after the upgrade until you reset each one (#231).
+- When auto-unlock fails on one device, only that device stops unlocking automatically; the others keep going. `iphone-control unlock-reset` re-enables the controlled device, `--device <UDID>` another one. If an older version had disabled auto-unlock, every device stays disabled after the upgrade until you reset each one (#231).
 
 ## [0.3.2] - 2026-11-28
 

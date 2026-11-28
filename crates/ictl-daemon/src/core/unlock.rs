@@ -48,9 +48,11 @@ impl Daemon {
     /// `unlock-reset` as a request: a path of its own, not the device lane's. Not queued behind what holds the device,
     /// which may be entering a passcode (a reset waiting for it would clear the record a wrong entry just wrote), and
     /// nothing of the device lane is done on the way (no WDA restart, no cache cleared): it only changes files
-    pub(super) fn unlock_reset_now(&self, req: &Request) -> Response {
-        let device = match req {
-            Request::UnlockResetDevice { device } => device.as_deref(),
+    /// `expect`: the caller's [`crate::core::CallCtx::expect_udid`], checked against the device actually re-enabled
+    /// (this path skips the device lane, where it is checked otherwise)
+    pub(super) fn unlock_reset_now(&self, req: &Request, expect: Option<&str>) -> Response {
+        let udid = match req {
+            Request::UnlockResetDevice { udid } => udid.as_deref(),
             _ => None,
         };
         let Ok(g) = self.inner.try_lock() else {
@@ -60,24 +62,44 @@ impl Daemon {
             ))
             .with_failure(Delivery::NotSent, FailureStage::Preflight);
         };
-        match self.unlock_reset(&g, device) {
+        match self.unlock_reset(&g, udid, expect) {
             Ok(text) => Response::text_with(text, crate::protocol::Outcome::default()),
             Err(e) => Response::error(e.to_string()),
         }
     }
 
-    pub(crate) fn unlock_reset(&self, g: &Inner, device: Option<&str>) -> crate::error::Result<String> {
-        let named = match device {
-            // among the devices connected now: a name another device had in an older listing doesn't count, and a
-            // name two devices share is refused (`resolve_device`)
-            Some(q) => {
-                let infos = self.connected_infos(g);
-                let i = crate::devices::resolve_device(&infos, q)?;
-                Some(infos[i].udid.clone())
-            }
+    pub(crate) fn unlock_reset(
+        &self,
+        g: &Inner,
+        udid: Option<&str>,
+        expect: Option<&str>,
+    ) -> crate::error::Result<String> {
+        let named = match udid {
+            // a UDID of a device connected now; not a name (a name no longer the one in the daemon's list would pick
+            // another device), and not a device that isn't there (its UDID mistyped, or the wrong one)
+            Some(q) => match g.connected.iter().find(|d| d.udid.eq_ignore_ascii_case(q.trim())) {
+                Some(d) => Some(d.udid.clone()),
+                None => {
+                    return Err(ictl_l10n::trf!(
+                        "没有接着 UDID 是 {q} 的设备（--device 只收 UDID，用 iphone-control devices 查看）",
+                        "No device with the UDID {q} is connected (--device takes a UDID only; see iphone-control devices)"
+                    )
+                    .into());
+                }
+            },
             None => None,
         };
-        let udid = match named.or_else(|| g.device.as_ref().map(|d| d.udid.clone())) {
+        let target = named.or_else(|| g.device.as_ref().map(|d| d.udid.clone()));
+        if let (Some(want), Some(t)) = (expect, target.as_deref())
+            && !want.eq_ignore_ascii_case(t)
+        {
+            return Err(ictl_l10n::trf!(
+                "要恢复的是 {t}，和请求要求的设备 {want} 不一致，没有恢复",
+                "The device to re-enable is {t}, not {want} as the request expected; nothing was re-enabled"
+            )
+            .into());
+        }
+        let udid = match target {
             Some(u) => u,
             None => {
                 return Err(ictl_l10n::tr!(

@@ -76,6 +76,17 @@ pub fn create_dir_all_from(base: &Path, dir: &Path) -> io::Result<()> {
     Ok(())
 }
 
+/// `base` with every directory above it that is missing, then each of `subdirs` inside it, every one of them kept in
+/// its parent ([`create_dir_all`], [`create_dir_all_from`]). For the start of a data directory: run before anything
+/// makes directories in it the plain way, which wouldn't keep a missing directory above it
+pub fn create_tree(base: &Path, subdirs: &[&str]) -> io::Result<()> {
+    create_dir_all(base)?;
+    for d in subdirs {
+        create_dir_all_from(base, &base.join(d))?;
+    }
+    Ok(())
+}
+
 /// `name` in `dir` replaced whole by `data` with permissions `mode`, on disk (data and name) when it returns. The
 /// temporary file it is written to first is created with `mode` and set to exactly `mode` on its descriptor before
 /// anything is written (the umask could leave it different), and named after `name`
@@ -156,6 +167,27 @@ pub(crate) mod tests {
 
     pub(crate) fn synced() -> Vec<PathBuf> {
         SYNCED.with(|s| std::mem::take(&mut *s.borrow_mut()))
+    }
+
+    /// A data directory whose parent and grandparent are missing too: each directory made is kept in its parent, top
+    /// down, before the subdirectories in it
+    #[test]
+    fn a_new_tree_is_kept_from_the_first_missing_directory_down() {
+        let root = std::env::temp_dir().join(format!("ictl-durable-tree-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let data = root.join("new/share/iphone-control");
+        synced();
+        create_tree(&data, &["secrets", "logs"]).unwrap();
+        let got = synced();
+        let at =
+            |p: &Path| got.iter().position(|q| q == p).unwrap_or_else(|| panic!("{} not synced: {got:?}", p.display()));
+        // new/ in the root, share/ in new/, iphone-control/ in share/, secrets/ and logs/ in iphone-control/
+        let order = [root.clone(), root.join("new"), root.join("new/share"), data.clone()];
+        for w in order.windows(2) {
+            assert!(at(&w[0]) < at(&w[1]), "{} before {}: {got:?}", w[0].display(), w[1].display());
+        }
+        assert!(data.join("secrets").is_dir() && data.join("logs").is_dir());
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     /// Directories made earlier without syncing (a plain `create_dir_all`) are kept too, from the base down

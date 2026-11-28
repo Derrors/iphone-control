@@ -333,13 +333,13 @@ impl Config {
     /// 建好数据目录并收紧权限：账号私钥、锁屏密码都在里面（配对记录归系统的 usbmuxd 管）
     pub fn prepare_dirs(&self) -> std::io::Result<()> {
         use std::os::unix::fs::PermissionsExt;
+        // first, before any plain create_dir_all: the data directory and every directory above it made now, then
+        // secrets/ and logs/, each kept in its parent. Auto-unlock writes durably inside those (passcodes, disabled
+        // records, their shadow); a directory above them made by a plain call could be lost with a power cut,
+        // taking them along ([`ictl_unlock::durable`])
+        ictl_unlock::durable::create_tree(&self.data_dir, &["secrets", "logs"])?;
         for d in ["account", "wda", "ddi"] {
             std::fs::create_dir_all(self.data_dir.join(d))?;
-        }
-        // what auto-unlock keeps (passcodes, disabled records, their shadow) is written durably inside these: the
-        // directories themselves have to survive a power cut too ([`ictl_unlock::durable`])
-        for d in ["secrets", "logs"] {
-            ictl_unlock::durable::create_dir_all_from(&self.data_dir, &self.data_dir.join(d))?;
         }
         for d in ["", "account", "secrets"] {
             std::fs::set_permissions(self.data_dir.join(d), std::fs::Permissions::from_mode(0o700))?;
@@ -351,6 +351,22 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A first start where the data directory and the ones above it don't exist yet: everything is made, and a
+    /// passcode can be written (the order of the syncs is tested in `ictl_unlock::durable`)
+    #[test]
+    fn a_first_start_makes_the_data_directory_and_above() {
+        let root = std::env::temp_dir().join(format!("ictl-config-cold-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let data = root.join("new/share/iphone-control");
+        let cfg = Config::from_env(&data);
+        cfg.prepare_dirs().unwrap();
+        for d in ["secrets", "logs", "account", "wda", "ddi"] {
+            assert!(data.join(d).is_dir(), "{d}");
+        }
+        cfg.write_passcode("A", "123456").unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     /// A passcode set again replaces the old one whole and stays private; the single passcode an older version
     /// saved is given to a device only if it has none, and never written over one set meanwhile

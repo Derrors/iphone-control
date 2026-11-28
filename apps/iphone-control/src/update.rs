@@ -2,6 +2,18 @@
 //! contact the release API. CLI and Viewer use the same local cache and channel evidence.
 mod archive;
 mod channel;
+mod fleet;
+
+/// Whose viewer answers on `port`, asked without a token ([`fleet::viewer_identity`])
+pub async fn viewer_identity(port: u16) -> Option<(String, String)> {
+    fleet::viewer_identity(port).await
+}
+
+/// `update recover` without a receipt (a package manager's installation): what an update of the instances left
+/// (`fleet`), with the program as it is installed now
+pub async fn recover_fleet() -> anyhow::Result<()> {
+    fleet::recover(env!("CARGO_PKG_VERSION")).await
+}
 mod install;
 mod release;
 pub mod transaction;

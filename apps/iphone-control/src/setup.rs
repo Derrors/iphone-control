@@ -8,7 +8,8 @@ use ictl_daemon::protocol::Request;
 
 use crate::Cli;
 use crate::account::login;
-use crate::client::{account_dir, print_text, snapshot, target_device};
+use crate::client::{account_dir, ask, devices_dir, print_text, snapshot, target_device};
+use ictl_daemon::protocol::{Response, SetupStepKind};
 
 /// 每隔 `every` 检查一次，直到 `check` 返回 true 或超时
 pub(crate) async fn wait_until<F, Fut>(timeout: Duration, every: Duration, mut check: F) -> bool
@@ -31,7 +32,7 @@ where
 /// The phone's part of the guide: connect, pair, Developer Mode, Apple ID, sign and install WDA, wait for WDA.
 /// Needs the daemon running ([`crate::guide`] starts it first)
 pub(crate) async fn device_setup(cli: &Cli) -> anyhow::Result<()> {
-    use ictl_device::{Device, DeviceError};
+    use ictl_device::Device;
     let socket = &cli.socket;
 
     println!("{}", ictl_l10n::tr!("[1/6] 等待手机连接", "[1/6] Waiting for the phone"));
@@ -55,7 +56,7 @@ pub(crate) async fn device_setup(cli: &Cli) -> anyhow::Result<()> {
     println!("{}", ictl_l10n::trf!("  手机 {}", "  Phone {}", ictl_daemon::core::device_label(&target)));
 
     println!("{}", ictl_l10n::tr!("[2/6] 配对", "[2/6] Pairing"));
-    if device.paired().await? {
+    if setup_step(socket, &device.udid, SetupStepKind::PairStatus).await? == "paired" {
         println!("{}", ictl_l10n::tr!("  已配对", "  Already paired"));
     } else {
         println!(
@@ -66,9 +67,8 @@ pub(crate) async fn device_setup(cli: &Cli) -> anyhow::Result<()> {
             )
         );
         let ok = wait_until(Duration::from_secs(300), Duration::from_secs(5), || async {
-            match device.pair("iphone-control").await {
-                Ok(()) => true,
-                Err(DeviceError::PairingPending | DeviceError::PasswordProtected) => false,
+            match setup_step(socket, &device.udid, SetupStepKind::Pair).await {
+                Ok(done) => done == "paired",
                 Err(e) => {
                     eprintln!("  {e}");
                     false
@@ -83,10 +83,12 @@ pub(crate) async fn device_setup(cli: &Cli) -> anyhow::Result<()> {
     }
 
     println!("{}", ictl_l10n::tr!("[3/6] 开发者模式", "[3/6] Developer Mode"));
-    if device.developer_mode_enabled().await.unwrap_or(false) {
+    let dev_mode_on =
+        || async { setup_step(socket, &device.udid, SetupStepKind::DevModeStatus).await.is_ok_and(|s| s == "on") };
+    if dev_mode_on().await {
         println!("{}", ictl_l10n::tr!("  已打开", "  Already on"));
     } else {
-        let _ = device.reveal_developer_mode().await;
+        let _ = setup_step(socket, &device.udid, SetupStepKind::DevModeReveal).await;
         println!(
             "{}",
             ictl_l10n::tr!(
@@ -101,13 +103,8 @@ pub(crate) async fn device_setup(cli: &Cli) -> anyhow::Result<()> {
                 "  after the restart, unlock it, tap “Turn On” in the prompt and enter the passcode. The connection drops while the phone restarts and recovers by itself."
             )
         );
-        let ok = wait_until(Duration::from_secs(900), Duration::from_secs(10), || async {
-            match Device::find(udid.as_deref()).await {
-                Ok(d) => d.developer_mode_enabled().await.unwrap_or(false),
-                Err(_) => false,
-            }
-        })
-        .await;
+        // the phone restarts meanwhile: the daemon holds it again once it is back
+        let ok = wait_until(Duration::from_secs(900), Duration::from_secs(10), dev_mode_on).await;
         if !ok {
             bail!(
                 "{}",
@@ -208,6 +205,43 @@ pub(crate) async fn device_setup(cli: &Cli) -> anyhow::Result<()> {
         }
     );
     Ok(())
+}
+
+/// A step of the phone's setup, done by the instance that holds the phone (docs/dev/multi-instance-plan.md 4.5): the
+/// daemon this command talks to. When no instance holds it (the daemon hasn't taken it yet, or doesn't run), here,
+/// under a short lease of this command's own, let go of before anything else is asked of the daemon. Answers as
+/// [`SetupStepKind`] says
+async fn setup_step(socket: &Path, udid: &str, step: SetupStepKind) -> anyhow::Result<String> {
+    use ictl_daemon::lease::{Claim, Holder};
+    let refused = match ask(socket, Request::SetupStep { udid: udid.to_owned(), step }).await {
+        Ok(Response::Text { text, .. }) => return Ok(text),
+        Ok(Response::Error { message, .. }) => message,
+        Ok(Response::Image { .. }) => {
+            bail!("{}", ictl_l10n::tr!("守护进程返回了意外的响应", "The daemon sent an unexpected response"))
+        }
+        Err(e) => e.to_string(),
+    };
+    let _lease = match ictl_daemon::lease::try_claim(&devices_dir(), udid, Holder::probe("setup"))? {
+        Claim::Got(l) => l,
+        // an instance holds it, and refused: its answer stands
+        Claim::Held(_) => bail!("{refused}"),
+    };
+    let device = ictl_device::Device::find(Some(udid)).await?;
+    Ok(match step {
+        SetupStepKind::PairStatus => if device.paired().await? { "paired" } else { "unpaired" }.into(),
+        SetupStepKind::Pair => match device.pair("iphone-control").await {
+            Ok(()) => "paired".into(),
+            Err(ictl_device::DeviceError::PairingPending | ictl_device::DeviceError::PasswordProtected) => {
+                "pending".into()
+            }
+            Err(e) => return Err(e.into()),
+        },
+        SetupStepKind::DevModeReveal => {
+            device.reveal_developer_mode().await?;
+            "revealed".into()
+        }
+        SetupStepKind::DevModeStatus => if device.developer_mode_enabled().await? { "on" } else { "off" }.into(),
+    })
 }
 
 /// The last steps of [`device_setup`] for a phone driven natively: no Apple ID, no signing, the daemon only mounts

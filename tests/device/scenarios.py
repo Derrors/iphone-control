@@ -545,6 +545,8 @@ async def main() -> int:
         await session.initialize()
         d = await Runner(session, os.environ.get("SHOTS_DIR", "shots")).look()
         print(f"### {d.line()}", flush=True)
+        if not dev.is_expected(d):
+            return 1
         if not (d.udid and d.w and d.h):
             print("--- no device ready to test (`iphone-control status`)", flush=True)
             return 1

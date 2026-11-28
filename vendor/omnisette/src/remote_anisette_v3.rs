@@ -100,6 +100,10 @@ pub struct AnisetteState {
         deserialize_with = "bin_deserialize_opt"
     )]
     adi_pb: Option<Vec<u8>>,
+    // iphone-control: the address this state was provisioned with, in the same file so the two never disagree
+    // (src/state_file.rs). Absent in a state an older version provisioned; older versions ignore it
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) provisioned_by: Option<String>,
 }
 
 impl Default for AnisetteState {
@@ -107,6 +111,7 @@ impl Default for AnisetteState {
         AnisetteState {
             keychain_identifier: rand::random::<[u8; 16]>(),
             adi_pb: None,
+            provisioned_by: None,
         }
     }
 }
@@ -557,9 +562,52 @@ pub struct RemoteAnisetteProviderV3 {
     pub state: Option<AnisetteState>,
     configuration_path: PathBuf,
     serial: String,
+    require_known_origin: bool,
 }
 
 impl RemoteAnisetteProviderV3 {
+    // iphone-control: a state is sent only to the address it was provisioned with, checked on the very state about
+    // to be sent (not on a copy read earlier): one of another address never, one without a recorded address only
+    // while that is allowed
+    fn check_origin(&self, state: &AnisetteState) -> Result<(), AnisetteError> {
+        match &state.provisioned_by {
+            Some(u) if crate::state_file::same_address(u, &self.client_url) => Ok(()),
+            Some(u) => Err(AnisetteError::OriginMismatch { recorded: u.clone(), configured: self.client_url.clone() }),
+            None if self.require_known_origin => Err(AnisetteError::OriginUnknown),
+            None => Ok(()),
+        }
+    }
+
+    pub fn requiring_known_origin(mut self, required: bool) -> Self {
+        self.require_known_origin = required;
+        self
+    }
+
+    // iphone-control: provisions under the state lock. The state on disk is read again first: if another process
+    // provisioned it meanwhile (and, when `rejected`, it isn't the one the server just refused), that one is used
+    // instead of writing a new one over it
+    async fn provision_shared(&mut self, rejected: bool) -> Result<(), AnisetteError> {
+        let _lock = crate::state_file::lock(&self.configuration_path).await?;
+        let ours = self.state.as_ref().and_then(|s| s.adi_pb.clone());
+        let disk = crate::state_file::read(&self.configuration_path)?;
+        if let Some(d) = &disk
+            && d.is_provisioned()
+            && !(rejected && d.adi_pb == ours)
+        {
+            self.state = disk;
+            return Ok(());
+        }
+        let mut state = disk.or(self.state.take()).unwrap_or_else(AnisetteState::new);
+        state.adi_pb = None;
+        state.provisioned_by = None;
+        let client = self.client.as_ref().ok_or(AnisetteError::Misc)?;
+        client.provision(&mut state).await?;
+        state.provisioned_by = Some(self.client_url.clone());
+        crate::state_file::write(&self.configuration_path, &state)?;
+        self.state = Some(state);
+        Ok(())
+    }
+
     pub fn new(
         url: String,
         configuration_path: PathBuf,
@@ -571,6 +619,7 @@ impl RemoteAnisetteProviderV3 {
             state: None,
             configuration_path,
             serial,
+            require_known_origin: false,
         }
     }
 }
@@ -581,40 +630,37 @@ impl AnisetteHeadersProvider for RemoteAnisetteProviderV3 {
         &mut self,
         _skip_provisioning: bool,
     ) -> Result<HashMap<String, String>, AnisetteError> {
+        // iphone-control: the state is shared with other processes: read again, provisioned and written under a lock,
+        // with the address it was provisioned with (src/state_file.rs), instead of read once and written in place
+        fs::create_dir_all(&self.configuration_path)?;
+        if self.state.is_none() {
+            self.state = Some(crate::state_file::read(&self.configuration_path)?.unwrap_or_else(AnisetteState::new));
+        }
+        // iphone-control: a provisioned state of another origin goes nowhere, not even to ask the server for its info
+        if let Some(s) = self.state.as_ref().filter(|s| s.is_provisioned()) {
+            self.check_origin(s)?;
+        }
         if self.client.is_none() {
             self.client = Some(AnisetteClient::new(self.client_url.clone()).await?);
         }
-        let client = self.client.as_ref().unwrap();
-
-        fs::create_dir_all(&self.configuration_path)?;
-
-        let config_path = self.configuration_path.join("state.plist");
-        if self.state.is_none() {
-            self.state = Some(if let Ok(text) = plist::from_file(&config_path) {
-                text
-            } else {
-                AnisetteState::new()
-            });
+        if !self.state.as_ref().is_some_and(|s| s.is_provisioned()) {
+            self.provision_shared(false).await?;
         }
-
-        let state = self.state.as_mut().unwrap();
-        if !state.is_provisioned() {
-            client.provision(state).await?;
-            plist::to_file_xml(&config_path, state)?;
-        }
-        let data = match client.get_headers(&state).await {
+        let client = self.client.as_ref().ok_or(AnisetteError::Misc)?;
+        let state = self.state.as_ref().ok_or(AnisetteError::Misc)?;
+        self.check_origin(state)?;
+        let data = match client.get_headers(state).await {
             Ok(data) => data,
-            Err(err) => {
-                if matches!(err, AnisetteError::AnisetteNotProvisioned) {
-                    state.adi_pb = None;
-                    client.provision(state).await?;
-                    plist::to_file_xml(config_path, state)?;
-                    client.get_headers(&state).await?
-                } else {
-                    // iphone-control: propagate network/server errors instead of panicking the thread.
-                    return Err(err);
-                }
+            Err(AnisetteError::AnisetteNotProvisioned) => {
+                // the server no longer knows this state: provisioned again, unless another process did meanwhile
+                self.provision_shared(true).await?;
+                let client = self.client.as_ref().ok_or(AnisetteError::Misc)?;
+                let state = self.state.as_ref().ok_or(AnisetteError::Misc)?;
+                self.check_origin(state)?;
+                client.get_headers(state).await?
             }
+            // iphone-control: propagate network/server errors instead of panicking the thread.
+            Err(err) => return Err(err),
         };
         Ok(data.get_headers(self.serial.clone()))
     }

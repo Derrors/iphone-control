@@ -27,6 +27,7 @@ iphone-control service restart
 | `HTTP_PROXY` / `HTTPS_PROXY` | 直连 | 访问苹果、anisette、开发者镜像、推送通知用的代理 |
 | `IPHONE_CONTROL_LANG` | `zh` | 界面语言：`zh` 或 `en`。工具说明和结果、命令行输出、日志、通知都按它。MCP 和命令行各自按自己的设置请求，守护进程按请求的语言回答；日志和通知按守护进程自己的设置。见下方说明 |
 | `IPHONE_CONTROL_DEV_TOOLS` | 关 | 设为 `1` 时 MCP 服务多出[开发者工具](./tools#开发者工具-显式开启)：日志、崩溃报告、安装和卸载 App、Web Inspector（在网页和 WebView 里执行 JavaScript）。风险见[安全与隐私](./security)。见下方说明 |
+| `IPHONE_CONTROL_INSTANCE` | 空 | 同 `--instance`：命令行和 MCP 服务用哪个命名实例（`instance add` 登记的，一台设备一个守护进程）；不设就是默认实例。`daemon`、`viewer` 不看它，只认命令行上的 `--instance`（默认实例的服务也会读到共用设置里的这一项） |
 
 ### 控制台与远程访问
 

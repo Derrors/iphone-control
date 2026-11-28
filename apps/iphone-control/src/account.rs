@@ -66,6 +66,45 @@ pub(crate) fn read_secret(prompt: &str) -> anyhow::Result<String> {
     r
 }
 
+/// `login --reprovision-anisette`
+pub(crate) async fn reprovision_anisette(data_dir: &Path) -> anyhow::Result<()> {
+    let acct = account_dir(data_dir);
+    acct.reprovision_anisette().await?;
+    println!(
+        "{}",
+        ictl_l10n::trf!(
+            "已用 {} 重新生成 anisette 状态；Apple ID 会话不受影响",
+            "Made a new anisette state with {}; the Apple ID session is unaffected",
+            acct.anisette_address()
+        )
+    );
+    Ok(())
+}
+
+/// `login --confirm-anisette-origin`
+pub(crate) async fn confirm_anisette_origin(data_dir: &Path) -> anyhow::Result<()> {
+    let acct = account_dir(data_dir);
+    if acct.confirm_anisette_origin().await? {
+        println!(
+            "{}",
+            ictl_l10n::trf!(
+                "已记下：anisette 状态是用 {} 生成的",
+                "Recorded: the anisette state was made with {}",
+                acct.anisette_address()
+            )
+        );
+    } else {
+        println!(
+            "{}",
+            ictl_l10n::tr!(
+                "还没有 anisette 状态，不用确认：下次登录或签名时会用现在配置的地址生成",
+                "There is no anisette state yet, nothing to confirm: the next sign-in or signing makes one with the address configured now"
+            )
+        );
+    }
+    Ok(())
+}
+
 pub(crate) async fn login(data_dir: &Path, email: Option<String>) -> anyhow::Result<()> {
     println!(
         "{}",

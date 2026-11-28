@@ -1,6 +1,6 @@
 # Several Devices
 
-A host can have several iPhones and iPads connected, but it controls one at a time: every tool and command acts on that one. With a single device you can skip this page.
+A host can have several iPhones and iPads connected, but it controls one at a time: every tool and command acts on that one. With a single device you can skip this page. For two agents to control a device each at the same time, see [Several Devices at Once](./instances).
 
 Don't run two copies of iphone-control, or other usbmuxd-based tools, against the same device.
 

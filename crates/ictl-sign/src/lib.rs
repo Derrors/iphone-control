@@ -5,6 +5,7 @@
 //! 签名流程本身在这里重写，修掉了 Impactor 漏签 `.xctest` 的问题（见 [`bundle`]）。
 //!
 //! 账号目录（数据目录下 `account/`，0700）：`accounts.json`（会话令牌）、`keys/<团队>/key.pem`（开发私钥）、anisette 状态。
+//! 几个进程共用它（多个守护进程实例、命令行的 `login`）：写入加锁、原子替换，凭据有代次，anisette 状态记着来源（[`account`]）。
 //! 免费账号：描述文件 7 天过期、开发证书 1 年。
 //!
 //! 证书：每个账号目录有自己的私钥，对应团队里的一张开发证书；同一个团队同时最多两张（免费账号）。没有私钥（新的
@@ -12,6 +13,7 @@
 //! 用它签的 App 在每台设备上都起不来，而描述文件看上去还有效。所以要能判断设备上的 WDA 是不是本机这把私钥签的
 //! （[`AccountDir::local_public_keys`]、[`Profile::signed_with_any`]），本机的证书还在不在（[`Session::own_certificate_listed`]）。
 
+pub mod account;
 pub mod bundle;
 pub mod ipa;
 pub mod profile;
@@ -51,6 +53,21 @@ pub enum SignError {
     Transient(String),
     #[error("{}", ictl_l10n::tr!("账号下没有可用的开发团队", "The account has no usable development team"))]
     NoTeam,
+    /// Another process held the account lock for longer than [`account::LOCK_WAIT`]: try again, nothing is wrong
+    /// with the session
+    #[error("{}", ictl_l10n::tr!("Apple ID 账号正被另一个进程使用（登录、签名），稍后再试", "The Apple ID account is in use by another process (signing in, signing); try again later"))]
+    AccountBusy,
+    /// The anisette state was provisioned by an older version, with an address it didn't record, and other instances
+    /// share the account: it isn't sent anywhere until the user says where it came from
+    #[error("{}", ictl_l10n::tr!("Anisette 状态的来源未知（旧版本生成的）：运行 iphone-control login --reprovision-anisette 重新生成；确知它就是用现在的地址生成的，也可以 --confirm-anisette-origin", "Where the anisette state came from is unknown (an older version made it): run iphone-control login --reprovision-anisette to make a new one, or --confirm-anisette-origin if you know it was made with the address configured now"))]
+    AnisetteOriginUnknown,
+    /// The anisette state was provisioned with another address than the one configured: never sent to this one
+    #[error("{}", ictl_l10n::trf!("Anisette 状态是用 {recorded} 生成的，现在配置的是 {configured}：不会发给另一个地址。改回原来的地址，或运行 iphone-control login --reprovision-anisette 用现在的地址重新生成", "The anisette state was made with {recorded}, but {configured} is configured now: it isn't sent to another address. Set the old address again, or run iphone-control login --reprovision-anisette to make a new one with the current address"))]
+    AnisetteOriginMismatch { recorded: String, configured: String },
+    /// While this login waited (for a verification code), the same Apple ID was signed in again elsewhere, or the
+    /// anisette state changed: its result isn't written over the newer one
+    #[error("{}", ictl_l10n::tr!("等待验证码期间，同一个 Apple ID 在别处（另一个命令或实例）重新登录过，或者 Anisette 状态变了：这次登录的结果没有写入，以免覆盖更新的凭据；需要的话重新登录", "While this login waited for the verification code, the same Apple ID was signed in again elsewhere (another command or instance), or the anisette state changed: this login's result wasn't written, so the newer credentials aren't overwritten; sign in again if needed"))]
+    LoginSuperseded,
     #[error("{}", ictl_l10n::trf!("签名失败：{0}", "Signing failed: {0}", .0))]
     Codesign(ictl_l10n::Text),
     #[error("{}", ictl_l10n::trf!("开发者服务：{0}", "Developer services: {0}", .0))]
@@ -65,7 +82,13 @@ impl SignError {
     /// Whether this error reflects a transient network, Anisette, or upstream availability problem rather than a
     /// rejected/expired Apple ID session.
     pub fn is_transient(&self) -> bool {
-        matches!(self, Self::Transient(_))
+        matches!(self, Self::Transient(_) | Self::AccountBusy)
+    }
+
+    /// The configuration doesn't let the session be used (the anisette origin): nothing is wrong with the session
+    /// itself, so it isn't reported as expired
+    pub fn is_configuration(&self) -> bool {
+        matches!(self, Self::AnisetteOriginUnknown | Self::AnisetteOriginMismatch { .. })
     }
 }
 
@@ -86,6 +109,9 @@ fn is_transient_plume_error(e: &plume_core::Error) -> bool {
 }
 
 fn classify_session_error(e: plume_core::Error) -> SignError {
+    if let Some(o) = origin_error(&e) {
+        return o;
+    }
     if is_transient_plume_error(&e) {
         SignError::Transient(e.to_string())
     } else {
@@ -124,8 +150,23 @@ where
     unreachable!("loop always returns on attempt == total")
 }
 
+/// The anisette provider refused to send a state of another (or an unknown) origin: a configuration to fix, never
+/// a transient failure or an expired session
+fn origin_error(e: &plume_core::Error) -> Option<SignError> {
+    match e {
+        plume_core::Error::Anisette(omnisette::AnisetteError::OriginMismatch { recorded, configured }) => {
+            Some(SignError::AnisetteOriginMismatch { recorded: recorded.clone(), configured: configured.clone() })
+        }
+        plume_core::Error::Anisette(omnisette::AnisetteError::OriginUnknown) => Some(SignError::AnisetteOriginUnknown),
+        _ => None,
+    }
+}
+
 impl From<plume_core::Error> for SignError {
     fn from(e: plume_core::Error) -> Self {
+        if let Some(o) = origin_error(&e) {
+            return o;
+        }
         if is_transient_plume_error(&e) {
             Self::Transient(e.to_string())
         } else {
@@ -148,6 +189,8 @@ pub struct AccountDir {
     pub dir: PathBuf,
     /// 自建 anisette 服务地址；None 用 Impactor 的默认（第三方）服务
     pub anisette_url: Option<String>,
+    /// Other instances share this account: an anisette state of unknown origin isn't used ([`account`])
+    pub require_known_origin: bool,
 }
 
 impl AccountDir {
@@ -156,7 +199,10 @@ impl AccountDir {
     }
 
     fn anisette(&self) -> AnisetteConfiguration {
-        let c = AnisetteConfiguration::default().set_configuration_path(self.dir.clone());
+        // the origin is checked again by the provider on the very state it sends ([`account`])
+        let c = AnisetteConfiguration::default()
+            .set_configuration_path(self.dir.clone())
+            .set_require_known_origin(self.require_known_origin);
         // 启用的是 v3 provider，它只看 v3 地址；原来设的是用不到的 v1 地址，自建服务不生效
         match &self.anisette_url {
             Some(url) => c.set_anisette_url_v3(url.clone()),
@@ -202,21 +248,55 @@ impl AccountDir {
         two_factor: impl Fn(TwoFactorRequest) -> std::result::Result<TwoFactorAction, String>,
     ) -> Result<String> {
         restrict_dir(&self.dir)?;
-        let anisette =
-            self.fetch_anisette_with(&SESSION_RETRY_DELAYS, SESSION_ATTEMPT_TIMEOUT, tokio::time::sleep).await?;
+        self.check_origin()?;
+        // what this Apple ID's credentials are before (another login may replace them while this one waits)
+        let before = self.credentials_of(email)?;
+        // the anisette state is provisioned, if it has to be, under its own lock (omnisette's state_file); with it,
+        // the state this request used: its content, not only where it came from (provisioned again with the same
+        // address is another state)
+        let (anisette, origin) = self
+            .with_state_used(|| {
+                self.fetch_anisette_with(&SESSION_RETRY_DELAYS, SESSION_ATTEMPT_TIMEOUT, tokio::time::sleep)
+            })
+            .await?;
         let (e, p) = (email.to_owned(), password.to_owned());
+        // not under the account lock: this waits for the user to type a verification code
         let account =
             PlumeAccount::login_with_anisette(move || Ok((e.clone(), p.clone())), two_factor, anisette).await?;
-        let mut store = AccountStore::load(&Some(self.store_path()))
-            .await
-            .map_err(|e| SignError::Developer(e.to_string().into()))?;
-        store
-            .accounts_add_from_session(email.to_owned(), account)
-            .await
-            .map_err(|e| SignError::Developer(e.to_string().into()))?;
-        // the session's tokens were just written with the default umask
-        restrict_tree(&self.dir)?;
+        let gsa = plume_store::account_from_session(email.to_owned(), account).await?;
+        self.commit_login(gsa, &before, &origin).await?;
         Ok(email.to_owned())
+    }
+
+    /// An Apple ID's credentials on disk now, as a login compares them: its ADSID and GS token
+    fn credentials_of(&self, email: &str) -> Result<Option<(String, String)>> {
+        let store = AccountStore::load_sync(&Some(self.store_path()))
+            .map_err(|e| SignError::Developer(e.to_string().into()))?;
+        Ok(store.get_account(email).map(|a| (a.adsid().clone(), a.xcode_gs_token().clone())))
+    }
+
+    /// A login's result merged into the credentials as they are on disk now, under the account lock, then counted.
+    /// The same Apple ID changed since the login began (signed in again elsewhere), or the anisette state it used:
+    /// refused, the newer one kept. Other Apple IDs merge as they are
+    async fn commit_login(
+        &self,
+        gsa: plume_store::GsaAccount,
+        before: &Option<(String, String)>,
+        origin: &account::StateIdentity,
+    ) -> Result<()> {
+        // the account lock, then the state's (the order everything takes them in): nothing provisions the state
+        // while it is compared and the credentials written
+        let _lock = self.lock().await?;
+        let _state = omnisette::state_file::hold(&self.dir).await.map_err(|e| SignError::Transient(e.to_string()))?;
+        if self.credentials_of(gsa.email())? != *before || self.anisette_identity()? != *origin {
+            return Err(SignError::LoginSuperseded);
+        }
+        let mut store = AccountStore::load_sync(&Some(self.store_path()))
+            .map_err(|e| SignError::Developer(e.to_string().into()))?;
+        store.accounts_add_sync(gsa).map_err(|e| SignError::Developer(e.to_string().into()))?;
+        self.commit_locked()?;
+        restrict_tree(&self.dir)?;
+        Ok(())
     }
 
     /// 本机签名私钥（`keys/<团队>/key.pem`）的公钥，PKCS#1 DER，可以和 [`certificate_public_key`] 比。还没签过名时为空
@@ -243,6 +323,7 @@ impl AccountDir {
     pub async fn session(&self) -> Result<Session> {
         restrict_dir(&self.dir)?;
         restrict_tree(&self.dir)?;
+        self.check_origin()?;
         let store = AccountStore::load(&Some(self.store_path()))
             .await
             .map_err(|e| SignError::Developer(e.to_string().into()))?;
@@ -350,6 +431,8 @@ impl Session {
             revoked_certificate = true;
             true
         };
+        // a new signing key may be written: under the account lock, as long as the certificate takes
+        let lock = self.dir.lock().await?;
         let cert = CertificateIdentity::new_with_session(
             &self.inner,
             self.dir.dir.clone(),
@@ -362,6 +445,7 @@ impl Session {
         // a new certificate's private key was just written with the default umask (0644): locked down now, not after
         // the whole package is signed
         restrict_tree(&self.dir.dir)?;
+        drop(lock);
         let new_certificate = cert.new;
         if new_certificate {
             tracing::warn!(
@@ -507,9 +591,13 @@ mod tests {
     /// 自建 anisette 服务地址要落到 v3 provider 实际读的字段上（原来设到 v1 字段，不生效）
     #[test]
     fn custom_anisette_url_reaches_v3_provider() {
-        let dir = AccountDir { dir: PathBuf::from("/tmp/x"), anisette_url: Some("https://ani.example.com".into()) };
+        let dir = AccountDir {
+            dir: PathBuf::from("/tmp/x"),
+            anisette_url: Some("https://ani.example.com".into()),
+            require_known_origin: false,
+        };
         assert_eq!(dir.anisette().anisette_url_v3(), "https://ani.example.com");
-        let default = AccountDir { dir: PathBuf::from("/tmp/x"), anisette_url: None };
+        let default = AccountDir { dir: PathBuf::from("/tmp/x"), anisette_url: None, require_known_origin: false };
         assert_eq!(default.anisette().anisette_url_v3(), "https://mac-ani.jkcoxson.com");
     }
 
@@ -623,7 +711,7 @@ mod tests {
         let root = std::env::temp_dir().join(format!("ictl-keys-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(root.join("keys/TEAM1")).unwrap();
         std::fs::write(root.join("keys/TEAM1/key.pem"), pem).unwrap();
-        let acct = AccountDir { dir: root.clone(), anisette_url: None };
+        let acct = AccountDir { dir: root.clone(), anisette_url: None, require_known_origin: false };
         let keys = acct.local_public_keys();
         assert_eq!(keys.len(), 1);
         assert_eq!(certificate_public_key(&mine).as_ref(), Some(&keys[0]), "the same comparison plume uses");
@@ -638,7 +726,7 @@ mod tests {
         assert!(!profile(vec![other.clone()]).signed_with_any(&keys), "signed elsewhere");
         assert!(profile(vec![other, mine]).signed_with_any(&keys), "lists every certificate valid at the time");
         assert!(!profile(vec![b"not a certificate".to_vec()]).signed_with_any(&keys));
-        let none = AccountDir { dir: root.join("nothing"), anisette_url: None };
+        let none = AccountDir { dir: root.join("nothing"), anisette_url: None, require_known_origin: false };
         assert!(none.local_public_keys().is_empty(), "never signed here");
         std::fs::remove_dir_all(root).unwrap();
     }
@@ -874,7 +962,8 @@ mod tests {
         });
 
         // Trailing slash verifies URL normalization in omnisette as well.
-        let acct = AccountDir { dir: dir.clone(), anisette_url: Some(format!("http://{addr}/")) };
+        let acct =
+            AccountDir { dir: dir.clone(), anisette_url: Some(format!("http://{addr}/")), require_known_origin: false };
         let slept = std::cell::RefCell::new(Vec::new());
         let data = acct
             .fetch_anisette_with(&SESSION_RETRY_DELAYS, Duration::from_secs(5), |d| {
@@ -924,7 +1013,11 @@ mod tests {
                 }
             });
 
-            let acct = AccountDir { dir: dir.clone(), anisette_url: Some(format!("http://{addr}")) };
+            let acct = AccountDir {
+                dir: dir.clone(),
+                anisette_url: Some(format!("http://{addr}")),
+                require_known_origin: false,
+            };
             let slept = std::cell::RefCell::new(Vec::new());
             let err = acct
                 .fetch_anisette_with(&SESSION_RETRY_DELAYS, Duration::from_secs(5), |d| {
@@ -953,7 +1046,8 @@ mod tests {
             tokio::time::sleep(Duration::from_secs(2)).await;
         });
 
-        let acct = AccountDir { dir: dir.clone(), anisette_url: Some(format!("http://{addr}")) };
+        let acct =
+            AccountDir { dir: dir.clone(), anisette_url: Some(format!("http://{addr}")), require_known_origin: false };
         let slept = std::cell::RefCell::new(Vec::new());
         let err = acct
             .fetch_anisette_with(&SESSION_RETRY_DELAYS, Duration::from_millis(120), |d| {

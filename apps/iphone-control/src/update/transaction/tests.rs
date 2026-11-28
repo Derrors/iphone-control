@@ -69,6 +69,10 @@ struct TestService {
     binary: PathBuf,
     child: RefCell<Option<Child>>,
     busy: Cell<bool>,
+    /// The named instances' daemons don't come up with this version
+    members_fail_on: RefCell<Option<String>>,
+    /// What the named instances' daemons were asked to do, in order
+    members: RefCell<Vec<String>>,
 }
 
 impl TestService {
@@ -130,6 +134,15 @@ impl Services for TestService {
         }
         Ok(())
     }
+    async fn stop_members(&self) -> Result<()> {
+        self.members.borrow_mut().push("stop".into());
+        Ok(())
+    }
+    async fn start_members(&self, version: &str) -> Result<()> {
+        self.members.borrow_mut().push(format!("start {version}"));
+        ensure!(self.members_fail_on.borrow().as_deref() != Some(version), "a named daemon didn't come up");
+        Ok(())
+    }
 }
 
 /// Starts a fixture binary that was just written. Another test that spawns a process meanwhile can leave a copy of the
@@ -176,6 +189,8 @@ impl Fixture {
             binary: bin,
             child: RefCell::default(),
             busy: Cell::new(false),
+            members_fail_on: RefCell::default(),
+            members: RefCell::default(),
         };
         Self { _dir: dir, host, store, old, new, candidate }
     }
@@ -229,6 +244,27 @@ async fn unhealthy_daemon_restores_last_verified_executable_and_service() {
     assert_eq!(result.suppressed_version.unwrap(), f.new.version);
 }
 
+/// The named instances' daemons are part of the transaction: one that doesn't come up with the new program puts the
+/// old one back for every instance, started again on it, and the update fails (docs/dev/multi-instance-plan.md 5.3)
+#[tokio::test]
+async fn a_named_daemon_that_does_not_come_up_puts_the_old_program_back() {
+    if unsafe { libc::geteuid() } == 0 {
+        return;
+    }
+    let f = Fixture::new("0.2.1");
+    f.host.start_healthy(&f.old.version).await.unwrap();
+    f.host.members_fail_on.replace(Some(f.new.version.clone()));
+    assert!(f.apply().await.is_err());
+    f.assert_installed(&f.old);
+    assert_eq!(crate::client::snapshot(&f.host.socket).await.unwrap().version.unwrap(), f.old.version);
+    assert_eq!(
+        *f.host.members.borrow(),
+        // stopped once the exclusive lease is held, started on the new program, stopped again, back on the old one
+        ["stop".to_string(), format!("start {}", f.new.version), "stop".into(), format!("start {}", f.old.version)]
+    );
+    assert_eq!(outcome(&f.store.binary).unwrap().unwrap().status, "restored");
+}
+
 #[tokio::test]
 async fn operator_update_preserves_stopped_state() {
     if unsafe { libc::geteuid() } == 0 {
@@ -270,6 +306,11 @@ impl Services for Interrupted {
         self.die("starting");
         Ok(())
     }
+    // killed once the first named daemon is up on the new program (docs/dev/multi-instance-plan.md 5.3)
+    async fn start_members(&self, _version: &str) -> Result<()> {
+        self.die("members");
+        Ok(())
+    }
 }
 
 #[tokio::test]
@@ -288,6 +329,8 @@ async fn interrupted_worker() {
             binary: b,
             child: RefCell::default(),
             busy: Cell::new(false),
+            members_fail_on: RefCell::default(),
+            members: RefCell::default(),
         },
     };
     replace(&store, &host, old, new, &c, false).await.unwrap();
@@ -299,7 +342,7 @@ async fn recovers_after_process_death_using_only_durable_records() {
     if unsafe { libc::geteuid() } == 0 {
         return;
     }
-    for phase in ["prepared", "replaced", "starting"] {
+    for phase in ["prepared", "replaced", "starting", "members"] {
         let f = Fixture::new("0.2.1");
         let binary = f.store.binary.clone();
         let receipt_file = f.store.receipt.clone();
@@ -334,14 +377,28 @@ async fn recovers_after_process_death_using_only_durable_records() {
             tx.phase = Phase::Prepared;
             write_json(&store.journal(), &tx).unwrap();
         }
-        if phase == "starting" {
+        if phase == "starting" || phase == "members" {
             assert_eq!(crate::client::snapshot(&f.host.socket).await.unwrap().version.unwrap(), f.new.version);
         }
         resume(&store, &f.host, &tx).await.unwrap();
+        // the named daemons (some may run the new program) were stopped and started again on the old one
+        assert_eq!(*f.host.members.borrow(), ["stop".to_string(), format!("start {}", f.old.version)], "{phase}");
         assert_eq!(digest(&store.binary).unwrap(), f.old.sha256);
         assert!(!store.journal().exists());
         assert_eq!(crate::client::snapshot(&f.host.socket).await.unwrap().version.unwrap(), f.old.version);
     }
+}
+
+/// The named instances' daemons recorded for the update are let past (an update killed after starting some of them
+/// on the new program must be able to stop them and put the old one back); any other iphone-control process isn't
+#[test]
+fn only_the_recorded_named_daemons_are_let_past() {
+    let ps = "1000 10 iphone-control\n1000 11 iphone-control\n1000 12 bash\n1001 13 iphone-control\n";
+    let args = |_| Some("iphone-control --instance ipad daemon".to_owned());
+    assert!(busy_client(ps, 1000, Some(10), &[11], args).is_ok());
+    let e = busy_client(ps, 1000, Some(10), &[], args).unwrap_err().to_string();
+    assert!(e.contains("11"), "{e}");
+    assert!(busy_client(ps, 1000, None, &[11], args).is_err(), "the default daemon isn't let past by itself");
 }
 
 #[test]
@@ -399,6 +456,8 @@ fn only_mcp_servers_idle_without_the_lease() {
         "/home/u/.local/bin/iphone-control mcp",
         "iphone-control --socket /run/x.sock mcp",
         "iphone-control --data-dir=/d --socket=/s mcp --url https://h:8200",
+        "iphone-control --instance ipad mcp --local",
+        "iphone-control --instance=ipad mcp",
     ] {
         assert!(idles_without_lease(args), "{args}");
     }

@@ -163,12 +163,16 @@ pub async fn run(
     let access = if lan { lan::Access::lan(lan_hosts) } else { lan::Access::local() };
     let listener = tokio::net::TcpListener::bind((access.bind_ip(), port)).await?;
     let port = listener.local_addr()?.port();
+    // the login tokens and the certificate made here are every instance's (docs/dev/multi-instance-plan.md 3.3)
+    let cfg = ictl_daemon::Config::from_env(data_dir);
+    let shared = cfg.root.clone();
     let tls = match tls.enabled(access.is_lan()) {
-        true => Some(Arc::new(tls.load(data_dir, &access.names())?)),
+        true => Some(Arc::new(tls.load(&shared, &access.names())?)),
         false => None,
     };
     let agents = Agents::new(socket)?;
-    let auth = auth::Auth::load(data_dir, port)?;
+    let scope = auth::Scope { instance: cfg.instance_name().to_owned(), id: cfg.instance_id.clone(), port };
+    let auth = auth::Auth::load_for(&shared, scope)?;
     println!(
         "{}",
         ictl_l10n::trf!(
@@ -234,7 +238,7 @@ pub async fn run(
                     "HTTPS:证书是本机生成的({}),SHA-256 指纹 {}。浏览器第一次打开会提示证书不受信任:核对指纹一致后继续访问。想免掉这一步,用 --tls-cert/--tls-key 换成自己的证书",
                     "HTTPS: a certificate made on this machine ({}), SHA-256 fingerprint {}. The first time, the browser warns that it isn't trusted: check that the fingerprint matches, then go on. To skip that, use a certificate of your own (--tls-cert/--tls-key)",
                     t.cert.display(),
-                    t.fingerprint
+                    t.fingerprint()
                 )
             );
         } else {
@@ -244,7 +248,7 @@ pub async fn run(
                     "HTTPS:证书 {}(SHA-256 {})",
                     "HTTPS: certificate {} (SHA-256 {})",
                     t.cert.display(),
-                    t.fingerprint
+                    t.fingerprint()
                 )
             );
         }

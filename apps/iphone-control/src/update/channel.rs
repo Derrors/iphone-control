@@ -25,6 +25,116 @@ pub(super) async fn apply(socket: &Path, report: &Report) -> Result<()> {
         "{}",
         ictl_l10n::tr!("正式版的版本号不对", "invalid stable release version")
     );
+    // with named instances, all of them go through the update (`fleet`): the viewers stopped (they hold the
+    // maintenance lease while they run), the daemons once the exclusive lease is held, all started again afterwards
+    // a record even without named instances: the default instance's services, to be started again by `update
+    // recover` should this updater die after the package manager replaced the program. A state that can't be read
+    // isn't taken for stopped
+    let not_known = || {
+        ictl_l10n::tr!(
+            "查不了默认实例控制台的服务状态，没有升级",
+            "The default instance's viewer service state can't be read; not updated"
+        )
+    };
+    let default_viewer = match crate::service::viewer_find_checked() {
+        Ok(Some(v)) => crate::service::state(&v).with_context(not_known)?,
+        Ok(None) => false,
+        Err(e) => bail!("{}（{e}）", not_known()),
+    };
+    let brew_prefix = (report.install_method == InstallMethod::Homebrew)
+        .then(|| exe.ancestors().nth(4).and_then(Path::parent).map(Path::to_owned))
+        .flatten();
+    let mut fleet = Some(super::fleet::Fleet::begin_package(socket, latest, default_viewer).await?);
+    // the default instance's viewer too: running, it would keep the exclusive lease from ever being had
+    let paused = match super::transaction::pause_viewer(socket).await {
+        Ok(p) => p,
+        Err(e) => {
+            if let Some(f) = &fleet {
+                f.finish(true)?;
+            }
+            return Err(e);
+        }
+    };
+    if let Some(f) = fleet.as_mut()
+        && let Err(e) = f.stop_viewers().await
+    {
+        crate::service::resume_viewer(paused);
+        let up = f.start_viewers().await;
+        f.finish(up)?;
+        return Err(e);
+    }
+    let members = fleet.as_ref().map(|f| f.members()).unwrap_or_default();
+    if let Some(f) = fleet.as_mut() {
+        f.package(brew_prefix)?;
+    }
+    let result = apply_package(socket, report, exe, latest, &members).await;
+    crate::service::resume_viewer(paused);
+    let Some(f) = fleet.as_mut() else { return result };
+    // the named daemons on what is installed now: the new version, or still the old one
+    let installed = if result.is_ok() { latest } else { env!("CARGO_PKG_VERSION") };
+    if result.is_ok() {
+        f.at(super::fleet::Phase::Committed)?;
+    }
+    if let Err(e) = f.start_daemons(installed).await {
+        // what the package manager left isn't known: the record stays for `update recover`
+        eprintln!("{e:#}");
+        bail!(
+            "{}",
+            ictl_l10n::tr!(
+                "命名实例的守护进程没有起来：查看后运行 iphone-control update recover",
+                "The named instances' daemons didn't come up: look into it, then run iphone-control update recover"
+            )
+        );
+    }
+    let up = f.start_viewers().await;
+    f.finish(up)?;
+    result
+}
+
+/// The package manager's run, under the maintenance lock's exclusive lease, with the named daemons stopped once it
+/// is held
+async fn exclusive_package<T>(
+    members: &[super::fleet::Member],
+    run: impl std::future::Future<Output = Result<T>>,
+) -> Result<T> {
+    let exclusive = exclusive_within(Duration::from_secs(30)).await?;
+    super::fleet::stop_daemons(members).await?;
+    // leases refused until the package manager is seen done: by this updater just below, or by `update recover`
+    // should this one die while the package manager goes on
+    super::fleet::package_started()?;
+    let r = run.await;
+    super::fleet::package_done()?;
+    drop(exclusive);
+    r
+}
+
+/// The maintenance lock's exclusive lease, tried for a while: the package manager replaces the program only while
+/// no client and no daemon works with a phone (docs/dev/multi-instance-plan.md 5.3)
+async fn exclusive_within(wait: Duration) -> Result<File> {
+    let deadline = tokio::time::Instant::now() + wait;
+    loop {
+        match ictl_daemon::maintenance::exclusive() {
+            Ok(f) => return Ok(f),
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock && tokio::time::Instant::now() < deadline => {
+                tokio::time::sleep(Duration::from_millis(500)).await;
+            }
+            Err(e) => {
+                return Err(anyhow::Error::new(e).context(ictl_l10n::tr!(
+                    "正忙，没有升级：手机正被使用（控制台、MCP 或守护进程自己的工作），稍后再试",
+                    "Busy, not updated: the phone is in use (the control page, MCP or the daemon's own work); try again shortly"
+                )));
+            }
+        }
+    }
+}
+
+async fn apply_package(
+    socket: &Path,
+    report: &Report,
+    exe: &Path,
+    latest: &str,
+    members: &[super::fleet::Member],
+) -> Result<()> {
     match (report.install_method, report.availability) {
         (InstallMethod::Homebrew, Availability::BrewCheck) => {
             let cellar = exe
@@ -34,7 +144,8 @@ pub(super) async fn apply(socket: &Path, report: &Report) -> Result<()> {
             let tap = tap().context(ictl_l10n::tr!("缺少 Homebrew tap", "missing Homebrew tap"))?;
             let brew = install::brew_program(cellar)
                 .context(ictl_l10n::tr!("找不到 Homebrew 程序", "cannot locate the Homebrew executable"))?;
-            if homebrew(&brew, cellar, tap, latest).await? {
+            let upgraded = exclusive_package(members, homebrew(&brew, cellar, tap, latest)).await?;
+            if upgraded {
                 let running = brew_service_running(&brew).await;
                 restart(
                     socket,
@@ -51,7 +162,8 @@ pub(super) async fn apply(socket: &Path, report: &Report) -> Result<()> {
             let repo = publisher().context(ictl_l10n::tr!("缺少发布者", "missing release publisher"))?;
             let target =
                 super::target().context(ictl_l10n::tr!("不支持的 Debian 架构", "unsupported Debian architecture"))?;
-            if debian(repo, target, latest, exe).await? {
+            let upgraded = exclusive_package(members, debian(repo, target, latest, exe)).await?;
+            if upgraded {
                 let running = deb_service_running().await;
                 restart(
                     socket,

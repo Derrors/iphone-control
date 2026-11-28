@@ -28,6 +28,7 @@ mod completions;
 mod debug;
 mod envfile;
 mod guide;
+mod instance_cmd;
 mod mcp_bridge;
 mod procgroup;
 mod remote;
@@ -51,6 +52,11 @@ struct Cli {
     #[arg(help = ictl_l10n::tr!("守护进程控制接口。默认：root 是 /run/iphone-control/ctl.sock，普通用户是 $XDG_RUNTIME_DIR/iphone-control/ctl.sock", "Daemon control socket. Default: /run/iphone-control/ctl.sock for root, $XDG_RUNTIME_DIR/iphone-control/ctl.sock for a regular user"))]
     #[arg(long, env = ictl_daemon::protocol::env::SOCKET, default_value_os_t = protocol::default_socket())]
     socket: PathBuf,
+    /// Read off the raw arguments before the settings are, with IPHONE_CONTROL_INSTANCE ([`invocation`]); here so
+    /// clap takes it and lists it
+    #[arg(long, value_name = "NAME", help = ictl_l10n::tr!("命名实例（一台设备一个守护进程，instance add 登记的）；也可以用 IPHONE_CONTROL_INSTANCE。不给就是默认实例。命令行上的 --socket 优先于环境和设置文件里的实例名", "A named instance (one daemon per device, registered by instance add); IPHONE_CONTROL_INSTANCE too. The default instance without it. A --socket on the command line wins over an instance named in the environment or the settings file"))]
+    #[allow(dead_code)]
+    instance: Option<String>,
     /// 不给就是首次运行引导（设置好以后显示状态）
     #[command(subcommand)]
     command: Option<Command>,
@@ -83,11 +89,23 @@ enum Command {
         /// MCP server this way, so the token isn't on a command line every user can read
         #[arg(long, value_name = "FILE", hide = true, conflicts_with = "url")]
         task_token_file: Option<PathBuf>,
+        /// Read off the raw arguments before the settings are ([`invocation`]): it changes what is read
+        #[arg(long, conflicts_with = "url", help = ictl_l10n::tr!("只连本机的 --socket：不管设置文件和环境里的 IPHONE_CONTROL_URL、IPHONE_CONTROL_CA、IPHONE_CONTROL_INSTANCE（mcp-config 生成的命令带它）", "Only this machine's --socket: IPHONE_CONTROL_URL, IPHONE_CONTROL_CA and IPHONE_CONTROL_INSTANCE in the settings file or the environment are ignored (the command mcp-config prints has it)"))]
+        #[allow(dead_code)]
+        local: bool,
     },
     #[command(about = ictl_l10n::tr!("打印把 MCP 注册到 Claude Code 的命令", "Print the command that registers the MCP server with Claude Code"))]
     McpConfig,
     #[command(about = ictl_l10n::tr!("守护进程和设备状态、最近的日志", "Daemon and device state, recent log"))]
-    Status,
+    Status {
+        #[arg(long, help = ictl_l10n::tr!("所有实例，各一行", "Every instance, one line each"))]
+        all: bool,
+    },
+    #[command(about = ictl_l10n::tr!("命名实例（一台设备一个守护进程）：add / list / remove", "Named instances (one daemon per device): add / list / remove"))]
+    Instance {
+        #[command(subcommand)]
+        action: instance_cmd::InstanceAction,
+    },
     #[command(about = ictl_l10n::tr!("逐层诊断，每项失败都给出修复办法", "Layer-by-layer health check with a fix for each failure"))]
     Doctor,
     #[command(about = ictl_l10n::tr!("设置引导：语言、代理、后台服务、配对、开发者模式、Apple ID、安装 WDA、自动解锁、通知、注册 MCP（可重复运行，做过的步骤跳过）", "Guided setup: language, proxy, background service, pairing, Developer Mode, Apple ID, WDA, auto-unlock, notifications, MCP registration (safe to re-run; done steps are skipped)"))]
@@ -105,6 +123,10 @@ enum Command {
     Login {
         #[arg(help = ictl_l10n::tr!("Apple ID 邮箱；不给就交互输入", "Apple ID email; asked for interactively if not given"))]
         email: Option<String>,
+        #[arg(long, conflicts_with_all = ["email", "confirm_anisette_origin"], help = ictl_l10n::tr!("不登录：丢掉 anisette 状态，用现在配置的地址重新生成（旧版本生成的状态没记来源，多实例下要先做这一步或 --confirm-anisette-origin）", "Don't sign in: discard the anisette state and make a new one with the address configured now (a state an older version made has no recorded origin; with several instances do this or --confirm-anisette-origin first)"))]
+        reprovision_anisette: bool,
+        #[arg(long, conflicts_with = "email", help = ictl_l10n::tr!("不登录：确认现在的 anisette 状态就是用现在配置的地址生成的，记下来（只在确知时用；拿不准就用 --reprovision-anisette）", "Don't sign in: confirm the anisette state was made with the address configured now, and record it (only if you know; otherwise use --reprovision-anisette)"))]
+        confirm_anisette_origin: bool,
     },
     #[command(about = ictl_l10n::tr!("立即签名并安装 WDA", "Sign and install WDA now"))]
     Sign,
@@ -288,36 +310,62 @@ fn main() -> anyhow::Result<()> {
         }
     }
     // 设置文件先读进环境（命令行上已设的优先），要在启动任何线程之前：语言、代理、通知等对所有命令都生效。
-    // 控制台给它的 agent 起的 MCP 服务（`mcp --task-token-file`）只连本机：设置文件里给自己的命令连别处用的地址不读，
-    // 读了会和这个参数冲突、服务起不来
-    let local_only = mcp_with_token_file(std::env::args_os().skip(1));
-    let skip: &[&str] =
-        if local_only { &[ictl_daemon::protocol::env::URL, ictl_daemon::protocol::env::CA] } else { &[] };
-    envfile::load_into_process(skip);
-    tokio::runtime::Runtime::new()?.block_on(run())
+    // 命名实例再叠上它自己的登记（instances/<名字>.env）。只连本机的 MCP 服务（`mcp --local`，控制台给它的 agent 起的
+    // `mcp --task-token-file`）不读连别处用的地址和实例名：读了会连到别处，或者和这个参数冲突、服务起不来
+    let named = envfile::load_into_process(&invocation(std::env::args_os().skip(1)))?;
+    tokio::runtime::Runtime::new()?.block_on(run(named))
 }
 
-/// `mcp --task-token-file FILE` (or `=FILE`): read off the raw arguments, before clap (which caches the language,
-/// known only once the settings are loaded). Not taken for an argument of another command that happens to read the
+/// What decides which settings are read, off the raw arguments before clap (which caches the language, known only
+/// once the settings are loaded): the root options `--instance`, `--socket`, `--data-dir` (either form), and `mcp
+/// --local` or `--task-token-file` (or `=FILE`). Not taken for an argument of another command that happens to read the
 /// same (a prompt of `task run`), and arguments that aren't UTF-8 are read too
-fn mcp_with_token_file(args: impl IntoIterator<Item = std::ffi::OsString>) -> bool {
+fn invocation(args: impl IntoIterator<Item = std::ffi::OsString>) -> ictl_daemon::instance::Invocation {
+    let mut inv = ictl_daemon::instance::Invocation::default();
     let mut args = args.into_iter();
-    if completions::command(&mut args).is_none_or(|c| c != "mcp") {
-        return false;
+    let mut command = None;
+    while let Some(arg) = args.next() {
+        let b = arg.as_encoded_bytes();
+        let (name, value) = match b.iter().position(|c| *c == b'=') {
+            Some(i) if b.starts_with(b"--") => {
+                (&b[..i], Some(std::ffi::OsString::from(String::from_utf8_lossy(&b[i + 1..]).into_owned())))
+            }
+            _ => (b, None),
+        };
+        let slot = match name {
+            b"--instance" => 0,
+            b"--socket" => 1,
+            b"--data-dir" => 2,
+            _ => {
+                command = Some(arg);
+                break;
+            }
+        };
+        let Some(v) = value.or_else(|| args.next()) else { break };
+        match slot {
+            0 => inv.instance = Some(v.to_string_lossy().into_owned()),
+            1 => inv.socket = Some(v.into()),
+            _ => inv.data_dir = Some(v.into()),
+        }
+    }
+    inv.service = command.as_ref().is_some_and(|c| c == "daemon" || c == "viewer");
+    if command.is_none_or(|c| c != "mcp") {
+        return inv;
     }
     while let Some(arg) = args.next() {
-        if arg == "--task-token-file" || arg.as_encoded_bytes().starts_with(b"--task-token-file=") {
-            return true;
+        if arg == "--local" || arg == "--task-token-file" || arg.as_encoded_bytes().starts_with(b"--task-token-file=") {
+            inv.local = true;
+            break;
         }
         if arg == "--" {
-            return false;
+            break;
         }
         // an option's value isn't an option (`--ca --task-token-file` is a certificate of that name)
         if arg == "--url" || arg == "--ca" {
             args.next();
         }
     }
-    false
+    inv
 }
 
 /// Commands that ask once, print the result and end; see [`restore_sigpipe`]
@@ -325,7 +373,7 @@ fn prints_and_exits(command: Option<&Command>) -> bool {
     matches!(
         command,
         Some(
-            Command::Status
+            Command::Status { .. }
                 | Command::Doctor
                 | Command::Devices
                 | Command::McpConfig
@@ -364,10 +412,13 @@ fn read_task_token(f: &std::path::Path) -> anyhow::Result<String> {
     Ok(t.to_owned())
 }
 
-async fn run() -> anyhow::Result<()> {
+/// `named`: the named instance this command is for ([`envfile::load_into_process`])
+async fn run(named: Option<String>) -> anyhow::Result<()> {
     // 依赖树里 rustls 的 ring 和 aws-lc-rs 都开着，不装默认 provider 的话第一个 HTTPS 请求就 panic
     let _ = rustls::crypto::ring::default_provider().install_default();
     let mut cli = Cli::parse();
+    // the leases a command takes itself are where its daemon's are, for the data directory given (`client`)
+    client::set_data_dir(&cli.data_dir);
     if prints_and_exits(cli.command.as_ref()) {
         restore_sigpipe();
     }
@@ -393,14 +444,27 @@ async fn run() -> anyhow::Result<()> {
             | Command::Update { .. }
             | Command::McpConfig
             | Command::Mcp { .. }
-            | Command::Status
+            | Command::Status { .. }
+            | Command::Instance { action: instance_cmd::InstanceAction::Check { .. } }
             | Command::Completions { .. },
         ) => None,
         _ => Some(ictl_daemon::maintenance::shared()?),
     };
-    let Some(command) = cli.command.take() else { return guide::first_run(&cli).await };
+    let Some(command) = cli.command.take() else {
+        refuse_for_named(named.as_deref(), "instance add")?;
+        return guide::first_run(&cli).await;
+    };
     match command {
         Command::Completions { shell } => completions::write(shell, &mut std::io::stdout().lock()),
+        // the program and the services of every instance: from the default instance only (its socket is the one
+        // checked for tasks), not one named instance's
+        Command::Update { .. } if named.is_some() => anyhow::bail!(
+            "{}",
+            ictl_l10n::tr!(
+                "升级在默认实例上运行，会一起处理所有实例：去掉 --instance（和 IPHONE_CONTROL_INSTANCE）再运行",
+                "An update runs on the default instance and takes every instance through it: run it without --instance (and IPHONE_CONTROL_INSTANCE)"
+            )
+        ),
         Command::Update { action: None, yes } => update::upgrade(&cli.socket, update::check(false).await?, yes).await,
         Command::Update { action: Some(action), .. } => update_command(action, &cli.socket).await,
         Command::Daemon => {
@@ -414,14 +478,26 @@ async fn run() -> anyhow::Result<()> {
             ictl_mcp::serve_stdio(cli.socket, Some(ictl_daemon::maintenance::shared), token).await
         }
         Command::McpConfig => {
-            println!("{}", mcp_config(&cli.socket)?);
+            println!("{}", mcp_config(&cli.socket, named.as_deref())?);
             Ok(())
         }
-        Command::Status => status(&cli.socket).await,
+        Command::Status { all: false } => status(&cli.socket).await,
+        Command::Status { all: true } => {
+            instance_cmd::run(&cli.socket, named.as_deref(), instance_cmd::InstanceAction::List).await
+        }
+        Command::Instance { action } => instance_cmd::run(&cli.socket, named.as_deref(), action).await,
         Command::Doctor => print_text(&cli.socket, Request::Doctor).await,
+        // a named instance's setup is its phone's: the guide's other parts (language, proxy, the background service,
+        // MCP registration) are the default instance's, and its services are `instance add`'s
+        Command::Setup { .. } if named.is_some() => setup::device_setup(&cli).await,
         Command::Setup { reconfigure } => guide::setup(&cli, reconfigure).await,
-        Command::Service { action } => service_cmd(&cli.socket, &cli.data_dir, action).await,
-        Command::Login { email } => login(&cli.data_dir, email).await,
+        Command::Service { action } => {
+            refuse_for_named(named.as_deref(), "instance")?;
+            service_cmd(&cli.socket, &cli.data_dir, action).await
+        }
+        Command::Login { reprovision_anisette: true, .. } => account::reprovision_anisette(&cli.data_dir).await,
+        Command::Login { confirm_anisette_origin: true, .. } => account::confirm_anisette_origin(&cli.data_dir).await,
+        Command::Login { email, .. } => login(&cli.data_dir, email).await,
         Command::Sign => print_text(&cli.socket, Request::Resign { force: true }).await,
         Command::Resign { force } => print_text(&cli.socket, Request::Resign { force }).await,
         Command::Passcode { action } => passcode(&cli.data_dir, &cli.socket, action).await,
@@ -435,7 +511,8 @@ async fn run() -> anyhow::Result<()> {
             match action {
                 Some(ViewerAction::Token { action, new }) => {
                     let at = ViewerAt { port, lan, lan_hosts: &lan_hosts, tls: &tls, mcp };
-                    viewer_token(&cli.data_dir, &at, action, new)
+                    // the tokens are every instance's
+                    viewer_token(&ictl_daemon::Config::from_env(&cli.data_dir).root, &at, action, new)
                 }
                 None => viewer::run(&cli.socket, &cli.data_dir, port, lan, &lan_hosts, &tls, mcp).await,
             }
@@ -475,6 +552,8 @@ async fn update_command(action: UpdateAction, socket: &Path) -> anyhow::Result<(
         UpdateAction::Schedule => schedule::configure(socket),
         UpdateAction::Apply => transaction::apply(socket, false, update::check(false).await?).await,
         UpdateAction::Unpin => transaction::unpin(),
+        // a package manager's installation (APT, Homebrew) has no receipt: only the instances' part is left to recover
+        UpdateAction::Recover { .. } if !update::receipt_path().exists() => update::recover_fleet().await,
         UpdateAction::Recover { scheduled } => transaction::recover(socket, scheduled).await,
         UpdateAction::Run => {
             let report = update::check(true).await?;
@@ -486,17 +565,36 @@ async fn update_command(action: UpdateAction, socket: &Path) -> anyhow::Result<(
     }
 }
 
-/// MCP 进程由客户端直接拉起本程序：显式带上 socket，免得 Claude Code 的环境里没有 XDG_RUNTIME_DIR 时算出别的位置。
-/// 英文、开发者工具开关写进注册命令：MCP 客户端不带用户 shell 的环境
-fn mcp_config(socket: &Path) -> anyhow::Result<String> {
-    Ok(mcp_command(&service::stable_exe()?, socket))
+/// A named instance's services and first setup are `instance add`'s and `instance remove`'s
+/// (docs/dev/multi-instance-plan.md 4.5): the `service` commands and the first-run guide are the default instance's
+fn refuse_for_named(named: Option<&str>, instead: &str) -> anyhow::Result<()> {
+    match named {
+        Some(n) => anyhow::bail!(
+            "{}",
+            ictl_l10n::trf!(
+                "这是默认实例的命令，实例 {} 不用：它的服务和设置用 iphone-control {} 管",
+                "This is the default instance's command, not for the instance {}: its services and setup are iphone-control {}'s",
+                n,
+                instead
+            )
+        ),
+        None => Ok(()),
+    }
 }
 
-fn mcp_command(exe: &Path, socket: &Path) -> String {
+/// MCP 进程由客户端直接拉起本程序：显式带上 socket，免得 Claude Code 的环境里没有 XDG_RUNTIME_DIR 时算出别的位置；
+/// 带 --local，设置文件或环境里连别处的地址、别的实例名都不会把它带走。命名实例的服务名是 iphone-<名字>。
+/// 英文、开发者工具开关写进注册命令：MCP 客户端不带用户 shell 的环境
+fn mcp_config(socket: &Path, named: Option<&str>) -> anyhow::Result<String> {
+    Ok(mcp_command(&service::stable_exe()?, socket, named))
+}
+
+fn mcp_command(exe: &Path, socket: &Path, named: Option<&str>) -> String {
     let lang = if ictl_l10n::is_en() { format!("-e {}=en ", ictl_l10n::ENV) } else { String::new() };
     let dev = if ictl_mcp::dev_tools_enabled() { "-e IPHONE_CONTROL_DEV_TOOLS=1 " } else { "" };
+    let server = named.map(|n| format!("iphone-{n}")).unwrap_or_else(|| "iphone".into());
     format!(
-        "claude mcp add iphone -s user {lang}{dev}-- {} --socket {} mcp",
+        "claude mcp add {server} -s user {lang}{dev}-- {} --socket {} mcp --local",
         shell_quote(&exe.to_string_lossy()),
         shell_quote(&socket.to_string_lossy())
     )
@@ -646,31 +744,53 @@ mod tests {
     /// 英文时注册命令带上语言（MCP 客户端不带用户 shell 的环境）；中文时不带
     #[test]
     fn mcp_config_carries_english() {
-        let cmd = |l| with_lang(l, || mcp_command(Path::new("/b/iphone-control"), Path::new("/s")));
-        assert_eq!(cmd(Lang::Zh), "claude mcp add iphone -s user -- /b/iphone-control --socket /s mcp");
+        let cmd = |l| with_lang(l, || mcp_command(Path::new("/b/iphone-control"), Path::new("/s"), None));
+        assert_eq!(cmd(Lang::Zh), "claude mcp add iphone -s user -- /b/iphone-control --socket /s mcp --local");
         assert_eq!(
             cmd(Lang::En),
-            "claude mcp add iphone -s user -e IPHONE_CONTROL_LANG=en -- /b/iphone-control --socket /s mcp"
+            "claude mcp add iphone -s user -e IPHONE_CONTROL_LANG=en -- /b/iphone-control --socket /s mcp --local"
         );
+        let named = with_lang(Lang::Zh, || mcp_command(Path::new("/b/i"), Path::new("/run/ipad.sock"), Some("ipad")));
+        assert_eq!(named, "claude mcp add iphone-ipad -s user -- /b/i --socket /run/ipad.sock mcp --local");
     }
 
-    /// Only `mcp`'s own option, in either form, after any root options; not a prompt that reads the same, and an
-    /// argument that isn't UTF-8 doesn't stop it
+    /// `mcp`'s own `--local` or token file, in either form, after any root options; not a prompt that reads the
+    /// same, and an argument that isn't UTF-8 doesn't stop it
     #[test]
-    fn the_token_file_option_is_found_only_for_mcp() {
-        use super::mcp_with_token_file;
+    fn local_mcp_is_found_only_for_mcp() {
         use std::ffi::OsString;
         use std::os::unix::ffi::OsStringExt;
-        let found = |args: &[&str]| mcp_with_token_file(args.iter().map(OsString::from));
+        let found = |args: &[&str]| super::invocation(args.iter().map(OsString::from)).local;
         assert!(found(&["mcp", "--task-token-file", "/t"]));
         assert!(found(&["mcp", "--task-token-file=/t"]));
+        assert!(found(&["mcp", "--local"]));
         assert!(found(&["--socket", "/s.sock", "--data-dir=/d", "mcp", "--task-token-file", "/t"]));
+        assert!(found(&["--instance", "ipad", "--socket=/s", "mcp", "--local"]));
         assert!(!found(&["mcp"]));
         assert!(!found(&["task", "run", "--", "echo", "--task-token-file"]), "another command's argument");
-        assert!(!found(&["--socket", "mcp", "status", "--task-token-file"]), "a root option's value isn't the command");
+        assert!(!found(&["--socket", "mcp", "status", "--local"]), "a root option's value isn't the command");
         assert!(!found(&["mcp", "--ca", "--task-token-file"]), "an option's value");
         let odd =
             vec![OsString::from("mcp"), OsString::from_vec(vec![0xff, 0xfe]), OsString::from("--task-token-file=/t")];
-        assert!(mcp_with_token_file(odd));
+        assert!(super::invocation(odd).local);
+    }
+
+    /// The root options that decide which settings are read, in either form; none after the command
+    #[test]
+    fn the_instance_and_socket_are_read_before_the_command() {
+        use std::ffi::OsString;
+        let inv = |args: &[&str]| super::invocation(args.iter().map(OsString::from));
+        let i = inv(&["--instance", "ipad", "--socket=/s", "--data-dir", "/d", "status"]);
+        assert_eq!(i.instance.as_deref(), Some("ipad"));
+        assert_eq!(i.socket.as_deref(), Some(Path::new("/s")));
+        assert_eq!(i.data_dir.as_deref(), Some(Path::new("/d")));
+        assert_eq!(inv(&["--instance=phone", "devices"]).instance.as_deref(), Some("phone"));
+        assert!(inv(&["daemon"]).service && inv(&["--data-dir", "/d", "viewer"]).service, "a service's role");
+        assert!(!inv(&["status"]).service && !inv(&["mcp"]).service);
+        let after = inv(&["task", "run", "--instance", "x"]);
+        assert!(after.instance.is_none() && after.socket.is_none());
+        use clap::Parser;
+        assert!(super::Cli::try_parse_from(["i", "--instance", "ipad", "status"]).is_ok(), "clap takes it too");
+        assert!(super::Cli::try_parse_from(["i", "mcp", "--local", "--url", "https://a:1"]).is_err());
     }
 }

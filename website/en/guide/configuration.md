@@ -27,6 +27,7 @@ iphone-control service restart
 | `HTTP_PROXY` / `HTTPS_PROXY` | direct | Proxy for Apple, anisette, Developer Disk Image and notification traffic |
 | `IPHONE_CONTROL_LANG` | `zh` | Language: `zh` or `en`. Applies to tool descriptions and results, CLI output, logs and notifications. The MCP server and the CLI each send their own setting and the daemon answers in it; logs and notifications follow the daemon's own setting. See the note below the table |
 | `IPHONE_CONTROL_DEV_TOOLS` | off | `1` adds the [developer tools](./tools#developer-tools-opt-in) to the MCP server: logs, crash reports, installing and removing apps, and Web Inspector (JavaScript in web pages and WebViews). See [Security](./security) for the risks. See the note below the table |
+| `IPHONE_CONTROL_INSTANCE` | empty | Like `--instance`: the named instance (one daemon per device, registered by `instance add`) the CLI and the MCP server use; without it the default instance. `daemon` and `viewer` don't take it, only `--instance` on their command line (the default instance's services read the shared settings too) |
 
 ### Control page and remote access
 

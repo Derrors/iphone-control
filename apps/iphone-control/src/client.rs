@@ -49,7 +49,27 @@ pub async fn snapshot(socket: &Path) -> anyhow::Result<ictl_daemon::Snapshot> {
 /// 账号目录和 anisette 地址：与守护进程同一份配置（路径、环境变量的读法都在 Config 里）
 pub fn account_dir(data_dir: &Path) -> ictl_sign::AccountDir {
     let cfg = ictl_daemon::Config::from_env(data_dir);
-    ictl_sign::AccountDir { dir: cfg.account_dir(), anisette_url: cfg.anisette_url }
+    cfg.account()
+}
+
+/// The data directory this command was started with (`--data-dir`, `ICTL_DATA_DIR`, a named instance's), set once
+/// clap has read the command line ([`set_data_dir`])
+static DATA_DIR: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+
+/// Records the data directory clap worked out, for whatever works with a device directly ([`devices_dir`])
+pub fn set_data_dir(dir: &Path) {
+    let _ = DATA_DIR.set(dir.to_owned());
+}
+
+/// The device leases' directory, as the daemon of this command's instance and data directory sees it: the one a
+/// daemon started with the same `--data-dir` locks
+pub fn devices_dir() -> std::path::PathBuf {
+    let data = DATA_DIR.get().cloned().unwrap_or_else(|| {
+        env_nonempty(ictl_daemon::protocol::env::DATA_DIR)
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(protocol::default_data_dir)
+    });
+    ictl_daemon::Config::from_env(&data).devices_dir()
 }
 
 /// 命令要针对哪台设备：`IPHONE_UDID` > 守护进程正在控制的（或选定的）> USB 上唯一的一台。
@@ -58,8 +78,18 @@ pub async fn target_device(socket: &Path, query: Option<&str>) -> anyhow::Result
     let snap = snapshot(socket).await.ok();
     let mut infos = snap.as_ref().map(|s| s.devices.clone()).unwrap_or_default();
     if infos.is_empty() {
+        let dir = devices_dir();
         for d in ictl_device::list_devices().await.unwrap_or_default() {
-            let i = ictl_device::Device::from_usb(&d).info().await.unwrap_or_default();
+            // a device another instance controls isn't read: its lease says what it is
+            let i = match ictl_daemon::lease::holder(&dir, &d.udid) {
+                Some(h) => ictl_device::DeviceInfo {
+                    name: h.name,
+                    product_type: h.model,
+                    product_version: h.ios,
+                    ..Default::default()
+                },
+                None => ictl_device::Device::from_usb(&d).info().await.unwrap_or_default(),
+            };
             infos.push(ictl_device::DeviceInfo { udid: d.udid, ..i });
         }
     }

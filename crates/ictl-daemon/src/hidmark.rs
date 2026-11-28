@@ -32,6 +32,12 @@ pub(crate) fn left_over(dir: &Path) -> HashMap<String, u32> {
     entries.flatten().filter_map(|e| e.file_name().to_str().and_then(sanitize)).map(|u| (u, 0)).collect()
 }
 
+/// Whether an earlier daemon (of this instance or another) left `udid`'s marker: read again whenever this instance
+/// takes the device's lease, since another may have had it meanwhile (docs/dev/multi-instance-plan.md 4.6)
+pub(crate) fn is_left(dir: &Path, udid: &str) -> bool {
+    sanitize(udid).is_some_and(|n| dir.join(n).is_file())
+}
+
 /// The marker for `udid` in `dir`, if any, removed
 pub(crate) fn clear(dir: &Path, udid: &str) {
     if let Some(name) = sanitize(udid) {

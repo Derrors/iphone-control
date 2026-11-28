@@ -15,6 +15,20 @@ pub struct ScrollSearch {
     pub max: u32,
 }
 
+/// A device step of `setup` the instance holding the device does for it ([`Request::SetupStep`])
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SetupStepKind {
+    /// Whether the phone is paired: answers `paired` or `unpaired`
+    PairStatus,
+    /// Pair with the phone: answers `paired`, or `pending` while the phone waits for "Trust" and the passcode
+    Pair,
+    /// Show the Developer Mode switch in the phone's settings: answers `revealed`
+    DevModeReveal,
+    /// Whether Developer Mode is on: answers `on` or `off`
+    DevModeStatus,
+}
+
 /// How `text` is matched in [`ElementSelector`]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -246,6 +260,26 @@ pub enum Request {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         udid: Option<String>,
     },
+    /// `setup`'s pairing and Developer Mode steps, done by the instance that holds `udid` (docs/dev/multi-instance-plan.md
+    /// 4.5): refused unless it holds that device and no task is active or being opened
+    SetupStep {
+        udid: String,
+        step: SetupStepKind,
+    },
+    /// `instance add`, to the default instance (docs/dev/multi-instance-plan.md 4.4): select `udid` for good,
+    /// only if it is the device controlled or selected now and `expect_token` (the boot id and selection generation
+    /// `Request::Daemon` reported, `<boot id>:<generation>`) is still current. Answers the new token. Refused while a
+    /// switch is under way
+    PinCurrent {
+        /// Not `expect_udid`: that name every request may carry is taken off before the request is read
+        udid: String,
+        expect_token: String,
+    },
+    /// `wda-bridge`: one connection to WDA's port on the device being controlled, relayed both ways once the answer
+    /// line says `streaming`. Refused while a task is active; ended when a task is opened or the device switched
+    WdaForward {
+        udid: String,
+    },
     /// 列出 USB 上接着的全部设备，标出正在控制哪台
     ListDevices,
     /// 改为控制另一台设备：`device` 是 UDID、设备名或 `auto`（取消选定，改回自动选）
@@ -436,6 +470,9 @@ impl Request {
             | Self::Resign { .. }
             | Self::UnlockReset
             | Self::UnlockResetDevice { .. }
+            | Self::SetupStep { .. }
+            | Self::WdaForward { .. }
+            | Self::PinCurrent { .. }
             | Self::ListDevices
             | Self::AppLogs { .. }
             | Self::CrashReports { .. }

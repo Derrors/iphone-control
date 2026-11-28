@@ -136,7 +136,13 @@ impl Daemon {
             (self.cfg.ddi_cache_for(legacy), self.cfg.ddi_url.clone(), self.cfg.ddi_dir.clone());
         // a WDA launched in the background before (WDA control earlier): not wanted now, ended once the image is up
         // (AppService needs it)
-        let known = g.persisted.detached_for(&device.udid);
+        // the shared record, with the process's creation identity; an older version's pid only for a device without
+        // one (a record that can't be read is none of these: left alone)
+        let known = match crate::adopt::read(&self.cfg.adopt_dir(), &device.udid) {
+            Ok(Some(r)) => Some((r.pid, Some((r.executable, r.started)))),
+            Ok(None) => g.persisted.detached_for(&device.udid).map(|pid| (pid, None)),
+            Err(_) => None,
+        };
         let Ok(lease) = crate::maintenance::shared() else { return };
         let wake = self.wake.clone();
         g.preparing = Some(tokio::task::spawn_local(then_wake(wake, async move {
@@ -144,7 +150,15 @@ impl Daemon {
             let mut t = device.open_tunnel().await.map_err(|e| (e, false))?;
             let r = ensure_ddi(&device, &mut t, legacy, &cache, &url, user_dir.as_deref()).await;
             let stopped = match (&r, known) {
-                (Ok(_), Some(pid)) => Some((device.udid.clone(), detached::stop(&mut t, pid).await)),
+                (Ok(_), Some((pid, proof))) => {
+                    let expect = match &proof {
+                        Some((exe, started)) => {
+                            detached::Expect::Created { executable: exe.as_deref(), started: started.as_deref() }
+                        }
+                        None => detached::Expect::Legacy,
+                    };
+                    Some((device.udid.clone(), detached::stop(&mut t, pid, expect).await))
+                }
                 _ => None,
             };
             t.close().await;
@@ -172,6 +186,12 @@ impl Daemon {
                 return;
             }
         };
+        if let Ok(Some(r)) = crate::adopt::read(&self.cfg.adopt_dir(), udid)
+            && r.pid == pid
+            && let Err(e) = crate::adopt::remove(&self.cfg.adopt_dir(), udid)
+        {
+            tracing::warn!("removing the background WDA record of {udid} failed: {e}");
+        }
         if g.persisted.forget_detached(udid, Some(pid)) {
             g.persisted.save(&self.cfg.state_file());
         }

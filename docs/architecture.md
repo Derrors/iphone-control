@@ -22,6 +22,10 @@
 | `usbmuxd` | 系统服务（Linux 发行版包由 udev 拉起，macOS 内置）；守护进程不启停它 | GPL-3.0 独立进程，不链接；提供 USB 设备列表、`Listen` 热插拔事件流与端口复用 |
 | `iphone-control`（无子命令）、`setup`、`service`、`doctor`、`sign` 等 | 一次性 | 首次运行引导（`guide.rs`）、服务管理与运维命令。除 `completions` 外启动时自动加载 `~/.config/iphone-control/env`（已有环境变量优先） |
 
+### 多实例
+
+一台设备一个守护进程（[D19](decisions.md#d19一台主机同时控制多台设备每台设备一个守护进程多实例2026-11-29)、[multi-instance-plan.md](dev/multi-instance-plan.md)）。命令行、服务、MCP 在读设置之前按 `--instance`/`IPHONE_CONTROL_INSTANCE` 找到实例（`ictl-daemon/src/instance.rs` 的 `resolve`），命名实例的 socket、数据目录、设备、端口、ID 只取自登记。共用的东西在数据根（默认实例的数据目录）：账号目录（账号锁、凭据代次，`ictl-sign/src/account.rs`）、密码和停用记录、设备租约（`lease.rs`）、后台 WDA 的接管记录（`adopt.rs`）、控制台令牌和证书包。设备的租约由巡检拿（`claim.rs`）；不持设备锁做事的拿准入凭据（`admission.rs`），`select` 换台按 `switch.rs` 的 8 步走；每日会话检查由领导实例做（`supervise/session.rs`）；有命名实例时升级经 `update/fleet.rs` 一起处理所有实例。
+
 ### 本地控制接口与网络边界
 
 控制接口使用权限 `0600` 的 Unix socket（普通用户默认 `$XDG_RUNTIME_DIR/iphone-control/ctl.sock`，macOS 等无该变量时在数据目录下；root 为 `/run/iphone-control/ctl.sock`），采用 JSON 行协议（流式画面与任务事件在同一连接上转为二进制帧或行流）。请求/响应类型与客户端在 `ictl-protocol`，供 MCP、CLI 与控制台共用：

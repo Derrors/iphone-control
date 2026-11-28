@@ -201,7 +201,12 @@ impl Daemon {
 
     /// Runs without holding the daemon lock (an install can take minutes), like re-signing
     /// Installs are queued one at a time inside `Device::install` (they share one upload path on the phone)
-    pub(crate) async fn install_app(&self, device: &ictl_device::Device, path: &str) -> crate::error::Result<String> {
+    pub(crate) async fn install_app(
+        &self,
+        device: &ictl_device::Device,
+        pass: &crate::admission::Pass,
+        path: &str,
+    ) -> crate::error::Result<String> {
         let p = std::path::Path::new(path);
         if !p.exists() {
             return Err(ictl_l10n::trf!(
@@ -211,7 +216,11 @@ impl Daemon {
             .into());
         }
         device.install(p).await?;
-        self.inner.lock().await.dev.apps.clear();
+        // the lists are another device's by now if the lease changed (it can't while this holds its pass)
+        let mut g = self.inner.lock().await;
+        if pass.current() {
+            g.dev.apps.clear();
+        }
         Ok(ictl_l10n::trf!("已安装 {path}", "Installed {path}"))
     }
 

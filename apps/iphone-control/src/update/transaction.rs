@@ -185,16 +185,27 @@ trait Services {
     async fn idle(&self, current: &Receipt) -> Result<bool>;
     async fn stop(&self) -> Result<()>;
     async fn start_healthy(&self, version: &str) -> Result<()>;
+    /// The named instances' daemons (`fleet`), stopped with the program's own before it is put back
+    async fn stop_members(&self) -> Result<()> {
+        Ok(())
+    }
+    /// Those that were running started again on `version`, each checked to answer with it: the program is
+    /// committed only once they are
+    async fn start_members(&self, _version: &str) -> Result<()> {
+        Ok(())
+    }
 }
 
 struct Host<'a> {
     service: Service,
     socket: &'a Path,
     binary: &'a Path,
+    /// The named instances going through the update with the default one (`fleet`)
+    members: Vec<super::fleet::Member>,
 }
 
 #[cfg(target_os = "macos")]
-fn process_path(pid: u32) -> Result<PathBuf> {
+pub(super) fn process_path(pid: u32) -> Result<PathBuf> {
     use std::os::unix::ffi::OsStrExt;
     let mut buf = [0u8; libc::PROC_PIDPATHINFO_MAXSIZE as usize];
     let n = unsafe { libc::proc_pidpath(pid as i32, buf.as_mut_ptr().cast(), buf.len() as u32) };
@@ -203,11 +214,13 @@ fn process_path(pid: u32) -> Result<PathBuf> {
 }
 
 #[cfg(not(target_os = "macos"))]
-fn process_path(pid: u32) -> Result<PathBuf> {
+pub(super) fn process_path(pid: u32) -> Result<PathBuf> {
     Ok(fs::read_link(format!("/proc/{pid}/exe"))?)
 }
 
-fn check_clients(daemon: Option<u32>) -> Result<()> {
+/// `allowed`: the named instances' daemons going through the update (`fleet`), by the PIDs their service manager
+/// reports; any other iphone-control process is still refused
+fn check_clients(daemon: Option<u32>, allowed: &[u32]) -> Result<()> {
     // Older binaries don't take a shared lease. Refuse an existing client (also an installation
     // using a different socket) before restarting the service.
     let output = std::process::Command::new("ps").args(["-A", "-o", "uid=,pid=,comm="]).env("LC_ALL", "C").output()?;
@@ -216,8 +229,18 @@ fn check_clients(daemon: Option<u32>) -> Result<()> {
         "{}",
         ictl_l10n::tr!("列不出正在运行的客户端", "cannot enumerate running clients")
     );
-    let uid = unsafe { libc::geteuid() };
-    for line in std::str::from_utf8(&output.stdout)?.lines() {
+    busy_client(std::str::from_utf8(&output.stdout)?, unsafe { libc::geteuid() }, daemon, allowed, process_args)
+}
+
+/// The `ps -A -o uid=,pid=,comm=` lines of `uid` that are an iphone-control process this update can't go past
+fn busy_client(
+    ps: &str,
+    uid: u32,
+    daemon: Option<u32>,
+    allowed: &[u32],
+    args_of: impl Fn(u32) -> Option<String>,
+) -> Result<()> {
+    for line in ps.lines() {
         let mut parts = line.split_whitespace();
         if parts.next().and_then(|s| s.parse::<u32>().ok()) != Some(uid) {
             continue;
@@ -226,7 +249,7 @@ fn check_clients(daemon: Option<u32>) -> Result<()> {
             .next()
             .and_then(|s| s.parse::<u32>().ok())
             .context(ictl_l10n::tr!("进程列表读不懂", "invalid process list"))?;
-        if daemon == Some(pid) || pid == std::process::id() {
+        if daemon == Some(pid) || pid == std::process::id() || allowed.contains(&pid) {
             continue;
         }
         let command = parts.collect::<Vec<_>>().join(" ");
@@ -235,7 +258,7 @@ fn check_clients(daemon: Option<u32>) -> Result<()> {
         }
         // an MCP server of this version holds the lease only during a tool call, which the exclusive lease already
         // waited for; idle, it just reconnects to the new daemon on the next call
-        if process_args(pid).is_some_and(|a| idles_without_lease(&a)) {
+        if args_of(pid).is_some_and(|a| idles_without_lease(&a)) {
             continue;
         }
         bail!(
@@ -259,16 +282,16 @@ fn process_args(pid: u32) -> Option<String> {
     out.status.success().then(|| String::from_utf8_lossy(&out.stdout).trim().to_owned())
 }
 
-/// `iphone-control [--data-dir D] [--socket S] mcp …`: the MCP server, which from this version on takes the
-/// maintenance lease for each tool call only. Older ones hold it for their whole life, so they never get this far
+/// `iphone-control [--data-dir D] [--socket S] [--instance N] mcp …`: the MCP server, which from this version on takes
+/// the maintenance lease for each tool call only. Older ones hold it for their whole life, so they never get this far
 fn idles_without_lease(args: &str) -> bool {
     let mut words = args.split_whitespace().skip(1);
     while let Some(w) = words.next() {
         match w {
-            "--data-dir" | "--socket" => {
+            "--data-dir" | "--socket" | "--instance" => {
                 words.next();
             }
-            w if w.starts_with("--data-dir=") || w.starts_with("--socket=") => {}
+            w if w.starts_with("--data-dir=") || w.starts_with("--socket=") || w.starts_with("--instance=") => {}
             w => return w == "mcp",
         }
     }
@@ -328,7 +351,7 @@ impl Services for Host<'_> {
     async fn idle(&self, current: &Receipt) -> Result<bool> {
         service::managed(self.binary, &current.service)?;
         let pid = service::managed_pid(&self.service, false)?;
-        check_clients(pid)?;
+        check_clients(pid, &member_pids(&self.members))?;
         if let Some(pid) = pid {
             ensure!(
                 self.socket_owner().await? == Some(pid) && self.healthy(pid, &current.version).await,
@@ -401,6 +424,19 @@ impl Services for Host<'_> {
             .context(ictl_l10n::tr!("守护进程健康检查超时", "daemon health check timed out"))?;
         Ok(())
     }
+
+    async fn stop_members(&self) -> Result<()> {
+        super::fleet::stop_daemons(&self.members).await
+    }
+
+    async fn start_members(&self, version: &str) -> Result<()> {
+        super::fleet::start_daemons(&self.members, version).await
+    }
+}
+
+/// The PIDs of the named instances' daemons going through the update, as their service manager reports them
+fn member_pids(members: &[super::fleet::Member]) -> Vec<u32> {
+    members.iter().filter_map(|m| service::main_pid(&service::instance_services(&m.name).0)).collect()
 }
 
 async fn restore(store: &Store, host: &impl Services, tx: &Transaction, why: &str) -> Result<()> {
@@ -417,12 +453,14 @@ async fn restore(store: &Store, host: &impl Services, tx: &Transaction, why: &st
         ictl_l10n::tr!("用来恢复的程序摘要对不上", "recovery executable digest mismatch")
     );
     host.stop().await?;
+    host.stop_members().await?;
     if current != tx.old.sha256 {
         store.link(&backup, &store.binary)?;
     }
     if tx.was_running {
         host.start_healthy(&tx.old.version).await?;
     }
+    host.start_members(&tx.old.version).await?;
     write_json(&store.receipt, &tx.old)?;
     store.record("restored", &tx.new.version, why, Some(tx.new.version.clone()))?;
     store.clear()
@@ -480,6 +518,8 @@ async fn replace(
         if running {
             host.stop().await?;
         }
+        // the named daemons, now that the exclusive lease is held (their viewers were stopped before it)
+        host.stop_members().await?;
         store.link(candidate, &store.binary)?;
         tx.phase = Phase::Replaced;
         write_json(&store.journal(), &tx)?;
@@ -487,6 +527,8 @@ async fn replace(
         if !running {
             host.stop().await?;
         }
+        // the named instances' daemons too: one that doesn't come up with it puts the old program back for all
+        host.start_members(&tx.new.version).await?;
         Ok::<_, anyhow::Error>(())
     }
     .await;
@@ -578,11 +620,30 @@ pub async fn apply(socket: &Path, background: bool, report: super::Report) -> Re
     let version =
         report.available_version.context(ictl_l10n::tr!("没有可用的正式版", "no stable release is available"))?;
     eligible(&receipt.version, &version, background)?;
-    let host = Host { service, socket, binary: &store.binary };
+    // with named instances, all of them go through the update (`fleet`): the intent first, every instance's tasks
+    // checked, their services stopped, their daemons part of the transaction, the viewers started again as they were
+    let default_viewer = crate::service::viewer_find().is_some_and(|s| crate::service::running(&s));
+    let mut fleet = super::fleet::Fleet::begin(socket, &version, default_viewer).await?;
+    let members = fleet.as_ref().map(|f| f.members()).unwrap_or_default();
+    let host = Host { service, socket, binary: &store.binary, members };
     // the control page's service is an always-running client: it would keep the update busy forever, so it stops
     // for the update and starts again afterwards (not while it runs an AI task: that would end the task)
-    let paused = pause_viewer(socket).await?;
+    let paused = match pause_viewer(socket).await {
+        Ok(p) => p,
+        Err(e) => {
+            if let Some(f) = &fleet {
+                f.finish(true)?;
+            }
+            return Err(e);
+        }
+    };
+    let stopped = match fleet.as_mut() {
+        Some(f) => f.stop_viewers().await,
+        None => Ok(()),
+    };
+    let old_version = receipt.version.clone();
     let result = async {
+        stopped?;
         if background {
             ensure!(
                 matches!(report.policy, super::Policy::AutoPatch),
@@ -627,16 +688,44 @@ pub async fn apply(socket: &Path, background: bool, report: super::Report) -> Re
         work
     }
     .await;
+    // an interrupted transaction (the journal still there, its recovery failed) is `update recover`'s, the instances'
+    // record with it
+    let settled = !store.journal().try_exists().unwrap_or(true);
+    if let Some(f) = fleet.as_mut().filter(|_| settled) {
+        if result.is_ok() {
+            f.at(super::fleet::Phase::Committed)?;
+        } else if let Err(e) = f.start_daemons(&old_version).await {
+            // stopped for an update that didn't get as far as the program (a download that failed): started again
+            // on the program of before; the transaction put back and started them already when it got that far
+            eprintln!("{e:#}");
+        }
+    }
     crate::service::resume_viewer(paused);
+    if let Some(f) = fleet.as_ref().filter(|_| settled) {
+        let up = f.start_viewers().await;
+        f.finish(up)?;
+    }
     result
 }
 
 /// [`service::pause_viewer`], unless an AI task is running
-async fn pause_viewer(socket: &Path) -> Result<Option<Service>> {
-    if crate::service::viewer_find().is_some_and(|s| crate::service::running(&s))
-        && ictl_daemon::protocol::task_list(socket).await.is_ok_and(|l| l.iter().any(|t| t.active()))
-    {
-        anyhow::bail!("{}", ictl_l10n::tr!("正忙：有 AI 任务在进行", "busy: an AI task is running"));
+pub(super) async fn pause_viewer(socket: &Path) -> Result<Option<Service>> {
+    if crate::service::viewer_find().is_some_and(|s| crate::service::running(&s)) {
+        // a running viewer may run a task: not known (the list can't be read) counts as one
+        let list = ictl_daemon::protocol::task_list(socket).await.map_err(|e| {
+            anyhow::anyhow!(
+                "{}",
+                ictl_l10n::trf!(
+                    "正忙：查不了任务（{e}），没有升级",
+                    "busy: the tasks can't be listed ({e}); not updated"
+                )
+            )
+        })?;
+        ensure!(
+            !list.iter().any(|t| t.active()),
+            "{}",
+            ictl_l10n::tr!("正忙：有 AI 任务在进行", "busy: an AI task is running")
+        );
     }
     service::pause_viewer()
 }
@@ -685,7 +774,13 @@ async fn resume(store: &Store, host: &impl Services, tx: &Transaction) -> Result
 pub async fn recover(socket: &Path, scheduled: bool) -> Result<()> {
     let receipt = read_receipt()?;
     let store = Store::open(&receipt.binary_path, receipt_path())?;
-    let Some(tx) = read_json::<Transaction>(&store.journal())? else { return Ok(()) };
+    let Some(tx) = read_json::<Transaction>(&store.journal())? else {
+        // the program's own transaction is settled: what the instances' record says is left (`fleet`)
+        drop(store);
+        return super::fleet::recover(&receipt.version).await;
+    };
+    // the named daemons an interrupted update recorded: stopped and started again with the program
+    let members = super::fleet::recorded_members();
     if scheduled
         && outcome(&store.binary)?.is_some_and(|o| o.status == "recovery_failed" && o.target_version == tx.new.version)
     {
@@ -714,13 +809,17 @@ pub async fn recover(socket: &Path, scheduled: bool) -> Result<()> {
     let service = service::managed(&store.binary, &receipt.service)?;
     let paused = pause_viewer(socket).await?;
     let result = async {
-        check_clients(service::managed_pid(&service, true)?)?;
-        let host = Host { service, socket, binary: &store.binary };
+        // the named daemons the update recorded may run (some started on the new program before it was killed):
+        // they are let past, and stopped by the recovery with the program
+        check_clients(service::managed_pid(&service, true)?, &member_pids(&members))?;
+        let host = Host { service, socket, binary: &store.binary, members };
         resume(&store, &host, &tx).await
     }
     .await;
     crate::service::resume_viewer(paused);
-    result
+    result?;
+    drop(store);
+    super::fleet::recover(&read_receipt()?.version).await
 }
 
 #[cfg(test)]

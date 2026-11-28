@@ -557,7 +557,7 @@ fn register_mcp(cli: &Cli, force: bool) -> anyhow::Result<()> {
     if ictl_mcp::dev_tools_enabled() {
         env_args.push("IPHONE_CONTROL_DEV_TOOLS=1".into());
     }
-    let server = [exe.as_str(), "--socket", socket.as_str(), "mcp"];
+    let server = [exe.as_str(), "--socket", socket.as_str(), "mcp", "--local"];
     let mut any = false;
     for backend in crate::agent::Backend::ALL {
         let Some(program) = backend.find() else { continue };

@@ -83,6 +83,9 @@ pub fn scope_check(req: &Request) -> Option<Check> {
         | Request::Resign { .. }
         | Request::UnlockReset
         | Request::UnlockResetDevice { .. }
+        | Request::SetupStep { .. }
+        | Request::WdaForward { .. }
+        | Request::PinCurrent { .. }
         | Request::ListDevices
         | Request::AppLogs { .. }
         | Request::CrashReports { .. }

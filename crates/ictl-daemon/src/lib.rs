@@ -6,23 +6,32 @@
 //! - 并发模型见 [`core`]
 //! - AI 任务（谁能在任务进行中操作手机）见 [`tasks`]
 
+mod admission;
+mod adopt;
+mod claim;
 pub mod config;
 pub mod core;
 pub mod detached;
 pub mod devices;
 mod devtools;
 mod doctor;
+pub mod envfmt;
 pub mod error;
 pub mod eventlog;
+mod forward;
 mod hidmark;
 pub mod imaging;
+pub mod instance;
+pub mod lease;
 pub mod machine;
 pub mod maintenance;
 mod mjpeg;
 pub mod notify;
 pub mod procs;
 mod screen;
+mod setup;
 mod supervise;
+mod switch;
 pub mod tasks;
 mod tools;
 mod watch;
@@ -47,6 +56,14 @@ const MAX_REQUEST_LINE: u64 = 1024 * 1024;
 
 /// 运行守护进程直到收到 SIGTERM / SIGINT
 pub async fn run(cfg: Config) -> anyhow::Result<()> {
+    cfg.check_instance()?;
+    // a named instance's lifecycle lock (in the data root, where --purge doesn't reach), held for as long as it runs;
+    // then its registration read again: `instance remove` holds the lock while it removes it
+    let _named = match &cfg.instance {
+        Some(name) => Some(instance_lock(&cfg.root, name, INSTANCE_WAIT).await?),
+        None => None,
+    };
+    cfg.check_still_registered()?;
     cfg.prepare_dirs()?;
     let socket = cfg.socket.clone();
     if let Some(dir) = socket.parent()
@@ -87,6 +104,64 @@ pub async fn run(cfg: Config) -> anyhow::Result<()> {
 
 /// How long a starting daemon waits for the one before it to let go of the socket (it may still be stopping)
 const INSTANCE_WAIT: std::time::Duration = std::time::Duration::from_secs(15);
+
+/// The instance `name`'s lifecycle lock ([`instance::try_lock`]), waited for up to `wait` (another daemon of it may be
+/// stopping, or `instance remove` at work)
+async fn instance_lock(root: &std::path::Path, name: &str, wait: std::time::Duration) -> anyhow::Result<std::fs::File> {
+    let deadline = Instant::now() + wait;
+    loop {
+        if let Some(f) = instance::try_lock(root, name)? {
+            return Ok(f);
+        }
+        if Instant::now() >= deadline {
+            bail!(
+                "{}",
+                ictl_l10n::trf!(
+                    "实例 {name} 已经有守护进程在运行（或正在被移除）",
+                    "The instance {name} has a daemon running already (or is being removed)"
+                )
+            );
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    }
+}
+
+/// The lock beside `socket` (`ctl.lock`) a daemon holds for as long as it runs, if none does now: whoever holds it
+/// knows no daemon serves that socket (`instance remove` deletes an instance only while holding it). Never waits
+pub fn try_lifecycle_lock(socket: &std::path::Path) -> std::io::Result<Option<std::fs::File>> {
+    use std::os::fd::AsRawFd;
+    use std::os::unix::fs::OpenOptionsExt;
+    let file = match std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(socket.with_extension("lock"))
+    {
+        Ok(f) => f,
+        // never started: nothing runs there; the lock made now keeps one from starting meanwhile
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            use std::os::unix::fs::DirBuilderExt;
+            if let Some(dir) = socket.parent() {
+                std::fs::DirBuilder::new().recursive(true).mode(0o700).create(dir)?;
+            }
+            std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .truncate(false)
+                .mode(0o600)
+                .custom_flags(libc::O_NOFOLLOW)
+                .open(socket.with_extension("lock"))?
+        }
+        Err(e) => return Err(e),
+    };
+    // SAFETY: a valid descriptor, owned by `file` for as long as the lock is held
+    if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
+        return Ok(Some(file));
+    }
+    let e = std::io::Error::last_os_error();
+    if e.kind() == std::io::ErrorKind::WouldBlock { Ok(None) } else { Err(e) }
+}
 
 /// The lock beside the socket (`ctl.lock`), held while the daemon runs; waits up to `wait` for another daemon that is
 /// stopping, and gives up at once when one answers on the socket
@@ -138,6 +213,8 @@ async fn serve(cfg: Config, listener: tokio::net::UnixListener) -> anyhow::Resul
     }
     watchdog::spawn(daemon.heartbeat.clone(), daemon.log.clone(), run_state.clone());
     let watcher = watch::spawn(daemon.wake.clone());
+    // the daily Apple ID session check, led by one instance for all (`supervise::session`)
+    let sessions = tokio::task::spawn_local(daemon.clone().lead_session_checks());
 
     let mut tick = tokio::time::interval(core::TICK);
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -207,6 +284,9 @@ async fn serve(cfg: Config, listener: tokio::net::UnixListener) -> anyhow::Resul
     // 自动解锁被打断时停用标记会留着（ictl-unlock），不会因此输错第二次
     watcher.abort();
     let _ = watcher.await;
+    // a check under way keeps the leader's lock in its own thread until it ends
+    sessions.abort();
+    let _ = sessions.await;
     conns.abort_all();
     while conns.join_next().await.is_some() {}
     if let Some((t, _)) = ticking {
@@ -276,6 +356,22 @@ async fn serve_conn(daemon: Arc<Daemon>, stream: tokio::net::UnixStream) {
                 (Ok((protocol::Request::ScreenStream, _, ctx, lang)), Ok(lease)) => {
                     drop(lease);
                     ictl_l10n::scope(lang, daemon.screen_stream(reader, w, ctx.expect_udid, ctx.low_bandwidth)).await;
+                    return;
+                }
+                // `wda-bridge`: one connection to WDA's port (`forward`)
+                (Ok((protocol::Request::WdaForward { udid }, _, ctx, lang)), Ok(lease)) => {
+                    drop(lease);
+                    if ctx.task.is_some() {
+                        let r = protocol::Response::error(ictl_l10n::tr!(
+                            "AI 任务不能开 WDA 桥接",
+                            "An AI task can't open a WDA bridge"
+                        ));
+                        let mut line = serde_json::to_string(&r).unwrap_or_default();
+                        line.push('\n');
+                        let _ = w.write_all(line.as_bytes()).await;
+                        return;
+                    }
+                    ictl_l10n::scope(lang, daemon.wda_forward(reader, w, &udid)).await;
                     return;
                 }
                 // the same for WDA's MJPEG picture (iOS 17-26)
@@ -366,6 +462,22 @@ fn parse_request(line: &[u8]) -> serde_json::Result<(protocol::Request, bool, co
     ))
 }
 
+/// A task being opened, counted while it is ([`core::Snapshot::task_opening`])
+struct Opening<'a>(&'a std::sync::atomic::AtomicUsize);
+
+impl<'a> Opening<'a> {
+    fn new(n: &'a std::sync::atomic::AtomicUsize) -> Self {
+        n.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Self(n)
+    }
+}
+
+impl Drop for Opening<'_> {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
 /// Serves [`protocol::Request::TaskOpen`] (the connection is the task's lease) or [`protocol::Request::TaskEvents`]:
 /// one answer line, then the task's events, one JSON line each, until it ends or the client goes away
 async fn task_stream(
@@ -380,7 +492,30 @@ async fn task_stream(
         line.push('\n');
         w.write_all(line.as_bytes()).await.is_ok()
     }
+    // a task is opened with the selection latch held, from the check to the registration: a switch can't come in
+    // between and leave it bound to the device of before (docs/dev/multi-instance-plan.md 4.1)
+    let latch = matches!(req, protocol::Request::TaskOpen { .. }).then(|| daemon.select_latch.lock());
+    // counted before the update intent is looked at, until the task is listed (or refused): an update that wrote
+    // the intent waits for none being counted, then finds every task there is
+    let opening = matches!(req, protocol::Request::TaskOpen { .. }).then(|| Opening::new(&daemon.task_opening));
+    let held = match latch {
+        Some(l) => Some(l.await),
+        None => None,
+    };
+    // the bridges to WDA end before a task is registered: what goes through them is out of its reach
+    let bridges_closed = held.is_none() || daemon.forwards.end_all().await;
     let found = match req {
+        protocol::Request::TaskOpen { .. } if !bridges_closed => Err(ictl_l10n::tr!(
+            "WDA 桥接没有关掉，没有开任务；停掉 wda-bridge 再试",
+            "A WDA bridge didn't close, so no task was opened; stop wda-bridge and try again"
+        )
+        .into()),
+        protocol::Request::TaskOpen { .. } if daemon.gate.check_open().is_err() => Err(admission::switching().into()),
+        protocol::Request::TaskOpen { .. } if daemon.cfg.update_intent().exists() => Err(ictl_l10n::tr!(
+            "正在准备升级，现在不开新任务；升级完再试",
+            "An update is being prepared, so no new task is opened now; try again after it"
+        )
+        .into()),
         protocol::Request::TaskOpen { title, owner, apps } => match daemon.resolve_scope(&apps).await {
             Err(m) => Err(m),
             Ok(apps) => daemon.tasks.open(&title, &owner, daemon.controlled_udid().as_deref(), apps, peer).map(|t| {
@@ -400,6 +535,9 @@ async fn task_stream(
             .ok_or_else(|| ictl_l10n::tr!("没有这个任务", "No such task").into()),
         _ => Err("not a task stream".into()),
     };
+    // registered (or refused): the latch isn't held while the task runs
+    drop(held);
+    drop(opening);
     let (task, opened) = match found {
         Ok(f) => f,
         Err(m) => {
@@ -506,6 +644,68 @@ mod tests {
     use super::*;
 
     /// The whole way through the socket: a task opened by a client holds the phone until its connection closes
+    /// `PinCurrent` reaches the daemon whole over its socket: its device isn't `expect_udid`, which every request's
+    /// options take off before the request is read (docs/dev/multi-instance-plan.md 4.4)
+    #[tokio::test]
+    async fn pin_current_keeps_its_device_over_the_socket() {
+        let local = tokio::task::LocalSet::new();
+        local
+            .run_until(async {
+                let (d, dir) = core::tests::test_daemon("pin-socket");
+                let socket = dir.join("ctl.sock");
+                let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+                let daemon = d.clone();
+                tokio::task::spawn_local(async move {
+                    while let Ok((s, _)) = listener.accept().await {
+                        tokio::task::spawn_local(serve_conn(daemon.clone(), s));
+                    }
+                });
+                let req = protocol::Request::PinCurrent {
+                    udid: "00008150-000C".into(),
+                    expect_token: d.selection_token(),
+                };
+                let line = serde_json::to_string(&req).unwrap();
+                assert!(line.contains(r#""udid":"00008150-000C""#) && !line.contains("expect_udid"), "{line}");
+                let r = protocol::call(&socket, &req, None).await.unwrap();
+                // read whole: refused for the device (none controlled here), not for a field gone missing
+                assert!(
+                    matches!(&r, protocol::Response::Error { message, .. } if message.contains("00008150-000C") && !message.contains("missing field")),
+                    "{r:?}"
+                );
+                std::fs::remove_dir_all(dir).unwrap();
+            })
+            .await;
+    }
+
+    /// While an update is being prepared (its intent written) no task is opened; the count of tasks being opened is
+    /// back to none either way, and once the intent goes a task opens again (docs/dev/multi-instance-plan.md 5.3)
+    #[tokio::test]
+    async fn no_task_opens_while_an_update_is_prepared() {
+        let local = tokio::task::LocalSet::new();
+        local
+            .run_until(async {
+                let (d, dir) = core::tests::test_daemon("update-intent");
+                d.fake_controlled("00008150-000B");
+                let socket = dir.join("ctl.sock");
+                let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+                let daemon = d.clone();
+                tokio::task::spawn_local(async move {
+                    while let Ok((s, _)) = listener.accept().await {
+                        tokio::task::spawn_local(serve_conn(daemon.clone(), s));
+                    }
+                });
+                std::fs::write(d.cfg.update_intent(), b"9.9.9").unwrap();
+                let Err(e) = protocol::open_task(&socket, "看看设置", "test", &[]).await else { panic!("opened") };
+                assert!(e.contains("升级") || e.contains("update"), "{e}");
+                assert_eq!(d.task_opening.load(std::sync::atomic::Ordering::SeqCst), 0);
+                std::fs::remove_file(d.cfg.update_intent()).unwrap();
+                let (_opened, _events) = protocol::open_task(&socket, "看看设置", "test", &[]).await.unwrap();
+                assert_eq!(d.task_opening.load(std::sync::atomic::Ordering::SeqCst), 0, "listed: no longer counted");
+                std::fs::remove_dir_all(dir).unwrap();
+            })
+            .await;
+    }
+
     #[tokio::test]
     async fn an_opened_task_holds_the_phone_until_its_lease_goes() {
         use protocol::{Request, Response};
@@ -690,6 +890,28 @@ mod tests {
         assert!(e.to_string().contains("running") || e.to_string().contains("运行"), "{e}");
         drop(first);
         assert!(single_instance(&socket, std::time::Duration::ZERO).await.is_ok(), "free again");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// `Resign` names its device with the top-level `expect_udid` every request has (taken off before the request is
+    /// read, so a field of its own would always be empty): another device being controlled refuses it before anything
+    /// is registered or signed (docs/dev/multi-instance-plan.md 4.5)
+    #[tokio::test]
+    async fn a_resign_for_another_device_is_refused_before_signing() {
+        let (d, dir) = core::tests::test_daemon("resign-expect");
+        let usb = ictl_device::UsbDevice { udid: "00008130-00000000000000AA".into(), device_id: 1 };
+        d.inner.lock().await.device = Some(ictl_device::Device::from_usb(&usb));
+        let (req, _, ctx, _) =
+            parse_request(br#"{"op":"resign","force":true,"expect_udid":"00008020-00000000000000BB"}"#).unwrap();
+        assert_eq!(req, protocol::Request::Resign { force: true });
+        let r = d.handle(req, std::time::Instant::now(), ctx).await;
+        assert!(
+            matches!(&r, protocol::Response::Error { message, .. } if message.contains("00008020-00000000000000BB")),
+            "{r:?}"
+        );
+        assert!(!d.inner.lock().await.resigning, "never started");
+        let log = std::fs::read_to_string(dir.join("logs/daemon.log")).unwrap_or_default();
+        assert!(!log.contains("开始重签") && !log.contains("Re-signing started"), "{log}");
         std::fs::remove_dir_all(dir).unwrap();
     }
 

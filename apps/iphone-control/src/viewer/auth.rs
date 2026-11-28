@@ -124,6 +124,25 @@ fn load_unlocked(data_dir: &Path) -> anyhow::Result<Vec<Entry>> {
 }
 
 /// The tokens as they are on disk; `None` when there is no file yet
+/// The tokens and the stamp of the very file they were read from (one open file: a save in between can't give one
+/// file's tokens with another's stamp, which would keep the newer tokens from being read)
+fn read_stamped(data_dir: &Path) -> anyhow::Result<Option<(Vec<Entry>, Option<Stamp>)>> {
+    use std::io::Read;
+    use std::os::unix::fs::MetadataExt;
+    let file = tokens_file(data_dir);
+    let mut f = match std::fs::File::open(&file) {
+        Ok(f) => f,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(anyhow::Error::new(e).context(file.display().to_string())),
+    };
+    let m = f.metadata()?;
+    let stamp = m.modified().ok().map(|modified| Stamp { modified, len: m.len(), ino: m.ino() });
+    let mut b = Vec::new();
+    f.read_to_end(&mut b)?;
+    let v: Vec<Entry> = serde_json::from_slice(&b).with_context(|| file.display().to_string())?;
+    Ok(Some((v.into_iter().filter(|e| valid_token(&e.token)).collect(), stamp)))
+}
+
 fn read(data_dir: &Path) -> anyhow::Result<Option<Vec<Entry>>> {
     let file = tokens_file(data_dir);
     match std::fs::read(&file) {
@@ -288,21 +307,53 @@ pub enum Verdict {
     Limited,
 }
 
+/// Which viewer a session is for (docs/dev/multi-instance-plan.md 4.7): every instance's viewer takes the same
+/// tokens, but a browser's session is bound to the instance (by its id: a name can be used again) and the port
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Scope {
+    pub instance: String,
+    pub id: String,
+    pub port: u16,
+}
+
+impl Scope {
+    /// The default instance's viewer on `port`
+    #[cfg(test)]
+    pub fn default_instance(port: u16) -> Self {
+        Self { instance: ictl_daemon::instance::DEFAULT.into(), id: ictl_daemon::instance::DEFAULT_ID.into(), port }
+    }
+
+    fn is_default(&self) -> bool {
+        self.instance == ictl_daemon::instance::DEFAULT
+    }
+}
+
 /// A token as the viewer checks it
 struct Known {
     name: String,
     role: Role,
     token: String,
-    /// The session cookie's value: HMAC-SHA256 of a fixed text under the token
+    /// The session cookie's value: HMAC-SHA256, under the token, of a text naming the viewer ([`Scope`])
     session: String,
+    /// The value of before (the same text for every viewer), still taken by the default instance's viewer, where
+    /// browsers logged in before
+    v1: Option<String>,
 }
 
 impl Known {
-    fn of(e: Entry) -> Self {
+    fn of(e: Entry, scope: &Scope) -> Self {
         let key = ring::hmac::Key::new(ring::hmac::HMAC_SHA256, e.token.as_bytes());
-        let tag = ring::hmac::sign(&key, b"iphone-control viewer session v1");
-        let session = tag.as_ref().iter().map(|x| format!("{x:02x}")).collect();
-        Self { name: e.name, role: e.role, token: e.token, session }
+        let hex = |text: &[u8]| ring::hmac::sign(&key, text).as_ref().iter().map(|x| format!("{x:02x}")).collect();
+        let v2 =
+            format!("iphone-control viewer session v2 instance={} id={} port={}", scope.instance, scope.id, scope.port);
+        let session = hex(v2.as_bytes());
+        let v1 = scope.is_default().then(|| hex(b"iphone-control viewer session v1"));
+        Self { name: e.name, role: e.role, token: e.token, session, v1 }
+    }
+
+    /// Whether `session` is this token's, for this viewer
+    fn has(&self, session: &str) -> bool {
+        same(session, &self.session) || self.v1.as_deref().is_some_and(|v| same(session, v))
     }
 
     fn who(&self, bearer: bool) -> Who {
@@ -335,6 +386,7 @@ fn stamp(data_dir: &Path) -> Option<Stamp> {
 pub struct Auth {
     /// `None`: fixed tokens (tests)
     data_dir: Option<PathBuf>,
+    scope: Scope,
     tokens: Mutex<Tokens>,
     /// One per port: cookies aren't separated by port, and another viewer on this machine has other tokens
     cookie: String,
@@ -342,32 +394,44 @@ pub struct Auth {
 }
 
 impl Auth {
-    /// The tokens in `data_dir` ([`load`])
+    /// `<instance> <id>`: whose viewer this is, for the login page's header
+    pub fn instance_header(&self) -> String {
+        format!("{} {}", self.scope.instance, self.scope.id)
+    }
+
+    /// The tokens in `data_dir` ([`load`]), for the default instance's viewer on `port`
+    #[cfg(test)]
     pub fn load(data_dir: &Path, port: u16) -> anyhow::Result<Self> {
-        let known = load(data_dir)?.into_iter().map(Known::of).collect();
-        Ok(Self::with(Some(data_dir.to_owned()), Tokens { known, modified: stamp(data_dir) }, port))
+        Self::load_for(data_dir, Scope::default_instance(port))
+    }
+
+    /// The tokens in `data_dir` ([`load`]), for the viewer `scope` says
+    pub fn load_for(data_dir: &Path, scope: Scope) -> anyhow::Result<Self> {
+        let known = load(data_dir)?.into_iter().map(|e| Known::of(e, &scope)).collect();
+        Ok(Self::with(Some(data_dir.to_owned()), Tokens { known, modified: stamp(data_dir) }, scope))
     }
 
     /// These tokens and no file
     #[cfg(test)]
     pub fn fixed(entries: Vec<Entry>, port: u16) -> Self {
-        Self::with(None, Tokens { known: entries.into_iter().map(Known::of).collect(), modified: None }, port)
+        let scope = Scope::default_instance(port);
+        let known = entries.into_iter().map(|e| Known::of(e, &scope)).collect();
+        Self::with(None, Tokens { known, modified: None }, scope)
     }
 
-    fn with(data_dir: Option<PathBuf>, tokens: Tokens, port: u16) -> Self {
-        Self { data_dir, tokens: Mutex::new(tokens), cookie: format!("ictl_viewer_{port}"), failures: Mutex::default() }
+    fn with(data_dir: Option<PathBuf>, tokens: Tokens, scope: Scope) -> Self {
+        let cookie = format!("ictl_viewer_{}", scope.port);
+        Self { data_dir, scope, tokens: Mutex::new(tokens), cookie, failures: Mutex::default() }
     }
 
     /// The tokens, read again if the file changed. A file that can't be read leaves them as they were
     fn tokens(&self) -> std::sync::MutexGuard<'_, Tokens> {
         let mut t = self.tokens.lock().unwrap_or_else(|p| p.into_inner());
-        if let Some(dir) = &self.data_dir {
-            let modified = stamp(dir);
-            if modified != t.modified
-                && let Ok(Some(v)) = read(dir)
-            {
-                *t = Tokens { known: v.into_iter().map(Known::of).collect(), modified };
-            }
+        if let Some(dir) = &self.data_dir
+            && stamp(dir) != t.modified
+            && let Ok(Some((v, modified))) = read_stamped(dir)
+        {
+            *t = Tokens { known: v.into_iter().map(|e| Known::of(e, &self.scope)).collect(), modified };
         }
         t
     }
@@ -375,7 +439,7 @@ impl Auth {
     /// Whether the token `who` logged in with is still there (not removed or replaced since): a stream it opened
     /// ends when it isn't
     pub fn knows(&self, who: &Who) -> bool {
-        self.tokens().known.iter().any(|k| same(&who.session, &k.session))
+        self.tokens().known.iter().any(|k| k.has(&who.session))
     }
 
     /// The request's session cookie or `Authorization: Bearer` token
@@ -388,9 +452,10 @@ impl Auth {
             if k.eq_ignore_ascii_case("cookie") {
                 let ours = v.split(';').filter_map(|c| c.trim().split_once('=')).find(|(n, _)| *n == self.cookie);
                 if let Some((_, v)) = ours
-                    && let Some(k) = self.tokens().known.iter().find(|k| same(v.trim(), &k.session))
+                    && let Some(k) = self.tokens().known.iter().find(|k| k.has(v.trim()))
                 {
-                    return Verdict::Ok(k.who(false));
+                    // the value it came with: an earlier login's (v1) is known by it too ([`Self::knows`])
+                    return Verdict::Ok(Who { session: v.trim().to_owned(), ..k.who(false) });
                 }
             } else if k.eq_ignore_ascii_case("authorization") {
                 let v = v.trim();
@@ -673,6 +738,38 @@ mod tests {
         // another set of tokens: the old sessions end
         let other = Auth::fixed(vec![entry(OWNER, Role::Operate, 'c')], 8202);
         assert_eq!(other.check(&head(&[&format!("Cookie: {pair}")])), Verdict::Missing);
+    }
+
+    /// A session belongs to the viewer it was made by: its instance (by id) and port. Another instance's viewer, or a
+    /// new instance given the port of one removed, doesn't take it; the value of before (v1) is still taken by the
+    /// default instance's viewer only
+    #[test]
+    fn a_session_is_the_instance_s_it_was_made_for() {
+        let tokens = || vec![entry(OWNER, Role::Operate, 'a')];
+        let scoped = |instance: &str, id: &str, port| {
+            let scope = Scope { instance: instance.into(), id: id.into(), port };
+            let known = tokens().into_iter().map(|e| Known::of(e, &scope)).collect();
+            Auth::with(None, Tokens { known, modified: None }, scope)
+        };
+        let cookie = |a: &Auth| a.set_cookie(OWNER, false).split(';').next().unwrap().to_owned();
+        let default = Auth::fixed(tokens(), 8200);
+        let ipad = scoped("ipad", "3f2a", 8203);
+        let ok = |a: &Auth, c: &str| matches!(a.check(&head(&[&format!("Cookie: {c}")])), Verdict::Ok(_));
+        assert!(ok(&ipad, &cookie(&ipad)) && ok(&default, &cookie(&default)));
+        let moved = cookie(&default).replace("8200", "8203");
+        assert!(!ok(&ipad, &moved), "the default instance's session isn't the instance's");
+        let reused = scoped("ipad", "77aa", 8203);
+        assert!(!ok(&reused, &cookie(&ipad)), "removed and added again: a new id, the old sessions end");
+        let key = ring::hmac::Key::new(ring::hmac::HMAC_SHA256, "a".repeat(64).as_bytes());
+        let v1: String = ring::hmac::sign(&key, b"iphone-control viewer session v1")
+            .as_ref()
+            .iter()
+            .map(|x| format!("{x:02x}"))
+            .collect();
+        assert!(ok(&default, &format!("ictl_viewer_8200={v1}")), "logged in before: still in");
+        assert!(!ok(&ipad, &format!("ictl_viewer_8203={v1}")));
+        let Verdict::Ok(w) = default.check(&head(&[&format!("Cookie: ictl_viewer_8200={v1}")])) else { panic!() };
+        assert!(default.knows(&w));
     }
 
     /// `viewer token …` while the viewer runs takes effect without a restart

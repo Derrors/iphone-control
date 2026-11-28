@@ -15,6 +15,8 @@ impl Daemon {
             s.auto_unlock = unlock.enabled();
             s.log_tail = self.log.tail(15);
             s.maintenance = crate::maintenance::active();
+            s.instance = Some(self.identity());
+            s.task_opening = self.task_opening.load(std::sync::atomic::Ordering::SeqCst);
             return Response::text(serde_json::to_string_pretty(&s).unwrap_or_default());
         }
         if let Err(e) = check_request(&req) {
@@ -242,14 +244,42 @@ impl Daemon {
             Lane::Snapshot => unreachable!("handled above"),
             Lane::Task => {
                 return Response::error(ictl_l10n::tr!(
-                    "task_open、task_events 是流式请求，要用 open_task / task_events 打开",
-                    "task_open and task_events are streaming requests: open them with open_task / task_events"
+                    "task_open、task_events、wda_forward 是流式请求，要用 open_task / task_events / wda-bridge 打开",
+                    "task_open, task_events and wda_forward are streaming requests: open them with open_task / task_events / wda-bridge"
                 ));
+            }
+            Lane::Setup => {
+                let Request::SetupStep { udid, step } = &req else { unreachable!("lane") };
+                if ctx.task.is_some() {
+                    return Response::error(ictl_l10n::tr!("AI 任务不能做设置步骤", "An AI task can't do setup steps"))
+                        .with_failure(Delivery::NotSent, FailureStage::Preflight);
+                }
+                return text(self.setup_step(udid, *step).await);
+            }
+            Lane::Select if matches!(req, Request::PinCurrent { .. }) => {
+                let Request::PinCurrent { udid, expect_token } = &req else { unreachable!("lane") };
+                if ctx.task.is_some() {
+                    return Response::error(ictl_l10n::tr!("AI 任务不能固定设备", "An AI task can't pin the device"))
+                        .with_failure(Delivery::NotSent, FailureStage::Preflight);
+                }
+                return text(self.pin_current(udid, expect_token).await);
+            }
+            Lane::Select => {
+                let Request::SelectDevice { device } = &req else { unreachable!("lane") };
+                let controlled = self.inner.lock().await.device.as_ref().map(|d| d.udid.clone());
+                if let Err(r) = admit(&req, queued_at, &ctx, controlled.as_deref()) {
+                    return r.with_failure(Delivery::NotSent, FailureStage::Preflight);
+                }
+                return text(self.select(device, &mut ctx.gone).await);
             }
             // 重签自己分段持锁：签名、安装要几十秒，期间不挡住别的请求
             Lane::Resign => {
                 let Request::Resign { force } = req else { unreachable!("lane") };
-                return self.resign_now(force).await.map(Response::text).unwrap_or_else(Response::error);
+                return self
+                    .resign_now(force, ctx.expect_udid.as_deref())
+                    .await
+                    .map(Response::text)
+                    .unwrap_or_else(Response::error);
             }
             // Web Inspector talks to the page, not to WDA: its own lock, the device lock only to look up the device
             Lane::Web => {
@@ -268,12 +298,20 @@ impl Daemon {
                         Ok(s) => s,
                         Err(r) => return r.with_failure(Delivery::NotSent, FailureStage::Preflight),
                     };
-                    let device = self.inner.lock().await.device.clone();
-                    if let Err(r) = admit(&req, queued_at, &ctx, device.as_ref().map(|d| d.udid.as_str())) {
-                        return r;
-                    }
-                    let Some(device) = device else {
-                        return Response::error(ictl_l10n::tr!("手机未连接", "Phone not connected"));
+                    let (device, _pass) = {
+                        let g = self.inner.lock().await;
+                        if let Err(r) = admit(&req, queued_at, &ctx, g.device.as_ref().map(|d| d.udid.as_str())) {
+                            return r;
+                        }
+                        let Some(device) = g.device.clone() else {
+                            return Response::error(ictl_l10n::tr!("手机未连接", "Phone not connected"));
+                        };
+                        match self.gate.admit(None) {
+                            Ok(p) => (device, p),
+                            Err(e) => {
+                                return Response::error(e).with_failure(Delivery::NotSent, FailureStage::Preflight);
+                            }
+                        }
                     };
                     let (target, expression, timeout_ms) = match &req {
                         Request::WebTargets => return text(self.web_targets(&mut slot, &device).await),
@@ -320,16 +358,23 @@ impl Daemon {
                         }
                     }
                 }
-                let device = self.inner.lock().await.device.clone();
-                if let Err(r) = admit(&req, queued_at, &ctx, device.as_ref().map(|d| d.udid.as_str())) {
-                    return r;
-                }
-                let Some(device) = device else {
-                    return Response::error(ictl_l10n::tr!("手机未连接", "Phone not connected"));
+                let (device, pass) = {
+                    let g = self.inner.lock().await;
+                    if let Err(r) = admit(&req, queued_at, &ctx, g.device.as_ref().map(|d| d.udid.as_str())) {
+                        return r;
+                    }
+                    let Some(device) = g.device.clone() else {
+                        return Response::error(ictl_l10n::tr!("手机未连接", "Phone not connected"));
+                    };
+                    // long: a switch is refused while it runs, rather than waiting minutes for it
+                    match self.gate.admit(Some(crate::admission::Long::Install)) {
+                        Ok(p) => (device, p),
+                        Err(e) => return Response::error(e).with_failure(Delivery::NotSent, FailureStage::Preflight),
+                    }
                 };
                 let Request::InstallApp { path } = req else { unreachable!("lane") };
                 // install_app clears the app lists itself once installed
-                return text(self.install_app(&device, &path).await);
+                return text(self.install_app(&device, &pass, &path).await);
             }
             // the checks of this machine first, without the device lock; then the phone's, with it
             Lane::Doctor => {
@@ -342,6 +387,9 @@ impl Daemon {
                 let g = &mut *g;
                 if let Err(r) = admit(&req, queued_at, &ctx, g.device.as_ref().map(|d| d.udid.as_str())) {
                     return r.with_failure(Delivery::NotSent, FailureStage::Preflight);
+                }
+                if let Err(e) = self.gate.check_open() {
+                    return Response::error(e).with_failure(Delivery::NotSent, FailureStage::Preflight);
                 }
                 return Response::text(self.doctor(g, host).await);
             }
@@ -370,6 +418,10 @@ impl Daemon {
                 let Some(device) = g.device.clone() else {
                     return Response::error(ictl_l10n::tr!("手机未连接", "Phone not connected"));
                 };
+                let pass = match self.gate.admit(None) {
+                    Ok(p) => p,
+                    Err(e) => return Response::error(e).with_failure(Delivery::NotSent, FailureStage::Preflight),
+                };
                 return match req {
                     Request::CrashReports { filter, name } => {
                         drop(g);
@@ -385,10 +437,12 @@ impl Daemon {
                         let r = device.uninstall(&bid).await;
                         // an action on the phone: what was read of the screen and the apps is out of date
                         let mut g = self.inner.lock().await;
-                        g.dev.apps.clear();
-                        g.elements_cache = None;
-                        g.swiped_tree = None;
-                        g.swiped_snap = None;
+                        if pass.current() {
+                            g.dev.apps.clear();
+                            g.elements_cache = None;
+                            g.swiped_tree = None;
+                            g.swiped_snap = None;
+                        }
                         drop(g);
                         *self.last_action.lock().unwrap_or_else(|p| p.into_inner()) = Some(Instant::now());
                         text(r.map(|()| ictl_l10n::trf!("已卸载 {bid}", "Uninstalled {bid}")).map_err(Into::into))
@@ -425,6 +479,12 @@ impl Daemon {
         let g = &mut *g;
         if let Err(r) = admit(&req, queued_at, &ctx, g.device.as_ref().map(|d| d.udid.as_str())) {
             return r.with_failure(Delivery::NotSent, FailureStage::Preflight);
+        }
+        // a switch let go of the device lock to wait: nothing reaches the old device meanwhile (listing doesn't)
+        if !matches!(req, Request::ListDevices)
+            && let Err(e) = self.gate.check_open()
+        {
+            return Response::error(e).with_failure(Delivery::NotSent, FailureStage::Preflight);
         }
         if let Err(r) = self.scope_recheck(g, &req, admission, unknown_approved).await {
             return r.with_failure(Delivery::NotSent, FailureStage::Preflight);
@@ -606,7 +666,7 @@ impl Daemon {
             // answered before the device lock is waited for (`Daemon::unlock_reset_now`)
             Request::UnlockReset | Request::UnlockResetDevice { .. } => unreachable!("unlock_reset_now"),
             Request::ListDevices => Ok(self.list_devices_text(g)),
-            Request::SelectDevice { device } => self.select_device(g, &device).await,
+            // its own lane: a switch lets go of the device lock while it waits ([`crate::switch`])
             Request::AppLogs { process, grep, since_secs, limit, errors_only } => {
                 self.app_logs(g, &process, &grep, Duration::from_secs(since_secs), limit, errors_only).await
             }
@@ -628,7 +688,11 @@ impl Daemon {
             | Request::TaskStepDone { .. }
             | Request::TaskConfirm { .. }
             | Request::TaskNote { .. }
-            | Request::TaskFinish { .. } => unreachable!("other lanes"),
+            | Request::TaskFinish { .. }
+            | Request::SelectDevice { .. }
+            | Request::SetupStep { .. }
+            | Request::WdaForward { .. }
+            | Request::PinCurrent { .. } => unreachable!("other lanes"),
         };
         let r = r.map(|t| Response::text_data(t, outcome, data)).unwrap_or_else(crate::error::Error::response);
         with_unlock_note(r, g.dev.unlocked.take())
@@ -655,6 +719,10 @@ pub(super) enum Lane {
     Device,
     /// tasks: the streams are served by the connection (`lib::serve_conn`), the rest before any lane
     Task,
+    /// changing the device: the selection latch, the device lock in steps ([`crate::switch`])
+    Select,
+    /// `setup`'s device steps for the device held: the selection latch, then the device lock ([`crate::setup`])
+    Setup,
 }
 
 pub(super) fn lane(req: &Request) -> Lane {
@@ -702,8 +770,12 @@ pub(super) fn lane(req: &Request) -> Lane {
         | Request::UnlockReset
         | Request::UnlockResetDevice { .. }
         | Request::ListDevices
-        | Request::SelectDevice { .. }
         | Request::AppLogs { .. } => Lane::Device,
+        Request::SelectDevice { .. } => Lane::Select,
+        Request::SetupStep { .. } => Lane::Setup,
+        Request::PinCurrent { .. } => Lane::Select,
+        // a stream, served by the connection (`lib::serve_conn`)
+        Request::WdaForward { .. } => Lane::Task,
     }
 }
 

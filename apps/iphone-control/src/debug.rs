@@ -218,6 +218,24 @@ async fn e2e_with_wda(
 
 pub async fn run(udid: Option<&str>, args: DebugArgs) -> anyhow::Result<()> {
     let device = Device::find(udid).await?;
+    // the device's lease for as long as this runs: not while a daemon (of any instance) controls it
+    // (docs/dev/multi-instance-plan.md 4.5)
+    let _lease = match ictl_daemon::lease::try_claim(
+        &crate::client::devices_dir(),
+        &device.udid,
+        ictl_daemon::lease::Holder::probe("debug"),
+    )? {
+        ictl_daemon::lease::Claim::Got(l) => l,
+        ictl_daemon::lease::Claim::Held(h) => anyhow::bail!(
+            "{}",
+            ictl_l10n::trf!(
+                "{} 正被 {} 使用：先停掉它（debug 会和它争 XCTest、HID）",
+                "{} is in use by {}: stop it first (debug would compete with it for XCTest and HID)",
+                device.udid,
+                h.map(|h| h.by).unwrap_or_else(|| "?".into())
+            )
+        ),
+    };
     let info = device.info().await?;
     println!("{}", ictl_l10n::trf!("手机 {} iOS {}", "Phone {} iOS {}", info.product_type, info.product_version));
     let screen = ScreenSize { width: args.width, height: args.height };

@@ -30,10 +30,10 @@ pub fn requested(args: impl IntoIterator<Item = OsString>) -> bool {
 /// `args` is left at the command's own arguments. None when there is none
 pub fn command(args: &mut impl Iterator<Item = OsString>) -> Option<OsString> {
     while let Some(arg) = args.next() {
-        if arg == "--data-dir" || arg == "--socket" {
+        let b = arg.as_encoded_bytes();
+        if arg == "--data-dir" || arg == "--socket" || arg == "--instance" {
             args.next()?;
-        } else if arg.as_encoded_bytes().starts_with(b"--data-dir=") || arg.as_encoded_bytes().starts_with(b"--socket=")
-        {
+        } else if b.starts_with(b"--data-dir=") || b.starts_with(b"--socket=") || b.starts_with(b"--instance=") {
             continue;
         } else {
             return Some(arg);

@@ -2,6 +2,7 @@
 
 pub(crate) mod native;
 pub(crate) mod resign;
+mod session;
 mod wda;
 
 use std::sync::Arc;
@@ -9,6 +10,7 @@ use std::time::{Duration, Instant};
 
 use ictl_device::{Device, DeviceError, Rotation, ScreenSize, Tunnel, UsbDevice};
 
+use crate::claim::Round;
 use crate::core::{Daemon, DeviceProfile, Inner, Route, close_hid};
 use crate::machine::DeviceState;
 use crate::notify::Event;
@@ -101,19 +103,20 @@ impl Daemon {
             }
         };
         self.note_connected(g, devices).await;
-        let pinned = self.pinned(g);
-        let udids: Vec<&str> = g.connected.iter().map(|d| d.udid.as_str()).collect();
-        // just started, nothing controlled yet: in automatic mode go on with the last device that was ready (kept in
-        // state.json), not whichever usbmuxd happens to list first
-        let current = g.device.as_ref().map(|d| d.udid.as_str()).or(g.persisted.screen_udid.as_deref());
-        let target = crate::machine::pick_device(&udids, pinned.as_deref(), current).map(|i| g.connected[i].clone());
-
-        match target {
-            None => self.offline(g).await,
-            Some(d) => {
-                self.online(g, &d).await;
-                self.adopt_legacy_passcode(g);
-                self.clear_left_viewed(g).await;
+        // a device is switched to by `select` alone ([`Daemon::switch_to`]): not while it is under way
+        if self.gate.check_open().is_ok() {
+            match self.round_target(g).await {
+                Round::Offline => {
+                    self.offline(g).await;
+                    self.offline_lease(g);
+                }
+                Round::Held => {}
+                Round::Device(d) => {
+                    self.online(g, &d).await;
+                    self.describe_lease(g);
+                    self.adopt_legacy_passcode(g);
+                    self.clear_left_viewed(g).await;
+                }
             }
         }
 
@@ -124,15 +127,11 @@ impl Daemon {
             g.next_resign = now + self.cfg.resign_check;
             let d = self.clone();
             tokio::task::spawn_local(async move {
-                if let Err(e) = d.resign_now(false).await {
+                if let Err(e) = d.resign_now(false, None).await {
                     let mut g = d.inner.lock().await;
                     d.notify(&mut g, Event::ResignFailed(e.to_string()));
                 }
             });
-        }
-        if now >= g.next_session_check && upkeep.session {
-            g.next_session_check = now + self.cfg.session_check;
-            tokio::task::spawn_local(self.clone().check_session());
         }
         self.web_housekeeping(g.device.as_ref().map(|d| d.udid.as_str()));
         Self::log_housekeeping(g);
@@ -287,12 +286,42 @@ impl Daemon {
         if g.state != DeviceState::Ready && !device.developer_mode_enabled().await.unwrap_or(true) {
             return self.set_state(g, DeviceState::DeveloperModeOff);
         }
+        // which way it is driven depends on its iOS version: not known yet (its details not read), it isn't taken for
+        // a WDA device (which would sign and launch WDA on an iOS 27 phone); read again next round
+        if self.cfg.ios_backend != crate::config::IosBackend::Wda
+            && g.info.as_ref().is_none_or(|i| i.major_version() == 0)
+        {
+            self.read_leased(g, seen).await;
+            g.info = g.infos.get(&seen.udid).and_then(|entry| entry.value.clone());
+            if g.info.as_ref().is_none_or(|i| i.major_version() == 0) {
+                return self.set_state(
+                    g,
+                    DeviceState::Preparing {
+                        last_error: Some(
+                            ictl_l10n::tr!(
+                                "还没读到 iOS 版本，稍后再试",
+                                "The iOS version isn't known yet; trying again shortly"
+                            )
+                            .into(),
+                        ),
+                    },
+                );
+            }
+        }
         // iOS 27 起默认原生控制：不签名、不启动 WDA（docs/dev/ios27-native.md）
         if self.native(g) {
             return Box::pin(self.native_online(g, device)).await;
         }
-        let Some(bundle) = g.persisted.wda_bundle.clone() else {
-            return self.set_state(g, DeviceState::NeedsSigning);
+        let bundle = match g.persisted.wda_bundle.clone() {
+            Some(b) => b,
+            None if !g.dev.wda_takeover_tried => {
+                g.dev.wda_takeover_tried = true;
+                match self.take_over_wda(g, &device).await {
+                    Some(b) => b,
+                    None => return self.set_state(g, DeviceState::NeedsSigning),
+                }
+            }
+            None => return self.set_state(g, DeviceState::NeedsSigning),
         };
 
         // WDA 健康：本进程的 runner 还活着，且 /status ready
@@ -391,14 +420,13 @@ impl Daemon {
 #[derive(Debug, PartialEq, Eq)]
 struct Upkeep {
     resign: bool,
-    session: bool,
 }
 
 /// 只为用 WDA 的设备做：在用的设备走原生控制时都不做（iOS 27 原生不要 Apple ID，见 docs/dev/ios27-native.md）。
 /// 没装过 WDA（`has_bundle` 为 false）也不做。会话检查在没连手机时照做，提早发现会话失效
 fn wda_upkeep(device: bool, native: bool, has_bundle: bool) -> Upkeep {
     let wda = has_bundle && !(device && native);
-    Upkeep { resign: wda && device, session: wda }
+    Upkeep { resign: wda && device }
 }
 
 /// 手机重启后开发者镜像可能掉了：没挂就挂上（返回挂上的版本），已挂载时只是一次查询。
@@ -503,14 +531,14 @@ mod upkeep_tests {
     #[test]
     fn wda_upkeep_is_only_for_devices_that_use_wda() {
         // a WDA device with WDA installed: both
-        assert_eq!(wda_upkeep(true, false, true), Upkeep { resign: true, session: true });
+        assert_eq!(wda_upkeep(true, false, true), Upkeep { resign: true });
         // the device in use is driven natively: neither, even with a WDA bundle left from another device
-        assert_eq!(wda_upkeep(true, true, true), Upkeep { resign: false, session: false });
+        assert_eq!(wda_upkeep(true, true, true), Upkeep { resign: false });
         // no phone: nothing to re-sign for, the Apple ID session is still checked
-        assert_eq!(wda_upkeep(false, false, true), Upkeep { resign: false, session: true });
+        assert_eq!(wda_upkeep(false, false, true), Upkeep { resign: false });
         // never installed WDA (native only): no Apple ID upkeep at all
-        assert_eq!(wda_upkeep(true, false, false), Upkeep { resign: false, session: false });
-        assert_eq!(wda_upkeep(false, false, false), Upkeep { resign: false, session: false });
+        assert_eq!(wda_upkeep(true, false, false), Upkeep { resign: false });
+        assert_eq!(wda_upkeep(false, false, false), Upkeep { resign: false });
     }
 
     /// A `resign` failure inside `spawn_blocking` answers the caller in the request's language while recording the
@@ -530,7 +558,7 @@ mod upkeep_tests {
 
         let own = ictl_l10n::own_lang();
         let other = if own == ictl_l10n::Lang::En { ictl_l10n::Lang::Zh } else { ictl_l10n::Lang::En };
-        let err = ictl_l10n::scope(other, d.resign_now(true)).await.unwrap_err().to_string();
+        let err = ictl_l10n::scope(other, d.resign_now(true, None)).await.unwrap_err().to_string();
 
         let (want_other, want_own) = if own == ictl_l10n::Lang::En {
             ("还没有登录 Apple ID", "Not signed in to an Apple ID yet")

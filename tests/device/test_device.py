@@ -10,6 +10,22 @@ import device as dev
 
 
 class DeviceTests(unittest.TestCase):
+    def test_a_run_stops_on_another_device_than_expected(self):
+        import os
+        d = dev.Device()
+        d.udid = "00008020-000925043499002E"
+        saved = os.environ.pop("EXPECT_UDID", None)
+        try:
+            self.assertTrue(dev.is_expected(d), "nothing expected")
+            os.environ["EXPECT_UDID"] = "00008020-000925043499002e"
+            self.assertTrue(dev.is_expected(d), "the same in either case")
+            os.environ["EXPECT_UDID"] = "00008130-AAAA"
+            self.assertFalse(dev.is_expected(d))
+        finally:
+            os.environ.pop("EXPECT_UDID", None)
+            if saved is not None:
+                os.environ["EXPECT_UDID"] = saved
+
     def test_selected_device_is_found_in_both_languages(self):
         udid = "00008020-1111111111111111"
         for separator in (",", ", "):

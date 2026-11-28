@@ -3,6 +3,9 @@
 //! it for the daemon; every other command loads it at start-up ([`load_into_process`]), so `login`, `notify-test` and
 //! the first-run guide see the same settings.
 //!
+//! A named instance (`--instance`, docs/dev/multi-instance-plan.md 3.1) adds its own `instances/<name>.env` over it:
+//! [`ictl_daemon::instance::resolve`] works out what the process environment gets.
+//!
 //! The first-run guide writes it with [`EnvFile::set`]: a changed key is replaced in place, a new one appended, comments
 //! and other keys are kept. A new file starts from `packaging/env.example`, so it documents itself. Mode 0600: it holds
 //! notification secrets.
@@ -12,15 +15,13 @@ use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, bail};
+use ictl_daemon::envfmt::{last_values, line_key, parse};
+use ictl_daemon::instance;
 
 const TEMPLATE: &str = include_str!("../../../packaging/env.example");
 
 pub fn config_dir() -> PathBuf {
-    std::env::var_os("XDG_CONFIG_HOME")
-        .filter(|v| !v.is_empty())
-        .map(PathBuf::from)
-        .unwrap_or_else(|| home().join(".config"))
-        .join("iphone-control")
+    instance::config_dir()
 }
 
 pub fn home() -> PathBuf {
@@ -100,40 +101,10 @@ impl EnvFile {
     }
 }
 
-/// The key a line assigns, if it is an assignment (`KEY=…`, `export KEY=…`)
-fn line_key(l: &str) -> Option<&str> {
-    let l = l.trim_start();
-    let l = l.strip_prefix("export ").unwrap_or(l);
-    let (k, _) = l.split_once('=')?;
-    (!k.is_empty() && k.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')).then_some(k)
-}
-
-pub fn parse(text: &str) -> Vec<(String, String)> {
-    text.lines()
-        .filter_map(|l| {
-            let k = line_key(l)?;
-            let v = l.trim_start().strip_prefix("export ").unwrap_or(l.trim_start())[k.len() + 1..].trim();
-            Some((k.to_owned(), unquote(v)))
-        })
-        .collect()
-}
-
-fn unquote(v: &str) -> String {
-    for q in ['\'', '"'] {
-        if v.len() >= 2 && v.starts_with(q) && v.ends_with(q) {
-            return v[1..v.len() - 1].to_owned();
-        }
-    }
-    v.to_owned()
-}
-
 /// Bare when that is safe for both the shell and systemd, single-quoted otherwise. A value with a single quote, a
 /// backslash or a newline would mean different things to the two readers, so it is refused
 fn quote(v: &str) -> anyhow::Result<String> {
-    if v.bytes().all(|b| b.is_ascii_alphanumeric() || b"_./:@%+,=-".contains(&b)) {
-        return Ok(v.to_owned());
-    }
-    if v.contains(['\'', '\\', '\n', '\r']) {
+    let Some(q) = ictl_daemon::envfmt::quote(v) else {
         bail!(
             "{}",
             ictl_l10n::tr!(
@@ -141,32 +112,34 @@ fn quote(v: &str) -> anyhow::Result<String> {
                 "The value can't contain a single quote, a backslash or a newline"
             )
         );
-    }
-    Ok(format!("'{v}'"))
+    };
+    Ok(q)
 }
 
-/// Puts the file's settings into this process's environment, without overriding what is already set (a variable on
-/// the command line wins), except the keys in `skip`. A key set twice takes its last value, as the shell and systemd
-/// read the file. Called once at start-up, before any thread is started
-pub fn load_into_process(skip: &[&str]) {
-    let Ok(text) = std::fs::read_to_string(path()) else { return };
-    for (k, v) in last_values(parse(&text)) {
-        if v.is_empty() || skip.contains(&k.as_str()) || std::env::var_os(&k).is_some() {
-            continue;
+/// Works out the instance this command is for and puts its settings into this process's environment
+/// ([`instance::resolve`]): what is already set there wins (a variable on the command line), the managed keys of a
+/// named instance excepted. Returns the named instance. Called once at start-up, before any thread is started
+pub fn load_into_process(inv: &instance::Invocation) -> anyhow::Result<Option<String>> {
+    let shared = match std::fs::read_to_string(path()) {
+        Ok(text) => last_values(parse(&text)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+        // as before: a settings file that can't be read is no settings, but say so
+        Err(e) => {
+            eprintln!("{}: {e}", path().display());
+            Vec::new()
         }
+    };
+    let r = instance::resolve(inv, &shared, &|k| std::env::var(k).ok(), &instance::registry_dir)
+        .map_err(anyhow::Error::msg)?;
+    for k in &r.unset {
         // SAFETY: single-threaded: main() calls this before building the async runtime
-        unsafe { std::env::set_var(&k, &v) };
+        unsafe { std::env::remove_var(k) };
     }
-}
-
-/// Each key once, with its last value (an empty last one too: it unsets the key, as in the shell)
-fn last_values(pairs: Vec<(String, String)>) -> Vec<(String, String)> {
-    let mut out: Vec<(String, String)> = Vec::new();
-    for (k, v) in pairs {
-        out.retain(|(o, _)| *o != k);
-        out.push((k, v));
+    for (k, v) in &r.set {
+        // SAFETY: as above
+        unsafe { std::env::set_var(k, v) };
     }
-    out
+    Ok(r.name)
 }
 
 #[cfg(test)]

@@ -7,7 +7,9 @@ use super::{MAX_BODY, auth, lan, protocol};
 pub(super) fn keepable(req: &Head) -> bool {
     let short = match (req.method.as_str(), req.path.as_str()) {
         ("GET", "/") => true,
-        ("GET" | "POST", p) => p.starts_with("/api/") && p != "/api/agent/tasks/open" && task_events_id(p).is_none(),
+        ("GET" | "POST", p) => {
+            p.starts_with("/api/") && p != "/api/events" && p != "/api/agent/tasks/open" && task_events_id(p).is_none()
+        }
         _ => false,
     };
     short && !req.close && !req.chunked && req.content_length.unwrap_or(0) <= MAX_BODY

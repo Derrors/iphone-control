@@ -242,8 +242,39 @@ async function loadInfo() {
     if (seq === infoSequence && epoch === feedEpoch) feedError();
   }
 }
-/* 标签页在后台时不问（看不见的页面不用跟），回到前台马上补一次（见 layout.js 的 visibilitychange） */
+/* 按需共享状态流（SSE）：开启且处于前台时由服务端统一采样并去重推送；断开或切后台时回退原有轮询 */
+let stateEvents = null, stateEventsOpen = false;
+function stopStateEvents() {
+  stateEventsOpen = false;
+  if (stateEvents) { try { stateEvents.close(); } catch {} stateEvents = null; }
+}
+function startStateEvents() {
+  if (S.mode !== 'live' || document.hidden || typeof EventSource !== 'function' || stateEvents) return;
+  const es = new EventSource('/api/events');
+  stateEvents = es;
+  const parse = e => { try { return JSON.parse(e.data); } catch { return null; } };
+  es.addEventListener('open', () => { if (stateEvents === es) stateEventsOpen = true; });
+  es.addEventListener('error', () => { if (stateEvents === es) stateEventsOpen = false; });
+  es.addEventListener('info', e => {
+    if (stateEvents !== es) return;
+    stateEventsOpen = true;
+    const v = parse(e); if (v) applyInfo(v);
+  });
+  es.addEventListener('daemon', e => {
+    if (stateEvents !== es) return;
+    const v = parse(e); if (v) applyDaemonState(v);
+  });
+  es.addEventListener('status', e => {
+    if (stateEvents !== es) return;
+    const v = parse(e); if (v) applyStatusState(v);
+  });
+  es.addEventListener('tasks', e => {
+    if (stateEvents !== es) return;
+    const v = parse(e); if (Array.isArray(v) && wantsTasks()) adoptTask(v);
+  });
+}
+/* 标签页在后台时不问（看不见的页面不用跟）；SSE 正常连通时由服务端推送，不再重复轮询 */
 async function pollInfo() {
-  if (!document.hidden) await loadInfo();
+  if (!document.hidden && !stateEventsOpen) await loadInfo();
   setTimeout(pollInfo, 2000);
 }

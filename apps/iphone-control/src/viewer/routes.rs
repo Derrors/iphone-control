@@ -40,6 +40,7 @@ pub(super) async fn route(
             };
             super::stream::picture(ctx, &head, feed).await
         }
+        ("GET", "/api/events") => super::stream::state_events(ctx, &head, &pass),
         ("GET", p) if task_events_id(p).is_some() => {
             let id = task_events_id(p).unwrap_or_default();
             match protocol::task_events(&ctx.socket, id).await {

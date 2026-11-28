@@ -28,6 +28,7 @@
 mod actions;
 mod api;
 pub mod auth;
+mod events;
 mod head;
 mod io;
 mod lan;
@@ -99,6 +100,8 @@ struct Ctx {
     mcp: Option<ictl_mcp::HttpService>,
     /// The login every HTTP request needs ([`auth`]); `None` only in tests
     auth: Option<auth::Auth>,
+    /// Shared on-demand SSE state broadcaster for `GET /api/events`
+    events: events::StateHub,
 }
 
 /// A page's picture (`?feed=`) registered while its stream runs: the page asks whether it is still open. Dropped with
@@ -308,6 +311,7 @@ pub async fn run(
         tls,
         mcp: mcp.then(|| ictl_mcp::http_service(socket.to_path_buf())),
         auth: Some(auth),
+        events: events::StateHub::default(),
     });
     let slots = Arc::new(tokio::sync::Semaphore::new(MAX_CONNECTIONS));
     let busy = Arc::new(tokio::sync::Semaphore::new(BUSY_ANSWERS));

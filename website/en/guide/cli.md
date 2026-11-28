@@ -12,6 +12,7 @@ These go before the command, for example `iphone-control --socket /path/ctl.sock
 |---|---|---|
 | `--data-dir <dir>` | `ICTL_DATA_DIR` | Data directory; defaults in [Configuration](./configuration#directories-and-control-socket) |
 | `--socket <path>` | `ICTL_SOCKET` | The daemon's control socket; defaults in the same place |
+| `--instance <name>` | `IPHONE_CONTROL_INSTANCE` | Run for this named instance, see [Instances](./instances); a `--socket` on the command line wins over an instance named in the environment or the settings file |
 
 ## Running
 
@@ -19,7 +20,8 @@ These go before the command, for example `iphone-control --socket /path/ctl.sock
 |---|---|
 | `daemon` | The long-running daemon. Usually started by the background service; you can also run it in a terminal |
 | `mcp [--url <viewer> [--ca <PEM>]]` | MCP stdio server, started by the AI client. With `--url` (or `IPHONE_CONTROL_URL` set), a bridge to another machine's viewer `/mcp`: for a phone on that machine and a client that only starts a command. With a task's token (`IPHONE_CONTROL_TASK_TOKEN`) only that is sent, otherwise the login from `IPHONE_CONTROL_VIEWER_TOKEN`; a command under `task run --url` has these set, so a plain `iphone-control mcp` works there |
-| `mcp-config` | Prints the command that registers the MCP server with Claude Code, with a program path that stays the same across upgrades (Homebrew's `opt` link) |
+| `mcp-config` | Prints the command that registers the MCP server with Claude Code (`--socket <absolute path> mcp --local`; a named instance's server is `iphone-<name>`), with a program path that stays the same across upgrades (Homebrew's `opt` link) |
+| `mcp --local` | Only `--socket`: `IPHONE_CONTROL_URL`, `IPHONE_CONTROL_CA` and `IPHONE_CONTROL_INSTANCE` in the settings file or the environment are ignored |
 
 ## Shell completion
 
@@ -102,6 +104,7 @@ Cancellation preserves saved settings and discards unsaved changes. In the full 
 | Command | What it does |
 |---|---|
 | `status` | State, phone, how the device was chosen, time left on the profile, auto-unlock, notifications, recent log |
+| `status --all` | Every instance, one line each |
 | `doctor` | Layer-by-layer checks with a fix for each failure |
 
 ## Several devices
@@ -111,7 +114,10 @@ See [Several Devices](./multi-device).
 | Command | What it does |
 |---|---|
 | `devices` | Lists devices on USB; marks the controlled one and whether it has an auto-unlock passcode |
-| `select <UDID\|name\|auto>` | Control another device, remembered across restarts; `auto` goes back to automatic choice |
+| `select <UDID\|name\|auto>` | Control another device, remembered across restarts; `auto` goes back to automatic choice (not beside named instances) |
+| `instance add <name> --device <UDID>` | Add a named instance, see [Instances](./instances); `--port`, `--force`, `--yes`, `--resume` |
+| `instance list` | List the instances |
+| `instance remove <name> [--purge]` | Stop and remove a named instance |
 
 ## Auto-unlock
 

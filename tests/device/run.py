@@ -12,7 +12,8 @@ viewer's `/mcp`; MCP_CA trusts its self-signed certificate), see mcp_http.py. Sc
 
 It first asks which device it controls (model, iOS version, screen, native or WDA: the `###` line, which a pull
 request needs) and at the end checks that it is still the same one: another session switching devices in between
-makes the run worthless.
+makes the run worthless. With EXPECT_UDID set it stops at once when the device controlled is another one (two
+instances run side by side, see instances.py).
 
 The default steps check what they get, not only that no tool failed: the tab they tap becomes the selected one, the
 screen is reported as changed, a screenshot has the screen's size, the text typed into Spotlight shows up. They
@@ -195,6 +196,8 @@ async def main() -> int:
             print(f"--- no device to test: {e}", flush=True)
             return 1
         print(f"### {d.line()}", flush=True)
+        if not dev.is_expected(d):
+            return 1
         if not steps and not (d.w and d.h):
             print("--- the screen's size is unknown (is the daemon ready? `iphone-control status`)", flush=True)
             print("--- 准备阶段的原始 iphone_status 响应（0×0 摘要也可能仅表示未取得尺寸字段）：\n" + r.last_status, flush=True)

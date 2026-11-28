@@ -12,6 +12,7 @@
 |---|---|---|
 | `--data-dir <目录>` | `ICTL_DATA_DIR` | 数据目录，默认值见[配置](./configuration#目录和控制接口) |
 | `--socket <路径>` | `ICTL_SOCKET` | 守护进程的控制接口，默认值同上 |
+| `--instance <名字>` | `IPHONE_CONTROL_INSTANCE` | 对这个命名实例运行，见[多实例](./instances)；命令行上的 `--socket` 优先于环境和设置文件里的实例名 |
 
 ## 运行
 
@@ -19,7 +20,8 @@
 |---|---|
 | `daemon` | 常驻守护进程。一般由后台服务启动，也可以在终端里手动运行 |
 | `mcp [--url <控制台> [--ca <PEM>]]` | MCP stdio 服务，由 AI 客户端拉起。加 `--url`（或设了 `IPHONE_CONTROL_URL`）时转接另一台机器控制台的 `/mcp`：手机接在那台机器上、客户端又只能填命令时用。有任务口令（`IPHONE_CONTROL_TASK_TOKEN`）就只带它，否则用 `IPHONE_CONTROL_VIEWER_TOKEN` 登录；`task run --url` 启动的命令已经设好这些，照常配置 `iphone-control mcp` 就行 |
-| `mcp-config` | 打印把 MCP 注册到 Claude Code 的命令。程序路径用升级后不变的那个（Homebrew 用 `opt` 下的链接） |
+| `mcp-config` | 打印把 MCP 注册到 Claude Code 的命令（`--socket <绝对路径> mcp --local`，命名实例的服务名是 `iphone-<名字>`）。程序路径用升级后不变的那个（Homebrew 用 `opt` 下的链接） |
+| `mcp --local` | 只连 `--socket`：不管设置文件和环境里的 `IPHONE_CONTROL_URL`、`IPHONE_CONTROL_CA`、`IPHONE_CONTROL_INSTANCE` |
 
 ## Shell 补全
 
@@ -102,6 +104,7 @@ Viewer 要用令牌登录（见下面的 `viewer`）。持有令牌的人（只�
 | 命令 | 作用 |
 |---|---|
 | `status` | 状态、手机、选设备方式、描述文件还剩多久、自动解锁、通知、最近日志 |
+| `status --all` | 所有实例，各一行 |
 | `doctor` | 逐层诊断，每项失败都给出修复办法 |
 
 ## 多台设备
@@ -111,7 +114,10 @@ Viewer 要用令牌登录（见下面的 `viewer`）。持有令牌的人（只�
 | 命令 | 作用 |
 |---|---|
 | `devices` | 列出 USB 上接着的设备，标出正在控制哪台、有没有设自动解锁密码 |
-| `select <UDID\|设备名\|auto>` | 改为控制另一台，重启后还记得；`auto` 改回自动选 |
+| `select <UDID\|设备名\|auto>` | 改为控制另一台，重启后还记得；`auto` 改回自动选（有命名实例时不能用） |
+| `instance add <名字> --device <UDID>` | 添加命名实例，见[多实例](./instances)；`--port`、`--force`、`--yes`、`--resume` |
+| `instance list` | 列出实例 |
+| `instance remove <名字> [--purge]` | 停掉并移除命名实例 |
 
 ## 自动解锁
 

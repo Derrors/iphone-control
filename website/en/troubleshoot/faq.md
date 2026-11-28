@@ -24,6 +24,8 @@ Messages are in Simplified Chinese by default, and in English with `IPHONE_CONTR
 | WDA 卡在手机上的「Enable UI Automation」密码框<br>WDA is stuck at the “Enable UI Automation” passcode prompt | The phone asks for the passcode for "XCTest" | Enter the passcode on the phone. This happens after a reboot, and sometimes after the daemon is restarted several times in a row. The daemon retries every 5 seconds, each launch waiting about 25 seconds for the prompt, and notifies you once |
 | WDA 启动失败，稍后重试：…<br>WDA failed to start, retrying later: … | Other failure | Read the error after the colon and run `doctor`. Retries back off up to 5 minutes |
 | 就绪<br>Ready | Everything works | — |
+| 这台设备由实例 X 控制<br>This device is controlled by the instance X | Another instance ([Instances](../guide/instances)) holds the device's lease | Have that instance let go of it (`--instance X select` another device, or `instance remove X`) and this one takes over by itself; or select another device for this one |
+| 有命名实例时默认实例只控制选定的那台，还没选<br>With named instances the default instance only controls the device selected for it | Beside named instances the default one doesn't choose a device by itself | `iphone-control select <UDID>` (not another instance's device) |
 
 ## The phone isn't detected
 

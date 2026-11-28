@@ -5,6 +5,7 @@ The tools answer in Chinese or English (IPHONE_CONTROL_LANG of the daemon and th
 its own language, so nothing here depends on either: an expected text is given in both languages (`T`), and app
 names are read from the phone (`iphone_list_apps`)."""
 
+import os
 import re
 import struct
 from dataclasses import dataclass, field
@@ -134,6 +135,16 @@ def controlled(devices_text: str, status_text: str = "") -> tuple[str, str, str]
         if m := _DEVICE.search(ln):
             return m[1], m[2], m[3]
     return "?", "?", ""
+
+
+def is_expected(d: Device) -> bool:
+    """With EXPECT_UDID set, whether `d` is that device (in either case); says so when it isn't. Two instances
+    tested side by side must each be on its own device before doing anything (instances.py)"""
+    want = os.environ.get("EXPECT_UDID", "").strip()
+    if want and want.upper() != (d.udid or "").upper():
+        print(f"--- controlling {d.udid or 'no device'}, not EXPECT_UDID={want}: stopped before any step", flush=True)
+        return False
+    return True
 
 
 def read_status(d: Device, text: str) -> Device:

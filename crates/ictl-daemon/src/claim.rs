@@ -5,8 +5,9 @@
 //!   in it isn't taken by someone else meanwhile (D11: never another device silently).
 //! - Automatic (only without named instances): the device in use while it is connected, else the first one no one
 //!   holds. Disconnected: the lease goes, another may be chosen.
-//! - The default instance while named instances are registered or being added: only the device selected for it;
-//!   none selected is [`DeviceState::NeedsSelection`].
+//! - The default instance while named instances are registered or being added: only the device selected for it, or
+//!   the one it controls already (until `instance add` pins it, docs/dev/multi-instance-plan.md 4.4), unless a named
+//!   instance has that one; no other is chosen. None of these is [`DeviceState::NeedsSelection`].
 //!
 //! The registry is read every round (one `readdir`): an instance being added is seen at once.
 
@@ -58,11 +59,23 @@ impl Daemon {
 
     /// The device this round controls, with its lease taken
     pub(crate) async fn round_target(self: &Arc<Self>, g: &mut Inner) -> Round {
-        let pinned = self.pinned(g);
+        let mut pinned = self.pinned(g);
         if pinned.is_none() && self.restricted() {
-            self.let_go(g).await;
-            self.set_state(g, DeviceState::NeedsSelection);
-            return Round::Held;
+            // the device controlled now is kept, as if selected (`instance add` is about to pin it): none other is
+            // chosen, and none a named instance has or is getting
+            let keep = g
+                .device
+                .as_ref()
+                .map(|d| d.udid.clone())
+                .filter(|u| crate::instance::scan(&self.cfg.registry).is_ok_and(|s| s.reserved_by(u).is_none()));
+            match keep {
+                Some(u) => pinned = Some(u),
+                None => {
+                    self.let_go(g).await;
+                    self.set_state(g, DeviceState::NeedsSelection);
+                    return Round::Held;
+                }
+            }
         }
         let udids: Vec<&str> = g.connected.iter().map(|d| d.udid.as_str()).collect();
         // just started, nothing controlled yet: in automatic mode go on with the last device that was ready (kept in

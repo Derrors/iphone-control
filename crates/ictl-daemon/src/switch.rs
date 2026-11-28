@@ -460,10 +460,17 @@ mod tests {
             // not registered yet: automatic, the first one
             let mut g = d.inner.lock().await;
             assert!(matches!(d.round_target(&mut g).await, crate::claim::Round::Device(u) if u.udid == A));
+            // controlling A when a named instance appears (`instance add` about to pin it): A is kept
+            g.device = Some(Device::from_usb(&usb(A, 1)));
             drop(g);
             std::fs::create_dir_all(&d.cfg.registry).unwrap();
             let p = crate::instance::Pending { name: "ipad".into(), udid: B.into(), port: 8203, started: 1 };
             std::fs::write(d.cfg.registry.join("ipad.pending"), serde_json::to_vec(&p).unwrap()).unwrap();
+            let mut g = d.inner.lock().await;
+            assert!(matches!(d.round_target(&mut g).await, crate::claim::Round::Device(u) if u.udid == A));
+            // gone: none other is chosen
+            g.device = None;
+            drop(g);
             assert!(d.select("auto").await.is_err());
             let e = d.select(B).await.unwrap_err().to_string();
             assert!(e.contains("ipad"), "{e}");

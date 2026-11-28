@@ -132,20 +132,20 @@ impl Daemon {
             tracing::warn!(
                 "{}",
                 ictl_l10n::log_trf!(
-                    "撤掉旧版本的停用标记失败，它照旧生效：{e}",
-                    "Removing the older version's flag failed; it still applies: {e}"
+                    "撤掉旧版本的停用标记时出错（可能没撤掉，也可能撤了一部分；没撤掉的照旧生效）：{e}",
+                    "Removing the older version's flag failed (it may not be removed, or only in part; what is left still applies): {e}"
                 )
             );
             false
         });
         if retired {
             self.log.log(ictl_l10n::log_tr!(
-                "存了锁屏密码的设备都已逐台恢复，撤掉了旧版本留下的停用标记",
-                "Every device with a saved passcode was re-enabled one by one: the flag an older version left is removed"
+                "存了锁屏密码的设备都已解除旧版本的停用，撤掉了旧版本留下的全局停用标记；各设备自己的停用记录仍保留",
+                "Every device with a saved passcode is released from the older version's flag, so that global flag is removed; each device's own disabled record stays"
             ));
             text += ictl_l10n::tr!(
-                "；存了锁屏密码的设备都已恢复，旧版本留下的停用标记已撤掉",
-                "; every device with a saved passcode is re-enabled, so the flag an older version left is removed"
+                "；已撤掉旧版本留下的全局停用标记（各设备自己的停用记录仍保留）",
+                "; the global flag an older version left is removed (each device's own disabled record stays)"
             );
         } else if store.legacy() {
             text += ictl_l10n::tr!(

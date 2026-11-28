@@ -18,6 +18,7 @@ mod doctor;
 pub mod envfmt;
 pub mod error;
 pub mod eventlog;
+mod forward;
 mod hidmark;
 pub mod imaging;
 pub mod instance;
@@ -28,6 +29,7 @@ mod mjpeg;
 pub mod notify;
 pub mod procs;
 mod screen;
+mod setup;
 mod supervise;
 mod switch;
 pub mod tasks;
@@ -291,6 +293,22 @@ async fn serve_conn(daemon: Arc<Daemon>, stream: tokio::net::UnixStream) {
                     ictl_l10n::scope(lang, daemon.screen_stream(reader, w, ctx.expect_udid, ctx.low_bandwidth)).await;
                     return;
                 }
+                // `wda-bridge`: one connection to WDA's port (`forward`)
+                (Ok((protocol::Request::WdaForward { udid }, _, ctx, lang)), Ok(lease)) => {
+                    drop(lease);
+                    if ctx.task.is_some() {
+                        let r = protocol::Response::error(ictl_l10n::tr!(
+                            "AI 任务不能开 WDA 桥接",
+                            "An AI task can't open a WDA bridge"
+                        ));
+                        let mut line = serde_json::to_string(&r).unwrap_or_default();
+                        line.push('\n');
+                        let _ = w.write_all(line.as_bytes()).await;
+                        return;
+                    }
+                    ictl_l10n::scope(lang, daemon.wda_forward(reader, w, &udid)).await;
+                    return;
+                }
                 // the same for WDA's MJPEG picture (iOS 17-26)
                 (Ok((protocol::Request::MjpegStream, _, ctx, lang)), Ok(lease)) => {
                     drop(lease);
@@ -400,6 +418,10 @@ async fn task_stream(
         Some(l) => Some(l.await),
         None => None,
     };
+    // the bridges to WDA end before a task is registered: what goes through them is out of its reach
+    if held.is_some() {
+        daemon.forwards.end_all().await;
+    }
     let found = match req {
         protocol::Request::TaskOpen { .. } if daemon.gate.check_open().is_err() => Err(admission::switching().into()),
         protocol::Request::TaskOpen { title, owner, apps } => match daemon.resolve_scope(&apps).await {
@@ -713,6 +735,28 @@ mod tests {
         assert!(e.to_string().contains("running") || e.to_string().contains("运行"), "{e}");
         drop(first);
         assert!(single_instance(&socket, std::time::Duration::ZERO).await.is_ok(), "free again");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// `Resign` names its device with the top-level `expect_udid` every request has (taken off before the request is
+    /// read, so a field of its own would always be empty): another device being controlled refuses it before anything
+    /// is registered or signed (docs/dev/multi-instance-plan.md 4.5)
+    #[tokio::test]
+    async fn a_resign_for_another_device_is_refused_before_signing() {
+        let (d, dir) = core::tests::test_daemon("resign-expect");
+        let usb = ictl_device::UsbDevice { udid: "00008130-00000000000000AA".into(), device_id: 1 };
+        d.inner.lock().await.device = Some(ictl_device::Device::from_usb(&usb));
+        let (req, _, ctx, _) =
+            parse_request(br#"{"op":"resign","force":true,"expect_udid":"00008020-00000000000000BB"}"#).unwrap();
+        assert_eq!(req, protocol::Request::Resign { force: true });
+        let r = d.handle(req, std::time::Instant::now(), ctx).await;
+        assert!(
+            matches!(&r, protocol::Response::Error { message, .. } if message.contains("00008020-00000000000000BB")),
+            "{r:?}"
+        );
+        assert!(!d.inner.lock().await.resigning, "never started");
+        let log = std::fs::read_to_string(dir.join("logs/daemon.log")).unwrap_or_default();
+        assert!(!log.contains("开始重签") && !log.contains("Re-signing started"), "{log}");
         std::fs::remove_dir_all(dir).unwrap();
     }
 

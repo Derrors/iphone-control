@@ -52,14 +52,33 @@ pub fn account_dir(data_dir: &Path) -> ictl_sign::AccountDir {
     cfg.account()
 }
 
+/// The device leases' directory, as the daemon of this command's instance sees it (`crate::envfile` set the data
+/// directory of a named instance)
+pub fn devices_dir() -> std::path::PathBuf {
+    let data = env_nonempty(ictl_daemon::protocol::env::DATA_DIR)
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(protocol::default_data_dir);
+    ictl_daemon::Config::from_env(&data).devices_dir()
+}
+
 /// 命令要针对哪台设备：`IPHONE_UDID` > 守护进程正在控制的（或选定的）> USB 上唯一的一台。
 /// 给了 `query`（UDID 或设备名）就在接着的设备里找
 pub async fn target_device(socket: &Path, query: Option<&str>) -> anyhow::Result<ictl_device::DeviceInfo> {
     let snap = snapshot(socket).await.ok();
     let mut infos = snap.as_ref().map(|s| s.devices.clone()).unwrap_or_default();
     if infos.is_empty() {
+        let dir = devices_dir();
         for d in ictl_device::list_devices().await.unwrap_or_default() {
-            let i = ictl_device::Device::from_usb(&d).info().await.unwrap_or_default();
+            // a device another instance controls isn't read: its lease says what it is
+            let i = match ictl_daemon::lease::holder(&dir, &d.udid) {
+                Some(h) => ictl_device::DeviceInfo {
+                    name: h.name,
+                    product_type: h.model,
+                    product_version: h.ios,
+                    ..Default::default()
+                },
+                None => ictl_device::Device::from_usb(&d).info().await.unwrap_or_default(),
+            };
             infos.push(ictl_device::DeviceInfo { udid: d.udid, ..i });
         }
     }

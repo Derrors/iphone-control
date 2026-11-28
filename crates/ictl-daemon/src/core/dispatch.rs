@@ -243,9 +243,17 @@ impl Daemon {
             Lane::Snapshot => unreachable!("handled above"),
             Lane::Task => {
                 return Response::error(ictl_l10n::tr!(
-                    "task_open、task_events 是流式请求，要用 open_task / task_events 打开",
-                    "task_open and task_events are streaming requests: open them with open_task / task_events"
+                    "task_open、task_events、wda_forward 是流式请求，要用 open_task / task_events / wda-bridge 打开",
+                    "task_open, task_events and wda_forward are streaming requests: open them with open_task / task_events / wda-bridge"
                 ));
+            }
+            Lane::Setup => {
+                let Request::SetupStep { udid, step } = &req else { unreachable!("lane") };
+                if ctx.task.is_some() {
+                    return Response::error(ictl_l10n::tr!("AI 任务不能做设置步骤", "An AI task can't do setup steps"))
+                        .with_failure(Delivery::NotSent, FailureStage::Preflight);
+                }
+                return text(self.setup_step(udid, *step).await);
             }
             Lane::Select => {
                 let Request::SelectDevice { device } = &req else { unreachable!("lane") };
@@ -258,7 +266,11 @@ impl Daemon {
             // 重签自己分段持锁：签名、安装要几十秒，期间不挡住别的请求
             Lane::Resign => {
                 let Request::Resign { force } = req else { unreachable!("lane") };
-                return self.resign_now(force).await.map(Response::text).unwrap_or_else(Response::error);
+                return self
+                    .resign_now(force, ctx.expect_udid.as_deref())
+                    .await
+                    .map(Response::text)
+                    .unwrap_or_else(Response::error);
             }
             // Web Inspector talks to the page, not to WDA: its own lock, the device lock only to look up the device
             Lane::Web => {
@@ -668,7 +680,9 @@ impl Daemon {
             | Request::TaskConfirm { .. }
             | Request::TaskNote { .. }
             | Request::TaskFinish { .. }
-            | Request::SelectDevice { .. } => unreachable!("other lanes"),
+            | Request::SelectDevice { .. }
+            | Request::SetupStep { .. }
+            | Request::WdaForward { .. } => unreachable!("other lanes"),
         };
         let r = r.map(|t| Response::text_data(t, outcome, data)).unwrap_or_else(crate::error::Error::response);
         with_unlock_note(r, g.dev.unlocked.take())
@@ -697,6 +711,8 @@ pub(super) enum Lane {
     Task,
     /// changing the device: the selection latch, the device lock in steps ([`crate::switch`])
     Select,
+    /// `setup`'s device steps for the device held: the selection latch, then the device lock ([`crate::setup`])
+    Setup,
 }
 
 pub(super) fn lane(req: &Request) -> Lane {
@@ -746,6 +762,9 @@ pub(super) fn lane(req: &Request) -> Lane {
         | Request::ListDevices
         | Request::AppLogs { .. } => Lane::Device,
         Request::SelectDevice { .. } => Lane::Select,
+        Request::SetupStep { .. } => Lane::Setup,
+        // a stream, served by the connection (`lib::serve_conn`)
+        Request::WdaForward { .. } => Lane::Task,
     }
 }
 

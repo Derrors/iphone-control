@@ -13,14 +13,13 @@ use crate::client::target_device;
 pub(crate) async fn wda_bridge(socket: &Path, port: u16) -> anyhow::Result<()> {
     // 和守护进程控制同一台（WDA 只在那台上跑着）
     let target = target_device(socket, None).await?;
-    let device = ictl_device::Device::find(Some(&target.udid)).await?;
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", port)).await?;
     println!(
         "{}",
         ictl_l10n::trf!(
             "WDA 桥接 127.0.0.1:{port} → 手机 {} 的 8100 端口（Ctrl-C 停止）",
             "WDA bridge 127.0.0.1:{port} → port 8100 on phone {} (Ctrl-C to stop)",
-            device.udid
+            target.udid
         )
     );
     println!(
@@ -35,9 +34,9 @@ pub(crate) async fn wda_bridge(socket: &Path, port: u16) -> anyhow::Result<()> {
         let (client, _) = listener.accept().await?;
         // 连接太多就不接新的（见 MAX_CONNECTIONS）
         let Ok(slot) = slots.clone().try_acquire_owned() else { continue };
-        let device = device.clone();
+        let (socket, udid) = (socket.to_owned(), target.udid.clone());
         tokio::spawn(async move {
-            if let Err(e) = bridge_conn(client, &device).await {
+            if let Err(e) = bridge_conn(client, &socket, &udid).await {
                 tracing::warn!("{}", ictl_l10n::log_trf!("桥接连接出错：{e}", "Bridge connection error: {e}"));
             }
             drop(slot);
@@ -46,15 +45,28 @@ pub(crate) async fn wda_bridge(socket: &Path, port: u16) -> anyhow::Result<()> {
 }
 
 /// 先读到第一个请求的头部，Host 必须是本机回环地址才转发：恶意网页借 DNS rebinding 发到 127.0.0.1 的请求，
-/// Host 头是它自己的域名
-async fn bridge_conn(mut client: tokio::net::TcpStream, device: &ictl_device::Device) -> anyhow::Result<()> {
+/// Host 头是它自己的域名。转发经守护进程（`Request::WdaForward`）：控制这台设备的实例开这条连接，任务进行中、
+/// 切换设备时它会拒绝或结束（docs/dev/multi-instance-plan.md 4.5），本命令不自己连手机
+async fn bridge_conn(mut client: tokio::net::TcpStream, socket: &Path, udid: &str) -> anyhow::Result<()> {
     use tokio::io::AsyncWriteExt;
     let (head, body) = read_head(&mut client).await?;
     if !host_is_loopback(&head) {
         client.write_all(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").await?;
         return Ok(());
     }
-    let mut remote = device.connect_port(8100).await?;
+    let mut remote = match ictl_daemon::protocol::open_wda_forward(socket, udid).await? {
+        Ok(r) => r,
+        Err(why) => {
+            let body = format!("{why}\n");
+            let head = format!(
+                "HTTP/1.1 503 Service Unavailable\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            client.write_all(head.as_bytes()).await?;
+            client.write_all(body.as_bytes()).await?;
+            anyhow::bail!("{why}");
+        }
+    };
     remote.write_all(&head).await?;
     remote.write_all(&body).await?;
     tokio::io::copy_bidirectional(&mut client, &mut remote).await?;

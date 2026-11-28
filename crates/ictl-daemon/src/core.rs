@@ -375,6 +375,8 @@ pub struct Daemon {
     pub(crate) claiming: std::sync::atomic::AtomicBool,
     /// At most this many other devices' details are read at once
     pub(crate) probes: Arc<tokio::sync::Semaphore>,
+    /// The `wda-bridge` connections open ([`crate::forward`])
+    pub(crate) forwards: Arc<crate::forward::Forwards>,
     /// Counts the selections written since the start ([`InstanceIdentity::selection_generation`])
     pub(crate) selection_generation: std::sync::atomic::AtomicU64,
 }
@@ -582,6 +584,7 @@ impl Daemon {
             claimed: std::sync::Mutex::new(None),
             claiming: std::sync::atomic::AtomicBool::new(false),
             probes: Arc::new(tokio::sync::Semaphore::new(crate::devices::PROBES_AT_ONCE)),
+            forwards: Arc::default(),
             selection_generation: std::sync::atomic::AtomicU64::new(0),
         })
     }

@@ -127,7 +127,7 @@ impl Daemon {
             g.next_resign = now + self.cfg.resign_check;
             let d = self.clone();
             tokio::task::spawn_local(async move {
-                if let Err(e) = d.resign_now(false).await {
+                if let Err(e) = d.resign_now(false, None).await {
                     let mut g = d.inner.lock().await;
                     d.notify(&mut g, Event::ResignFailed(e.to_string()));
                 }
@@ -536,7 +536,7 @@ mod upkeep_tests {
 
         let own = ictl_l10n::own_lang();
         let other = if own == ictl_l10n::Lang::En { ictl_l10n::Lang::Zh } else { ictl_l10n::Lang::En };
-        let err = ictl_l10n::scope(other, d.resign_now(true)).await.unwrap_err().to_string();
+        let err = ictl_l10n::scope(other, d.resign_now(true, None)).await.unwrap_err().to_string();
 
         let (want_other, want_own) = if own == ictl_l10n::Lang::En {
             ("还没有登录 Apple ID", "Not signed in to an Apple ID yet")

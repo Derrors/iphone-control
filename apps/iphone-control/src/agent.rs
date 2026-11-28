@@ -132,7 +132,7 @@ impl Drop for TokenFile {
 
 /// Variables of this program's settings that the agent has no use for and shouldn't see: notification keys, the
 /// viewer's login (the agent's MCP server reads the settings file itself, so nothing it needs is lost)
-const HIDDEN_FROM_AGENT: [&str; 6] = [
+const HIDDEN_FROM_AGENT: [&str; 8] = [
     ictl_daemon::protocol::env::TG_BOT_TOKEN,
     ictl_daemon::protocol::env::BARK_KEY,
     ictl_daemon::protocol::env::VIEWER_TOKEN,
@@ -141,6 +141,9 @@ const HIDDEN_FROM_AGENT: [&str; 6] = [
     // it would refuse to start)
     ictl_daemon::protocol::env::URL,
     ictl_daemon::protocol::env::CA,
+    // nor to another instance's socket, nor to an HTTP endpoint (docs/dev/multi-instance-plan.md 3.1)
+    ictl_daemon::protocol::env::INSTANCE,
+    ictl_daemon::protocol::env::MCP_URL,
 ];
 
 /// The agent's working directory under `base`: this user's own (0700, not a link). The agent reads what is there
@@ -443,7 +446,7 @@ impl Agents {
         let s = |v: &str| v.to_owned();
         match backend {
             Backend::Claude => {
-                let args = ["--socket", &socket, "mcp", "--task-token-file", &token_file];
+                let args = ["--socket", &socket, "mcp", "--local", "--task-token-file", &token_file];
                 let mcp = json!({"mcpServers": {"iphone": {"command": exe, "args": args, "env": env}}});
                 vec![
                     s("-p"),
@@ -485,10 +488,11 @@ impl Agents {
                     format!("mcp_servers.iphone.command={}", q(&exe)),
                     s("-c"),
                     format!(
-                        "mcp_servers.iphone.args=[{},{},{},{},{}]",
+                        "mcp_servers.iphone.args=[{},{},{},{},{},{}]",
                         q("--socket"),
                         q(&socket),
                         q("mcp"),
+                        q("--local"),
                         q("--task-token-file"),
                         q(&token_file)
                     ),

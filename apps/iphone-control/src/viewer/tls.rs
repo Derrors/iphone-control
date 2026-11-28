@@ -9,7 +9,15 @@
 //! The certificate is the user's (`--tls-cert`, `--tls-key`: mkcert, `tailscale cert`, an internal CA), or one made
 //! here, self-signed, kept in the data directory and reused, so the browser asks once rather than every start. Its
 //! SHA-256 fingerprint is printed, to check against the browser's warning the first time. A new name or address
-//! (DHCP gave the machine another one) makes a new certificate that also covers the old ones.
+//! (DHCP gave the machine another one) makes a new certificate that also covers the old ones, with the same key.
+//!
+//! The certificate made here is every instance's (docs/dev/multi-instance-plan.md 4.7): one file, `bundle.pem`, holds
+//! the certificate, its key and the names it covers, 0600 from the moment it is made, replaced whole under
+//! `viewer-tls.lock`; a viewer reading it gets one whole set, never one round's key with another's certificate. Each
+//! new TLS connection looks at it (time, size, inode) and takes a new one another viewer wrote; one that doesn't load
+//! is left for the next connection (at most once a second), the certificate of before still served. The three files
+//! of before (`cert.pem`, `key.pem`, `names.json`) are still written, under the same lock and in #218's order, for an
+//! older version; this one doesn't read them, but takes them over once, when there is no bundle yet.
 //!
 //! Not a login: anyone who can reach the page can still use it.
 
@@ -39,6 +47,11 @@ const HANDSHAKE: u8 = 0x16;
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 /// Under the data directory: the certificate made here
 const DIR: &str = "viewer-tls";
+const BUNDLE: &str = "bundle.pem";
+/// Beside [`DIR`], held while the certificate made here is written
+const LOCK: &str = "viewer-tls.lock";
+/// A bundle that didn't load is tried again no sooner than this
+const RELOAD_EVERY: Duration = Duration::from_secs(1);
 
 /// `--tls`
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
@@ -78,13 +91,22 @@ impl Setting {
 }
 
 pub struct Tls {
-    acceptor: tokio_rustls::TlsAcceptor,
-    /// SHA-256 of the certificate, as browsers show it (`AB:CD:…`)
-    pub fingerprint: String,
-    /// The certificate's file
+    serving: std::sync::RwLock<Serving>,
+    /// The bundle followed for a new certificate (the one made here); `None`: the user's, loaded once
+    bundle: Option<PathBuf>,
+    /// The certificate's file (a remote client's `--ca` is a copy of it)
     pub cert: PathBuf,
     /// Made here (self-signed): browsers warn the first time
     pub made: bool,
+}
+
+/// What a [`Tls`] serves now
+struct Serving {
+    acceptor: tokio_rustls::TlsAcceptor,
+    fingerprint: String,
+    /// The bundle's (modified, length, inode) it was loaded from
+    stamp: Option<(SystemTime, u64, u64)>,
+    tried: std::time::Instant,
 }
 
 impl Tls {
@@ -92,35 +114,58 @@ impl Tls {
     pub fn from_files(cert: &Path, key: &Path) -> anyhow::Result<Self> {
         let c = std::fs::read(cert).with_context(|| cert.display().to_string())?;
         let k = std::fs::read(key).with_context(|| key.display().to_string())?;
-        Self::new(&c, &k, cert, false)
+        let (acceptor, fingerprint) = acceptor(&c, &k, cert)?;
+        let serving = Serving { acceptor, fingerprint, stamp: None, tried: std::time::Instant::now() };
+        Ok(Self { serving: std::sync::RwLock::new(serving), bundle: None, cert: cert.to_owned(), made: false })
     }
 
     /// The certificate made here, made (again) when there is none, it doesn't cover all of `names`, or it ends soon
     pub fn made(data_dir: &Path, names: &[String]) -> anyhow::Result<Self> {
         let dir = data_dir.join(DIR);
-        let (cert, key) = ensure_made(&dir, names, now())?;
-        Self::new(&cert, &key, &dir.join("cert.pem"), true)
+        let pem = ensure_made(data_dir, names, now())?;
+        let bundle = dir.join(BUNDLE);
+        let (acceptor, fingerprint) = acceptor(&pem, &pem, &bundle)?;
+        let serving = Serving { acceptor, fingerprint, stamp: stamp(&bundle), tried: std::time::Instant::now() };
+        Ok(Self {
+            serving: std::sync::RwLock::new(serving),
+            bundle: Some(bundle),
+            cert: dir.join("cert.pem"),
+            made: true,
+        })
     }
 
-    fn new(cert_pem: &[u8], key_pem: &[u8], path: &Path, made: bool) -> anyhow::Result<Self> {
-        let certs = CertificateDer::pem_slice_iter(cert_pem)
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| anyhow::anyhow!("{}: {e:?}", path.display()))?;
-        let Some(first) = certs.first() else {
-            bail!(ictl_l10n::trf!("{} 里没有证书", "No certificate in {}", path.display()));
-        };
-        let fingerprint = fingerprint(first);
-        let key = PrivateKeyDer::from_pem_slice(key_pem).map_err(|e| anyhow::anyhow!("key: {e:?}"))?;
-        let provider = Arc::new(rustls::crypto::ring::default_provider());
-        let mut cfg = rustls::ServerConfig::builder_with_provider(provider)
-            .with_safe_default_protocol_versions()?
-            .with_no_client_auth()
-            .with_single_cert(certs, key)
-            .with_context(|| {
-                ictl_l10n::trf!("证书和私钥对不上（{}）", "The certificate and key don't match ({})", path.display())
-            })?;
-        cfg.alpn_protocols = vec![b"http/1.1".to_vec()];
-        Ok(Self { acceptor: tokio_rustls::TlsAcceptor::from(Arc::new(cfg)), fingerprint, cert: path.to_owned(), made })
+    /// SHA-256 of the certificate served now, as browsers show it (`AB:CD:…`)
+    pub fn fingerprint(&self) -> String {
+        self.serving.read().unwrap_or_else(|p| p.into_inner()).fingerprint.clone()
+    }
+
+    /// The certificate another viewer wrote since, taken; one that doesn't load is tried again later
+    fn reload(&self) {
+        let Some(bundle) = &self.bundle else { return };
+        let now_stamp = stamp(bundle);
+        {
+            let s = self.serving.read().unwrap_or_else(|p| p.into_inner());
+            if now_stamp == s.stamp || s.tried.elapsed() < RELOAD_EVERY {
+                return;
+            }
+        }
+        let mut s = self.serving.write().unwrap_or_else(|p| p.into_inner());
+        s.tried = std::time::Instant::now();
+        match std::fs::read(bundle).map_err(anyhow::Error::from).and_then(|pem| acceptor(&pem, &pem, bundle)) {
+            Ok((acceptor, fingerprint)) => {
+                if fingerprint != s.fingerprint {
+                    tracing::info!(
+                        "{}",
+                        ictl_l10n::log_trf!(
+                            "控制台证书换了（别的控制台写的），SHA-256 指纹 {fingerprint}",
+                            "The viewer's certificate changed (written by another viewer), SHA-256 fingerprint {fingerprint}"
+                        )
+                    );
+                }
+                (s.acceptor, s.fingerprint, s.stamp) = (acceptor, fingerprint, now_stamp);
+            }
+            Err(e) => tracing::warn!("{}: {e}", bundle.display()),
+        }
     }
 
     /// The connection as it comes: TLS when it starts with a handshake, plain HTTP otherwise
@@ -131,14 +176,46 @@ impl Tls {
         if n == 0 || first[0] != HANDSHAKE {
             return Ok(Conn::Plain(tcp));
         }
-        let s = tokio::time::timeout(HANDSHAKE_TIMEOUT, self.acceptor.accept(tcp)).await.map_err(timed_out)??;
+        self.reload();
+        let acceptor = self.serving.read().unwrap_or_else(|p| p.into_inner()).acceptor.clone();
+        let s = tokio::time::timeout(HANDSHAKE_TIMEOUT, acceptor.accept(tcp)).await.map_err(timed_out)??;
         Ok(Conn::Tls(Box::new(s)))
     }
 }
 
+/// A TLS acceptor for the certificate (chain) in `cert_pem` and the key in `key_pem` (the same bundle may hold both),
+/// with the certificate's fingerprint
+fn acceptor(cert_pem: &[u8], key_pem: &[u8], path: &Path) -> anyhow::Result<(tokio_rustls::TlsAcceptor, String)> {
+    let certs = CertificateDer::pem_slice_iter(cert_pem)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| anyhow::anyhow!("{}: {e:?}", path.display()))?;
+    let Some(first) = certs.first() else {
+        bail!(ictl_l10n::trf!("{} 里没有证书", "No certificate in {}", path.display()));
+    };
+    let fingerprint = fingerprint(first);
+    let key = PrivateKeyDer::from_pem_slice(key_pem).map_err(|e| anyhow::anyhow!("key: {e:?}"))?;
+    let provider = Arc::new(rustls::crypto::ring::default_provider());
+    let mut cfg = rustls::ServerConfig::builder_with_provider(provider)
+        .with_safe_default_protocol_versions()?
+        .with_no_client_auth()
+        .with_single_cert(certs, key)
+        .with_context(|| {
+            ictl_l10n::trf!("证书和私钥对不上（{}）", "The certificate and key don't match ({})", path.display())
+        })?;
+    cfg.alpn_protocols = vec![b"http/1.1".to_vec()];
+    Ok((tokio_rustls::TlsAcceptor::from(Arc::new(cfg)), fingerprint))
+}
+
+fn stamp(p: &Path) -> Option<(SystemTime, u64, u64)> {
+    use std::os::unix::fs::MetadataExt;
+    let m = std::fs::metadata(p).ok()?;
+    Some((m.modified().ok()?, m.len(), m.ino()))
+}
+
 /// The fingerprint of the certificate made here, if there is one (for `service status`)
 pub fn made_fingerprint(data_dir: &Path) -> Option<String> {
-    let pem = std::fs::read(data_dir.join(DIR).join("cert.pem")).ok()?;
+    let dir = data_dir.join(DIR);
+    let pem = std::fs::read(dir.join(BUNDLE)).or_else(|_| std::fs::read(dir.join("cert.pem"))).ok()?;
     let first = CertificateDer::pem_slice_iter(&pem).next()?.ok()?;
     Some(fingerprint(&first))
 }
@@ -151,25 +228,80 @@ fn now() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
 }
 
-/// What a made certificate covers, next to it
+/// What a made certificate covers: `names.json` of before, and the header of the bundle
 #[derive(Serialize, Deserialize)]
 struct Made {
     names: Vec<String>,
     not_after: u64,
 }
 
-/// The made certificate and key (PEM) in `dir`, made now if needed
-fn ensure_made(dir: &Path, names: &[String], now: u64) -> anyhow::Result<(Vec<u8>, Vec<u8>)> {
-    let (cert_f, key_f, meta_f) = (dir.join("cert.pem"), dir.join("key.pem"), dir.join("names.json"));
-    let meta: Option<Made> = std::fs::read(&meta_f).ok().and_then(|b| serde_json::from_slice(&b).ok());
-    if let (Some(m), Ok(c), Ok(k)) = (&meta, std::fs::read(&cert_f), std::fs::read(&key_f))
-        && names.iter().all(|n| m.names.contains(n))
-        && m.not_after > now + RENEW_DAYS * DAY
-    {
-        return Ok((c, k));
+/// The bundle's header line that holds [`Made`] (text outside a PEM block is left alone by readers)
+const MADE_LINE: &str = "iphone-control viewer certificate: ";
+
+/// A bundle: what it covers, its certificate (PEM) and its key (PEM)
+struct Bundle {
+    made: Made,
+    cert: Vec<u8>,
+    key: Vec<u8>,
+}
+
+impl Bundle {
+    fn render(&self) -> anyhow::Result<Vec<u8>> {
+        let mut out = format!("{MADE_LINE}{}\n", serde_json::to_string(&self.made)?).into_bytes();
+        out.extend_from_slice(&self.cert);
+        out.extend_from_slice(&self.key);
+        Ok(out)
     }
-    // the names it had stay: a page opened at an old address keeps working
-    let mut all: Vec<String> = meta.map(|m| m.names).unwrap_or_default();
+
+    fn parse(pem: &[u8]) -> Option<Self> {
+        let text = std::str::from_utf8(pem).ok()?;
+        let made = serde_json::from_str(text.lines().next()?.strip_prefix(MADE_LINE)?).ok()?;
+        let section = |kind: &str| {
+            let (begin, end) = (format!("-----BEGIN {kind}-----"), format!("-----END {kind}-----"));
+            let start = text.find(&begin)?;
+            let stop = start + text[start..].find(&end)? + end.len();
+            Some(format!("{}\n", &text[start..stop]).into_bytes())
+        };
+        Some(Self { made, cert: section("CERTIFICATE")?, key: section("PRIVATE KEY")? })
+    }
+
+    fn covers(&self, names: &[String], now: u64) -> bool {
+        names.iter().all(|n| self.made.names.contains(n)) && self.made.not_after > now + RENEW_DAYS * DAY
+    }
+}
+
+/// The bundle made here (PEM: certificate and key), made now if needed: with the lock held, so two viewers starting at
+/// once make one, and each reads a whole one
+fn ensure_made(data_dir: &Path, names: &[String], now: u64) -> anyhow::Result<Vec<u8>> {
+    use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
+    let dir = data_dir.join(DIR);
+    std::fs::DirBuilder::new().recursive(true).mode(0o700).create(&dir)?;
+    let lock = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .mode(0o600)
+        .open(data_dir.join(LOCK))?;
+    // SAFETY: a valid descriptor, owned by `lock` for as long as it is held; waited for: a certificate is made in
+    // milliseconds
+    if unsafe { libc::flock(std::os::fd::AsRawFd::as_raw_fd(&lock), libc::LOCK_EX) } != 0 {
+        return Err(io::Error::last_os_error().into());
+    }
+    let bundle_f = dir.join(BUNDLE);
+    let current = std::fs::read(&bundle_f).ok().and_then(|b| Bundle::parse(&b)).or_else(|| legacy(&dir));
+    if let Some(b) = &current
+        && b.covers(names, now)
+    {
+        let pem = b.render()?;
+        if std::fs::read(&bundle_f).ok().as_deref() != Some(&pem[..]) {
+            // the older version's pair, taken over once
+            write_atomic(&bundle_f, &pem, 0o600)?;
+        }
+        return Ok(pem);
+    }
+    // the names it had stay: a page opened at an old address keeps working; so does the key
+    let mut all: Vec<String> = current.as_ref().map(|b| b.made.names.clone()).unwrap_or_default();
     for n in names {
         if !all.contains(n) {
             all.push(n.clone());
@@ -186,24 +318,39 @@ fn ensure_made(dir: &Path, names: &[String], now: u64) -> anyhow::Result<(Vec<u8
     p.extended_key_usages = vec![rcgen::ExtendedKeyUsagePurpose::ServerAuth];
     // a new certificate under the same name gets a new serial number (Firefox refuses a reused one)
     p.serial_number = Some(rcgen::SerialNumber::from(now.max(1)));
-    // ECDSA P-256, the same key type rcgen 0.12 made
-    let key = rcgen::KeyPair::generate()?;
+    // ECDSA P-256, the same key type rcgen 0.12 made; the one there was, kept
+    let kept = current.as_ref().and_then(|b| rcgen::KeyPair::from_pem(std::str::from_utf8(&b.key).ok()?).ok());
+    let key = match kept {
+        Some(k) => k,
+        None => rcgen::KeyPair::generate()?,
+    };
     let cert = p.self_signed(&key)?;
-    let (c, k) = (cert.pem().into_bytes(), key.serialize_pem().into_bytes());
-    // names.json is what makes the pair reused: gone first and written last, so a stop halfway (a new key beside the
-    // old certificate) is made again on the next start instead of failing to load for good
-    {
-        use std::os::unix::fs::DirBuilderExt;
-        std::fs::DirBuilder::new().recursive(true).mode(0o700).create(dir)?;
-    }
+    let b = Bundle {
+        made: Made { names: all, not_after },
+        cert: cert.pem().into_bytes(),
+        key: key.serialize_pem().into_bytes(),
+    };
+    let pem = b.render()?;
+    write_atomic(&bundle_f, &pem, 0o600)?;
+    // the older version's three files, in #218's order: names.json is what makes that pair reused, gone first and
+    // written last, so a stop halfway is made again rather than failing to load
+    let meta_f = dir.join("names.json");
     match std::fs::remove_file(&meta_f) {
         Err(e) if e.kind() != io::ErrorKind::NotFound => return Err(e.into()),
         _ => {}
     }
-    write_atomic(&key_f, &k, 0o600)?;
-    write_atomic(&cert_f, &c, 0o644)?;
-    write_atomic(&meta_f, &serde_json::to_vec_pretty(&Made { names: all, not_after })?, 0o644)?;
-    Ok((c, k))
+    write_atomic(&dir.join("key.pem"), &b.key, 0o600)?;
+    write_atomic(&dir.join("cert.pem"), &b.cert, 0o644)?;
+    write_atomic(&meta_f, &serde_json::to_vec_pretty(&b.made)?, 0o644)?;
+    Ok(pem)
+}
+
+/// The pair an older version made (three files), if whole: the certificate and key that go together, and its names
+fn legacy(dir: &Path) -> Option<Bundle> {
+    let made: Made = serde_json::from_slice(&std::fs::read(dir.join("names.json")).ok()?).ok()?;
+    let (cert, key) = (std::fs::read(dir.join("cert.pem")).ok()?, std::fs::read(dir.join("key.pem")).ok()?);
+    acceptor(&cert, &key, &dir.join("cert.pem")).ok()?;
+    Some(Bundle { made, cert, key })
 }
 
 /// Writes `data` to a new temporary file beside `file` (with `mode` from the start: the key is only ever this
@@ -315,42 +462,71 @@ mod tests {
 
     #[test]
     fn the_made_certificate_is_kept_and_grows_with_new_names() {
+        use std::os::unix::fs::PermissionsExt;
         let tmp = tempfile::tempdir().unwrap();
         let a = Tls::made(tmp.path(), &names(&["localhost", "127.0.0.1"])).unwrap();
         assert!(a.made);
-        assert_eq!(a.fingerprint.len(), 32 * 3 - 1);
+        assert_eq!(a.fingerprint().len(), 32 * 3 - 1);
+        let key_a = std::fs::read(tmp.path().join(DIR).join("key.pem")).unwrap();
         let b = Tls::made(tmp.path(), &names(&["127.0.0.1"])).unwrap();
-        assert_eq!(a.fingerprint, b.fingerprint, "covered: the same certificate");
+        assert_eq!(a.fingerprint(), b.fingerprint(), "covered: the same certificate");
         let c = Tls::made(tmp.path(), &names(&["localhost", "192.168.1.9"])).unwrap();
-        assert_ne!(a.fingerprint, c.fingerprint, "a new address: a new certificate");
+        assert_ne!(a.fingerprint(), c.fingerprint(), "a new address: a new certificate");
+        assert_eq!(std::fs::read(tmp.path().join(DIR).join("key.pem")).unwrap(), key_a, "with the same key");
         let meta: Made =
             serde_json::from_slice(&std::fs::read(tmp.path().join(DIR).join("names.json")).unwrap()).unwrap();
         assert_eq!(meta.names, names(&["localhost", "127.0.0.1", "192.168.1.9"]), "keeping the old names");
-        assert_eq!(made_fingerprint(tmp.path()), Some(c.fingerprint.clone()));
-        use std::os::unix::fs::PermissionsExt;
-        let mode = std::fs::metadata(tmp.path().join(DIR).join("key.pem")).unwrap().permissions().mode();
-        assert_eq!(mode & 0o777, 0o600);
+        assert_eq!(made_fingerprint(tmp.path()), Some(c.fingerprint()));
+        for (f, want) in [("key.pem", 0o600), ("bundle.pem", 0o600), ("cert.pem", 0o644)] {
+            let mode = std::fs::metadata(tmp.path().join(DIR).join(f)).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, want, "{f}");
+        }
         // close to its end: made again
-        let (cert, _) = ensure_made(&tmp.path().join(DIR), &names(&["localhost"]), meta.not_after - DAY).unwrap();
-        assert_ne!(fingerprint(&CertificateDer::pem_slice_iter(&cert).next().unwrap().unwrap()), c.fingerprint);
+        let pem = ensure_made(tmp.path(), &names(&["localhost"]), meta.not_after - DAY).unwrap();
+        assert_ne!(fingerprint(&CertificateDer::pem_slice_iter(&pem).next().unwrap().unwrap()), c.fingerprint());
     }
 
-    /// A stop while a new pair was written (a new key beside the old certificate, names.json gone) makes a pair again
-    /// on the next start, instead of a viewer that can't load its certificate; nothing temporary is left
+    /// The pair an older version made is taken over once (the same certificate, now in the bundle); one it left
+    /// halfway (a new key beside the old certificate, names.json gone) is made again and loads; nothing temporary is
+    /// left
     #[test]
-    fn a_pair_written_halfway_is_made_again() {
+    fn an_older_versions_pair_is_taken_over_or_made_again() {
         let tmp = tempfile::tempdir().unwrap();
         let a = Tls::made(tmp.path(), &names(&["localhost"])).unwrap();
         let dir = tmp.path().join(DIR);
-        // as left by a stop after the key: names.json removed, the key another one
+        std::fs::remove_file(dir.join(BUNDLE)).unwrap();
+        let b = Tls::made(tmp.path(), &names(&["localhost"])).unwrap();
+        assert_eq!(a.fingerprint(), b.fingerprint(), "the older version's, taken over");
+        assert!(dir.join(BUNDLE).is_file());
+        // as an older version leaves it, stopped after the key: names.json removed, the key another one
+        std::fs::remove_file(dir.join(BUNDLE)).unwrap();
         std::fs::remove_file(dir.join("names.json")).unwrap();
         let other = rcgen::KeyPair::generate().unwrap().serialize_pem();
         std::fs::write(dir.join("key.pem"), other).unwrap();
-        let b = Tls::made(tmp.path(), &names(&["localhost"])).expect("made again, and loads");
-        assert_ne!(a.fingerprint, b.fingerprint);
+        let c = Tls::made(tmp.path(), &names(&["localhost"])).expect("made again, and loads");
+        assert_ne!(a.fingerprint(), c.fingerprint());
         let left: Vec<String> =
             std::fs::read_dir(&dir).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
         assert!(left.iter().all(|n| !n.ends_with(".tmp")), "{left:?}");
+    }
+
+    /// A viewer takes the certificate another one made since, at its next TLS connection; a bundle that doesn't load
+    /// leaves the one served before
+    #[test]
+    fn a_certificate_another_viewer_made_is_taken_without_a_restart() {
+        let tmp = tempfile::tempdir().unwrap();
+        let a = Tls::made(tmp.path(), &names(&["localhost"])).unwrap();
+        let before = a.fingerprint();
+        let other = Tls::made(tmp.path(), &names(&["localhost", "nas.local"])).unwrap();
+        a.reload();
+        assert_eq!(a.fingerprint(), before, "not tried again within a second");
+        std::thread::sleep(RELOAD_EVERY + Duration::from_millis(100));
+        a.reload();
+        assert_eq!(a.fingerprint(), other.fingerprint(), "taken");
+        write_atomic(&tmp.path().join(DIR).join(BUNDLE), b"broken", 0o600).unwrap();
+        std::thread::sleep(RELOAD_EVERY + Duration::from_millis(100));
+        a.reload();
+        assert_eq!(a.fingerprint(), other.fingerprint(), "kept");
     }
 
     #[test]
@@ -359,7 +535,7 @@ mod tests {
         let made = Tls::made(tmp.path(), &names(&["localhost"])).unwrap();
         let dir = tmp.path().join(DIR);
         let own = Tls::from_files(&dir.join("cert.pem"), &dir.join("key.pem")).unwrap();
-        assert_eq!(own.fingerprint, made.fingerprint);
+        assert_eq!(own.fingerprint(), made.fingerprint());
         assert!(!own.made);
         std::fs::write(tmp.path().join("bad.pem"), "not a certificate").unwrap();
         assert!(Tls::from_files(&tmp.path().join("bad.pem"), &dir.join("key.pem")).is_err());

@@ -71,6 +71,32 @@ pub async fn open_mjpeg_stream(
     })
 }
 
+/// Opens a [`Request::WdaForward`] to WDA's port on `udid`, which the daemon must be controlling: `Ok(Ok(..))` with
+/// the connection (bytes both ways from here on; buffered, as the answer line was read off it), `Ok(Err(why))` when the
+/// daemon won't, `Err` when it can't be reached
+pub async fn open_wda_forward(
+    socket: &std::path::Path,
+    udid: &str,
+) -> std::io::Result<Result<tokio::io::BufReader<tokio::net::UnixStream>, String>> {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    let mut stream = BufReader::new(connect(socket).await?);
+    let mut v = serde_json::to_value(Request::WdaForward { udid: udid.to_owned() })?;
+    if let Some(o) = v.as_object_mut() {
+        o.insert(LANG.into(), ictl_l10n::lang().code().into());
+    }
+    let mut line = v.to_string();
+    line.push('\n');
+    stream.get_mut().write_all(line.as_bytes()).await?;
+    let mut first = String::new();
+    tokio::time::timeout(std::time::Duration::from_secs(30), stream.read_line(&mut first))
+        .await
+        .map_err(|_| std::io::Error::new(std::io::ErrorKind::TimedOut, "WDA forward: no answer"))??;
+    Ok(match serde_json::from_str::<Response>(&first).map_err(std::io::Error::other)? {
+        Response::Error { message, .. } => Err(message),
+        _ => Ok(stream),
+    })
+}
+
 /// Opens a [`Request::ScreenStream`]: `Ok(Ok(..))` with the reading half (buffered: it may already hold the first
 /// messages) and the writing half, `Ok(Err(why))` when the daemon can't stream, `Err` when it can't be reached
 pub async fn open_screen_stream(

@@ -75,7 +75,7 @@ impl Daemon {
             );
             self.publish(&g);
         }
-        if let Err(e) = self.resign_now(true).await {
+        if let Err(e) = self.resign_now(true, Some(&udid)).await {
             let mut g = self.inner.lock().await;
             self.notify(&mut g, Event::ResignFailed(e.to_string()));
         }
@@ -214,8 +214,14 @@ impl Daemon {
         }
     }
 
-    /// 检查描述文件并按需重签（`force` 立即重签）。分三段：持锁取参数 → 不持锁签名、安装（几十秒）→ 持锁写结果
-    pub(crate) async fn resign_now(self: &Arc<Self>, force: bool) -> crate::error::Result<String> {
+    /// 检查描述文件并按需重签（`force` 立即重签）。分三段：持锁取参数 → 不持锁签名、安装（几十秒）→ 持锁写结果。
+    /// `expect`: the device the caller means (the request's `expect_udid`, taken off it into [`crate::core::CallCtx`]
+    /// before the request is read): another one being controlled refuses before anything is registered or signed
+    pub(crate) async fn resign_now(
+        self: &Arc<Self>,
+        force: bool,
+        expect: Option<&str>,
+    ) -> crate::error::Result<String> {
         let _lease = crate::maintenance::shared()?;
         let (device, name, pass) = {
             let mut g = self.inner.lock().await;
@@ -247,6 +253,16 @@ impl Daemon {
                 .into());
             }
             let device = g.device.clone().ok_or(ictl_l10n::tr!("手机未连接", "Phone not connected"))?;
+            if let Some(want) = expect
+                && !want.eq_ignore_ascii_case(&device.udid)
+            {
+                return Err(ictl_l10n::trf!(
+                    "正在控制的是 {}，不是要签名的 {want}，没有签名",
+                    "The device being controlled is {}, not {want} to be signed; nothing was signed",
+                    device.udid
+                )
+                .into());
+            }
             // held until the result is written: a switch doesn't wait for a re-signing, it is refused meanwhile
             let pass = self.gate.admit(Some(crate::admission::Long::Resign))?;
             let name = g

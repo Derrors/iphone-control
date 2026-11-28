@@ -64,6 +64,8 @@ pub(super) fn state_of(s: &DeviceState) -> (&'static str, Option<String>) {
         DeviceState::NeedsAutomationPin => ("NeedsAutomationPin", None),
         DeviceState::Preparing { last_error } => ("Preparing", last_error.clone()),
         DeviceState::Ready => ("Ready", None),
+        DeviceState::ClaimedElsewhere { by } => ("ClaimedElsewhere", Some(by.clone())),
+        DeviceState::NeedsSelection => ("NeedsSelection", None),
     }
 }
 

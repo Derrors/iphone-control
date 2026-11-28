@@ -115,13 +115,16 @@ impl Daemon {
 
     // ------------------------------------------------------------------ 重签与会话
 
-    pub(super) async fn check_session(self: Arc<Self>) {
-        let Ok(_lease) = crate::maintenance::shared() else { return };
+    /// The Apple ID session checked (and, while it is good, whether this machine's certificate is still in the
+    /// team). `lead`, the leader's lock ([`super::session`]), goes into the blocking thread and comes back: a daemon
+    /// stopping meanwhile ends without letting go of it before the check is done
+    pub(super) async fn check_session_with(&self, lead: std::fs::File) -> (SessionCheckOutcome, Option<std::fs::File>) {
         let account = self.account();
         // plume_core 的 future 不是 Send，放到阻塞线程里 block_on（同重签）；也不持锁
         // 会话好的话顺便查本机的签名证书还在不在团队里（同一次登录）
-        let outcome = tokio::task::spawn_blocking(move || {
-            tokio::runtime::Handle::current().block_on(async move {
+        let r = tokio::task::spawn_blocking(move || {
+            let held = lead;
+            let outcome = tokio::runtime::Handle::current().block_on(async move {
                 let check = async {
                     let s = account.session().await?;
                     Ok::<_, ictl_sign::SignError>(match s.own_certificate_listed().await {
@@ -140,20 +143,32 @@ impl Daemon {
                     })
                 };
                 classify_session_check_result(tokio::time::timeout(SESSION_CHECK_TIMEOUT, check).await)
-            })
+            });
+            (outcome, held)
         })
-        .await
-        .unwrap_or_else(|e| {
-            SessionCheckOutcome::Transient(ictl_l10n::log_trf!(
-                "会话检查任务异常：{e}",
-                "Session check task failed: {e}"
-            ))
-        });
-        let mut g = self.inner.lock().await;
-        self.apply_session_check(&mut g, outcome, Instant::now());
+        .await;
+        match r {
+            Ok((outcome, held)) => (outcome, Some(held)),
+            Err(e) => (
+                SessionCheckOutcome::Transient(ictl_l10n::log_trf!(
+                    "会话检查任务异常：{e}",
+                    "Session check task failed: {e}"
+                )),
+                None,
+            ),
+        }
     }
 
-    fn apply_session_check(&self, g: &mut Inner, outcome: SessionCheckOutcome, now: Instant) {
+    /// What a check found, logged (and notified, when `notify`: the notification was claimed, [`super::session`]).
+    /// Returns when the next one is due, and whether this instance still leads
+    pub(super) fn apply_session_check(
+        &self,
+        g: &mut Inner,
+        outcome: SessionCheckOutcome,
+        now: Instant,
+        notify: bool,
+    ) -> (Duration, bool) {
+        let every = self.cfg.session_check;
         match outcome {
             SessionCheckOutcome::Ok(listed) => {
                 g.dedup.clear("session");
@@ -166,29 +181,35 @@ impl Daemon {
                         ));
                     }
                 }
+                (every, true)
             }
-            SessionCheckOutcome::NotLoggedIn => {}
+            SessionCheckOutcome::NotLoggedIn => (every, true),
             SessionCheckOutcome::Transient(e) => {
-                let retry = self.cfg.session_check.min(SESSION_CHECK_TRANSIENT_RETRY);
-                g.next_session_check = g.next_session_check.min(now + retry);
+                let retry = every.min(SESSION_CHECK_TRANSIENT_RETRY);
                 let mins = (retry.as_secs() / 60).max(1);
                 self.log.log(&ictl_l10n::log_trf!(
                     "Apple ID 会话检查遇到临时网络/Anisette 故障，{mins} 分钟后重试（暂不视为会话失效）：{e}",
                     "Apple ID session check hit a transient network/Anisette failure; retrying in {mins} min (not treating the session as expired): {e}"
                 ));
+                (retry, true)
             }
+            // this instance may not use the session as configured: another one that may takes over
             SessionCheckOutcome::Misconfigured(e) => {
                 self.log.log(&ictl_l10n::log_trf!(
                     "Apple ID 会话检查没有执行：{e}",
                     "The Apple ID session check wasn't run: {e}"
                 ));
+                (every, false)
             }
             SessionCheckOutcome::Expired(e) => {
                 self.log.log(&ictl_l10n::log_trf!(
                     "Apple ID 会话检查失败：{e}",
                     "Checking the Apple ID session failed: {e}"
                 ));
-                self.notify(g, Event::SessionExpired(e));
+                if notify {
+                    self.notify(g, Event::SessionExpired(e));
+                }
+                (every, true)
             }
         }
     }
@@ -196,7 +217,7 @@ impl Daemon {
     /// 检查描述文件并按需重签（`force` 立即重签）。分三段：持锁取参数 → 不持锁签名、安装（几十秒）→ 持锁写结果
     pub(crate) async fn resign_now(self: &Arc<Self>, force: bool) -> crate::error::Result<String> {
         let _lease = crate::maintenance::shared()?;
-        let (device, name) = {
+        let (device, name, pass) = {
             let mut g = self.inner.lock().await;
             let g = &mut *g;
             // 看这台手机上装的那份，不看最近一次签名：给别的手机签过之后，这台装的还是更早签的、更早到期
@@ -226,6 +247,8 @@ impl Daemon {
                 .into());
             }
             let device = g.device.clone().ok_or(ictl_l10n::tr!("手机未连接", "Phone not connected"))?;
+            // held until the result is written: a switch doesn't wait for a re-signing, it is refused meanwhile
+            let pass = self.gate.admit(Some(crate::admission::Long::Resign))?;
             let name = g
                 .info
                 .as_ref()
@@ -234,7 +257,7 @@ impl Daemon {
                 .unwrap_or_else(|| "iphone-control".into());
             g.resigning = true;
             self.log.log(ictl_l10n::log_tr!("开始重签", "Re-signing started"));
-            (device, name)
+            (device, name, pass)
         };
         let signed_udid = device.udid.clone();
         let account = self.account();
@@ -310,7 +333,7 @@ impl Daemon {
                 g.persisted.record_resign(now_secs(), None);
                 g.persisted.save(&self.cfg.state_file());
                 // 新包装上后旧的 runner 会失效，下一轮巡检重新拉起。签名期间切到了别的设备就不动它的会话
-                if g.device.as_ref().is_some_and(|d| d.udid == signed_udid) {
+                if pass.current() && g.device.as_ref().is_some_and(|d| d.udid == signed_udid) {
                     // 装新包时旧的后台 WDA 已被结束：忘掉它（进程号可能被别的进程用上），巡检马上重新拉起
                     self.forget_detached_here(g);
                     self.drop_session(g).await;
@@ -342,8 +365,8 @@ impl Daemon {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
-enum SessionCheckOutcome {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum SessionCheckOutcome {
     Ok(Option<bool>),
     NotLoggedIn,
     Transient(String),
@@ -351,6 +374,19 @@ enum SessionCheckOutcome {
     /// expired, checked again on the usual schedule
     Misconfigured(String),
     Expired(String),
+}
+
+impl SessionCheckOutcome {
+    /// As kept in the shared state ([`super::session::CheckState::last`]), in the daemon's own language
+    pub(crate) fn describe(&self) -> String {
+        match self {
+            Self::Ok(_) => ictl_l10n::log_tr!("会话有效", "session valid").into(),
+            Self::NotLoggedIn => ictl_l10n::log_tr!("没登录 Apple ID", "not signed in").into(),
+            Self::Transient(e) => ictl_l10n::log_trf!("临时故障：{e}", "transient failure: {e}"),
+            Self::Misconfigured(e) => ictl_l10n::log_trf!("没有执行：{e}", "not run: {e}"),
+            Self::Expired(e) => ictl_l10n::log_trf!("会话失效：{e}", "session expired: {e}"),
+        }
+    }
 }
 
 fn classify_session_check_result(
@@ -374,7 +410,7 @@ fn classify_session_check_result(
     }
 }
 
-fn now_secs() -> u64 {
+pub(super) fn now_secs() -> u64 {
     std::time::SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs()
 }
 
@@ -407,35 +443,38 @@ mod tests {
 
         // Routine 24h schedule hits a transient failure: no SessionExpired alert, retry pulled in to 1h.
         let now = Instant::now();
+        let every = d.cfg.session_check;
         {
             let mut g = d.inner.lock().await;
-            g.next_session_check = now + d.cfg.session_check;
-            d.apply_session_check(&mut g, transient, now);
+            assert_eq!(d.apply_session_check(&mut g, transient, now, true), (SESSION_CHECK_TRANSIENT_RETRY, true));
             assert!(!g.dedup.was_sent("session"), "transient glitch must not trigger SessionExpired");
-            assert_eq!(g.next_session_check, now + SESSION_CHECK_TRANSIENT_RETRY);
-
-            // An already-sooner next_session_check is not pushed back.
-            let sooner = now + Duration::from_secs(600);
-            g.next_session_check = sooner;
-            d.apply_session_check(&mut g, timeout_outcome, now);
-            assert_eq!(g.next_session_check, sooner);
+            assert_eq!(
+                d.apply_session_check(&mut g, timeout_outcome, now, true),
+                (SESSION_CHECK_TRANSIENT_RETRY, true)
+            );
             assert!(!g.dedup.was_sent("session"));
 
-            // NotLoggedIn leaves schedule and dedup untouched.
-            d.apply_session_check(&mut g, not_logged_in, now);
-            assert_eq!(g.next_session_check, sooner);
+            // NotLoggedIn: the usual schedule, no alert
+            assert_eq!(d.apply_session_check(&mut g, not_logged_in, now, true), (every, true));
             assert!(!g.dedup.was_sent("session"));
 
+            // a configuration this instance may not use the session with: another one leads
+            let mis = SessionCheckOutcome::Misconfigured("origin".into());
+            assert_eq!(d.apply_session_check(&mut g, mis, now, true), (every, false));
+
+            // expired, but the notification was claimed by a leader before: logged only
+            d.apply_session_check(&mut g, expired.clone(), now, false);
+            assert!(!g.dedup.was_sent("session"));
             // Real SessionInvalid does alert via Event::SessionExpired.
-            d.apply_session_check(&mut g, expired, now);
+            d.apply_session_check(&mut g, expired, now, true);
             assert!(g.dedup.was_sent("session"), "confirmed session invalidation must alert");
 
             // A subsequent transient error does not wipe the session alert dedup state.
-            d.apply_session_check(&mut g, SessionCheckOutcome::Transient("blip".into()), now);
+            d.apply_session_check(&mut g, SessionCheckOutcome::Transient("blip".into()), now, true);
             assert!(g.dedup.was_sent("session"));
 
             // Recovery clears dedup and records own_cert.
-            d.apply_session_check(&mut g, SessionCheckOutcome::Ok(Some(true)), now);
+            d.apply_session_check(&mut g, SessionCheckOutcome::Ok(Some(true)), now, true);
             assert!(!g.dedup.was_sent("session"));
             assert_eq!(g.own_cert, Some((now, true)));
         }

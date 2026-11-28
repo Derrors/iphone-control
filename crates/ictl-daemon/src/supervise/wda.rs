@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 use ictl_device::{Device, DeviceError, LogStream, Tunnel};
 use ictl_wda::{WdaClient, WdaError, WdaRunner, http::DeviceTransport};
 
-use crate::core::{Daemon, Inner};
+use crate::core::{Daemon, DeviceProfile, Inner};
 use crate::detached;
 use crate::machine::DeviceState;
 use crate::notify::Event;
@@ -50,6 +50,8 @@ pub(crate) enum StartOutcome {
         mounted: Option<String>,
         /// 后台 WDA 是接上的还是新启动的
         detached: Detached,
+        /// 它的可执行文件（手机进程列表里的），记进接管记录
+        executable: Option<String>,
     },
     NeedsUnlock,
     /// 开发者镜像没准备好。`mount_failed`：是挂载这一步失败（才可能是缓存坏了）；
@@ -107,9 +109,107 @@ impl Daemon {
     /// Forgets the background WDA recorded for the device in use (it didn't answer): the next background launch
     /// replaces it
     pub(super) fn forget_detached_here(&self, g: &mut Inner) {
-        if let Some(udid) = g.device.as_ref().map(|d| d.udid.clone())
-            && g.persisted.forget_detached(&udid, None)
+        let Some(udid) = g.device.as_ref().map(|d| d.udid.clone()) else { return };
+        if let Err(e) = crate::adopt::remove(&self.cfg.adopt_dir(), &udid) {
+            tracing::warn!("removing the background WDA record of {udid} failed: {e}");
+        }
+        if g.persisted.forget_detached(&udid, None) {
+            g.persisted.save(&self.cfg.state_file());
+        }
+    }
+
+    /// The background WDA on `udid` that may be attached to (docs/dev/multi-instance-plan.md 4.6): the shared record's
+    /// process, launched as this version does, of the bundle this instance uses, not to be ended (an explicit stop
+    /// that failed, or an intent of another instance that still matches). An older version's record in state.json is
+    /// moved over first, when the device has no newer one. `None`: launched anew, which ends whatever runs
+    fn adoptable(&self, g: &mut Inner, udid: &str, bundle: &str) -> Option<(u64, Option<String>)> {
+        use crate::adopt::{self, Record};
+        let dir = self.cfg.adopt_dir();
+        let mut record = adopt::read(&dir, udid).unwrap_or_else(|e| {
+            tracing::warn!("reading the background WDA record of {udid} failed: {e}");
+            None
+        });
+        if record.is_none()
+            && let Some(pid) = g.persisted.adoptable_for(udid)
         {
+            let old = Record {
+                pid,
+                bundle: bundle.to_owned(),
+                team: g.persisted.team_id.clone(),
+                executable: None,
+                loopback: true,
+                owner_id: self.cfg.instance_id.clone(),
+                generation: 0,
+                cleanup_pending: false,
+            };
+            record = adopt::write(&dir, udid, old).ok();
+        }
+        let end = adopt::take_intents(&dir, udid, record.as_ref());
+        let r = record?;
+        if end || r.cleanup_pending {
+            self.log.log(&ictl_l10n::log_trf!(
+                "手机上的后台 WDA（进程 {}）之前该结束而没结束：重新启动它",
+                "The background WDA on the phone (pid {}) was to be ended and wasn't: launching it again",
+                r.pid
+            ));
+            return None;
+        }
+        (r.adoptable() && r.bundle == bundle).then_some((r.pid, r.executable))
+    }
+
+    /// This instance never signed WDA for itself (a new instance, first controlling a device another one used,
+    /// docs/dev/multi-instance-plan.md 4.6): the WDA recorded on the device is taken over when it is this host's: the
+    /// app is installed, its profile on the phone is signed with a certificate whose key is in the shared account,
+    /// and the record isn't to be cleaned up. Then its bundle becomes this instance's, and the usual start attaches to
+    /// it (or launches it again). Otherwise nothing changes: the device needs signing for this instance, as before.
+    /// Returns the bundle taken over
+    pub(super) async fn take_over_wda(&self, g: &mut Inner, device: &Device) -> Option<String> {
+        let r = crate::adopt::read(&self.cfg.adopt_dir(), &device.udid).ok().flatten()?;
+        if !r.adoptable() {
+            return None;
+        }
+        let installed = device.list_apps(false).await.ok()?.iter().any(|a| a.bundle_id == r.bundle);
+        if !installed {
+            return None;
+        }
+        let before = (g.persisted.wda_bundle.take(), g.persisted.team_id.take());
+        g.persisted.wda_bundle = Some(r.bundle.clone());
+        g.persisted.team_id = r.team.clone();
+        self.refresh_device_profile(g).await;
+        let ours = matches!(g.dev.device_profile, DeviceProfile::Expires(_)) && g.dev.foreign_wda == Some(false);
+        if !ours {
+            (g.persisted.wda_bundle, g.persisted.team_id) = before;
+            g.dev.device_profile = DeviceProfile::NotChecked;
+            g.dev.foreign_wda = None;
+            return None;
+        }
+        g.persisted.save(&self.cfg.state_file());
+        self.log.log(&ictl_l10n::log_trf!(
+            "接手这台设备上已装的 WDA（{}，本机账号签的），不用重新签名",
+            "Took over the WDA installed on this device ({}, signed by this host's account), no signing needed",
+            r.bundle
+        ));
+        Some(r.bundle)
+    }
+
+    /// The background WDA launched on or attached to on `udid`, recorded for whoever controls the device next. The
+    /// default instance also writes it where 0.3.2 looks (state.json), so a downgrade still ends it
+    fn record_adopt(&self, g: &mut Inner, udid: &str, pid: u64, executable: Option<String>) {
+        let Some(bundle) = g.persisted.wda_bundle.clone() else { return };
+        let r = crate::adopt::Record {
+            pid,
+            bundle,
+            team: g.persisted.team_id.clone(),
+            executable,
+            loopback: true,
+            owner_id: self.cfg.instance_id.clone(),
+            generation: 0,
+            cleanup_pending: false,
+        };
+        if let Err(e) = crate::adopt::write(&self.cfg.adopt_dir(), udid, r) {
+            tracing::warn!("writing the background WDA record of {udid} failed: {e}");
+        }
+        if self.cfg.instance.is_none() && g.persisted.record_detached(udid, pid) {
             g.persisted.save(&self.cfg.state_file());
         }
     }
@@ -139,9 +239,10 @@ impl Daemon {
                 "Starting WDA (launched in the background, no XCTest session)"
             ));
         }
-        let known = g.persisted.adoptable_for(&device.udid);
+        let known = self.adoptable(g, &device.udid, &bundle);
         if known.is_none()
             && let Some(pid) = g.persisted.detached_for(&device.udid)
+            && g.persisted.adoptable_for(&device.udid).is_none()
         {
             self.log.log(&ictl_l10n::log_trf!(
                 "手机上的后台 WDA（进程 {pid}）是旧版本启动的，对手机的所有网卡开放：重新启动，只听手机本机",
@@ -158,7 +259,7 @@ impl Daemon {
             // 手机重启后开发者镜像可能掉了；已挂载时只是一次查询。错误带上「是不是挂载这一步」。
             // 镜像好了再在同一条隧道上处理后台 WDA（见 prepare_detached）
             // 挂上的镜像版本、后台 WDA 的处理结果、启动前打开的系统日志流
-            type Ready = (Option<String>, Result<Detached, DeviceError>, Option<LogStream>);
+            type Ready = (Option<String>, Result<(Detached, Option<String>), DeviceError>, Option<LogStream>);
             let ddi: Result<Ready, (DeviceError, bool)> = async {
                 let mut t = device.open_tunnel().await.map_err(|e| (e, false))?;
                 let r = ensure_ddi(&device, &mut t, legacy, &cache, &url, user_dir.as_deref()).await;
@@ -185,7 +286,7 @@ impl Daemon {
                 Err((DeviceError::PasswordProtected, _)) => return StartOutcome::NeedsUnlock,
                 Err((e, mount_failed)) => return StartOutcome::Ddi { error: e.to_string(), mount_failed },
             };
-            let prepared = match prepared {
+            let (prepared, executable) = match prepared {
                 Ok(p) => p,
                 Err(e @ DeviceError::LaunchRefused(_)) => {
                     return StartOutcome::Refused(ictl_l10n::trf!(
@@ -205,7 +306,7 @@ impl Daemon {
                 Detached::Launched(_) => WdaRunner::attach(device.provider(), start_timeout, log).await,
             };
             match started {
-                Ok((runner, client)) => StartOutcome::Ready { runner, client, mounted, detached: prepared },
+                Ok((runner, client)) => StartOutcome::Ready { runner, client, mounted, detached: prepared, executable },
                 // still waiting for the passcode; this launch just didn't bring the prompt up: try again soon
                 Err(WdaError::NotReadyInTime(_)) if waiting_pin => StartOutcome::Wda(WdaError::NeedsAutomationPin),
                 Err(e) => StartOutcome::Wda(e),
@@ -224,7 +325,7 @@ impl Daemon {
         });
         // 后台启动被拒绝和 XCTest 会话启动被拒绝（unexpected response）走同一条路：记失败，查证书
         match outcome {
-            StartOutcome::Ready { runner, mut client, mounted, detached } => {
+            StartOutcome::Ready { runner, mut client, mounted, detached, executable } => {
                 if let Some(v) = mounted {
                     self.log.log(&ictl_l10n::log_trf!("开发者镜像已挂载 {v}", "Developer disk image mounted {v}"));
                 }
@@ -240,10 +341,8 @@ impl Daemon {
                 }
                 // this device's record only: the other devices' background WDAs keep running and are attached to
                 // again when switched back to
-                if let Some(udid) = g.device.as_ref().map(|d| d.udid.clone())
-                    && g.persisted.record_detached(&udid, detached.pid())
-                {
-                    g.persisted.save(&self.cfg.state_file());
+                if let Some(udid) = g.device.as_ref().map(|d| d.udid.clone()) {
+                    self.record_adopt(g, &udid, detached.pid(), executable);
                 }
                 g.dev.ddi_failures = 0;
                 g.runner = Some(runner);
@@ -299,13 +398,23 @@ impl Daemon {
     }
 }
 
-/// 在挂镜像的隧道上准备 WDA：`known`（这台设备上记下的后台 WDA）那个进程还是 WDA 就直接接上；否则在后台启动一个
-/// （会先结束已在运行的 WDA，包括旧版本用 XCTest 会话启动的）
-async fn prepare_detached(t: &mut Tunnel, known: Option<u64>, bundle: &str) -> Result<Detached, DeviceError> {
-    match known {
-        Some(pid) if detached::is_wda(&t.processes().await?, pid) => Ok(Detached::Adopted(pid)),
-        _ => Ok(Detached::Launched(t.launch_in_background(bundle, &ictl_wda::runner::launch_env()).await?)),
+/// 在挂镜像的隧道上准备 WDA：`known`（这台设备上记下的后台 WDA：进程号，和记下时的可执行文件）那个进程还是它就直接接上；
+/// 否则在后台启动一个（会先结束已在运行的 WDA，包括旧版本用 XCTest 会话启动的）。连同这个进程的可执行文件一起返回，
+/// 记进接管记录作证明（[`crate::adopt`]）
+async fn prepare_detached(
+    t: &mut Tunnel,
+    known: Option<(u64, Option<String>)>,
+    bundle: &str,
+) -> Result<(Detached, Option<String>), DeviceError> {
+    let procs = t.processes().await?;
+    if let Some((pid, exe)) = known
+        && detached::is_recorded_wda(&procs, pid, exe.as_deref())
+    {
+        return Ok((Detached::Adopted(pid), detached::executable_of(&procs, pid)));
     }
+    let pid = t.launch_in_background(bundle, &ictl_wda::runner::launch_env()).await?;
+    let exe = t.processes().await.ok().and_then(|p| detached::executable_of(&p, pid));
+    Ok((Detached::Launched(pid), exe))
 }
 
 /// 打开手机系统日志流；打不开只记一笔（后台启动照样进行，只是认不出密码框）

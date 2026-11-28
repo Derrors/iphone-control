@@ -130,6 +130,27 @@ pub struct Snapshot {
     pub unlock_disabled: bool,
     pub notify_configured: bool,
     pub log_tail: Vec<String>,
+    /// Which instance answers ([`InstanceIdentity`]); older daemons don't say
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instance: Option<InstanceIdentity>,
+}
+
+/// Which daemon this is (docs/dev/multi-instance-plan.md 3.2, 4.4): reported by the daemon itself, so a command never
+/// infers it from what it would work out on its own
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InstanceIdentity {
+    /// `default` or the instance's name
+    pub name: String,
+    /// [`crate::instance::DEFAULT_ID`] or the id `instance add` gave it
+    pub id: String,
+    pub data_dir: std::path::PathBuf,
+    /// The data root every instance shares
+    pub root: std::path::PathBuf,
+    pub socket: std::path::PathBuf,
+    /// New at every start: a token made with an earlier start's generation is never taken
+    pub boot_id: String,
+    /// Moves on with every selection written
+    pub selection_generation: u64,
 }
 
 /// What is known about the device being controlled. Replaced as a whole when that device goes away or changes
@@ -173,6 +194,9 @@ pub(crate) struct PerDevice {
     pub acted_at: Option<Instant>,
     /// 原生控制：上次因为无障碍服务不应答而重启手机上 axauditd 的时间（`tools::native::AX_RESTART_EVERY` 内只重启一次）
     pub ax_restarted: Option<Instant>,
+    /// Whether taking over the WDA another instance left on this device was tried ([`Daemon::take_over_wda`]): once
+    /// per device connection
+    pub wda_takeover_tried: bool,
     /// How long the request being handled spent unlocking the phone first ([`Daemon::ensure_unlocked`]); taken by
     /// [`Daemon::dispatch`], which says so in the answer
     pub unlocked: Option<Duration>,
@@ -258,6 +282,8 @@ pub(crate) struct Inner {
     pub info: Option<DeviceInfo>,
     /// 最近一轮巡检时 USB 上接着的全部设备
     pub connected: Vec<UsbDevice>,
+    /// The lease of the device this instance controls or is to control (docs/dev/multi-instance-plan.md 4.1)
+    pub lease: Option<crate::lease::Lease>,
     /// 每次 USB 接入的设备信息；字段不齐时限制重试频率
     pub infos: HashMap<String, crate::devices::CachedInfo>,
     /// HID 和截图用的隧道（HID 会话归它所有）
@@ -305,7 +331,6 @@ pub(crate) struct Inner {
     /// 本机的签名证书还在不在团队里，和查的时间（会话检查、自动重签前联网查；doctor 显示它，不在持锁时联网）
     pub own_cert: Option<(Instant, bool)>,
     pub next_resign: Instant,
-    pub next_session_check: Instant,
 }
 
 pub struct Daemon {
@@ -337,6 +362,21 @@ pub struct Daemon {
     pub(crate) rotation: watch::Sender<Option<u32>>,
     /// The rotation sampler is running
     pub(crate) rotation_sampling: std::sync::atomic::AtomicBool,
+    /// New at every start ([`InstanceIdentity::boot_id`])
+    pub(crate) boot_id: String,
+    /// Work on the device without the device lock, and switching devices ([`crate::admission`])
+    pub(crate) gate: Arc<crate::admission::Gate>,
+    /// Held while the selected device changes, and while a task is opened (docs/dev/multi-instance-plan.md 4.1):
+    /// taken before the device lock, never after
+    pub(crate) select_latch: tokio::sync::Mutex<()>,
+    /// A lease taken in the background after a probe let go of it, for the next round ([`crate::lease`])
+    pub(crate) claimed: std::sync::Mutex<Option<crate::lease::Lease>>,
+    /// That background claim is under way
+    pub(crate) claiming: std::sync::atomic::AtomicBool,
+    /// At most this many other devices' details are read at once
+    pub(crate) probes: Arc<tokio::sync::Semaphore>,
+    /// Counts the selections written since the start ([`InstanceIdentity::selection_generation`])
+    pub(crate) selection_generation: std::sync::atomic::AtomicU64,
 }
 
 impl Daemon {
@@ -469,6 +509,7 @@ impl Daemon {
             device: None,
             info: None,
             connected: Vec::new(),
+            lease: None,
             infos: HashMap::new(),
             tunnel: None,
             runner: None,
@@ -495,7 +536,6 @@ impl Daemon {
             own_cert: None,
             // 启动一分钟后再做第一次重签检查和会话验证，先让设备就绪
             next_resign: now + Duration::from_secs(60),
-            next_session_check: now + Duration::from_secs(90),
         };
         let first = Snapshot {
             version: Some(env!("CARGO_PKG_VERSION").into()),
@@ -517,6 +557,7 @@ impl Daemon {
                 .is_disabled(),
             notify_configured: cfg.notify.any(),
             log_tail: Vec::new(),
+            instance: None,
         };
         let (snap, _) = watch::channel(first);
         let tasks = crate::tasks::Tasks::load(Some(cfg.data_dir.join("tasks")));
@@ -535,7 +576,27 @@ impl Daemon {
             probed: Default::default(),
             rotation: watch::channel(None).0,
             rotation_sampling: std::sync::atomic::AtomicBool::new(false),
+            boot_id: uuid::Uuid::new_v4().to_string(),
+            gate: Arc::default(),
+            select_latch: tokio::sync::Mutex::new(()),
+            claimed: std::sync::Mutex::new(None),
+            claiming: std::sync::atomic::AtomicBool::new(false),
+            probes: Arc::new(tokio::sync::Semaphore::new(crate::devices::PROBES_AT_ONCE)),
+            selection_generation: std::sync::atomic::AtomicU64::new(0),
         })
+    }
+
+    /// Which daemon this is, as `Request::Daemon` reports it
+    pub fn identity(&self) -> InstanceIdentity {
+        InstanceIdentity {
+            name: self.cfg.instance_name().to_owned(),
+            id: self.cfg.instance_id.clone(),
+            data_dir: self.cfg.data_dir.clone(),
+            root: self.cfg.root.clone(),
+            socket: self.cfg.socket.clone(),
+            boot_id: self.boot_id.clone(),
+            selection_generation: self.selection_generation.load(std::sync::atomic::Ordering::SeqCst),
+        }
     }
 
     /// 选定的设备：`IPHONE_UDID` 优先，其次是运行中选的
@@ -734,13 +795,27 @@ impl Daemon {
             unlock_disabled: unlock.disabled_by_failure(),
             notify_configured: self.cfg.notify.any(),
             log_tail: Vec::new(),
+            instance: None,
         });
     }
 
     pub async fn shutdown(&self) {
+        // what was let in on the device ends first, within the exit's budget (systemd allows 30 s): new work is
+        // refused, the streams end, the rest is waited for. Long work (a re-signing) isn't: the process ends, and the
+        // kernel lets go of the lease with it, after the work's own threads
+        self.gate.close();
+        self.gate.revoke_streams();
+        if let Err(left) = self.gate.drain(crate::switch::EXIT_DRAIN).await {
+            tracing::warn!("exiting with {left} operations on the device still under way");
+        }
         let mut g = self.inner.lock().await;
         self.log.log(ictl_l10n::log_tr!("收到停止信号,退出", "Received stop signal, exiting"));
         // 停 HID 媒体流、runner（经系统的 usbmuxd）
         self.drop_session(&mut g).await;
+        // the lease stays held until the process ends, and the kernel lets go of it: a re-signing's thread may still be
+        // installing on the device after this returns (docs/dev/multi-instance-plan.md 10.5)
+        if let Some(l) = g.lease.take() {
+            std::mem::forget(l);
+        }
     }
 }

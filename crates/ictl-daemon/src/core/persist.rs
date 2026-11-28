@@ -236,21 +236,27 @@ impl Persisted {
     }
 
     pub(crate) fn save(&self, path: &Path) {
+        if let Err(e) = self.try_save(path) {
+            tracing::warn!("{}", ictl_l10n::log_trf!("保存 state.json 失败：{e}", "Saving state.json failed: {e}"));
+        }
+    }
+
+    /// [`Self::save`] that says when it failed: for what mustn't be taken as done unless it is on disk (the
+    /// selected device, docs/dev/multi-instance-plan.md 4.1)
+    pub(crate) fn try_save(&self, path: &Path) -> std::io::Result<()> {
         use std::io::Write;
         let tmp = path.with_extension("json.tmp");
         // nothing written when it doesn't serialize: an empty file in its place would lose the whole state
-        let r = serde_json::to_vec_pretty(self).map_err(std::io::Error::other).and_then(|data| {
-            // sync before the rename, or a power cut can leave state.json empty
-            std::fs::File::create(&tmp)
-                .and_then(|mut f| {
-                    f.write_all(&data)?;
-                    f.sync_all()
-                })
-                .and_then(|_| std::fs::rename(&tmp, path))
-        });
-        if let Err(e) = r {
-            tracing::warn!("{}", ictl_l10n::log_trf!("保存 state.json 失败：{e}", "Saving state.json failed: {e}"));
+        let data = serde_json::to_vec_pretty(self).map_err(std::io::Error::other)?;
+        // sync before the rename, or a power cut can leave state.json empty
+        let mut f = std::fs::File::create(&tmp)?;
+        f.write_all(&data)?;
+        f.sync_all()?;
+        std::fs::rename(&tmp, path)?;
+        if let Some(dir) = path.parent() {
+            std::fs::File::open(dir)?.sync_all()?;
         }
+        Ok(())
     }
 
     /// 描述文件还剩多久；不知道返回 None

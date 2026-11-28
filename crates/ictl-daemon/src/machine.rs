@@ -26,6 +26,13 @@ pub enum DeviceState {
         last_error: Option<String>,
     },
     Ready,
+    /// Another instance holds this device's lease (docs/dev/multi-instance-plan.md 4.1): nothing is done with it,
+    /// tried again every round
+    ClaimedElsewhere {
+        by: String,
+    },
+    /// The default instance with named instances registered controls only the device it was given: none is
+    NeedsSelection,
 }
 
 impl DeviceState {
@@ -42,6 +49,8 @@ impl DeviceState {
             Self::Preparing { last_error: None } => ictl_l10n::tr!("正在准备手机（挂载开发者镜像、连接无障碍服务）", "Preparing the phone (mounting the developer disk image, connecting to the accessibility service)").into(),
             Self::Preparing { last_error: Some(e) } => ictl_l10n::trf!("准备手机失败，稍后重试：{e}", "Preparing the phone failed, retrying later: {e}"),
             Self::Ready => ictl_l10n::tr!("就绪", "Ready").into(),
+            Self::ClaimedElsewhere { by } => ictl_l10n::trf!("这台设备由实例 {by} 控制：本实例不碰它，它放开后自动接手", "This device is controlled by the instance {by}: this instance leaves it alone and takes over once it is let go"),
+            Self::NeedsSelection => ictl_l10n::tr!("有命名实例时默认实例只控制选定的那台，还没选：用 iphone-control select <UDID> 选一台（别的实例的设备除外）", "With named instances the default instance only controls the device selected for it, and none is: choose one with iphone-control select <UDID> (not another instance's)").into(),
         }
     }
 }

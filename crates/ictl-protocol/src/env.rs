@@ -73,6 +73,11 @@ pub const VIEWER_TLS_KEY: &str = "IPHONE_CONTROL_VIEWER_TLS_KEY";
 pub const VIEWER_CODEC: &str = "IPHONE_CONTROL_VIEWER_CODEC";
 pub const VIEWER_QP: &str = "IPHONE_CONTROL_VIEWER_QP";
 
+// instances (docs/dev/multi-instance-plan.md): which one a command, service or MCP server is for, and the id
+// `instance add` gives it (in its registry file, `instances/<name>.env`)
+pub const INSTANCE: &str = "IPHONE_CONTROL_INSTANCE";
+pub const INSTANCE_ID: &str = "IPHONE_CONTROL_INSTANCE_ID";
+
 // another machine's control page (`--url`)
 pub const URL: &str = "IPHONE_CONTROL_URL";
 pub const CA: &str = "IPHONE_CONTROL_CA";
@@ -123,6 +128,8 @@ pub const ALL: &[Var] = &[
     var(VIEWER_TLS_KEY, Kind::Setting, true),
     var(VIEWER_CODEC, Kind::Setting, true),
     var(VIEWER_QP, Kind::Setting, true),
+    var(INSTANCE, Kind::Setting, false),
+    var(INSTANCE_ID, Kind::Given, false),
     var(URL, Kind::Setting, false),
     var(CA, Kind::Setting, false),
     var(VIEWER_TOKEN, Kind::Setting, false),

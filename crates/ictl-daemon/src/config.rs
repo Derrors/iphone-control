@@ -5,9 +5,35 @@ use std::time::Duration;
 
 use ictl_device::ScreenSize;
 
+/// The anchor and registry of this host's instances. An anchor that can't be read is checked again, as an error,
+/// before a daemon starts ([`Config::check_instance`])
+#[cfg(not(test))]
+fn host_registry() -> (Option<crate::instance::Anchor>, PathBuf) {
+    let anchor = crate::instance::anchor().ok().flatten();
+    let registry = anchor.as_ref().map(|a| a.registry.clone());
+    (anchor, registry.unwrap_or_else(|| crate::instance::config_dir().join("instances")))
+}
+
+/// Unit tests never see the host's instances
+#[cfg(test)]
+fn host_registry() -> (Option<crate::instance::Anchor>, PathBuf) {
+    (None, std::env::temp_dir().join(format!("ictl-test-no-registry-{}", std::process::id())))
+}
+
 #[derive(Debug, Clone)]
 pub struct Config {
+    /// This instance's own data directory (state, tasks, logs, WDA, developer disk images)
     pub data_dir: PathBuf,
+    /// What every instance on this host shares (the Apple ID account, passcodes, auto-unlock's disabled records,
+    /// device leases, background-WDA records): the default instance's data directory ([`crate::instance`]). The same
+    /// as [`Self::data_dir`] for the default instance
+    pub root: PathBuf,
+    /// The named instance this is, `None` for the default one ([`crate::instance`])
+    pub instance: Option<String>,
+    /// This instance's id ([`crate::instance::DEFAULT_ID`] for the default one): a name can be used again, an id isn't
+    pub instance_id: String,
+    /// The instance registry directory
+    pub registry: PathBuf,
     pub socket: PathBuf,
     /// 固定要控制的手机（`IPHONE_UDID`）；None 时可以在运行中选（见 [`crate::core::Persisted::selected_udid`]）。
     /// 都没选是自动选：正在控制的那台一直用到断开，没有正在控制的才取 usbmuxd 列出的第一台
@@ -126,8 +152,24 @@ impl Config {
             (Some(width), Some(height)) => Some(ScreenSize { width, height }),
             _ => None,
         };
+        let instance = env(crate::protocol::env::INSTANCE).filter(|n| crate::instance::valid_name(n));
+        let (anchor, registry) = host_registry();
+        // a named instance's data directory is `<root>/instances/<name>`: the root is the anchor's, or that
+        let root = match (&instance, &anchor) {
+            (None, _) => data_dir.to_owned(),
+            (Some(_), Some(a)) => a.root.clone(),
+            (Some(_), None) => data_dir.parent().and_then(Path::parent).unwrap_or(data_dir).to_owned(),
+        };
         Self {
             data_dir: data_dir.to_owned(),
+            root,
+            instance_id: if instance.is_some() {
+                env(crate::protocol::env::INSTANCE_ID).unwrap_or_default()
+            } else {
+                crate::instance::DEFAULT_ID.into()
+            },
+            instance,
+            registry,
             // 实际值由命令行给（--socket / ICTL_SOCKET，见 apps/iphone-control）
             socket: crate::protocol::default_socket(),
             udid: env(crate::protocol::env::UDID),
@@ -155,16 +197,72 @@ impl Config {
     pub fn logs(&self) -> PathBuf {
         self.data_dir.join("logs")
     }
-    pub fn account_dir(&self) -> PathBuf {
-        self.data_dir.join("account")
+    /// The instance's name as shown and logged: `default` for the default one
+    pub fn instance_name(&self) -> &str {
+        self.instance.as_deref().unwrap_or(crate::instance::DEFAULT)
     }
-    /// The Apple ID account as this installation uses it ([`ictl_sign::account`])
+    /// Shared by every instance ([`Self::root`])
+    pub fn account_dir(&self) -> PathBuf {
+        self.root.join("account")
+    }
+    /// The device leases (`crate::lease`), shared
+    pub fn devices_dir(&self) -> PathBuf {
+        self.root.join("devices")
+    }
+    /// The background-WDA records (`crate::adopt`), shared and by device
+    pub fn adopt_dir(&self) -> PathBuf {
+        self.root.join("wda-adopt")
+    }
+    /// The lock whose holder runs the daily Apple ID session check for every instance
+    pub fn account_check_lock(&self) -> PathBuf {
+        self.root.join("account-check.lock")
+    }
+    /// The Apple ID account as this installation uses it ([`ictl_sign::account`]). With other instances an anisette
+    /// state of unknown origin isn't used (docs/dev/multi-instance-plan.md 4.2)
     pub fn account(&self) -> ictl_sign::AccountDir {
         ictl_sign::AccountDir {
             dir: self.account_dir(),
             anisette_url: self.anisette_url.clone(),
-            require_known_origin: false,
+            require_known_origin: self.shared_with_others(),
         }
+    }
+    /// Whether other instances share the data root: this is a named one, or named ones are registered or reserved. A
+    /// registry that can't be read counts as shared
+    pub fn shared_with_others(&self) -> bool {
+        self.instance.is_some() || crate::instance::scan(&self.registry).map(|s| s.any()).unwrap_or(true)
+    }
+    /// Before a daemon starts: the registry and data root are the ones every instance uses
+    /// ([`crate::instance::check_anchor`]); a named instance has its device and id, and its data directory where the
+    /// data root is worked out from
+    pub fn check_instance(&self) -> anyhow::Result<()> {
+        let anchor = crate::instance::check_anchor(&self.root).map_err(anyhow::Error::msg)?;
+        let Some(name) = &self.instance else { return Ok(()) };
+        if self.udid.is_none() || self.instance_id.is_empty() {
+            anyhow::bail!(
+                "{}",
+                ictl_l10n::trf!(
+                    "实例 {} 缺 IPHONE_UDID 或 IPHONE_CONTROL_INSTANCE_ID：命名实例要按它的登记启动（--instance {}）",
+                    "The instance {} has no IPHONE_UDID or IPHONE_CONTROL_INSTANCE_ID: a named instance starts from its registration (--instance {})",
+                    name,
+                    name
+                )
+            );
+        }
+        let at_home = self.data_dir.file_name().is_some_and(|f| f == name.as_str())
+            && self.data_dir.parent().and_then(Path::file_name).is_some_and(|f| f == "instances");
+        if anchor.is_none() && !at_home {
+            anyhow::bail!(
+                "{}",
+                ictl_l10n::trf!(
+                    "实例 {} 的数据目录 {} 不在 <数据根>/instances/{} 下，找不到共用的数据根",
+                    "The instance {}'s data directory {} isn't <data root>/instances/{}: the shared data root can't be found",
+                    name,
+                    self.data_dir.display(),
+                    name
+                )
+            );
+        }
+        Ok(())
     }
     pub fn wda_dir(&self) -> PathBuf {
         self.data_dir.join("wda")
@@ -188,16 +286,16 @@ impl Config {
     /// 旧版本的锁屏密码：只有一份，不知道是哪台设备的。USB 上只接着一台时归到那台名下（见
     /// `crate::core::Daemon::adopt_legacy_passcode`），接着多台时不用，免得把一台的密码输进另一台
     pub fn legacy_passcode_file(&self) -> PathBuf {
-        self.data_dir.join("secrets/passcode")
+        self.root.join("secrets/passcode")
     }
     pub fn passcodes_dir(&self) -> PathBuf {
-        self.data_dir.join("secrets/passcodes")
+        self.root.join("secrets/passcodes")
     }
     /// 建好 [`Self::passcodes_dir`]，只有自己能进；新建的目录在上一级目录里也落盘（[`ictl_unlock::durable`]）
     pub fn ensure_passcodes_dir(&self) -> std::io::Result<PathBuf> {
         use std::os::unix::fs::PermissionsExt;
         let dir = self.passcodes_dir();
-        ictl_unlock::durable::create_dir_all_from(&self.data_dir, &dir)?;
+        ictl_unlock::durable::create_dir_all_from(&self.root, &dir)?;
         std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))?;
         Ok(dir)
     }
@@ -341,8 +439,8 @@ impl Config {
     fn passcodes_lock(&self) -> std::io::Result<std::fs::File> {
         use std::os::fd::AsRawFd;
         use std::os::unix::fs::OpenOptionsExt;
-        let secrets = self.data_dir.join("secrets");
-        ictl_unlock::durable::create_dir_all_from(&self.data_dir, &secrets)?;
+        let secrets = self.root.join("secrets");
+        ictl_unlock::durable::create_dir_all_from(&self.root, &secrets)?;
         let f = std::fs::OpenOptions::new()
             .read(true)
             .write(true)
@@ -358,19 +456,21 @@ impl Config {
     }
     /// The single flag 0.3.2 and earlier kept for all devices; still written, as the shadow of
     /// [`Self::unlock_disabled`], so a downgraded daemon keeps every device disabled
+    /// In the data root's `logs/` (the default instance's, where 0.3.2 looks), shared by every instance
     pub fn unlock_disabled_flag(&self) -> PathBuf {
-        self.logs().join("UNLOCK-DISABLED")
+        self.root.join("logs/UNLOCK-DISABLED")
     }
-    /// Auto-unlock disabled after a failure, per device ([`ictl_unlock::DisableStore`])
+    /// Auto-unlock disabled after a failure, per device ([`ictl_unlock::DisableStore`]), shared by every instance
     pub fn unlock_disabled(&self) -> ictl_unlock::DisableStore {
-        ictl_unlock::DisableStore::new(self.data_dir.join("secrets/unlock-disabled"), self.unlock_disabled_flag())
+        ictl_unlock::DisableStore::new(self.root.join("secrets/unlock-disabled"), self.unlock_disabled_flag())
     }
     pub fn state_file(&self) -> PathBuf {
         self.data_dir.join("state.json")
     }
-    /// A marker per phone with a HID session open (`crate::hidmark`)
+    /// A marker per phone with a HID session open (`crate::hidmark`): by device, so shared by every instance (the
+    /// next instance to take the device clears what another left)
     pub fn hid_marker_dir(&self) -> PathBuf {
-        self.data_dir.join("hid-open")
+        self.root.join("hid-open")
     }
     /// Persistent daemon lifecycle marker and anti-storm alert state (`crate::watchdog`)
     pub fn run_state_file(&self) -> PathBuf {
@@ -384,12 +484,18 @@ impl Config {
         // secrets/ and logs/, each kept in its parent. Auto-unlock writes durably inside those (passcodes, disabled
         // records, their shadow); a directory above them made by a plain call could be lost with a power cut,
         // taking them along ([`ictl_unlock::durable`])
+        if self.root != self.data_dir {
+            ictl_unlock::durable::create_tree(&self.root, &["secrets", "logs"])?;
+        }
         ictl_unlock::durable::create_tree(&self.data_dir, &["secrets", "logs"])?;
-        for d in ["account", "wda", "ddi"] {
+        for d in ["wda", "ddi"] {
             std::fs::create_dir_all(self.data_dir.join(d))?;
         }
-        for d in ["", "account", "secrets"] {
-            std::fs::set_permissions(self.data_dir.join(d), std::fs::Permissions::from_mode(0o700))?;
+        std::fs::create_dir_all(self.account_dir())?;
+        let private =
+            [self.data_dir.clone(), self.data_dir.join("secrets"), self.root.clone(), self.root.join("secrets")];
+        for d in private.iter().chain([&self.account_dir()]) {
+            std::fs::set_permissions(d, std::fs::Permissions::from_mode(0o700))?;
         }
         Ok(())
     }

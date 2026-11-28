@@ -27,6 +27,11 @@ pub(crate) async fn stream(
     mut w: OwnedWriteHalf,
     expect_udid: Option<String>,
 ) {
+    // held while the stream runs; a switch to another device ends it ([`crate::admission`])
+    let pass = match d.gate.admit(None) {
+        Ok(p) => p,
+        Err(e) => return answer(&mut w, Response::error(e)).await,
+    };
     let (phone, udid) = match tokio::time::timeout(OPEN_TIMEOUT, open(d, expect_udid.as_deref())).await {
         Ok(Ok(p)) => p,
         Ok(Err(e)) => return answer(&mut w, Response::error(e)).await,
@@ -41,7 +46,13 @@ pub(crate) async fn stream(
         return;
     }
     // ends when the daemon switches to another device: the page then asks for that one's picture
-    relay(phone, reader, w, d.controlled_changes_from(&udid)).await;
+    let until = async {
+        tokio::select! {
+            () = d.controlled_changes_from(&udid) => {}
+            () = pass.revoked() => {}
+        }
+    };
+    relay(phone, reader, w, until).await;
 }
 
 async fn answer(w: &mut OwnedWriteHalf, r: Response) {

@@ -39,6 +39,10 @@ pub fn resolve_device(devices: &[DeviceInfo], query: &str) -> Result<usize, Stri
 }
 
 const METADATA_RETRY: Duration = Duration::from_secs(60);
+/// Other devices' details are read in the background, this many at a time, each within [`PROBE_BUDGET`]
+/// (docs/dev/multi-instance-plan.md 4.1)
+pub(crate) const PROBES_AT_ONCE: usize = 2;
+const PROBE_BUDGET: Duration = Duration::from_secs(2);
 
 #[derive(Default)]
 pub(crate) struct CachedInfo {
@@ -96,15 +100,45 @@ impl CachedInfo {
 /// Details read in the background, by UDID and the usbmuxd connection they were read over ([`Daemon::probed`])
 pub(crate) type Probed = std::sync::Arc<std::sync::Mutex<HashMap<(String, u32), DeviceInfo>>>;
 
+/// Reads a device other than the one controlled, for display (#243)
+struct Aside {
+    slot: Probed,
+    probes: std::sync::Arc<tokio::sync::Semaphore>,
+    dir: std::path::PathBuf,
+    me: String,
+}
+
+impl Aside {
+    /// Under a probe's lease, within [`PROBE_BUDGET`]; a device another instance controls is described by its
+    /// lease's hint instead
+    async fn read(self, d: UsbDevice) {
+        let Ok(_permit) = self.probes.acquire_owned().await else { return };
+        use crate::lease::{Claim, Holder};
+        let info = match crate::lease::try_claim(&self.dir, &d.udid, Holder::probe(&self.me)) {
+            Ok(Claim::Got(_probe)) => {
+                tokio::time::timeout(PROBE_BUDGET, Device::from_usb(&d).info()).await.ok().and_then(Result::ok)
+            }
+            Ok(Claim::Held(Some(h))) if h.instance_name().is_some() => {
+                Some(DeviceInfo { udid: d.udid.clone(), name: h.name, product_type: h.model, product_version: h.ios })
+            }
+            _ => None,
+        };
+        if let Some(info) = info {
+            self.slot.lock().unwrap_or_else(|p| p.into_inner()).insert((d.udid, d.device_id), info);
+        }
+    }
+}
+
 impl Daemon {
     /// Read identity on attachment; lockdown can return partial metadata until the device is trusted.
-    /// The controlled device (or every device, while none is) is read here, under the device lock: its details are
-    /// used at once (`online`). The others are read in the background and taken at the next round
+    /// The device whose lease this instance holds is read here, under the device lock: its details are used at once
+    /// (`online`). The others are read in the background and taken at the next round, each under a short lease of
+    /// its own (`Aside`), so a device another instance controls is never read
     pub(crate) async fn note_connected(&self, g: &mut Inner, devices: Vec<UsbDevice>) {
         g.infos.retain(|udid, _| devices.iter().any(|d| d.udid == *udid));
         let probed = std::mem::take(&mut *self.probed.lock().unwrap_or_else(|p| p.into_inner()));
         let now = Instant::now();
-        let current = g.device.as_ref().map(|d| d.udid.clone());
+        let mine = g.lease.as_ref().map(|l| l.udid().to_owned());
         let mut here = Vec::new();
         for d in &devices {
             if !g.connected.contains(d) {
@@ -118,15 +152,16 @@ impl Daemon {
             if !cached.due(now) {
                 continue;
             }
-            if current.is_none() || current.as_deref() == Some(d.udid.as_str()) {
+            if mine.as_deref().is_some_and(|m| m.eq_ignore_ascii_case(&d.udid)) {
                 here.push(d.clone());
             } else {
-                let (slot, d) = (self.probed.clone(), d.clone());
-                tokio::task::spawn_local(async move {
-                    if let Ok(info) = Device::from_usb(&d).info().await {
-                        slot.lock().unwrap_or_else(|p| p.into_inner()).insert((d.udid, d.device_id), info);
-                    }
-                });
+                let aside = Aside {
+                    slot: self.probed.clone(),
+                    probes: self.probes.clone(),
+                    dir: self.cfg.devices_dir(),
+                    me: self.cfg.instance_name().to_owned(),
+                };
+                tokio::task::spawn_local(aside.read(d.clone()));
             }
         }
         // the ones read here, at once rather than one after another
@@ -142,6 +177,28 @@ impl Daemon {
             }
         }
         g.connected = devices;
+    }
+
+    /// The details of the device whose lease was just taken, read now when there are none yet: `online` needs them
+    /// at once (the iOS version decides how it is driven)
+    pub(crate) async fn read_leased(&self, g: &mut Inner, d: &UsbDevice) {
+        let cached = g.infos.entry(d.udid.clone()).or_default();
+        if cached.value.is_some() || !cached.due(Instant::now()) {
+            return;
+        }
+        if let Ok(info) = Device::from_usb(d).info().await
+            && let Some(cached) = g.infos.get_mut(&d.udid)
+        {
+            cached.take(info);
+        }
+    }
+
+    /// The instance controlling `udid`, when it isn't this one (its lease's hint)
+    pub(crate) fn controlled_elsewhere(&self, g: &Inner, udid: &str) -> Option<String> {
+        if g.lease.as_ref().is_some_and(|l| l.is_for(udid)) {
+            return None;
+        }
+        crate::lease::holder(&self.cfg.devices_dir(), udid).and_then(|h| h.instance_name().map(str::to_owned))
     }
 
     pub(crate) fn list_devices_text(&self, g: &Inner) -> String {
@@ -176,9 +233,13 @@ impl Daemon {
             } else {
                 ictl_l10n::tr!("没设", "not set")
             };
+            let by = self
+                .controlled_elsewhere(g, &i.udid)
+                .map(|n| ictl_l10n::trf!("（由实例 {n} 控制）", " (controlled by the instance {n})"))
+                .unwrap_or_default();
             lines.push(ictl_l10n::trf!(
-                "{mark}{} 自动解锁密码{pin}",
-                "{mark}{} auto-unlock passcode {pin}",
+                "{mark}{} 自动解锁密码{pin}{by}",
+                "{mark}{} auto-unlock passcode {pin}{by}",
                 device_label(i)
             ));
         }
@@ -192,75 +253,6 @@ impl Daemon {
             );
         }
         lines.join("\n")
-    }
-
-    /// 改为控制 `query` 指的那台（UDID、设备名或 `auto`），选定的写进 state.json，重启后还记得
-    pub(crate) async fn select_device(&self, g: &mut Inner, query: &str) -> crate::error::Result<String> {
-        if let Ok(d) = ictl_device::list_devices().await {
-            self.note_connected(g, d).await;
-        }
-        let q = query.trim();
-        if q.eq_ignore_ascii_case("auto") || q == ictl_l10n::tr!("自动", "automatic") {
-            if let Some(u) = &self.cfg.udid {
-                return Err(ictl_l10n::trf!(
-                    "IPHONE_UDID 固定为 {u};要改回自动选,先从 ~/.config/iphone-control/env 里删掉它,再重启守护进程",
-                    "IPHONE_UDID pins {u}; to go back to automatic, remove it from ~/.config/iphone-control/env and restart the daemon"
-                ).into());
-            }
-            g.persisted.selected_udid = None;
-            g.persisted.save(&self.cfg.state_file());
-            return Ok(match g.info.as_ref().filter(|_| g.device.is_some()) {
-                Some(i) => ictl_l10n::trf!("已改回自动选;正在控制 {},它断开时换成别的接着的设备", "Back to automatic; controlling {}, switches to another connected device when it disconnects", device_label(i)),
-                None if g.connected.is_empty() => ictl_l10n::tr!("已改回自动选;现在没接设备,接上后自动控制它", "Back to automatic; no device connected now, it takes over the next one plugged in").into(),
-                None => ictl_l10n::tr!("已改回自动选;10 秒内接管接着的设备,先用 iphone-control status 或 iphone_status 确认就绪", "Back to automatic; it takes over a connected device within 10 seconds, check readiness with iphone-control status or iphone_status first").into(),
-            });
-        }
-        let infos = self.connected_infos(g);
-        let target = infos[resolve_device(&infos, q)?].clone();
-        if let Some(u) = &self.cfg.udid
-            && !u.eq_ignore_ascii_case(&target.udid)
-        {
-            return Err(ictl_l10n::trf!(
-                "IPHONE_UDID 固定为 {u};要换设备,先改 ~/.config/iphone-control/env 里的 IPHONE_UDID,再重启守护进程",
-                "IPHONE_UDID pins {u}; to switch devices, change IPHONE_UDID in ~/.config/iphone-control/env and restart the daemon"
-            ).into());
-        }
-        if self.cfg.udid.is_none() {
-            g.persisted.selected_udid = Some(target.udid.clone());
-            g.persisted.save(&self.cfg.state_file());
-        }
-        let label = device_label(&target);
-        if g.device.as_ref().is_some_and(|d| d.udid == target.udid) {
-            return Ok(ictl_l10n::trf!(
-                "已经在控制 {label},之后固定控制这台",
-                "Already controlling {label}; it stays selected from now on"
-            ));
-        }
-        let usb = g
-            .connected
-            .iter()
-            .find(|d| d.udid == target.udid)
-            .cloned()
-            .ok_or(ictl_l10n::tr!("设备刚刚断开了", "the device just disconnected"))?;
-        self.online(g, &usb).await;
-        let pin = if self.cfg.passcode_file_for(&target.udid).is_file() {
-            ""
-        } else {
-            ictl_l10n::tr!(
-                ";这台没设自动解锁密码,锁屏时要人工解锁(在这台连着时运行 iphone-control passcode set)",
-                "; this device has no auto-unlock passcode, so unlock it by hand when locked (run iphone-control passcode set while it is connected)"
-            )
-        };
-        let wait = if self.cfg.ios_backend.drives_natively(Some(&target)) {
-            ictl_l10n::tr!("原生控制几秒就绪", "native control is ready in seconds")
-        } else {
-            ictl_l10n::tr!("WDA 起来要 10~60 秒", "WDA takes 10-60 seconds to start")
-        };
-        Ok(ictl_l10n::trf!(
-            "已切换到 {label},之后固定控制这台。状态:{};{wait},先用 iphone-control status 或 iphone_status 确认就绪{pin}",
-            "Switched to {label}; it stays selected from now on. State: {}; {wait}, check readiness with iphone-control status or iphone_status first{pin}",
-            g.state.describe()
-        ))
     }
 }
 

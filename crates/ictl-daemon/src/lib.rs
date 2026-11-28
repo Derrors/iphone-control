@@ -6,16 +6,22 @@
 //! - 并发模型见 [`core`]
 //! - AI 任务（谁能在任务进行中操作手机）见 [`tasks`]
 
+mod admission;
+mod adopt;
+mod claim;
 pub mod config;
 pub mod core;
 pub mod detached;
 pub mod devices;
 mod devtools;
 mod doctor;
+pub mod envfmt;
 pub mod error;
 pub mod eventlog;
 mod hidmark;
 pub mod imaging;
+pub mod instance;
+pub mod lease;
 pub mod machine;
 pub mod maintenance;
 mod mjpeg;
@@ -23,6 +29,7 @@ pub mod notify;
 pub mod procs;
 mod screen;
 mod supervise;
+mod switch;
 pub mod tasks;
 mod tools;
 mod watch;
@@ -47,6 +54,7 @@ const MAX_REQUEST_LINE: u64 = 1024 * 1024;
 
 /// 运行守护进程直到收到 SIGTERM / SIGINT
 pub async fn run(cfg: Config) -> anyhow::Result<()> {
+    cfg.check_instance()?;
     cfg.prepare_dirs()?;
     let socket = cfg.socket.clone();
     if let Some(dir) = socket.parent()
@@ -138,6 +146,8 @@ async fn serve(cfg: Config, listener: tokio::net::UnixListener) -> anyhow::Resul
     }
     watchdog::spawn(daemon.heartbeat.clone(), daemon.log.clone(), run_state.clone());
     let watcher = watch::spawn(daemon.wake.clone());
+    // the daily Apple ID session check, led by one instance for all (`supervise::session`)
+    let sessions = tokio::task::spawn_local(daemon.clone().lead_session_checks());
 
     let mut tick = tokio::time::interval(core::TICK);
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -207,6 +217,9 @@ async fn serve(cfg: Config, listener: tokio::net::UnixListener) -> anyhow::Resul
     // 自动解锁被打断时停用标记会留着（ictl-unlock），不会因此输错第二次
     watcher.abort();
     let _ = watcher.await;
+    // a check under way keeps the leader's lock in its own thread until it ends
+    sessions.abort();
+    let _ = sessions.await;
     conns.abort_all();
     while conns.join_next().await.is_some() {}
     if let Some((t, _)) = ticking {
@@ -380,7 +393,15 @@ async fn task_stream(
         line.push('\n');
         w.write_all(line.as_bytes()).await.is_ok()
     }
+    // a task is opened with the selection latch held, from the check to the registration: a switch can't come in
+    // between and leave it bound to the device of before (docs/dev/multi-instance-plan.md 4.1)
+    let latch = matches!(req, protocol::Request::TaskOpen { .. }).then(|| daemon.select_latch.lock());
+    let held = match latch {
+        Some(l) => Some(l.await),
+        None => None,
+    };
     let found = match req {
+        protocol::Request::TaskOpen { .. } if daemon.gate.check_open().is_err() => Err(admission::switching().into()),
         protocol::Request::TaskOpen { title, owner, apps } => match daemon.resolve_scope(&apps).await {
             Err(m) => Err(m),
             Ok(apps) => daemon.tasks.open(&title, &owner, daemon.controlled_udid().as_deref(), apps, peer).map(|t| {
@@ -400,6 +421,8 @@ async fn task_stream(
             .ok_or_else(|| ictl_l10n::tr!("没有这个任务", "No such task").into()),
         _ => Err("not a task stream".into()),
     };
+    // registered (or refused): the latch isn't held while the task runs
+    drop(held);
     let (task, opened) = match found {
         Ok(f) => f,
         Err(m) => {

@@ -97,7 +97,12 @@ impl Daemon {
         expect_udid: Option<String>,
         low_bandwidth: bool,
     ) {
-        let (feed, viewer) = match self.screen_feed(expect_udid.as_deref(), low_bandwidth).await {
+        // held while the stream runs; a switch to another device ends it ([`crate::admission`])
+        let opened = match self.gate.admit(None) {
+            Ok(pass) => self.screen_feed(expect_udid.as_deref(), low_bandwidth).await.map(|f| (f, pass)),
+            Err(e) => Err(crate::error::Error::from(e)),
+        };
+        let ((feed, viewer), pass) = match opened {
             Ok(f) => f,
             Err(e) => {
                 let mut line = serde_json::to_string(&Response::error(e)).unwrap_or_default();
@@ -165,16 +170,19 @@ impl Daemon {
                         if reopened > REOPEN_TRIES {
                             return;
                         }
-                        let Some((f, sub)) = self.reopen_feed(&mut reader, expect_udid.as_deref(), low_bandwidth).await
-                        else {
-                            return;
+                        let reopened = tokio::select! {
+                            r = self.reopen_feed(&mut reader, expect_udid.as_deref(), low_bandwidth) => r,
+                            () = pass.revoked() => None,
                         };
+                        let Some((f, sub)) = reopened else { return };
                         (feed, frames) = (f, sub);
                         need_key = true;
                         feed.request_keyframe();
                         continue;
                     }
                 },
+                // switching devices: the page connects again, to the new one
+                () = pass.revoked() => return,
                 r = reader.read(&mut buf) => match r {
                     Ok(0) | Err(_) => return,
                     Ok(n) => {

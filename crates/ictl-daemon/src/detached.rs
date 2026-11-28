@@ -1,8 +1,9 @@
 //! The WDA the daemon launches in the background (it holds no XCTest session), once it isn't used. It doesn't end
 //! with the daemon (that is the point: a restart or an update attaches to it again), so it is ended where it is no
 //! longer wanted: preparing a phone for native control, and `iphone-control service stop` / `uninstall`
-//! ([`end_recorded`], with the daemon stopped). Each phone keeps its own (`Persisted::detached_wdas`):
-//! switching to another device and back attaches to it again.
+//! ([`end_recorded`], with the daemon stopped). Each phone keeps its own record, shared by every instance
+//! (`crate::adopt`; the default instance also keeps it in `Persisted::detached_wdas`, where 0.3.2 looks): switching
+//! to another device and back, or another instance taking the device over, attaches to it again.
 
 use std::time::{Duration, Instant};
 
@@ -34,11 +35,23 @@ pub(crate) fn is_wda(procs: &[(u64, String)], pid: u64) -> bool {
     procs.iter().any(|(p, path)| *p == pid && path.contains("WebDriverAgentRunner"))
 }
 
-/// Ends the WDA launched in the background earlier (`pid`) if it still runs: SIGKILL through AppService (DVT's
-/// `kill_app` leaves WDA running), then waits up to 2 s for it to leave the process list
-pub(crate) async fn stop(t: &mut Tunnel, pid: u64) -> StoppedWda {
+/// Whether process `pid` is the WDA recorded with `executable` (`crate::adopt`): a record without
+/// one proves the pid alone
+pub(crate) fn is_recorded_wda(procs: &[(u64, String)], pid: u64, executable: Option<&str>) -> bool {
+    is_wda(procs, pid) && procs.iter().any(|(p, path)| *p == pid && executable.is_none_or(|e| e == path))
+}
+
+/// The executable process `pid` runs, as the phone lists it
+pub(crate) fn executable_of(procs: &[(u64, String)], pid: u64) -> Option<String> {
+    procs.iter().find(|(p, _)| *p == pid).map(|(_, path)| path.clone())
+}
+
+/// Ends the WDA launched in the background earlier (`pid`, with `executable` when it was recorded) if it still runs:
+/// SIGKILL through AppService (DVT's `kill_app` leaves WDA running), then waits up to 2 s for it to leave the process
+/// list. Another process with that pid is left alone
+pub(crate) async fn stop(t: &mut Tunnel, pid: u64, executable: Option<&str>) -> StoppedWda {
     match t.processes().await {
-        Ok(p) if !is_wda(&p, pid) => return StoppedWda::NotRunning(pid),
+        Ok(p) if !is_recorded_wda(&p, pid, executable) => return StoppedWda::NotRunning(pid),
         Ok(_) => {}
         Err(e) => return StoppedWda::Failed(pid, e.to_string()),
     }
@@ -60,12 +73,38 @@ pub(crate) async fn stop(t: &mut Tunnel, pid: u64) -> StoppedWda {
     }
 }
 
-/// For `service stop` and `uninstall`, with the daemon stopped: ends every recorded background WDA on the phones that
-/// are connected and forgets the ones that are gone. A phone that isn't connected, or one that couldn't be stopped,
-/// stays recorded; the daemon deals with it the next time it prepares that phone. By UDID
+/// A background WDA [`end_recorded`] is to end
+struct Recorded {
+    udid: String,
+    pid: u64,
+    exe: Option<String>,
+    /// The shared record's generation and bundle; `None`: only in state.json, by an older version
+    shared: Option<(u64, String)>,
+}
+
+/// For `service stop` and `uninstall`, with the daemon stopped: ends the background WDAs this instance recorded
+/// (docs/dev/multi-instance-plan.md 4.5, 4.6): its own shared records (by its id, never by a name another instance
+/// may have had) and the default instance's older ones in state.json. Only on the devices whose lease it can take:
+/// - stopped or gone: the record goes;
+/// - still running: the record says `cleanup_pending`, for whoever controls the device next;
+/// - another instance holds the device: its record isn't touched, an intent asks that instance to end it.
+///
+/// A phone that isn't connected stays recorded; the daemon deals with it the next time it prepares that phone. By UDID
 pub async fn end_recorded(cfg: &Config) -> Vec<(String, StoppedWda)> {
+    use crate::adopt::{self, Intent};
+    use crate::lease::{Claim, Holder};
     let path = cfg.state_file();
-    let recorded = Persisted::load(&path).detached_all();
+    let dir = cfg.adopt_dir();
+    let mut recorded: Vec<Recorded> = adopt::all(&dir)
+        .into_iter()
+        .filter(|(_, r)| r.owner_id == cfg.instance_id)
+        .map(|(udid, r)| Recorded { udid, pid: r.pid, exe: r.executable, shared: Some((r.generation, r.bundle)) })
+        .collect();
+    for (udid, pid) in Persisted::load(&path).detached_all() {
+        if !recorded.iter().any(|r| r.udid.eq_ignore_ascii_case(&udid)) {
+            recorded.push(Recorded { udid, pid, exe: None, shared: None });
+        }
+    }
     if recorded.is_empty() {
         return Vec::new();
     }
@@ -76,23 +115,65 @@ pub async fn end_recorded(cfg: &Config) -> Vec<(String, StoppedWda)> {
         Err(e) => {
             let why =
                 ictl_l10n::trf!("别的维护操作正占着手机：{e}", "another maintenance operation holds the phones: {e}");
-            return recorded.into_iter().map(|(u, pid)| (u, StoppedWda::Failed(pid, why.clone()))).collect();
+            return recorded.into_iter().map(|r| (r.udid, StoppedWda::Failed(r.pid, why.clone()))).collect();
         }
     };
     let mut out = Vec::new();
-    for (udid, pid) in recorded {
+    for Recorded { udid, pid, exe, shared } in recorded {
         let Some(usb) = connected.iter().find(|d| d.udid.eq_ignore_ascii_case(&udid)) else {
             out.push((udid, StoppedWda::Failed(pid, ictl_l10n::tr!("没接着", "not connected").to_string())));
             continue;
         };
+        let _device = match crate::lease::try_claim(&cfg.devices_dir(), &udid, Holder::instance(cfg.instance_name())) {
+            Ok(Claim::Got(l)) => l,
+            Ok(Claim::Held(h)) => {
+                let by = h.and_then(|h| h.instance_name().map(str::to_owned)).unwrap_or_else(|| "?".into());
+                if let Some((generation, bundle)) = &shared {
+                    let i = Intent {
+                        owner_id: cfg.instance_id.clone(),
+                        generation: *generation,
+                        pid,
+                        bundle: bundle.clone(),
+                    };
+                    if let Err(e) = adopt::add_intent(&dir, &udid, &i) {
+                        tracing::warn!("asking for the background WDA of {udid} to be ended failed: {e}");
+                    }
+                }
+                let why = ictl_l10n::trf!(
+                    "设备由实例 {by} 控制：交给它结束",
+                    "the device is controlled by the instance {by}: left to it to end"
+                );
+                out.push((udid, StoppedWda::Failed(pid, why)));
+                continue;
+            }
+            Err(e) => {
+                out.push((udid, StoppedWda::Failed(pid, e.to_string())));
+                continue;
+            }
+        };
         let s = match ictl_device::Device::from_usb(usb).open_tunnel().await {
             Ok(mut t) => {
-                let s = stop(&mut t, pid).await;
+                let s = stop(&mut t, pid, exe.as_deref()).await;
                 t.close().await;
                 s
             }
             Err(e) => StoppedWda::Failed(pid, e.to_string()),
         };
+        // the lease is held: the record is this process's to change
+        if shared.is_some() {
+            let r = match &s {
+                StoppedWda::Ended(_) | StoppedWda::NotRunning(_) => adopt::remove(&dir, &udid),
+                StoppedWda::Failed(..) => match adopt::read(&dir, &udid) {
+                    Ok(Some(r)) if r.pid == pid => {
+                        adopt::write(&dir, &udid, adopt::Record { cleanup_pending: true, ..r }).map(drop)
+                    }
+                    other => other.map(drop),
+                },
+            };
+            if let Err(e) = r {
+                tracing::warn!("updating the background WDA record of {udid} failed: {e}");
+            }
+        }
         out.push((udid, s));
     }
     // read again: only what was dealt with here changes

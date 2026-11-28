@@ -163,12 +163,14 @@ pub async fn run(
     let access = if lan { lan::Access::lan(lan_hosts) } else { lan::Access::local() };
     let listener = tokio::net::TcpListener::bind((access.bind_ip(), port)).await?;
     let port = listener.local_addr()?.port();
+    // the login tokens and the certificate made here are every instance's (docs/dev/multi-instance-plan.md 3.3)
+    let shared = ictl_daemon::Config::from_env(data_dir).root;
     let tls = match tls.enabled(access.is_lan()) {
-        true => Some(Arc::new(tls.load(data_dir, &access.names())?)),
+        true => Some(Arc::new(tls.load(&shared, &access.names())?)),
         false => None,
     };
     let agents = Agents::new(socket)?;
-    let auth = auth::Auth::load(data_dir, port)?;
+    let auth = auth::Auth::load(&shared, port)?;
     println!(
         "{}",
         ictl_l10n::trf!(

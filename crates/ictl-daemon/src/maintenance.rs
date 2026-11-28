@@ -8,6 +8,12 @@ use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 
+/// The host's own directory for what isn't any one installation's: the maintenance lock, the instance registry's
+/// anchor ([`crate::instance`]). Doesn't depend on `XDG_*`
+pub fn host_dir() -> io::Result<PathBuf> {
+    directory()
+}
+
 fn directory() -> io::Result<PathBuf> {
     // Independent of the socket, XDG runtime directory and executable: a second Viewer, even
     // one talking to a different socket, or a direct WDA client must still count as active.

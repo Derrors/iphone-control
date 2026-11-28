@@ -444,16 +444,25 @@ impl Tasks {
         }
     }
 
-    /// [`Self::admit`] for a request without a task's token
-    fn admit_other(&self, req: &Request) -> Result<Admission, Response> {
-        let Some(task) = self.active() else { return Ok(Admission::Free) };
-        if matches!(req, Request::SelectDevice { .. }) {
-            return Err(refuse(&ictl_l10n::trf!(
+    /// Why the device can't be switched now: a task is active (#106)
+    pub fn switch_refused(&self) -> Option<String> {
+        self.active().map(|task| {
+            ictl_l10n::trf!(
                 "任务「{}」进行中，不能切换设备；先停止它",
                 "Task “{}” is running, so the device can't be switched; stop it first",
                 task.title
-            )));
+            )
+        })
+    }
+
+    /// [`Self::admit`] for a request without a task's token
+    fn admit_other(&self, req: &Request) -> Result<Admission, Response> {
+        if matches!(req, Request::SelectDevice { .. })
+            && let Some(why) = self.switch_refused()
+        {
+            return Err(refuse(&why));
         }
+        let Some(task) = self.active() else { return Ok(Admission::Free) };
         if !acts(req) || matches!(req, Request::Touch { phase: TouchPhase::Up, .. }) {
             return Ok(Admission::Free);
         }

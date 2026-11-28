@@ -115,6 +115,30 @@ impl Daemon {
             .find(|i| i.udid.eq_ignore_ascii_case(&udid))
             .map(device_label)
             .unwrap_or_else(|| udid.clone());
+        // a device this instance doesn't control: only while no other instance does (that one knows whether it is
+        // entering the passcode now, this one can't), under a short lease of its own meanwhile
+        // (docs/dev/multi-instance-plan.md 4.3)
+        let _probe = if g.lease.as_ref().is_some_and(|l| l.is_for(&udid)) {
+            None
+        } else {
+            use crate::lease::{Claim, Holder};
+            match crate::lease::try_claim(&self.cfg.devices_dir(), &udid, Holder::probe(self.cfg.instance_name())) {
+                Ok(Claim::Got(l)) => Some(l),
+                Ok(Claim::Held(h)) => {
+                    return Err(match h.as_ref().and_then(|h| h.instance_name()) {
+                        Some(n) => ictl_l10n::trf!(
+                            "{label} 由实例 {n} 控制：在那个实例上恢复（iphone-control --instance {n} unlock-reset --device {udid}）",
+                            "{label} is controlled by the instance {n}: re-enable it there (iphone-control --instance {n} unlock-reset --device {udid})"
+                        ),
+                        None => ictl_l10n::trf!("{label} 正被另一个进程使用，稍后再试", "{label} is in use by another process; try again shortly"),
+                    }
+                    .into());
+                }
+                Err(e) => {
+                    return Err(ictl_l10n::trf!("拿不到 {label} 的租约：{e}", "Can't take {label}'s lease: {e}").into());
+                }
+            }
+        };
         let store = self.cfg.unlock_disabled();
         let r = store
             .reset(&udid)

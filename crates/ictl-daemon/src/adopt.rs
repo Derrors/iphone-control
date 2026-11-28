@@ -65,6 +65,12 @@ pub struct Intent {
     pub generation: u64,
     pub pid: u64,
     pub bundle: String,
+    /// The record's owner and its process's start, as it saw them: a record written again (or removed and written
+    /// anew) is never taken for the one the intent was about
+    #[serde(default)]
+    pub record_owner: String,
+    #[serde(default)]
+    pub started: Option<String>,
 }
 
 fn valid(udid: &str) -> io::Result<String> {
@@ -92,7 +98,11 @@ pub fn read(dir: &Path, udid: &str) -> io::Result<Option<Record>> {
 pub fn write(dir: &Path, udid: &str, mut r: Record) -> io::Result<Record> {
     let name = format!("{}.json", valid(udid)?);
     crate::lease::ensure_dir(dir)?;
-    r.generation = read(dir, udid).ok().flatten().map_or(0, |o| o.generation) + 1;
+    // moves on from the one before, and never back below a time-based floor: a record removed and written anew
+    // doesn't reuse a generation an earlier intent may name
+    let floor = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_micros() as u64);
+    let before = read(dir, udid).ok().flatten().map_or(0, |o| o.generation);
+    r.generation = (before + 1).max(floor);
     let data = serde_json::to_vec_pretty(&r).map_err(io::Error::other)?;
     ictl_unlock::durable::write_atomic(dir, &name, &data, 0o600)?;
     Ok(r)
@@ -121,6 +131,18 @@ pub fn all(dir: &Path) -> Vec<(String, Record)> {
         .collect();
     out.sort_by(|a, b| a.0.cmp(&b.0));
     out
+}
+
+/// The devices that have a record file, readable or not (upper case)
+pub fn devices_recorded(dir: &Path) -> Vec<String> {
+    let Ok(entries) = std::fs::read_dir(dir) else { return Vec::new() };
+    entries
+        .flatten()
+        .filter_map(|e| {
+            let name = e.file_name().to_str()?.strip_suffix(".json")?.to_owned();
+            valid(&name).ok().filter(|u| *u == name)
+        })
+        .collect()
 }
 
 /// Adds an intent to end `udid`'s process, for whoever holds the lease next
@@ -156,7 +178,11 @@ pub fn consume_intents(dir: &Path, udid: &str, record: Option<Record>) -> io::Re
         }
         let intent: Option<Intent> = std::fs::read(e.path()).ok().and_then(|b| serde_json::from_slice(&b).ok());
         if let (Some(i), Some(r)) = (intent, &record) {
-            end |= i.generation == r.generation && i.pid == r.pid && i.bundle == r.bundle;
+            end |= i.generation == r.generation
+                && i.pid == r.pid
+                && i.bundle == r.bundle
+                && i.record_owner == r.owner_id
+                && i.started == r.started;
         }
         found.push(e.path());
     }
@@ -195,9 +221,16 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("ictl-adopt-{}", uuid::Uuid::new_v4()));
         assert_eq!(read(&dir, "aa").unwrap(), None);
         let a = write(&dir, "aa", rec(10)).unwrap();
-        assert_eq!(a.generation, 1);
+        assert!(a.generation > 0);
         let b = write(&dir, "AA", rec(11)).unwrap();
-        assert_eq!(b.generation, 2, "the same device in either case");
+        assert!(b.generation > a.generation, "the same device in either case");
+        // removed and written anew: never a generation of before
+        remove(&dir, "aa").unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        let again = write(&dir, "aa", rec(11)).unwrap();
+        assert!(again.generation > b.generation, "not reused");
+        remove(&dir, "aa").unwrap();
+        let b = write(&dir, "AA", rec(11)).unwrap();
         assert_eq!(read(&dir, "aa").unwrap(), Some(b.clone()));
         assert!(!Record { cleanup_pending: true, ..b.clone() }.adoptable());
         assert!(!Record { loopback: false, ..b }.adoptable());
@@ -214,8 +247,14 @@ mod tests {
     fn an_intent_marks_the_record_before_it_goes_and_an_overtaken_one_is_dropped() {
         let dir = std::env::temp_dir().join(format!("ictl-adopt-{}", uuid::Uuid::new_v4()));
         let seen = write(&dir, "aa", rec(10)).unwrap();
-        let intent =
-            Intent { owner_id: "default".into(), generation: seen.generation, pid: 10, bundle: seen.bundle.clone() };
+        let intent = Intent {
+            owner_id: "default".into(),
+            generation: seen.generation,
+            pid: 10,
+            bundle: seen.bundle.clone(),
+            record_owner: seen.owner_id.clone(),
+            started: seen.started.clone(),
+        };
         add_intent(&dir, "aa", &intent).unwrap();
         let after = consume_intents(&dir, "AA", Some(seen.clone())).unwrap().unwrap();
         assert!(after.cleanup_pending && !after.adoptable(), "to be ended");

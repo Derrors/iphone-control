@@ -111,6 +111,41 @@ pub fn lock_registry(dir: &Path, wait: std::time::Duration) -> io::Result<std::f
     }
 }
 
+/// Where the instance `name`'s lifecycle lock is: in the data root, outside anything `instance remove --purge`
+/// deletes (a lock beside a socket in the instance's own directory would go with it, and a daemon starting from a
+/// registration read before could take a new one)
+pub fn lock_path(root: &Path, name: &str) -> PathBuf {
+    root.join("instance-locks").join(format!("{name}.lock"))
+}
+
+/// The instance `name`'s lifecycle lock, if no one holds it: held by its daemon for as long as it runs, and by
+/// `instance remove` while it removes the instance. Never waits
+pub fn try_lock(root: &Path, name: &str) -> io::Result<Option<std::fs::File>> {
+    use std::os::fd::AsRawFd;
+    use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
+    if !valid_name(name) {
+        return Err(io::Error::new(io::ErrorKind::InvalidInput, format!("not an instance name: {name:?}")));
+    }
+    let p = lock_path(root, name);
+    if let Some(dir) = p.parent() {
+        std::fs::DirBuilder::new().recursive(true).mode(0o700).create(dir)?;
+    }
+    let f = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(&p)?;
+    // SAFETY: a valid descriptor, owned by `f` for as long as the lock is held
+    if unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
+        return Ok(Some(f));
+    }
+    let e = io::Error::last_os_error();
+    if e.kind() == io::ErrorKind::WouldBlock { Ok(None) } else { Err(e) }
+}
+
 /// `name` in the registry directory `dir` replaced whole, private, on disk (`<n>.env`, `<n>.pending`)
 pub fn write_file(dir: &Path, name: &str, data: &[u8]) -> io::Result<()> {
     ictl_unlock::durable::write_atomic(dir, name, data, 0o600)
@@ -629,6 +664,21 @@ mod tests {
         let dd = Invocation { data_dir: Some("/elsewhere".into()), ..ipad.clone() };
         assert!(run(&dd, &[], &[], &dir).unwrap_err().contains("--data-dir"));
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// One holder of an instance's lifecycle lock at a time, across separate opens; it isn't in the instance's own
+    /// directory (what --purge deletes)
+    #[test]
+    fn an_instance_s_lifecycle_lock_is_outside_its_directory() {
+        let root = std::env::temp_dir().join(format!("ictl-ilock-{}", uuid::Uuid::new_v4()));
+        let held = try_lock(&root, "ipad").unwrap().expect("free");
+        assert!(try_lock(&root, "ipad").unwrap().is_none(), "held");
+        assert!(try_lock(&root, "phone").unwrap().is_some(), "another instance's");
+        assert!(!lock_path(&root, "ipad").starts_with(paths_for(&root, "ipad").0));
+        drop(held);
+        assert!(try_lock(&root, "ipad").unwrap().is_some());
+        assert!(try_lock(&root, "../x").is_err());
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     /// A service's `daemon` or `viewer` is a named instance only by `--instance`: the default instance's unit reads

@@ -258,6 +258,24 @@ impl Config {
     pub fn shared_with_others(&self) -> bool {
         self.instance.is_some() || crate::instance::scan(&self.registry_dir()).map(|s| s.any()).unwrap_or(true)
     }
+    /// A named instance's daemon, its lifecycle lock just taken: its registration is still there, with its id and data
+    /// directory (removed meanwhile, or removed and added again, it doesn't start from what it read before)
+    pub fn check_still_registered(&self) -> anyhow::Result<()> {
+        let Some(name) = &self.instance else { return Ok(()) };
+        let reg = crate::instance::read(&self.registry_dir(), name)?;
+        let ok = reg.is_some_and(|r| r.managed.id == self.instance_id && r.managed.data_dir == self.data_dir);
+        anyhow::ensure!(
+            ok,
+            "{}",
+            ictl_l10n::trf!(
+                "实例 {} 的登记已经不是这个进程启动时读的那份（被移除或重新添加过），不启动",
+                "The instance {}'s registration isn't the one this process started from (removed, or added again): not started",
+                name
+            )
+        );
+        Ok(())
+    }
+
     /// Before a daemon starts: the registry and data root are the ones every instance uses
     /// ([`crate::instance::check_anchor`]); a named instance has its device and id, and its data directory where the
     /// data root is worked out from
@@ -530,6 +548,37 @@ impl Config {
 
 #[cfg(test)]
 mod tests {
+    /// A named instance's daemon, its lifecycle lock taken, starts only from the registration as it is now: removed,
+    /// or added again under the same name (another id), it doesn't
+    #[test]
+    fn a_daemon_starts_only_from_its_registration_as_it_is() {
+        let root = std::env::temp_dir().join(format!("ictl-still-{}", uuid::Uuid::new_v4()));
+        let data = root.join("instances/ipad");
+        std::fs::create_dir_all(&data).unwrap();
+        let mut cfg = Config::from_env(&data);
+        cfg.registry = root.join("registry");
+        std::fs::create_dir_all(&cfg.registry).unwrap();
+        (cfg.instance, cfg.instance_id) = (Some("ipad".into()), "3f2a".into());
+        let reg = |id: &str| crate::instance::Registered {
+            name: "ipad".into(),
+            managed: crate::instance::Managed {
+                socket: root.join("ipad.sock"),
+                data_dir: data.clone(),
+                udid: "AA".into(),
+                port: 8203,
+                id: id.into(),
+            },
+            settings: Vec::new(),
+        };
+        let file = cfg.registry.join("ipad.env");
+        assert!(cfg.check_still_registered().is_err(), "removed");
+        std::fs::write(&file, crate::instance::render(&reg("3f2a")).unwrap()).unwrap();
+        cfg.check_still_registered().unwrap();
+        std::fs::write(&file, crate::instance::render(&reg("77aa")).unwrap()).unwrap();
+        assert!(cfg.check_still_registered().is_err(), "added again: another id");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     use super::*;
 
     /// A first start where the data directory and the ones above it don't exist yet: everything is made, and a

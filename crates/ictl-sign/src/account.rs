@@ -71,23 +71,50 @@ impl AccountDir {
 
     /// Where the anisette state came from, against the configured address
     pub fn anisette_origin(&self) -> Result<OriginCheck> {
+        let origin = omnisette::state_file::origin(&self.dir).map_err(|e| SignError::Transient(e.to_string()))?;
+        Ok(self.check_of(origin))
+    }
+
+    fn check_of(&self, origin: Origin) -> OriginCheck {
         let configured = self.anisette_address();
-        Ok(match omnisette::state_file::origin(&self.dir).map_err(|e| SignError::Transient(e.to_string()))? {
+        match origin {
             Origin::Missing | Origin::Unprovisioned => OriginCheck::Fresh,
             Origin::Unknown => OriginCheck::Unknown,
             Origin::Url(u) if omnisette::state_file::same_address(&u, &configured) => OriginCheck::Known,
             Origin::Url(recorded) => OriginCheck::Mismatch { recorded, configured },
-        })
+        }
     }
 
     /// The anisette state on disk now ([`StateIdentity`])
     pub fn anisette_identity(&self) -> Result<StateIdentity> {
-        let digest = match std::fs::read(self.dir.join(omnisette::state_file::STATE_FILE)) {
-            Ok(b) => Some(hex(&Sha256::digest(&b))),
-            Err(e) if e.kind() == io::ErrorKind::NotFound => None,
-            Err(e) => return Err(e.into()),
-        };
-        Ok(StateIdentity { origin: self.anisette_origin()?, digest })
+        // one read: the digest and the origin of the same bytes
+        let snap = omnisette::state_file::snapshot(&self.dir).map_err(|e| SignError::Transient(e.to_string()))?;
+        Ok(match snap {
+            None => StateIdentity { origin: OriginCheck::Fresh, digest: None },
+            Some((bytes, origin)) => {
+                StateIdentity { origin: self.check_of(origin), digest: Some(hex(&Sha256::digest(&bytes))) }
+            }
+        })
+    }
+
+    /// `f`'s result with the anisette state it used: the state on disk is the same before and after (provisioning
+    /// writes a new one, so the same bytes both times mean `f` read that one), tried again a few times when it
+    /// changed meanwhile
+    pub(crate) async fn with_state_used<T, F, Fut>(&self, mut f: F) -> Result<(T, StateIdentity)>
+    where
+        F: FnMut() -> Fut,
+        Fut: std::future::Future<Output = Result<T>>,
+    {
+        for _ in 0..3 {
+            let before = self.anisette_identity()?;
+            let r = f().await?;
+            if self.anisette_identity()? == before {
+                return Ok((r, before));
+            }
+        }
+        Err(SignError::Transient(
+            "the anisette state kept changing while it was used (another process provisioning it)".into(),
+        ))
     }
 
     /// Refuses to use the anisette state with the configured address when it came from another one, or from an
@@ -392,6 +419,39 @@ mod tests {
         assert!(matches!(a.commit_login(gsa("x@y.z", "t3"), &now, &used).await, Err(SignError::LoginSuperseded)));
         std::fs::write(dir.join("state.plist"), state("AQID")).unwrap();
         a.commit_login(gsa("x@y.z", "t3"), &now, &used).await.unwrap();
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// The state recorded for a login is the one its request used: one provisioned in between (the same address) makes
+    /// it read again, and what is recorded is the state that was there all through
+    #[tokio::test]
+    async fn the_state_recorded_is_the_one_used() {
+        let (a, dir) = acct(false);
+        let state = |pb: &str| {
+            format!(
+                "<?xml version=\"1.0\" encoding=\"UTF-8\"?><plist version=\"1.0\"><dict>\
+                 <key>keychain_identifier</key><data>AAAAAAAAAAAAAAAAAAAAAA==</data>\
+                 <key>adi_pb</key><data>{pb}</data>\
+                 <key>provisioned_by</key><string>https://ani.example.com</string></dict></plist>"
+            )
+        };
+        std::fs::write(dir.join("state.plist"), state("AQID")).unwrap();
+        let s1 = a.anisette_identity().unwrap();
+        // the first use: provisioned again by another process meanwhile (S2); the second: nothing changes
+        let mut uses = 0;
+        let ((), used) = a
+            .with_state_used(|| {
+                uses += 1;
+                if uses == 1 {
+                    std::fs::write(dir.join("state.plist"), state("BAUG")).unwrap();
+                }
+                async { Ok(()) }
+            })
+            .await
+            .unwrap();
+        assert_eq!(uses, 2, "used again");
+        assert_ne!(used, s1, "S2's, not S1's");
+        assert_eq!(used, a.anisette_identity().unwrap());
         std::fs::remove_dir_all(dir).unwrap();
     }
 

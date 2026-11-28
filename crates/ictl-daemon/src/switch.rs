@@ -73,6 +73,10 @@ impl Daemon {
         }
         let q = query.trim();
         if q.eq_ignore_ascii_case("auto") || q == ictl_l10n::tr!("自动", "automatic") {
+            // gone while the devices were listed: the selection stays as it is
+            if left(gone) {
+                return Err(cancelled());
+            }
             return self.select_auto(&mut g);
         }
         let infos = self.connected_infos(&g);
@@ -420,6 +424,13 @@ mod tests {
     async fn a_switch_moves_the_lease_and_the_selection() {
         local(async {
             let (d, dir) = controlling_a("switch-ok").await;
+            // `select auto` cancelled: the selection kept
+            d.inner.lock().await.persisted.selected_udid = Some(A.into());
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            tx.send(()).unwrap();
+            assert!(d.select("auto", &mut Some(rx)).await.is_err());
+            assert_eq!(d.inner.lock().await.persisted.selected_udid.as_deref(), Some(A));
+            d.inner.lock().await.persisted.selected_udid = None;
             // a caller gone while it waited: nothing switched, nothing written
             let (tx, rx) = tokio::sync::oneshot::channel();
             tx.send(()).unwrap();

@@ -48,11 +48,34 @@ pub fn same_address(a: &str, b: &str) -> bool {
 
 /// Where the state in `dir` came from. A state that can't be read is an error, never taken for missing
 pub fn origin(dir: &Path) -> Result<Origin, AnisetteError> {
-    match read(dir)? {
-        None => Ok(Origin::Missing),
-        Some(s) if !s.is_provisioned() => Ok(Origin::Unprovisioned),
-        Some(s) => Ok(s.provisioned_by.clone().map(Origin::Url).unwrap_or(Origin::Unknown)),
-    }
+    origin_of(&read(dir)?)
+}
+
+/// The state file's bytes and where they came from, read once: the two never belong to different states. `None`: no
+/// state yet
+pub fn snapshot(dir: &Path) -> Result<Option<(Vec<u8>, Origin)>, AnisetteError> {
+    let bytes = match std::fs::read(dir.join(STATE_FILE)) {
+        Ok(b) => b,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e.into()),
+    };
+    let state: AnisetteState = plist::from_bytes(&bytes)?;
+    let origin = origin_of(&Some(state))?;
+    Ok(Some((bytes, origin)))
+}
+
+fn origin_of(state: &Option<AnisetteState>) -> Result<Origin, AnisetteError> {
+    Ok(match state {
+        None => Origin::Missing,
+        Some(s) if !s.is_provisioned() => Origin::Unprovisioned,
+        Some(s) => s.provisioned_by.clone().map(Origin::Url).unwrap_or(Origin::Unknown),
+    })
+}
+
+/// The state's lock, held while nothing may provision or replace it (a login compares the state it used with the one
+/// there, then writes its credentials). Waited for as provisioning does
+pub async fn hold(dir: &Path) -> Result<StateLock, AnisetteError> {
+    Ok(lock(dir).await?)
 }
 
 /// Records that the provisioned state in `dir` came from `url` (the user said so). `Ok(false)`: there is no
@@ -80,7 +103,7 @@ pub async fn discard(dir: &Path) -> Result<(), AnisetteError> {
 }
 
 /// Held while the state is read, provisioned and written
-pub(crate) struct StateLock(#[allow(dead_code)] File);
+pub struct StateLock(#[allow(dead_code)] File);
 
 pub(crate) async fn lock(dir: &Path) -> io::Result<StateLock> {
     std::fs::create_dir_all(dir)?;

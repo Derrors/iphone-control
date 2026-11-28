@@ -594,7 +594,8 @@ async fn remove(name: &str, purge: bool) -> anyhow::Result<()> {
     }
     // stopped for sure: its daemon's lifecycle lock held here (a daemon started by hand, or stuck answering
     // nothing, still holds it), and kept until the registration and its directory are gone
-    let _stopped = held_lifecycle(&reg.managed.socket).await?.with_context(|| {
+    let root_dir = ictl_daemon::Config::from_env(&ictl_daemon::protocol::default_data_dir()).root;
+    let _stopped = held_lifecycle(&root_dir, name, &reg.managed.socket).await?.with_context(|| {
         ictl_l10n::trf!(
             "{name} 的守护进程还在运行（不是服务启动的，或者卡住了），登记留着",
             "{name}'s daemon still runs (not started by its service, or stuck), so its registration stays"
@@ -602,7 +603,6 @@ async fn remove(name: &str, purge: bool) -> anyhow::Result<()> {
     })?;
     // what --purge deletes: the instance's own directory as worked out from the data root and its name, never a
     // path the registration names elsewhere
-    let root_dir = ictl_daemon::Config::from_env(&ictl_daemon::protocol::default_data_dir()).root;
     let purge_dir = if purge { Some(purge_target(&root_dir, name, &reg.managed.data_dir)?) } else { None };
     // its background WDAs, as `service stop` ends them: by its id, on the devices whose lease can be taken
     let mut cfg = ictl_daemon::Config::from_env(&reg.managed.data_dir);
@@ -622,12 +622,20 @@ async fn remove(name: &str, purge: bool) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// The daemon's lifecycle lock beside `socket`, tried for a few seconds (a stopped service's process may take a moment
-/// to end); `None`: a daemon still holds it
-async fn held_lifecycle(socket: &Path) -> anyhow::Result<Option<std::fs::File>> {
+/// The instance's lifecycle locks, tried for a few seconds (a stopped service's process may take a moment to end):
+/// its own in the data root (kept while it is removed: a daemon starting meanwhile waits for it, then finds no
+/// registration), and the one beside its socket (a daemon of before without the first). `None`: a daemon still holds
+/// one
+async fn held_lifecycle(
+    root: &Path,
+    name: &str,
+    socket: &Path,
+) -> anyhow::Result<Option<(std::fs::File, std::fs::File)>> {
     for _ in 0..50 {
-        if let Some(f) = ictl_daemon::try_lifecycle_lock(socket)? {
-            return Ok(Some(f));
+        if let Some(own) = instance::try_lock(root, name)?
+            && let Some(beside) = ictl_daemon::try_lifecycle_lock(socket)?
+        {
+            return Ok(Some((own, beside)));
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }

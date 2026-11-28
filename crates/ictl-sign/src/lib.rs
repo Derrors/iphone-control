@@ -251,12 +251,14 @@ impl AccountDir {
         self.check_origin()?;
         // what this Apple ID's credentials are before (another login may replace them while this one waits)
         let before = self.credentials_of(email)?;
-        // the anisette state is provisioned, if it has to be, under its own lock (omnisette's state_file)
-        let anisette =
-            self.fetch_anisette_with(&SESSION_RETRY_DELAYS, SESSION_ATTEMPT_TIMEOUT, tokio::time::sleep).await?;
-        // and which state this login uses: its content, not only where it came from (provisioned again with the
-        // same address is another state)
-        let origin = self.anisette_identity()?;
+        // the anisette state is provisioned, if it has to be, under its own lock (omnisette's state_file); with it,
+        // the state this request used: its content, not only where it came from (provisioned again with the same
+        // address is another state)
+        let (anisette, origin) = self
+            .with_state_used(|| {
+                self.fetch_anisette_with(&SESSION_RETRY_DELAYS, SESSION_ATTEMPT_TIMEOUT, tokio::time::sleep)
+            })
+            .await?;
         let (e, p) = (email.to_owned(), password.to_owned());
         // not under the account lock: this waits for the user to type a verification code
         let account =
@@ -282,7 +284,10 @@ impl AccountDir {
         before: &Option<(String, String)>,
         origin: &account::StateIdentity,
     ) -> Result<()> {
+        // the account lock, then the state's (the order everything takes them in): nothing provisions the state
+        // while it is compared and the credentials written
         let _lock = self.lock().await?;
+        let _state = omnisette::state_file::hold(&self.dir).await.map_err(|e| SignError::Transient(e.to_string()))?;
         if self.credentials_of(gsa.email())? != *before || self.anisette_identity()? != *origin {
             return Err(SignError::LoginSuperseded);
         }

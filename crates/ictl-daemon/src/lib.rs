@@ -57,6 +57,13 @@ const MAX_REQUEST_LINE: u64 = 1024 * 1024;
 /// 运行守护进程直到收到 SIGTERM / SIGINT
 pub async fn run(cfg: Config) -> anyhow::Result<()> {
     cfg.check_instance()?;
+    // a named instance's lifecycle lock (in the data root, where --purge doesn't reach), held for as long as it runs;
+    // then its registration read again: `instance remove` holds the lock while it removes it
+    let _named = match &cfg.instance {
+        Some(name) => Some(instance_lock(&cfg.root, name, INSTANCE_WAIT).await?),
+        None => None,
+    };
+    cfg.check_still_registered()?;
     cfg.prepare_dirs()?;
     let socket = cfg.socket.clone();
     if let Some(dir) = socket.parent()
@@ -97,6 +104,27 @@ pub async fn run(cfg: Config) -> anyhow::Result<()> {
 
 /// How long a starting daemon waits for the one before it to let go of the socket (it may still be stopping)
 const INSTANCE_WAIT: std::time::Duration = std::time::Duration::from_secs(15);
+
+/// The instance `name`'s lifecycle lock ([`instance::try_lock`]), waited for up to `wait` (another daemon of it may be
+/// stopping, or `instance remove` at work)
+async fn instance_lock(root: &std::path::Path, name: &str, wait: std::time::Duration) -> anyhow::Result<std::fs::File> {
+    let deadline = Instant::now() + wait;
+    loop {
+        if let Some(f) = instance::try_lock(root, name)? {
+            return Ok(f);
+        }
+        if Instant::now() >= deadline {
+            bail!(
+                "{}",
+                ictl_l10n::trf!(
+                    "实例 {name} 已经有守护进程在运行（或正在被移除）",
+                    "The instance {name} has a daemon running already (or is being removed)"
+                )
+            );
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    }
+}
 
 /// The lock beside `socket` (`ctl.lock`) a daemon holds for as long as it runs, if none does now: whoever holds it
 /// knows no daemon serves that socket (`instance remove` deletes an instance only while holding it). Never waits

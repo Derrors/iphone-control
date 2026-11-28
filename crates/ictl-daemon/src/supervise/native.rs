@@ -136,9 +136,12 @@ impl Daemon {
             (self.cfg.ddi_cache_for(legacy), self.cfg.ddi_url.clone(), self.cfg.ddi_dir.clone());
         // a WDA launched in the background before (WDA control earlier): not wanted now, ended once the image is up
         // (AppService needs it)
+        // the shared record, with the process's creation identity; an older version's pid only for a device without
+        // one (a record that can't be read is none of these: left alone)
         let known = match crate::adopt::read(&self.cfg.adopt_dir(), &device.udid) {
-            Ok(Some(r)) => Some((r.pid, r.executable)),
-            _ => g.persisted.detached_for(&device.udid).map(|pid| (pid, None)),
+            Ok(Some(r)) => Some((r.pid, Some((r.executable, r.started)))),
+            Ok(None) => g.persisted.detached_for(&device.udid).map(|pid| (pid, None)),
+            Err(_) => None,
         };
         let Ok(lease) = crate::maintenance::shared() else { return };
         let wake = self.wake.clone();
@@ -147,8 +150,14 @@ impl Daemon {
             let mut t = device.open_tunnel().await.map_err(|e| (e, false))?;
             let r = ensure_ddi(&device, &mut t, legacy, &cache, &url, user_dir.as_deref()).await;
             let stopped = match (&r, known) {
-                (Ok(_), Some((pid, exe))) => {
-                    Some((device.udid.clone(), detached::stop(&mut t, pid, exe.as_deref()).await))
+                (Ok(_), Some((pid, proof))) => {
+                    let expect = match &proof {
+                        Some((exe, started)) => {
+                            detached::Expect::Created { executable: exe.as_deref(), started: started.as_deref() }
+                        }
+                        None => detached::Expect::Legacy,
+                    };
+                    Some((device.udid.clone(), detached::stop(&mut t, pid, expect).await))
                 }
                 _ => None,
             };

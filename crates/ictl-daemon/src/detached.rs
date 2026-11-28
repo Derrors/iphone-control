@@ -35,10 +35,15 @@ pub(crate) fn is_wda(procs: &[(u64, String)], pid: u64) -> bool {
     procs.iter().any(|(p, path)| *p == pid && path.contains("WebDriverAgentRunner"))
 }
 
-/// Whether process `pid` is the WDA recorded with `executable` (`crate::adopt`): a record without
-/// one proves the pid alone
-pub(crate) fn is_recorded_wda(procs: &[(u64, String)], pid: u64, executable: Option<&str>) -> bool {
-    is_wda(procs, pid) && procs.iter().any(|(p, path)| *p == pid && executable.is_none_or(|e| e == path))
+/// What a stop must find to end process `pid` ([`stop`])
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum Expect<'a> {
+    /// A shared record's process (`crate::adopt`): its creation identity, the executable and the start the phone
+    /// reports, must be the one recorded. A record without them proves nothing: the process is left alone (the next
+    /// launch ends it)
+    Created { executable: Option<&'a str>, started: Option<&'a str> },
+    /// Only in an older version's `state.json`, for a device without any shared record: a WDA with that pid
+    Legacy,
 }
 
 /// The executable process `pid` runs, as the phone lists it
@@ -46,14 +51,33 @@ pub(crate) fn executable_of(procs: &[(u64, String)], pid: u64) -> Option<String>
     procs.iter().find(|(p, _)| *p == pid).map(|(_, path)| path.clone())
 }
 
-/// Ends the WDA launched in the background earlier (`pid`, with `executable` when it was recorded) if it still runs:
-/// SIGKILL through AppService (DVT's `kill_app` leaves WDA running), then waits up to 2 s for it to leave the process
-/// list. Another process with that pid is left alone
-pub(crate) async fn stop(t: &mut Tunnel, pid: u64, executable: Option<&str>) -> StoppedWda {
-    match t.processes().await {
-        Ok(p) if !is_recorded_wda(&p, pid, executable) => return StoppedWda::NotRunning(pid),
-        Ok(_) => {}
+/// Ends the WDA launched in the background earlier (`pid`, as `expect` says it must be) if it still runs: SIGKILL
+/// through AppService (DVT's `kill_app` leaves WDA running), then waits up to 2 s for it to leave the process list.
+/// Another process with that pid, even of the same app, is left alone
+pub(crate) async fn stop(t: &mut Tunnel, pid: u64, expect: Expect<'_>) -> StoppedWda {
+    let procs = match t.processes().await {
+        Ok(p) => p,
         Err(e) => return StoppedWda::Failed(pid, e.to_string()),
+    };
+    if !is_wda(&procs, pid) {
+        return StoppedWda::NotRunning(pid);
+    }
+    if let Expect::Created { executable, started } = expect {
+        let (Some(executable), Some(started)) = (executable, started) else {
+            let why = ictl_l10n::tr!(
+                "记录里没有这个进程的创建身份，不结束它（下次启动 WDA 时会替换）",
+                "the record has no creation identity for this process, so it isn't ended (the next launch of WDA replaces it)"
+            );
+            return StoppedWda::Failed(pid, why.to_string());
+        };
+        let now = match t.process_starts().await {
+            Ok(s) => s.get(&pid).cloned(),
+            Err(e) => return StoppedWda::Failed(pid, e.to_string()),
+        };
+        if executable_of(&procs, pid).as_deref() != Some(executable) || now.as_deref() != Some(started) {
+            // that pid is another process now (the phone restarted, the app launched again)
+            return StoppedWda::NotRunning(pid);
+        }
     }
     if let Err(e) = t.signal(pid, 9).await {
         return StoppedWda::Failed(pid, e.to_string());
@@ -78,6 +102,7 @@ struct Recorded {
     udid: String,
     pid: u64,
     exe: Option<String>,
+    started: Option<String>,
     /// The shared record's generation and bundle; `None`: only in state.json, by an older version
     shared: Option<(u64, String)>,
 }
@@ -95,22 +120,23 @@ pub async fn end_recorded(cfg: &Config) -> Vec<(String, StoppedWda)> {
     use crate::lease::{Claim, Holder};
     let path = cfg.state_file();
     let dir = cfg.adopt_dir();
-    let shared = adopt::all(&dir);
-    let mut recorded: Vec<Recorded> = shared
-        .iter()
+    let mut recorded: Vec<Recorded> = adopt::all(&dir)
+        .into_iter()
         .filter(|(_, r)| r.owner_id == cfg.instance_id)
         .map(|(udid, r)| Recorded {
-            udid: udid.clone(),
+            udid,
             pid: r.pid,
-            exe: r.executable.clone(),
-            shared: Some((r.generation, r.bundle.clone())),
+            exe: r.executable,
+            started: r.started,
+            shared: Some((r.generation, r.bundle)),
         })
         .collect();
-    // an older version's record (state.json) only for a device with no shared record at all: one there, of any
-    // instance, says what runs on the device now (another instance may have taken its WDA over)
+    // an older version's record (state.json) only for a device with no shared record at all, readable or not: one
+    // there, of any instance, says what runs on the device now (another instance may have taken its WDA over)
+    let any = adopt::devices_recorded(&dir);
     for (udid, pid) in Persisted::load(&path).detached_all() {
-        if !shared.iter().any(|(u, _)| u.eq_ignore_ascii_case(&udid)) {
-            recorded.push(Recorded { udid, pid, exe: None, shared: None });
+        if !any.iter().any(|u| u.eq_ignore_ascii_case(&udid)) {
+            recorded.push(Recorded { udid, pid, exe: None, started: None, shared: None });
         }
     }
     if recorded.is_empty() {
@@ -127,7 +153,7 @@ pub async fn end_recorded(cfg: &Config) -> Vec<(String, StoppedWda)> {
         }
     };
     let mut out = Vec::new();
-    for Recorded { udid, pid, exe, shared } in recorded {
+    for Recorded { udid, pid, exe, started, shared } in recorded {
         let Some(usb) = connected.iter().find(|d| d.udid.eq_ignore_ascii_case(&udid)) else {
             out.push((udid, StoppedWda::Failed(pid, ictl_l10n::tr!("没接着", "not connected").to_string())));
             continue;
@@ -142,6 +168,8 @@ pub async fn end_recorded(cfg: &Config) -> Vec<(String, StoppedWda)> {
                         generation: *generation,
                         pid,
                         bundle: bundle.clone(),
+                        record_owner: cfg.instance_id.clone(),
+                        started: started.clone(),
                     };
                     if let Err(e) = adopt::add_intent(&dir, &udid, &i) {
                         tracing::warn!("asking for the background WDA of {udid} to be ended failed: {e}");
@@ -161,12 +189,13 @@ pub async fn end_recorded(cfg: &Config) -> Vec<(String, StoppedWda)> {
         };
         // the lease held: the shared record read again, the process still ours to end only if nothing changed since
         // it was listed (no other instance took it over, wrote it again, or recorded one at all)
-        let now = adopt::read(&dir, &udid).ok().flatten();
+        // one that can't be read is left alone: not taken for none (which would let the older pid end something)
+        let now = adopt::read(&dir, &udid);
         let still_ours = match (&shared, &now) {
-            (Some((generation, _)), Some(r)) => {
-                r.owner_id == cfg.instance_id && r.generation == *generation && r.pid == pid
+            (Some((generation, _)), Ok(Some(r))) => {
+                r.owner_id == cfg.instance_id && r.generation == *generation && r.pid == pid && r.started == started
             }
-            (None, None) => true,
+            (None, Ok(None)) => !adopt::devices_recorded(&dir).iter().any(|u| u.eq_ignore_ascii_case(&udid)),
             _ => false,
         };
         if !still_ours {
@@ -179,7 +208,11 @@ pub async fn end_recorded(cfg: &Config) -> Vec<(String, StoppedWda)> {
         }
         let s = match ictl_device::Device::from_usb(usb).open_tunnel().await {
             Ok(mut t) => {
-                let s = stop(&mut t, pid, exe.as_deref()).await;
+                let expect = match &shared {
+                    Some(_) => Expect::Created { executable: exe.as_deref(), started: started.as_deref() },
+                    None => Expect::Legacy,
+                };
+                let s = stop(&mut t, pid, expect).await;
                 t.close().await;
                 s
             }

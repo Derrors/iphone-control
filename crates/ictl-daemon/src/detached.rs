@@ -51,6 +51,28 @@ pub(crate) fn executable_of(procs: &[(u64, String)], pid: u64) -> Option<String>
     procs.iter().find(|(p, _)| *p == pid).map(|(_, path)| path.clone())
 }
 
+/// Whether a process now is the one recorded ([`same_process`])
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum Same {
+    Yes,
+    /// Another process (another executable, or another start)
+    Other,
+    /// Its start isn't known now: can't be told
+    Unknown,
+}
+
+/// The process listed now (`executable`, `started` as the phone gives them) against the one recorded
+pub(crate) fn same_process(executable: Option<&str>, started: Option<&str>, rec_exe: &str, rec_started: &str) -> Same {
+    if executable != Some(rec_exe) {
+        return Same::Other;
+    }
+    match started {
+        None => Same::Unknown,
+        Some(s) if s == rec_started => Same::Yes,
+        Some(_) => Same::Other,
+    }
+}
+
 /// Ends the WDA launched in the background earlier (`pid`, as `expect` says it must be) if it still runs: SIGKILL
 /// through AppService (DVT's `kill_app` leaves WDA running), then waits up to 2 s for it to leave the process list.
 /// Another process with that pid, even of the same app, is left alone
@@ -74,9 +96,18 @@ pub(crate) async fn stop(t: &mut Tunnel, pid: u64, expect: Expect<'_>) -> Stoppe
             Ok(s) => s.get(&pid).cloned(),
             Err(e) => return StoppedWda::Failed(pid, e.to_string()),
         };
-        if executable_of(&procs, pid).as_deref() != Some(executable) || now.as_deref() != Some(started) {
+        match same_process(executable_of(&procs, pid).as_deref(), now.as_deref(), executable, started) {
+            Same::Yes => {}
             // that pid is another process now (the phone restarted, the app launched again)
-            return StoppedWda::NotRunning(pid);
+            Same::Other => return StoppedWda::NotRunning(pid),
+            // its start not given: not known which it is, so neither ended nor forgotten
+            Same::Unknown => {
+                let why = ictl_l10n::tr!(
+                    "手机没给出这个进程的启动时间，认不出是不是记录里的那个：不结束，记录留着",
+                    "the phone didn't give this process's start, so it can't be told whether it is the one recorded: not ended, the record stays"
+                );
+                return StoppedWda::Failed(pid, why.to_string());
+            }
         }
     }
     if let Err(e) = t.signal(pid, 9).await {
@@ -252,6 +283,18 @@ pub async fn end_recorded(cfg: &Config) -> Vec<(String, StoppedWda)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A start the phone doesn't give (a missing entry, an empty list) isn't another start: not known, the process is
+    /// neither ended nor forgotten; another start or executable is another process
+    #[test]
+    fn a_missing_start_isn_t_another_process() {
+        let exe = "/private/var/containers/Bundle/Application/X/WebDriverAgentRunner-Runner.app/R";
+        assert_eq!(same_process(Some(exe), Some("1.5"), exe, "1.5"), Same::Yes);
+        assert_eq!(same_process(Some(exe), None, exe, "1.5"), Same::Unknown);
+        assert_eq!(same_process(Some(exe), Some("2.0"), exe, "1.5"), Same::Other);
+        assert_eq!(same_process(Some("/Applications/X.app/X"), None, exe, "1.5"), Same::Other);
+        assert_eq!(same_process(None, Some("1.5"), exe, "1.5"), Same::Other);
+    }
 
     #[test]
     fn only_the_wda_runner_with_that_pid_is_wda() {

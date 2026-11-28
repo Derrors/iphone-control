@@ -205,7 +205,7 @@ struct Host<'a> {
 }
 
 #[cfg(target_os = "macos")]
-fn process_path(pid: u32) -> Result<PathBuf> {
+pub(super) fn process_path(pid: u32) -> Result<PathBuf> {
     use std::os::unix::ffi::OsStrExt;
     let mut buf = [0u8; libc::PROC_PIDPATHINFO_MAXSIZE as usize];
     let n = unsafe { libc::proc_pidpath(pid as i32, buf.as_mut_ptr().cast(), buf.len() as u32) };
@@ -214,7 +214,7 @@ fn process_path(pid: u32) -> Result<PathBuf> {
 }
 
 #[cfg(not(target_os = "macos"))]
-fn process_path(pid: u32) -> Result<PathBuf> {
+pub(super) fn process_path(pid: u32) -> Result<PathBuf> {
     Ok(fs::read_link(format!("/proc/{pid}/exe"))?)
 }
 
@@ -638,7 +638,7 @@ pub async fn apply(socket: &Path, background: bool, report: super::Report) -> Re
         }
     };
     let stopped = match fleet.as_mut() {
-        Some(f) => f.stop_viewers(),
+        Some(f) => f.stop_viewers().await,
         None => Ok(()),
     };
     let old_version = receipt.version.clone();

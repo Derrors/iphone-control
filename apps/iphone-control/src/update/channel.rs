@@ -40,7 +40,7 @@ pub(super) async fn apply(socket: &Path, report: &Report) -> Result<()> {
         }
     };
     if let Some(f) = fleet.as_mut()
-        && let Err(e) = f.stop_viewers()
+        && let Err(e) = f.stop_viewers().await
     {
         crate::service::resume_viewer(paused);
         let up = f.start_viewers().await;
@@ -83,7 +83,11 @@ async fn exclusive_package<T>(
 ) -> Result<T> {
     let exclusive = exclusive_within(Duration::from_secs(30)).await?;
     super::fleet::stop_daemons(members).await?;
+    // leases refused until the package manager is seen done: by this updater just below, or by `update recover`
+    // should this one die while the package manager goes on
+    super::fleet::package_started()?;
     let r = run.await;
+    super::fleet::package_done()?;
     drop(exclusive);
     r
 }
